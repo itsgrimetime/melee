@@ -89,9 +89,7 @@ class ProducerCheckpointIncomplete(CfgRecoveryError):
 class AnalysisLimitError(CfgRecoveryError):
     """Raised when a deterministic analysis cap reaches its limit."""
 
-    def __init__(
-        self, limit_name: str, configured: int, observed: int
-    ) -> None:
+    def __init__(self, limit_name: str, configured: int, observed: int) -> None:
         self.limit_name = limit_name
         self.configured = configured
         self.observed = observed
@@ -132,9 +130,7 @@ class AnalysisLimits:
     @classmethod
     def for_image(cls, image: Image) -> AnalysisLimits:
         executable_raw_bytes = sum(
-            section.raw_size
-            for section in image.sections
-            if section.is_executable
+            section.raw_size for section in image.sections if section.is_executable
         )
         return cls(
             max_instructions=executable_raw_bytes,
@@ -152,7 +148,7 @@ class AnalysisLimits:
 
 
 _PRODUCER_CERTIFICATE_SCHEMA = "mwcc-retro-x86-producer-certificate-v1"
-_MOVZX_PRODUCER_ANALYSIS_SEMANTICS = "movzx-producer-analysis-v11"
+_MOVZX_PRODUCER_ANALYSIS_SEMANTICS = "movzx-producer-analysis-v14"
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -307,9 +303,7 @@ class UnreachableExecutableResidue:
 
     def contains(self, address: int, size: int = 1) -> bool:
         end = address + size
-        return any(
-            row.start <= address and end <= row.end for row in self.intervals
-        )
+        return any(row.start <= address and end <= row.end for row in self.intervals)
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,9 +322,7 @@ def _materialize_function_entries(
     function_provenance: dict[int, set[str]] = {}
     for row in seed_records:
         if row.is_function:
-            function_provenance.setdefault(row.address, set()).add(
-                row.category
-            )
+            function_provenance.setdefault(row.address, set()).add(row.category)
     return tuple(
         FunctionEntry(
             address=address,
@@ -566,9 +558,7 @@ def parse_cw_exception_metadata(
         return None
     if len(exc_sections) != 1:
         raise CfgRecoveryError("CodeWarrior exception table is not unique")
-    rdata_sections = tuple(
-        row for row in image.sections if row.name == ".rdata"
-    )
+    rdata_sections = tuple(row for row in image.sections if row.name == ".rdata")
     if len(rdata_sections) != 1:
         raise CfgRecoveryError(
             "CodeWarrior exception metadata requires one .rdata section"
@@ -584,12 +574,8 @@ def parse_cw_exception_metadata(
             "CodeWarrior exception range table is not wholly file-backed"
         ) from exc_read
 
-    relocation_slots = {
-        row.va for row in image.relocations if row.type == 3
-    }
-    if len(relocation_slots) != sum(
-        row.type == 3 for row in image.relocations
-    ):
+    relocation_slots = {row.va for row in image.relocations if row.type == 3}
+    if len(relocation_slots) != sum(row.type == 3 for row in image.relocations):
         raise CfgRecoveryError(
             "CodeWarrior exception metadata has duplicate HIGHLOW relocations"
         )
@@ -629,13 +615,9 @@ def parse_cw_exception_metadata(
                 "CodeWarrior exception range start is not executable: "
                 f"{function_entry:#x}"
             )
-        if not (
-            rdata.va <= metadata
-            and metadata + 4 <= rdata.va + rdata.virt_size
-        ):
+        if not (rdata.va <= metadata and metadata + 4 <= rdata.va + rdata.virt_size):
             raise CfgRecoveryError(
-                "CodeWarrior function metadata is outside .rdata: "
-                f"{metadata:#x}"
+                f"CodeWarrior function metadata is outside .rdata: {metadata:#x}"
             )
         if ranges and function_entry <= ranges[-1][0]:
             raise CfgRecoveryError(
@@ -716,9 +698,7 @@ def parse_cw_exception_metadata(
                 raise CfgRecoveryError(
                     "CodeWarrior packed PC map lacks exact relocations"
                 )
-            instruction_end, action = struct.unpack(
-                "<II", image.read(row_address, 8)
-            )
+            instruction_end, action = struct.unpack("<II", image.read(row_address, 8))
             if not previous_end < instruction_end < function_end:
                 raise CfgRecoveryError(
                     "CodeWarrior packed PC map is outside its function range"
@@ -727,9 +707,7 @@ def parse_cw_exception_metadata(
             landing_sites.add(instruction_end)
             action_roots.add(action)
             root_contexts.setdefault(action, set()).add(function_start)
-            pc_map.append(
-                (function_start, metadata, instruction_end, action)
-            )
+            pc_map.append((function_start, metadata, instruction_end, action))
 
     action_kinds: set[int] = set()
     direct_callbacks: set[int] = set()
@@ -763,10 +741,7 @@ def parse_cw_exception_metadata(
                 raise CfgRecoveryError(
                     f"CodeWarrior action kind has no audited size: {kind}"
                 )
-            if not (
-                rdata.va <= action
-                and action + size <= rdata.va + rdata.virt_size
-            ):
+            if not (rdata.va <= action and action + size <= rdata.va + rdata.virt_size):
                 raise CfgRecoveryError(
                     f"CodeWarrior action record is outside .rdata: {action:#x}"
                 )
@@ -778,13 +753,10 @@ def parse_cw_exception_metadata(
                     raise CfgRecoveryError(
                         "CodeWarrior action callback lacks an exact relocation"
                     )
-                callback = struct.unpack(
-                    "<I", image.read(callback_slot, 4)
-                )[0]
+                callback = struct.unpack("<I", image.read(callback_slot, 4))[0]
                 if not _is_executable_span(image, callback, 1):
                     raise CfgRecoveryError(
-                        "CodeWarrior action callback is not executable: "
-                        f"{callback:#x}"
+                        f"CodeWarrior action callback is not executable: {callback:#x}"
                     )
                 direct_callbacks.add(callback)
             continuation_offset = _CW_ACTION_CONTINUATION_OFFSETS.get(kind)
@@ -794,13 +766,10 @@ def parse_cw_exception_metadata(
                     raise CfgRecoveryError(
                         "CodeWarrior continuation lacks an exact relocation"
                     )
-                continuation = struct.unpack(
-                    "<I", image.read(continuation_slot, 4)
-                )[0]
+                continuation = struct.unpack("<I", image.read(continuation_slot, 4))[0]
                 if not _is_executable_span(image, continuation, 1):
                     raise CfgRecoveryError(
-                        "CodeWarrior continuation is not executable: "
-                        f"{continuation:#x}"
+                        f"CodeWarrior continuation is not executable: {continuation:#x}"
                     )
                 continuation_targets.add((kind, continuation))
             action_records.add(action)
@@ -842,9 +811,7 @@ def _initial_seed_records(
     image: Image, audit_anchors: Sequence[AuditAnchor]
 ) -> Iterable[SeedRecord]:
     if image.entrypoint:
-        entry_bytes = _executable_seed_bytes(
-            image, image.entrypoint, "PE entry point"
-        )
+        entry_bytes = _executable_seed_bytes(image, image.entrypoint, "PE entry point")
         yield SeedRecord(
             address=image.entrypoint,
             category="entrypoint",
@@ -877,8 +844,7 @@ def _initial_seed_records(
             image, anchor.address, len(anchor.instruction_bytes)
         ):
             raise CfgRecoveryError(
-                f"audit anchor is not executable: {anchor.name} "
-                f"at {anchor.address:#x}"
+                f"audit anchor is not executable: {anchor.name} at {anchor.address:#x}"
             )
         actual = _read_provenance(
             image,
@@ -888,14 +854,12 @@ def _initial_seed_records(
         )
         if actual != anchor.instruction_bytes:
             raise CfgRecoveryError(
-                f"audit anchor bytes differ: {anchor.name} "
-                f"at {anchor.address:#x}"
+                f"audit anchor bytes differ: {anchor.name} at {anchor.address:#x}"
             )
         actual_sha256 = hashlib.sha256(actual).hexdigest()
         if actual_sha256 != anchor.instruction_sha256:
             raise CfgRecoveryError(
-                f"audit anchor digest differs: {anchor.name} "
-                f"at {anchor.address:#x}"
+                f"audit anchor digest differs: {anchor.name} at {anchor.address:#x}"
             )
         yield SeedRecord(
             address=anchor.address,
@@ -917,14 +881,10 @@ def build_seed_inventory(
     return SeedInventory(tuple(_initial_seed_records(image, audit_anchors)))
 
 
-def _explicit_seed_inventory(
-    image: Image, seeds: Sequence[int]
-) -> SeedInventory:
+def _explicit_seed_inventory(image: Image, seeds: Sequence[int]) -> SeedInventory:
     records = []
     for address in sorted(set(seeds)):
-        seed_bytes = _executable_seed_bytes(
-            image, address, "explicit CFG seed"
-        )
+        seed_bytes = _executable_seed_bytes(image, address, "explicit CFG seed")
         records.append(
             SeedRecord(
                 address=address,
@@ -1001,6 +961,20 @@ class _AllocationPointeeEffect:
 
 
 @dataclass(frozen=True, slots=True)
+class _ObjectByteGuard:
+    """One structurally proven equality domain for the current object."""
+
+    function_entry: int
+    observation_address: int
+    register_family: str
+    field_path: tuple[int, ...]
+    discriminator_field: int
+    values: frozenset[int]
+    guard_address: int
+    provenance: str
+
+
+@dataclass(frozen=True, slots=True)
 class _OwnedBumpAllocatorFact:
     size_argument: int
     cursor_slot: int
@@ -1023,6 +997,7 @@ class _AllocatorTotalityCertificate:
     reset_targets: frozenset[int]
     grow_call_sites: frozenset[int]
     finalizer_targets: frozenset[int]
+    lifetime_roots: frozenset[int] = field(default_factory=frozenset)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1087,9 +1062,7 @@ class _MovzxProducerQuery:
 
     @property
     def sha256(self) -> str:
-        return hashlib.sha256(
-            _canonical_json_bytes(self.to_dict())
-        ).hexdigest()
+        return hashlib.sha256(_canonical_json_bytes(self.to_dict())).hexdigest()
 
     @property
     def memo_key(self) -> tuple[Any, ...]:
@@ -1162,9 +1135,7 @@ class _ProducerCertificateSession:
             "source_width",
         }
     )
-    _DEPENDENCY_KEYS = frozenset(
-        {"kind", "identifier", "fingerprint"}
-    )
+    _DEPENDENCY_KEYS = frozenset({"kind", "identifier", "fingerprint"})
     _RESULT_KEYS = frozenset({"status", "values", "provenance"})
 
     def __init__(
@@ -1197,16 +1168,10 @@ class _ProducerCertificateSession:
             )
 
     def _paths(self, query: _MovzxProducerQuery) -> tuple[Path, ...]:
-        return tuple(
-            sorted(self.checkpoint_dir.glob(f"{query.sha256}-*.json"))
-        )
+        return tuple(sorted(self.checkpoint_dir.glob(f"{query.sha256}-*.json")))
 
-    def _path(
-        self, query: _MovzxProducerQuery, dependency_sha256: str
-    ) -> Path:
-        return self.checkpoint_dir / (
-            f"{query.sha256}-{dependency_sha256}.json"
-        )
+    def _path(self, query: _MovzxProducerQuery, dependency_sha256: str) -> Path:
+        return self.checkpoint_dir / (f"{query.sha256}-{dependency_sha256}.json")
 
     def _dependency_payload(
         self, dependencies: tuple[tuple[str, int, str], ...]
@@ -1304,16 +1269,12 @@ class _ProducerCertificateSession:
                 f"producer certificate {label} schema mismatch: {path}"
             )
 
-    def _decode_query(
-        self, value: Any, *, path: Path
-    ) -> _MovzxProducerQuery:
+    def _decode_query(self, value: Any, *, path: Path) -> _MovzxProducerQuery:
         if not isinstance(value, dict):
             raise ProducerCertificateError(
                 f"producer certificate query must be an object: {path}"
             )
-        self._require_exact_keys(
-            value, self._QUERY_KEYS, label="query", path=path
-        )
+        self._require_exact_keys(value, self._QUERY_KEYS, label="query", path=path)
         field_path = value["field_path"]
         integer_fields = (
             value["function_entry"],
@@ -1321,12 +1282,14 @@ class _ProducerCertificateSession:
             value["source_width"],
         )
         if (
-            any(isinstance(row, bool) or not isinstance(row, int) for row in integer_fields)
+            any(
+                isinstance(row, bool) or not isinstance(row, int)
+                for row in integer_fields
+            )
             or not isinstance(field_path, list)
             or not field_path
             or any(
-                isinstance(row, bool) or not isinstance(row, int)
-                for row in field_path
+                isinstance(row, bool) or not isinstance(row, int) for row in field_path
             )
             or not isinstance(value["movzx_bytes_hex"], str)
             or not value["movzx_bytes_hex"]
@@ -1340,12 +1303,10 @@ class _ProducerCertificateSession:
             )
         if (
             not isinstance(value["analysis_semantics"], str)
-            or value["analysis_semantics"]
-            != _MOVZX_PRODUCER_ANALYSIS_SEMANTICS
+            or value["analysis_semantics"] != _MOVZX_PRODUCER_ANALYSIS_SEMANTICS
         ):
             raise ProducerCertificateError(
-                "producer certificate analysis semantics mismatch: "
-                f"{path}"
+                f"producer certificate analysis semantics mismatch: {path}"
             )
         return _MovzxProducerQuery(
             function_entry=value["function_entry"],
@@ -1415,9 +1376,7 @@ class _ProducerCertificateSession:
             raise ProducerCertificateError(
                 f"producer certificate result must be an object: {path}"
             )
-        self._require_exact_keys(
-            value, self._RESULT_KEYS, label="result", path=path
-        )
+        self._require_exact_keys(value, self._RESULT_KEYS, label="result", path=path)
         status = value["status"]
         values = value["values"]
         provenance = value["provenance"]
@@ -1451,14 +1410,11 @@ class _ProducerCertificateSession:
         recovery: _DirectCfgRecovery,
     ) -> _ProducerDomainMemoEntry | None:
         payload = _strict_json_object(path.read_bytes(), path=path)
-        self._require_exact_keys(
-            payload, self._TOP_LEVEL_KEYS, label="root", path=path
-        )
+        self._require_exact_keys(payload, self._TOP_LEVEL_KEYS, label="root", path=path)
         stored_digest = payload["certificate_sha256"]
-        if (
-            not isinstance(stored_digest, str)
-            or stored_digest != _producer_certificate_digest(payload)
-        ):
+        if not isinstance(
+            stored_digest, str
+        ) or stored_digest != _producer_certificate_digest(payload):
             raise ProducerCertificateError(
                 f"producer certificate digest mismatch: {path}"
             )
@@ -1503,9 +1459,7 @@ class _ProducerCertificateSession:
         if (
             payload["dependency_count"] != len(dependencies)
             or payload["dependency_sha256"]
-            != hashlib.sha256(
-                _canonical_json_bytes(dependency_payload)
-            ).hexdigest()
+            != hashlib.sha256(_canonical_json_bytes(dependency_payload)).hexdigest()
         ):
             raise ProducerCertificateError(
                 f"producer certificate dependency fingerprint mismatch: {path}"
@@ -1543,9 +1497,7 @@ class _ProducerCertificateSession:
         recovery.producer_query_ids.add(query_id)
         paths = self._paths(query)
         for path in paths:
-            entry = self._load(
-                path=path, expected_query=query, recovery=recovery
-            )
+            entry = self._load(path=path, expected_query=query, recovery=recovery)
             if entry is not None:
                 recovery.producer_domain_memo[query.memo_key] = entry
                 result = recovery._producer_domain_cached(
@@ -1564,9 +1516,7 @@ class _ProducerCertificateSession:
             self.query_states[query_id] = "stale"
 
         if self.remaining_budget == 0:
-            recovery._producer_progress_increment(
-                "max_producer_domain_queries"
-            )
+            recovery._producer_progress_increment("max_producer_domain_queries")
             self.query_states[query_id] = "pending"
             return None
 
@@ -1586,9 +1536,7 @@ class _ProducerCertificateSession:
             raise CfgRecoveryError(
                 "producer-domain evaluation did not publish its memo entry"
             )
-        payload = self._certificate_payload(
-            query=query, entry=entry, recovery=recovery
-        )
+        payload = self._certificate_payload(query=query, entry=entry, recovery=recovery)
         path = self._path(query, payload["dependency_sha256"])
         self._write_atomic(path, payload)
         self.completed_this_run += 1
@@ -1604,16 +1552,13 @@ class _ProducerCertificateSession:
 
     def require_fresh_resume(self, final_query_ids: set[str]) -> None:
         pending = sum(
-            self.query_states.get(query_id) == "pending"
-            for query_id in final_query_ids
+            self.query_states.get(query_id) == "pending" for query_id in final_query_ids
         )
         if self.completed_this_run or pending:
             raise ProducerCheckpointIncomplete(
                 completed_this_run=self.completed_this_run,
                 discovered_queries=len(final_query_ids),
-                validated_queries=len(
-                    final_query_ids & self.validated_query_ids
-                ),
+                validated_queries=len(final_query_ids & self.validated_query_ids),
                 pending_queries=pending,
                 checkpoint_dir=self.checkpoint_dir,
             )
@@ -1854,15 +1799,11 @@ _SCALAR_EXTRACT_WIDTHS = {
     1181: 16,
 }
 _VECTOR_EXTRACT_WIDTHS = {861: 128, 866: 128}
-_SCATTER_WRITERS = frozenset(
-    {1317, 1318, 1319, 1320, 1439, 1440, 1449, 1450}
-)
+_SCATTER_WRITERS = frozenset({1317, 1318, 1319, 1320, 1439, 1440, 1449, 1450})
 _CET_MEMORY_WRITERS = frozenset({1485, 1486, 1487, 1488})
 _FNSAVE_WRITERS = frozenset({204})
 _FXSAVE_WRITERS = frozenset({212, 213})
-_XSAVE_WRITERS = frozenset(
-    {1511, 1512, 1513, 1514, 1515, 1516, 1517, 1518}
-)
+_XSAVE_WRITERS = frozenset({1511, 1512, 1513, 1514, 1515, 1516, 1517, 1518})
 _CMPXCHG_INSTRUCTIONS = frozenset({113, 114, 115})
 _XCHG_INSTRUCTIONS = frozenset({1493})
 _XADD_INSTRUCTIONS = frozenset({1491})
@@ -2038,24 +1979,17 @@ class _DirectCfgRecovery:
         seed_inventory: SeedInventory,
         limits: AnalysisLimits,
         rejected_object_callback_tables: frozenset[int] = frozenset(),
-        producer_domain_memo: dict[
-            tuple[Any, ...], _ProducerDomainMemoEntry
-        ]
+        producer_domain_memo: dict[tuple[Any, ...], _ProducerDomainMemoEntry]
         | None = None,
-        producer_certificate_session: _ProducerCertificateSession
-        | None = None,
-        finite_control_memo: dict[
-            tuple[Any, ...], _ProducerDomainMemoEntry
-        ]
+        producer_certificate_session: _ProducerCertificateSession | None = None,
+        finite_control_memo: dict[tuple[Any, ...], _ProducerDomainMemoEntry]
         | None = None,
     ) -> None:
         _validate_capstone_audit_contract()
         self.image = image
         self.limits = limits
         self.highlow_relocation_vas = frozenset(
-            relocation.va
-            for relocation in image.relocations
-            if relocation.type == 3
+            relocation.va for relocation in image.relocations if relocation.type == 3
         )
         self.initializer_relocation_lookup_count = 0
         self.seed_records = set(seed_inventory.records)
@@ -2096,21 +2030,20 @@ class _DirectCfgRecovery:
         self.dynamic_field_write_receiver_cache: dict[
             tuple[Any, ...], _DependencyMemoEntry
         ] = {}
-        self.dynamic_field_write_receiver_active: set[
-            tuple[Any, ...]
-        ] = set()
+        self.dynamic_field_write_receiver_active: set[tuple[Any, ...]] = set()
         self.dynamic_field_writer_source_cache: dict[
             tuple[Any, ...], _ProducerDomainMemoEntry
         ] = {}
-        self.dynamic_field_writer_source_active: set[
-            tuple[Any, ...]
-        ] = set()
+        self.dynamic_field_writer_source_active: set[tuple[Any, ...]] = set()
         self.producer_domain_memo = (
             {} if producer_domain_memo is None else producer_domain_memo
         )
         self.producer_certificate_session = producer_certificate_session
         self.producer_query_ids: set[str] = set()
         self.producer_domain_active: set[tuple[Any, ...]] = set()
+        self.producer_exact_call_contexts: list[tuple[int, int, int]] = []
+        self.producer_object_guard_contexts: list[_ObjectByteGuard] = []
+        self.producer_allocator_lifetime_contexts: list[frozenset[int]] = []
         self.finite_control_memo = (
             {} if finite_control_memo is None else finite_control_memo
         )
@@ -2120,17 +2053,13 @@ class _DirectCfgRecovery:
             "invalidations": 0,
             "evaluations": 0,
         }
-        self.producer_dependency_collectors: list[
-            set[tuple[str, int]]
-        ] = []
+        self.producer_dependency_collectors: list[set[tuple[str, int]]] = []
         self.producer_function_fingerprint_cache: dict[
             int, tuple[tuple[Any, ...], str]
         ] = {}
         self.producer_seed_revision = 0
         self.producer_seed_index_version = (-1, -1)
-        self.producer_seed_records_by_address: dict[
-            int, tuple[SeedRecord, ...]
-        ] = {}
+        self.producer_seed_records_by_address: dict[int, tuple[SeedRecord, ...]] = {}
         self.producer_progress = {
             "max_producer_domain_passes": 0,
             "max_producer_domain_queries": 0,
@@ -2155,21 +2084,13 @@ class _DirectCfgRecovery:
         ] = {}
         self.copied_argument_origin_cache: set[tuple[Any, ...]] = set()
         self.global_copy_origin_cache: set[tuple[Any, ...]] = set()
-        self.copied_back_reference_origin_cache: set[
-            tuple[Any, ...]
-        ] = set()
-        self.runtime_descriptor_field_origin_cache: set[
-            tuple[Any, ...]
-        ] = set()
-        self.global_runtime_descriptor_field_origin_cache: set[
-            tuple[Any, ...]
-        ] = set()
+        self.copied_back_reference_origin_cache: set[tuple[Any, ...]] = set()
+        self.runtime_descriptor_field_origin_cache: set[tuple[Any, ...]] = set()
+        self.global_runtime_descriptor_field_origin_cache: set[tuple[Any, ...]] = set()
         self.back_reference_initializer_cache: dict[
             tuple[Any, ...], tuple[int, int] | None
         ] = {}
-        self.initialized_back_reference_cache: set[
-            tuple[Any, ...]
-        ] = set()
+        self.initialized_back_reference_cache: set[tuple[Any, ...]] = set()
         self.copy_registry_cache: dict[
             tuple[int, tuple[int, ...]],
             tuple[tuple[int, int, int], ...],
@@ -2178,9 +2099,7 @@ class _DirectCfgRecovery:
             tuple[Any, ...], tuple[int, int] | None
         ] = {}
         self.registered_copy_return_cache: dict[tuple[Any, ...], bool] = {}
-        self.copy_return_cache: dict[
-            tuple[int, int, tuple[int, ...], int], bool
-        ] = {}
+        self.copy_return_cache: dict[tuple[int, int, tuple[int, ...], int], bool] = {}
         self.pointer_identity_cache: dict[
             tuple[int, str, int, tuple[int, ...]], tuple[int, int] | None
         ] = {}
@@ -2200,14 +2119,14 @@ class _DirectCfgRecovery:
         self.function_address_index_revision: tuple[int, int] | None = None
         self.sorted_instruction_addresses: tuple[int, ...] = ()
         self.sorted_function_addresses: tuple[int, ...] = ()
-        self.global_stack_field_cache: dict[
-            tuple[Any, ...], _DependencyMemoEntry
-        ] = {}
+        self.global_stack_field_cache: dict[tuple[Any, ...], _DependencyMemoEntry] = {}
         self.zero_fill_function_cache: dict[tuple[Any, ...], bool] = {}
         self.relative_pointer_state_cache: dict[tuple[Any, ...], Any] = {}
         self.allocator_totality_cache: dict[
-            tuple[int, int, tuple[Any, ...], int],
-            _AllocatorTotalityCertificate | None,
+            tuple[Any, ...], _AllocatorTotalityCertificate | None
+        ] = {}
+        self.direct_function_call_closure_cache: dict[
+            tuple[Any, ...], frozenset[int]
         ] = {}
         self.partial_alias_death_cache: dict[tuple[Any, ...], bool] = {}
         self.argument_return_offset_cache: dict[
@@ -2223,12 +2142,8 @@ class _DirectCfgRecovery:
         self.zeroed_field_return_cache: dict[tuple[Any, ...], bool] = {}
         self.runtime_global_copy_field_cache: dict[tuple[Any, ...], bool] = {}
         self.runtime_global_copy_field_active: set[tuple[Any, ...]] = set()
-        self.raw_direct_call_sites_cache: (
-            dict[int, frozenset[int]] | None
-        ) = None
-        self.direct_call_domain_cache: dict[
-            tuple[int, tuple[int, ...]], bool
-        ] = {}
+        self.raw_direct_call_sites_cache: dict[int, frozenset[int]] | None = None
+        self.direct_call_domain_cache: dict[tuple[int, tuple[int, ...]], bool] = {}
         self.incoming_call_domain_cache: dict[
             tuple[int, tuple[int, ...], int], bool
         ] = {}
@@ -2253,9 +2168,7 @@ class _DirectCfgRecovery:
         self.stack_state_cache: dict[
             tuple[int, int, int], dict[int, tuple[int, int | None]] | None
         ] = {}
-        self.callee_cleanup_cache: dict[
-            tuple[int, int, int], int | None
-        ] = {}
+        self.callee_cleanup_cache: dict[tuple[int, int, int], int | None] = {}
         self.argument_state_cache: dict[
             tuple[int, str, tuple[int, ...], int],
             dict[int, tuple[int, frozenset[int]] | None],
@@ -2267,9 +2180,7 @@ class _DirectCfgRecovery:
         self.finite_argument_cache: dict[
             tuple[Any, ...], tuple[frozenset[int], str] | None
         ] = {}
-        self.no_return_cache: dict[
-            tuple[int, tuple[int, ...]], bool
-        ] = {}
+        self.no_return_cache: dict[tuple[int, tuple[int, ...]], bool] = {}
         self.diagnostics: set[OwnershipDiagnostic] = set()
         self.data_evidence: set[_DataEvidence] = set()
         self.structural_data_evidence: set[_DataEvidence] = set()
@@ -2280,9 +2191,9 @@ class _DirectCfgRecovery:
         self.finite_values: set[int] = set()
         self.produced_initializers: set[tuple[int, int]] = set()
         self.accepted_initializer_instructions: set[int] = set()
-        self.object_callback_table_hypotheses: set[
-            _ObjectCallbackTableHypothesis
-        ] = set()
+        self.object_callback_table_hypotheses: set[_ObjectCallbackTableHypothesis] = (
+            set()
+        )
         self.copied_descriptor_callback_hypotheses: set[
             _CopiedDescriptorCallbackHypothesis
         ] = set()
@@ -2295,13 +2206,10 @@ class _DirectCfgRecovery:
         self.validated_relocated_dispatch_slot_hypotheses: set[
             _RelocatedDispatchSlotHypothesis
         ] = set()
-        self.rejected_object_callback_tables = (
-            rejected_object_callback_tables
-        )
+        self.rejected_object_callback_tables = rejected_object_callback_tables
         self.fixpoint_updates = 0
         self.high_water = {
-            limit_name: 0
-            for limit_name in self.limits.__dataclass_fields__
+            limit_name: 0 for limit_name in self.limits.__dataclass_fields__
         }
         self._check_count(
             "max_producer_domain_cache_entries",
@@ -2310,9 +2218,7 @@ class _DirectCfgRecovery:
         self.pending: list[int] = []
         self.queued: set[int] = set()
         self._allow_movzx_producer_domains = False
-        self.cw_exception_metadata = parse_cw_exception_metadata(
-            image, limits
-        )
+        self.cw_exception_metadata = parse_cw_exception_metadata(image, limits)
         if self.cw_exception_metadata is not None:
             self.high_water["max_exception_entries"] = len(
                 self.cw_exception_metadata.range_table
@@ -2331,8 +2237,7 @@ class _DirectCfgRecovery:
         seed_function_flags: dict[int, bool] = {}
         for record in self.seed_records:
             seed_function_flags[record.address] = (
-                seed_function_flags.get(record.address, False)
-                or record.is_function
+                seed_function_flags.get(record.address, False) or record.is_function
             )
         for address, is_function in sorted(seed_function_flags.items()):
             self._enqueue(
@@ -2342,9 +2247,7 @@ class _DirectCfgRecovery:
             self._record_finite_target(address)
 
     def _check_count(self, limit_name: str, observed: int) -> None:
-        self.high_water[limit_name] = max(
-            self.high_water[limit_name], observed
-        )
+        self.high_water[limit_name] = max(self.high_water[limit_name], observed)
         self.limits.check(limit_name, observed)
 
     def _record_finite_value(self, value: int) -> None:
@@ -2373,6 +2276,45 @@ class _DirectCfgRecovery:
             self.dynamic_field_write_count,
         )
 
+    def _producer_exact_call_context(
+        self, function_entry: int
+    ) -> tuple[int, int] | None:
+        """Return the innermost exact call currently being summarized."""
+        for callee, call_address, caller_entry in reversed(
+            self.producer_exact_call_contexts
+        ):
+            if callee == function_entry:
+                return call_address, caller_entry
+        return None
+
+    def _producer_exact_call_context_signature(
+        self,
+    ) -> tuple[tuple[int, int, int], ...]:
+        return tuple(self.producer_exact_call_contexts)
+
+    def _producer_object_guard_context(
+        self, field_path: tuple[int, ...]
+    ) -> _ObjectByteGuard | None:
+        for guard in reversed(self.producer_object_guard_contexts):
+            if guard.field_path == field_path:
+                return guard
+        return None
+
+    def _producer_object_guard_context_signature(self) -> tuple[_ObjectByteGuard, ...]:
+        return tuple(self.producer_object_guard_contexts)
+
+    def _producer_allocator_lifetime_context(self) -> frozenset[int]:
+        return (
+            self.producer_allocator_lifetime_contexts[-1]
+            if self.producer_allocator_lifetime_contexts
+            else frozenset()
+        )
+
+    def _producer_allocator_lifetime_context_signature(
+        self,
+    ) -> tuple[frozenset[int], ...]:
+        return tuple(self.producer_allocator_lifetime_contexts)
+
     def _producer_progress_increment(self, limit_name: str) -> None:
         observed = self.producer_progress[limit_name] + 1
         self.producer_progress[limit_name] = observed
@@ -2391,9 +2333,7 @@ class _DirectCfgRecovery:
         for collector in self.producer_dependency_collectors:
             collector.add(("global-slot", slot))
 
-    def _note_producer_dynamic_field_dependency(
-        self, displacement: int
-    ) -> None:
+    def _note_producer_dynamic_field_dependency(self, displacement: int) -> None:
         for collector in self.producer_dependency_collectors:
             collector.add(("dynamic-field", displacement))
 
@@ -2422,17 +2362,14 @@ class _DirectCfgRecovery:
             + ";calls="
             + (
                 ""
-                if (target := self.direct_call_targets_by_source.get(address))
-                is None
+                if (target := self.direct_call_targets_by_source.get(address)) is None
                 else f"{target:#x}"
             )
             for address in addresses
         )
         rows.extend(
             f"incoming={source:#x}:{kind}"
-            for source, kind in sorted(
-                self.incoming_edges.get(function_entry, ())
-            )
+            for source, kind in sorted(self.incoming_edges.get(function_entry, ()))
         )
         rows.extend(
             "seed="
@@ -2447,9 +2384,7 @@ class _DirectCfgRecovery:
         )
         return digest
 
-    def _producer_seed_records_at(
-        self, address: int
-    ) -> tuple[SeedRecord, ...]:
+    def _producer_seed_records_at(self, address: int) -> tuple[SeedRecord, ...]:
         version = (len(self.seed_records), self.producer_seed_revision)
         if self.producer_seed_index_version != version:
             by_address: dict[int, list[SeedRecord]] = {}
@@ -2504,23 +2439,17 @@ class _DirectCfgRecovery:
                 and identifier < write_displacement + write.width
             )
             return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
-        raise CfgRecoveryError(
-            f"unknown producer dependency kind: {dependency_kind}"
-        )
+        raise CfgRecoveryError(f"unknown producer dependency kind: {dependency_kind}")
 
     def _producer_dependency_snapshot(
         self, dependencies: set[tuple[str, int]]
     ) -> tuple[tuple[str, int, str], ...]:
-        self._check_count(
-            "max_producer_domain_dependency_rows", len(dependencies)
-        )
+        self._check_count("max_producer_domain_dependency_rows", len(dependencies))
         return tuple(
             (
                 dependency_kind,
                 identifier,
-                self._producer_dependency_fingerprint(
-                    dependency_kind, identifier
-                ),
+                self._producer_dependency_fingerprint(dependency_kind, identifier),
             )
             for dependency_kind, identifier in sorted(dependencies)
         )
@@ -2532,13 +2461,9 @@ class _DirectCfgRecovery:
             (
                 dependency_kind,
                 identifier,
-                self._producer_dependency_fingerprint(
-                    dependency_kind, identifier
-                ),
+                self._producer_dependency_fingerprint(dependency_kind, identifier),
             )
-            for dependency_kind, identifier, _fingerprint in (
-                entry.dependencies
-            )
+            for dependency_kind, identifier, _fingerprint in (entry.dependencies)
         )
         if (
             entry.image_sha256 != self.image.sha256
@@ -2564,39 +2489,27 @@ class _DirectCfgRecovery:
                 (
                     dependency_kind,
                     identifier,
-                    self._producer_dependency_fingerprint(
-                        dependency_kind, identifier
-                    ),
+                    self._producer_dependency_fingerprint(dependency_kind, identifier),
                 )
-                for dependency_kind, identifier, _fingerprint in (
-                    existing.dependencies
-                )
+                for dependency_kind, identifier, _fingerprint in (existing.dependencies)
             )
             if (
                 existing.image_sha256 == self.image.sha256
                 and current_dependencies == existing.dependencies
             ):
-                self._producer_progress_increment(
-                    "max_producer_domain_cache_hits"
-                )
-                for dependency_kind, identifier, _fingerprint in (
-                    existing.dependencies
-                ):
+                self._producer_progress_increment("max_producer_domain_cache_hits")
+                for dependency_kind, identifier, _fingerprint in existing.dependencies:
                     for collector in self.producer_dependency_collectors:
                         collector.add((dependency_kind, identifier))
                 return existing.result
-            self._producer_progress_increment(
-                "max_producer_domain_invalidations"
-            )
+            self._producer_progress_increment("max_producer_domain_invalidations")
         if query_key in self.producer_domain_active:
             return None
 
         dependencies = {("function", function_entry)}
         self.producer_domain_active.add(query_key)
         self.producer_dependency_collectors.append(dependencies)
-        self._producer_progress_increment(
-            "max_producer_domain_evaluations"
-        )
+        self._producer_progress_increment("max_producer_domain_evaluations")
         try:
             result = compute()
         finally:
@@ -2606,16 +2519,12 @@ class _DirectCfgRecovery:
                 raise CfgRecoveryError(
                     "producer dependency collector stack is corrupted"
                 )
-        self._check_count(
-            "max_producer_domain_dependency_rows", len(dependencies)
-        )
+        self._check_count("max_producer_domain_dependency_rows", len(dependencies))
         snapshot = tuple(
             (
                 dependency_kind,
                 identifier,
-                self._producer_dependency_fingerprint(
-                    dependency_kind, identifier
-                ),
+                self._producer_dependency_fingerprint(dependency_kind, identifier),
             )
             for dependency_kind, identifier in sorted(dependencies)
         )
@@ -2644,22 +2553,16 @@ class _DirectCfgRecovery:
                 (
                     dependency_kind,
                     identifier,
-                    self._producer_dependency_fingerprint(
-                        dependency_kind, identifier
-                    ),
+                    self._producer_dependency_fingerprint(dependency_kind, identifier),
                 )
-                for dependency_kind, identifier, _fingerprint in (
-                    existing.dependencies
-                )
+                for dependency_kind, identifier, _fingerprint in (existing.dependencies)
             )
             if (
                 existing.image_sha256 == self.image.sha256
                 and current_dependencies == existing.dependencies
             ):
                 self.finite_control_progress["hits"] += 1
-                for dependency_kind, identifier, _fingerprint in (
-                    existing.dependencies
-                ):
+                for dependency_kind, identifier, _fingerprint in existing.dependencies:
                     for collector in self.producer_dependency_collectors:
                         collector.add((dependency_kind, identifier))
                 return existing.result
@@ -2687,9 +2590,7 @@ class _DirectCfgRecovery:
                 "finite-control cache-invalidated: "
                 f"transfer={query_key[1]:#x};"
                 f"root={function_entry:#x};changed="
-                + ",".join(
-                    render_dependency(row) for row in changed_dependencies
-                )
+                + ",".join(render_dependency(row) for row in changed_dependencies)
                 + f";dependencies={len(existing.dependencies)};"
                 f"prior={'blocked' if existing.result is None else 'finite'}"
             )
@@ -2709,16 +2610,12 @@ class _DirectCfgRecovery:
                 raise CfgRecoveryError(
                     "finite-control dependency collector stack is corrupted"
                 )
-        self._check_count(
-            "max_producer_domain_dependency_rows", len(dependencies)
-        )
+        self._check_count("max_producer_domain_dependency_rows", len(dependencies))
         snapshot = tuple(
             (
                 dependency_kind,
                 identifier,
-                self._producer_dependency_fingerprint(
-                    dependency_kind, identifier
-                ),
+                self._producer_dependency_fingerprint(dependency_kind, identifier),
             )
             for dependency_kind, identifier in sorted(dependencies)
         )
@@ -2747,13 +2644,8 @@ class _DirectCfgRecovery:
         self.block_starts.add(address)
         if is_new_block_start and address in self.instructions:
             predecessor = self.instruction_by_end.get(address)
-            if (
-                predecessor is not None
-                and predecessor.address not in self.terminators
-            ):
-                self._add_edge(
-                    predecessor.address, address, "fallthrough"
-                )
+            if predecessor is not None and predecessor.address not in self.terminators:
+                self._add_edge(predecessor.address, address, "fallthrough")
         if is_function and address not in self.function_addresses:
             self.function_addresses.add(address)
             self._check_count("max_functions", len(self.function_addresses))
@@ -2785,13 +2677,9 @@ class _DirectCfgRecovery:
         if kind == "direct-call":
             prior_target = self.direct_call_targets_by_source.get(source)
             if prior_target is not None and prior_target != target:
-                raise CfgRecoveryError(
-                    f"conflicting direct-call target at {source:#x}"
-                )
+                raise CfgRecoveryError(f"conflicting direct-call target at {source:#x}")
             self.direct_call_targets_by_source[source] = target
-            self.direct_call_sources_by_target.setdefault(target, set()).add(
-                source
-            )
+            self.direct_call_sources_by_target.setdefault(target, set()).add(source)
         self.incoming_edges.setdefault(target, set()).add((source, kind))
         if "call" not in kind:
             successors = self.non_call_successors.setdefault(source, set())
@@ -2827,12 +2715,7 @@ class _DirectCfgRecovery:
                 "retained="
                 + ",".join(f"{target:#x}" for target in sorted(retained))
                 + ";recomputed="
-                + (
-                    ",".join(
-                        f"{target:#x}" for target in sorted(candidates)
-                    )
-                    or "empty"
-                )
+                + (",".join(f"{target:#x}" for target in sorted(candidates)) or "empty")
             )
 
     def _executable_raw_end(self, address: int) -> int:
@@ -2843,21 +2726,16 @@ class _DirectCfgRecovery:
             ):
                 return section.va + section.raw_size
         raise CfgRecoveryError(
-            "CFG seed or target is not backed by executable raw bytes: "
-            f"{address:#x}"
+            f"CFG seed or target is not backed by executable raw bytes: {address:#x}"
         )
 
     def _decode_one(self, address: int):
         executable_raw_end = self._executable_raw_end(address)
         available = min(15, executable_raw_end - address)
-        code = _read_provenance(
-            self.image, address, available, "x86 instruction"
-        )
+        code = _read_provenance(self.image, address, available, "x86 instruction")
         decoded = next(self.decoder.disasm(code, address, count=1), None)
         if decoded is None:
-            raise CfgRecoveryError(
-                f"cannot decode x86 instruction at {address:#x}"
-            )
+            raise CfgRecoveryError(f"cannot decode x86 instruction at {address:#x}")
         return decoded
 
     def _claim_instruction(self, decoded) -> Instruction:
@@ -2883,9 +2761,7 @@ class _DirectCfgRecovery:
         for operand in decoded.operands:
             absolute = self._absolute_memory_operand(operand)
             if absolute is not None and operand.access & CS_AC_WRITE:
-                self.absolute_memory_writes.setdefault(absolute, set()).add(
-                    address
-                )
+                self.absolute_memory_writes.setdefault(absolute, set()).add(address)
         for byte_address in range(address, end):
             self.byte_owners[byte_address] = address
         self._check_count("max_instructions", len(self.instructions))
@@ -2914,8 +2790,7 @@ class _DirectCfgRecovery:
                 provenance_address=instruction.address,
                 provenance_bytes=instruction.bytes_hex,
                 detail=(
-                    f"mnemonic={instruction.mnemonic};"
-                    f"operands={instruction.operands}"
+                    f"mnemonic={instruction.mnemonic};operands={instruction.operands}"
                 ),
                 is_function=category == "direct-call-target",
             )
@@ -2924,9 +2799,7 @@ class _DirectCfgRecovery:
     def _previous_instruction(self, address: int) -> Instruction | None:
         return self.instruction_by_end.get(address)
 
-    def _computed_flow_blocker(
-        self, instruction: Instruction, detail: str
-    ) -> None:
+    def _computed_flow_blocker(self, instruction: Instruction, detail: str) -> None:
         self.diagnostics.add(
             OwnershipDiagnostic(
                 kind="computed-flow-blocker",
@@ -3008,8 +2881,7 @@ class _DirectCfgRecovery:
                 and decoded.operands[0].type == X86_OP_REG
                 and decoded.operands[0].size == 4
                 and decoded.operands[1].type == X86_OP_IMM
-                and self._register_family(decoded.operands[0].reg)
-                == index_family
+                and self._register_family(decoded.operands[0].reg) == index_family
             ):
                 compare = candidate
                 compare_decoded = decoded
@@ -3062,8 +2934,7 @@ class _DirectCfgRecovery:
             copy_decoded.id == X86_INS_MOV
             and len(copy_decoded.operands) == 2
             and all(row.type == X86_OP_REG for row in copy_decoded.operands)
-            and self._register_family(copy_decoded.operands[0].reg)
-            == index_family
+            and self._register_family(copy_decoded.operands[0].reg) == index_family
         ):
             value_family = self._register_family(copy_decoded.operands[1].reg)
             cursor = copy.address
@@ -3084,20 +2955,13 @@ class _DirectCfgRecovery:
                     and len(candidate_decoded.operands) == 2
                     and candidate_decoded.operands[0].type == X86_OP_MEM
                     and candidate_decoded.operands[0].size == 4
-                    and candidate_decoded.operands[0].mem.segment
-                    == X86_REG_INVALID
-                    and candidate_decoded.operands[0].mem.index
-                    == X86_REG_INVALID
-                    and candidate_decoded.operands[0].mem.base
-                    != X86_REG_INVALID
-                    and self._register_family(
-                        candidate_decoded.operands[0].mem.base
-                    )
+                    and candidate_decoded.operands[0].mem.segment == X86_REG_INVALID
+                    and candidate_decoded.operands[0].mem.index == X86_REG_INVALID
+                    and candidate_decoded.operands[0].mem.base != X86_REG_INVALID
+                    and self._register_family(candidate_decoded.operands[0].mem.base)
                     in {"esp", "ebp"}
                     and candidate_decoded.operands[1].type == X86_OP_REG
-                    and self._register_family(
-                        candidate_decoded.operands[1].reg
-                    )
+                    and self._register_family(candidate_decoded.operands[1].reg)
                     == value_family
                 ):
                     return None
@@ -3109,8 +2973,7 @@ class _DirectCfgRecovery:
             sign_decoded.id != x86_const.X86_INS_MOVSX
             or len(sign_decoded.operands) != 2
             or sign_decoded.operands[0].type != X86_OP_REG
-            or self._register_family(sign_decoded.operands[0].reg)
-            != value_family
+            or self._register_family(sign_decoded.operands[0].reg) != value_family
             or sign_decoded.operands[1].type != X86_OP_MEM
             or sign_decoded.operands[1].size != 1
         ):
@@ -3161,8 +3024,7 @@ class _DirectCfgRecovery:
             or self._direct_target(upper_branch_decoded) is None
             or self._direct_target(upper_branch_decoded)
             != self._direct_target(lower_branch_decoded)
-            or self._direct_target(upper_branch_decoded)
-            <= transfer_address
+            or self._direct_target(upper_branch_decoded) <= transfer_address
         ):
             return None
 
@@ -3200,12 +3062,8 @@ class _DirectCfgRecovery:
             incoming = self.incoming_edges.get(sign_extend.address, set())
             if incoming != {(upper_branch.address, "fallthrough")}:
                 return None
-        elif (
-            sign_extend.address in self.block_starts
-            or any(
-                address in self.block_starts
-                for address in pushed_addresses[:-1]
-            )
+        elif sign_extend.address in self.block_starts or any(
+            address in self.block_starts for address in pushed_addresses[:-1]
         ):
             return None
         return lower_compare, "signed-memory-range", bound, 0, bound - 1
@@ -3257,8 +3115,7 @@ class _DirectCfgRecovery:
                 decoded.id == x86_const.X86_INS_MOVZX
                 and len(decoded.operands) >= 2
                 and decoded.operands[0].type == X86_OP_REG
-                and self._register_family(decoded.operands[0].reg)
-                == index_family
+                and self._register_family(decoded.operands[0].reg) == index_family
             )
             index_written = any(
                 self._register_family(reg) == index_family
@@ -3286,9 +3143,7 @@ class _DirectCfgRecovery:
                 and decoded.operands[1].mem.base != X86_REG_INVALID
                 and decoded.operands[1].mem.index == X86_REG_INVALID
             ):
-                function_entry = self._registrar_function_entry(
-                    decoded.address
-                )
+                function_entry = self._registrar_function_entry(decoded.address)
                 source_base_register = self._register_family(
                     decoded.operands[1].mem.base
                 )
@@ -3358,11 +3213,7 @@ class _DirectCfgRecovery:
                 frozenset({value & 0xFF}),
                 f"immediate-byte={value & 0xFF:#x}",
             )
-        if (
-            destination.size != 1
-            or byte_index != 0
-            or source.type != X86_OP_REG
-        ):
+        if destination.size != 1 or byte_index != 0 or source.type != X86_OP_REG:
             return None
         guard = self._guard_for_index(decoded.address, source.reg)
         if guard is not None:
@@ -3394,11 +3245,12 @@ class _DirectCfgRecovery:
         visited: frozenset[tuple[int, str]],
     ) -> tuple[frozenset[int], str] | None:
         query_key = (
-            "producer-stack-v3",
+            "producer-stack-v4",
             address,
             root_offset,
             function_entry,
             field_path,
+            self._producer_allocator_lifetime_context_signature(),
         )
         return self._producer_domain_cached(
             query_key,
@@ -3420,19 +3272,25 @@ class _DirectCfgRecovery:
         argument_index: int,
         field_path: tuple[int, ...],
         visited: frozenset[tuple[int, str]],
+        *,
+        end_address: int | None = None,
+        excluded_addresses: frozenset[int] = frozenset(),
     ) -> tuple[frozenset[int], str] | None:
         """Summarize one owned callee's effect on an argument-relative byte.
 
-        An empty value set means that every reachable path preserves the
-        byte.  A non-empty singleton means that every reachable return crosses
-        a compatible exact writer.  ``None`` is bottom: aliases, escapes,
-        writes, calls, or control paths were not closed strongly enough.
+        An empty value set means that every reachable path preserves the byte.
+        A non-empty set contains every finite write value and records whether
+        another reachable path may preserve the incoming value.  ``None`` is
+        bottom: aliases, escapes, writes, calls, or control paths were not
+        closed strongly enough.
         """
         query_key = (
-            "producer-callee-byte-effect-v1",
+            "producer-callee-byte-effect-v3",
             function_entry,
             argument_index,
             field_path,
+            end_address,
+            tuple(sorted(excluded_addresses)),
             self._summary_fact_signature(),
             self.control_flow_revision,
         )
@@ -3444,6 +3302,8 @@ class _DirectCfgRecovery:
                 argument_index,
                 field_path,
                 visited,
+                end_address=end_address,
+                excluded_addresses=excluded_addresses,
             ),
         )
 
@@ -3453,13 +3313,18 @@ class _DirectCfgRecovery:
         argument_index: int,
         field_path: tuple[int, ...],
         visited: frozenset[tuple[int, str]],
+        *,
+        end_address: int | None = None,
+        excluded_addresses: frozenset[int] = frozenset(),
     ) -> tuple[frozenset[int], str] | None:
         if not field_path or function_entry not in self.function_addresses:
             return None
         key = (
             function_entry,
             "callee-byte-effect:"
-            f"{argument_index}:{','.join(map(str, field_path))}",
+            f"{argument_index}:{','.join(map(str, field_path))}:"
+            f"{end_address}:excluded="
+            f"{','.join(map(str, sorted(excluded_addresses)))}",
         )
         if key in visited:
             return None
@@ -3468,6 +3333,7 @@ class _DirectCfgRecovery:
             argument_index=argument_index,
             propagate_call_returns=True,
             allow_partial_taint=True,
+            stop_address=end_address,
         )
         if states is None:
             return None
@@ -3475,6 +3341,11 @@ class _DirectCfgRecovery:
             (row for row in self.function_addresses if row > function_entry),
             default=0x1_0000_0000,
         )
+        if end_address is not None and (
+            not function_entry <= end_address < following_entry
+            or end_address not in self.instructions
+        ):
+            return None
         target_field = field_path[0]
         writers: set[int] = set()
         values: set[int] = set()
@@ -3482,23 +3353,41 @@ class _DirectCfgRecovery:
         saw_return = False
         next_visited = visited | {key}
 
-        for candidate_address in self._function_instruction_addresses(
-            function_entry
-        ):
+        for candidate_address in self._function_instruction_addresses(function_entry):
             state = states.get(candidate_address)
-            if state is None or not self._reachable_within_function(
-                function_entry,
-                candidate_address,
-                function_entry,
-                following_entry,
+            if (
+                state is None
+                or not self._reachable_within_function(
+                    function_entry,
+                    candidate_address,
+                    function_entry,
+                    following_entry,
+                    excluded=excluded_addresses,
+                )
+                or (
+                    end_address is not None
+                    and not self._reachable_within_function(
+                        candidate_address,
+                        end_address,
+                        function_entry,
+                        following_entry,
+                        excluded=excluded_addresses,
+                    )
+                )
             ):
                 continue
             candidate = self._owned_decoded(candidate_address)
-            saw_return |= candidate.group(CS_GRP_RET)
+            if end_address is None:
+                saw_return |= candidate.group(CS_GRP_RET)
+            elif candidate_address == end_address:
+                saw_return = True
+                continue
             if candidate.id == X86_INS_MOV and len(candidate.operands) == 2:
                 destination, source = candidate.operands
-                if (
+                publishes_pointer = (
                     destination.type == X86_OP_MEM
+                    and destination.size == 4
+                    and source.size == 4
                     and self._relative_operand_offsets(
                         candidate_address,
                         source,
@@ -3506,10 +3395,58 @@ class _DirectCfgRecovery:
                         argument_index,
                         states,
                     )
-                ):
+                )
+                if publishes_pointer:
+                    destination_family = (
+                        None
+                        if destination.mem.base == X86_REG_INVALID
+                        else self._register_family(destination.mem.base)
+                    )
+                    destination_origins = (
+                        None
+                        if destination_family is None
+                        or destination.mem.segment != X86_REG_INVALID
+                        or destination.mem.index != X86_REG_INVALID
+                        else self._fresh_allocation_origin_calls_before(
+                            candidate_address,
+                            destination_family,
+                            function_entry,
+                        )
+                    )
+                    observations = (
+                        (end_address,)
+                        if end_address is not None
+                        else tuple(
+                            address
+                            for address in self._function_instruction_addresses(
+                                function_entry
+                            )
+                            if self._owned_decoded(address).group(CS_GRP_RET)
+                            and self._reachable_within_function(
+                                candidate_address,
+                                address,
+                                function_entry,
+                                following_entry,
+                            )
+                        )
+                    )
+                    contained = bool(
+                        destination_origins
+                        and observations
+                        and all(
+                            self._fresh_allocation_pointer_is_local_until(
+                                allocation_call,
+                                observation,
+                                function_entry,
+                            )
+                            for allocation_call in destination_origins
+                            for observation in observations
+                        )
+                    )
                     # Publishing the pointer can let later code mutate the
                     # object outside this closed callee summary.
-                    return None
+                    if not contained:
+                        return None
 
             for destination in candidate.operands:
                 if (
@@ -3532,28 +3469,55 @@ class _DirectCfgRecovery:
                 ):
                     return None
                 write_offset = next(iter(base_values)) + destination.mem.disp
-                if not (
-                    write_offset <= target_field
-                    < write_offset + destination.size
-                ):
+                if not (write_offset <= target_field < write_offset + destination.size):
                     continue
                 if len(field_path) != 1:
                     # A nested pointer publication needs its own exact pointee
                     # proof; never reinterpret it as a leaf-byte write.
                     return None
-                result = self._finite_byte_store_values(
-                    candidate,
-                    target_field - write_offset,
-                    function_entry,
-                    next_visited,
-                )
+                byte_index = target_field - write_offset
+                if candidate.mnemonic in {"movsb", "movsw", "movsd"}:
+                    if any(
+                        row < candidate_address
+                        and self._owned_decoded(row).mnemonic == "std"
+                        for row in self._function_instruction_addresses(function_entry)
+                    ):
+                        return None
+                    source_operand = next(
+                        (
+                            operand
+                            for operand in candidate.operands
+                            if operand.type == X86_OP_MEM
+                            and operand.access & CS_AC_READ
+                            and operand.mem.base != X86_REG_INVALID
+                        ),
+                        None,
+                    )
+                    if (
+                        source_operand is None
+                        or source_operand.mem.segment != X86_REG_INVALID
+                        or source_operand.mem.index != X86_REG_INVALID
+                    ):
+                        return None
+                    result = self._finite_object_byte_register_values_before(
+                        candidate_address,
+                        self._register_family(source_operand.mem.base),
+                        function_entry,
+                        (source_operand.mem.disp + byte_index,),
+                        next_visited,
+                    )
+                else:
+                    result = self._finite_byte_store_values(
+                        candidate,
+                        byte_index,
+                        function_entry,
+                        next_visited,
+                    )
                 if result is None:
                     return None
                 writers.add(candidate_address)
                 values.update(result[0])
-                details.append(
-                    f"writer={candidate_address:#x};{result[1]}"
-                )
+                details.append(f"writer={candidate_address:#x};{result[1]}")
 
             if not candidate.group(CS_GRP_CALL):
                 if (
@@ -3566,15 +3530,12 @@ class _DirectCfgRecovery:
             ecx_values = state[0][_REGISTER_FAMILIES.index("ecx")]
             target = self.direct_call_targets_by_source.get(candidate_address)
             if ecx_values and (
-                target is None
-                or self._function_reads_incoming_register(target, "ecx")
+                target is None or self._function_reads_incoming_register(target, "ecx")
             ):
                 return None
             aliases: list[tuple[int, int]] = []
             for callee_argument in range(8):
-                pushed = self._pushed_call_argument(
-                    candidate_address, callee_argument
-                )
+                pushed = self._pushed_call_argument(candidate_address, callee_argument)
                 if pushed is None:
                     break
                 offsets = self._relative_operand_offsets(
@@ -3623,45 +3584,65 @@ class _DirectCfgRecovery:
                 if effect is None:
                     return None
             if effect[0]:
-                writers.add(candidate_address)
                 values.update(effect[0])
+                if "optional-preserve" not in effect[1]:
+                    writers.add(candidate_address)
                 details.append(
-                    f"callee={target:#x};call={candidate_address:#x};"
-                    f"{effect[1]}"
+                    f"callee={target:#x};call={candidate_address:#x};{effect[1]}"
                 )
 
         if not saw_return:
             return None
-        if not writers:
+        if not values:
             return frozenset(), (
-                f"callee={function_entry:#x};argument={argument_index};"
-                "preserved"
+                f"callee={function_entry:#x};argument={argument_index};preserved"
             )
-        if len(values) != 1:
+        returns = (
+            [
+                end_address
+                for _ in (0,)
+                if self._reachable_within_function(
+                    function_entry,
+                    end_address,
+                    function_entry,
+                    following_entry,
+                    excluded=excluded_addresses,
+                )
+            ]
+            if end_address is not None
+            else [
+                candidate_address
+                for candidate_address in self._function_instruction_addresses(
+                    function_entry
+                )
+                if self._owned_decoded(candidate_address).group(CS_GRP_RET)
+                and states.get(candidate_address) is not None
+                and self._reachable_within_function(
+                    function_entry,
+                    candidate_address,
+                    function_entry,
+                    following_entry,
+                    excluded=excluded_addresses,
+                )
+            ]
+        )
+        if not returns:
             return None
-        returns = [
-            candidate_address
-            for candidate_address in self._function_instruction_addresses(
-                function_entry
-            )
-            if self._owned_decoded(candidate_address).group(CS_GRP_RET)
-            and states.get(candidate_address) is not None
-        ]
-        if not returns or any(
+        may_preserve = not writers or any(
             self._reachable_within_function(
                 function_entry,
                 return_address,
                 function_entry,
                 following_entry,
-                excluded=frozenset(writers),
+                excluded=frozenset(writers) | excluded_addresses,
             )
             for return_address in returns
-        ):
-            return None
+        )
         self._check_count("max_finite_values", len(values))
         return (
             frozenset(values),
             f"callee={function_entry:#x};argument={argument_index};"
+            + ("optional-preserve;" if may_preserve else "")
             + "|".join(details),
         )
 
@@ -3712,8 +3693,7 @@ class _DirectCfgRecovery:
                 if (
                     add.mnemonic != "add"
                     or len(add.operands) != 2
-                    or self._absolute_memory_operand(add.operands[0])
-                    != cursor_slot
+                    or self._absolute_memory_operand(add.operands[0]) != cursor_slot
                     or add.operands[0].size != 4
                     or add.operands[1].type != X86_OP_REG
                     or add.operands[1].size != 4
@@ -3752,17 +3732,14 @@ class _DirectCfgRecovery:
                         operand.type == X86_OP_REG
                         and operand.access & CS_AC_WRITE
                         and self._register_family(operand.reg) == size_family
-                        for operand in self._owned_decoded(
-                            candidate_address
-                        ).operands
+                        for operand in self._owned_decoded(candidate_address).operands
                     )
                 ]
                 if not normalizers or any(
                     row.mnemonic not in {"add", "and"}
                     or len(row.operands) != 2
                     or row.operands[0].type != X86_OP_REG
-                    or self._register_family(row.operands[0].reg)
-                    != size_family
+                    or self._register_family(row.operands[0].reg) != size_family
                     or row.operands[1].type != X86_OP_IMM
                     for row in normalizers
                 ):
@@ -3777,17 +3754,12 @@ class _DirectCfgRecovery:
                     candidate_address
                     for candidate_address in addresses
                     if self._owned_decoded(candidate_address).mnemonic == "sub"
-                    and len(
-                        self._owned_decoded(candidate_address).operands
-                    )
-                    == 2
+                    and len(self._owned_decoded(candidate_address).operands) == 2
                     and self._absolute_memory_operand(
                         self._owned_decoded(candidate_address).operands[0]
                     )
                     is not None
-                    and self._owned_decoded(candidate_address).operands[
-                        1
-                    ].type
+                    and self._owned_decoded(candidate_address).operands[1].type
                     == X86_OP_REG
                     and self._register_family(
                         self._owned_decoded(candidate_address).operands[1].reg
@@ -3824,11 +3796,7 @@ class _DirectCfgRecovery:
                 pushed[1].type == X86_OP_REG
                 and self._register_family(pushed[1].reg) == size_family
                 for callee_argument in range(8)
-                if (
-                    pushed := self._pushed_call_argument(
-                        call.address, callee_argument
-                    )
-                )
+                if (pushed := self._pushed_call_argument(call.address, callee_argument))
                 is not None
             ):
                 return None
@@ -3869,9 +3837,7 @@ class _DirectCfgRecovery:
         self, function_entry: int
     ) -> _OwnedBumpAllocatorFact | None:
         """Bind the arena slots and grow edge of an owned bump allocator."""
-        size_argument = self._owned_fixed_bump_allocator_size_argument(
-            function_entry
-        )
+        size_argument = self._owned_fixed_bump_allocator_size_argument(function_entry)
         if size_argument is None:
             return None
         following_entry = min(
@@ -3884,9 +3850,7 @@ class _DirectCfgRecovery:
             if (
                 row.mnemonic != "add"
                 or len(row.operands) != 2
-                or (cursor_slot := self._absolute_memory_operand(
-                    row.operands[0]
-                ))
+                or (cursor_slot := self._absolute_memory_operand(row.operands[0]))
                 is None
                 or row.operands[0].size != 4
                 or row.operands[1].type != X86_OP_REG
@@ -3899,20 +3863,14 @@ class _DirectCfgRecovery:
                     function_entry
                 )
                 if (
-                    (candidate := self._owned_decoded(candidate_address))
-                    .mnemonic
+                    (candidate := self._owned_decoded(candidate_address)).mnemonic
                     == "sub"
                     and len(candidate.operands) == 2
-                    and (
-                        slot := self._absolute_memory_operand(
-                            candidate.operands[0]
-                        )
-                    )
+                    and (slot := self._absolute_memory_operand(candidate.operands[0]))
                     is not None
                     and candidate.operands[0].size == 4
                     and candidate.operands[1].type == X86_OP_REG
-                    and self._register_family(candidate.operands[1].reg)
-                    == size_family
+                    and self._register_family(candidate.operands[1].reg) == size_family
                 )
             }
             if len(remaining_slots) != 1:
@@ -3932,8 +3890,7 @@ class _DirectCfgRecovery:
                 or descriptor_argument[1].type != X86_OP_IMM
                 or grow_size_argument is None
                 or grow_size_argument[1].type != X86_OP_REG
-                or self._register_family(grow_size_argument[1].reg)
-                != size_family
+                or self._register_family(grow_size_argument[1].reg) != size_family
             ):
                 continue
             candidates.append(
@@ -3942,9 +3899,7 @@ class _DirectCfgRecovery:
                     cursor_slot=cursor_slot,
                     remaining_slot=next(iter(remaining_slots)),
                     grow_target=call.target,
-                    descriptor=(
-                        descriptor_argument[1].imm & 0xFFFF_FFFF
-                    ),
+                    descriptor=(descriptor_argument[1].imm & 0xFFFF_FFFF),
                 )
             )
         unique = tuple(dict.fromkeys(candidates))
@@ -3952,6 +3907,13 @@ class _DirectCfgRecovery:
 
     def _direct_function_call_closure(self, root: int) -> frozenset[int]:
         """Return the finite owned direct-call closure rooted at ``root``."""
+        cache_key = (
+            root,
+            self._summary_fact_signature(),
+            self.control_flow_revision,
+        )
+        if cache_key in self.direct_function_call_closure_cache:
+            return self.direct_function_call_closure_cache[cache_key]
         if root not in self.function_addresses:
             return frozenset()
         closure = {root}
@@ -3972,7 +3934,9 @@ class _DirectCfgRecovery:
                 closure.add(call.target)
                 self.limits.check("max_summary_iterations", len(closure))
                 pending.append(call.target)
-        return frozenset(closure)
+        result = frozenset(closure)
+        self.direct_function_call_closure_cache[cache_key] = result
+        return result
 
     def _function_absolute_writes(
         self, function_entry: int, slots: frozenset[int]
@@ -4022,10 +3986,28 @@ class _DirectCfgRecovery:
             )
             if not zero_test:
                 continue
+            branch = None
             branch_address = address + row.size
-            if branch_address not in self.instructions:
+            for _ in range(8):
+                if (
+                    branch_address >= success_address
+                    or branch_address not in self.instructions
+                ):
+                    break
+                candidate = self._owned_decoded(branch_address)
+                if candidate.mnemonic in {"jne", "jnz", "je", "jz"}:
+                    branch = candidate
+                    break
+                if (
+                    candidate.group(CS_GRP_CALL)
+                    or candidate.group(CS_GRP_JUMP)
+                    or candidate.group(CS_GRP_RET)
+                    or x86_const.X86_REG_EFLAGS in candidate.regs_write
+                ):
+                    break
+                branch_address += candidate.size
+            if branch is None:
                 continue
-            branch = self._owned_decoded(branch_address)
             target = self._direct_target(branch)
             fallthrough = branch_address + branch.size
             if target is None:
@@ -4081,7 +4063,76 @@ class _DirectCfgRecovery:
                 )
             ):
                 zero_return = True
-        return saved_stack and zero_return
+        if saved_stack and zero_return:
+            return True
+
+        rows = [
+            self._owned_decoded(address)
+            for address in self._function_instruction_addresses(function_entry)
+        ]
+        if len(rows) != 12 or [row.mnemonic for row in rows] != [
+            "pop",
+            "pop",
+            "mov",
+            "mov",
+            "mov",
+            "mov",
+            "mov",
+            "mov",
+            "xor",
+            "push",
+            "push",
+            "ret",
+        ]:
+            return False
+        return_pop, context_pop, *stores, zero, zero_push, return_push, _ret = rows
+        if (
+            len(return_pop.operands) != 1
+            or return_pop.operands[0].type != X86_OP_REG
+            or len(context_pop.operands) != 1
+            or context_pop.operands[0].type != X86_OP_REG
+        ):
+            return False
+        return_family = self._register_family(return_pop.operands[0].reg)
+        context_family = self._register_family(context_pop.operands[0].reg)
+        expected_stores = (
+            (0, "ebx"),
+            (4, "esi"),
+            (8, "edi"),
+            (12, "esp"),
+            (16, "ebp"),
+            (20, return_family),
+        )
+        if any(
+            len(store.operands) != 2
+            or store.operands[0].type != X86_OP_MEM
+            or store.operands[0].size != 4
+            or store.operands[0].mem.segment != X86_REG_INVALID
+            or store.operands[0].mem.base == X86_REG_INVALID
+            or self._register_family(store.operands[0].mem.base) != context_family
+            or store.operands[0].mem.index != X86_REG_INVALID
+            or store.operands[0].mem.disp != offset
+            or store.operands[1].type != X86_OP_REG
+            or self._register_family(store.operands[1].reg) != source_family
+            for store, (offset, source_family) in zip(
+                stores, expected_stores, strict=True
+            )
+        ):
+            return False
+        return (
+            len(zero.operands) == 2
+            and all(
+                operand.type == X86_OP_REG
+                and self._register_family(operand.reg) == "eax"
+                for operand in zero.operands
+            )
+            and len(zero_push.operands) == 1
+            and zero_push.operands[0].type == X86_OP_REG
+            and self._register_family(zero_push.operands[0].reg) == "eax"
+            and len(return_push.operands) == 1
+            and return_push.operands[0].type == X86_OP_REG
+            and self._register_family(return_push.operands[0].reg) == return_family
+        )
 
     def _longjmp_like_context_restore(self, function_entry: int) -> bool:
         """Require every local RET to be dominated by ESP=[context]."""
@@ -4110,7 +4161,7 @@ class _DirectCfgRecovery:
                 == 0
             ):
                 restores.add(address)
-        return bool(restores and returns) and all(
+        if bool(restores and returns) and all(
             not self._reachable_within_function(
                 function_entry,
                 return_address,
@@ -4119,6 +4170,89 @@ class _DirectCfgRecovery:
                 excluded=frozenset(restores),
             )
             for return_address in returns
+        ):
+            return True
+
+        rows = [
+            self._owned_decoded(address)
+            for address in self._function_instruction_addresses(function_entry)
+        ]
+        if len(rows) != 14 or [row.mnemonic for row in rows] != [
+            "pop",
+            "pop",
+            "pop",
+            "mov",
+            "mov",
+            "mov",
+            "mov",
+            "mov",
+            "or",
+            "jne",
+            "inc",
+            "push",
+            "push",
+            "ret",
+        ]:
+            return False
+        (
+            _return_pop,
+            context_pop,
+            value_pop,
+            *tail,
+        ) = rows
+        loads = tail[:5]
+        tested, branch, increment, value_push, return_push, _ret = tail[5:]
+        if (
+            len(context_pop.operands) != 1
+            or context_pop.operands[0].type != X86_OP_REG
+            or len(value_pop.operands) != 1
+            or value_pop.operands[0].type != X86_OP_REG
+        ):
+            return False
+        context_family = self._register_family(context_pop.operands[0].reg)
+        value_family = self._register_family(value_pop.operands[0].reg)
+        if any(
+            len(load.operands) != 2
+            or load.operands[0].type != X86_OP_REG
+            or self._register_family(load.operands[0].reg) != destination_family
+            or load.operands[1].type != X86_OP_MEM
+            or load.operands[1].size != 4
+            or load.operands[1].mem.segment != X86_REG_INVALID
+            or load.operands[1].mem.base == X86_REG_INVALID
+            or self._register_family(load.operands[1].mem.base) != context_family
+            or load.operands[1].mem.index != X86_REG_INVALID
+            or load.operands[1].mem.disp != offset
+            for load, (destination_family, offset) in zip(
+                loads,
+                (("ebx", 0), ("esi", 4), ("edi", 8), ("esp", 12), ("ebp", 16)),
+                strict=True,
+            )
+        ):
+            return False
+        return (
+            len(tested.operands) == 2
+            and all(
+                operand.type == X86_OP_REG
+                and self._register_family(operand.reg) == value_family
+                for operand in tested.operands
+            )
+            and self._direct_target(branch) == value_push.address
+            and branch.address + branch.size == increment.address
+            and len(increment.operands) == 1
+            and increment.operands[0].type == X86_OP_REG
+            and self._register_family(increment.operands[0].reg) == value_family
+            and len(value_push.operands) == 1
+            and value_push.operands[0].type == X86_OP_REG
+            and self._register_family(value_push.operands[0].reg) == value_family
+            and len(return_push.operands) == 1
+            and return_push.operands[0].type == X86_OP_MEM
+            and return_push.operands[0].size == 4
+            and return_push.operands[0].mem.segment == X86_REG_INVALID
+            and return_push.operands[0].mem.base != X86_REG_INVALID
+            and self._register_family(return_push.operands[0].mem.base)
+            == context_family
+            and return_push.operands[0].mem.index == X86_REG_INVALID
+            and return_push.operands[0].mem.disp == 20
         )
 
     def _callback_nonreturns_via_context_restore(
@@ -4696,12 +4830,17 @@ class _DirectCfgRecovery:
         )
 
     def _allocator_totality_certificate(
-        self, allocator: int, allocation_caller: int
+        self,
+        allocator: int,
+        allocation_caller: int,
+        *,
+        lifetime_roots: frozenset[int] = frozenset(),
     ) -> _AllocatorTotalityCertificate | None:
         """Prove arena allocation total inside one checked backend session."""
         cache_key = (
             allocator,
             allocation_caller,
+            lifetime_roots,
             self._summary_fact_signature(),
             self.control_flow_revision,
         )
@@ -4746,6 +4885,7 @@ class _DirectCfgRecovery:
             zero_writes = []
             install_writes = []
             checks: dict[int, int] = {}
+            check_branches: dict[int, int] = {}
             for address in self._function_instruction_addresses(candidate):
                 row = self._owned_decoded(address)
                 if row.id == X86_INS_MOV and len(row.operands) == 2:
@@ -4775,8 +4915,9 @@ class _DirectCfgRecovery:
                         branch = self.instructions.get(branch_address)
                         if branch is not None and self._owned_decoded(
                             branch_address
-                        ).mnemonic in {"je", "jz"}:
+                        ).mnemonic in {"je", "jz", "jne", "jnz"}:
                             checks[slot - 8] = address
+                            check_branches[slot - 8] = branch_address
             if (
                 len(zero_writes) != 1
                 or len(install_writes) != 1
@@ -4786,28 +4927,79 @@ class _DirectCfgRecovery:
                 or not install_writes[0] < min(checks.values())
             ):
                 continue
-            success_returns = []
-            for address in self._function_instruction_addresses(candidate):
-                row = self._owned_decoded(address)
-                if not row.group(CS_GRP_RET):
-                    continue
-                previous = self._previous_instruction(address)
-                if previous is None:
-                    continue
-                prior = self._owned_decoded(previous.address)
-                if (
-                    prior.id == X86_INS_XOR
-                    and len(prior.operands) == 2
-                    and all(
+
+            def returns_zero_eax(return_address: int) -> bool:
+                cursor = return_address
+                for _ in range(16):
+                    previous = self._previous_instruction(cursor)
+                    if previous is None or previous.address < candidate:
+                        return False
+                    prior = self._owned_decoded(previous.address)
+                    writes_eax = any(
+                        self._register_family(register) == "eax"
+                        for register in prior.regs_write
+                    ) or any(
                         operand.type == X86_OP_REG
+                        and operand.access & CS_AC_WRITE
                         and self._register_family(operand.reg) == "eax"
                         for operand in prior.operands
                     )
-                ):
+                    if writes_eax:
+                        return (
+                            prior.id == X86_INS_XOR
+                            and len(prior.operands) == 2
+                            and all(
+                                operand.type == X86_OP_REG
+                                and self._register_family(operand.reg) == "eax"
+                                for operand in prior.operands
+                            )
+                        )
+                    if (
+                        prior.group(CS_GRP_CALL)
+                        or prior.group(CS_GRP_JUMP)
+                        or prior.group(CS_GRP_RET)
+                    ):
+                        return False
+                    cursor = previous.address
+                return False
+
+            success_returns = []
+            for address in self._function_instruction_addresses(candidate):
+                row = self._owned_decoded(address)
+                if row.group(CS_GRP_RET) and returns_zero_eax(address):
                     success_returns.append(address)
             if len(success_returns) != 1:
                 continue
             success_return = success_returns[0]
+            closed_nonzero_checks = True
+            for descriptor, branch_address in check_branches.items():
+                branch = self._owned_decoded(branch_address)
+                target = self._direct_target(branch)
+                if target is None:
+                    closed_nonzero_checks = False
+                    break
+                fallthrough = branch.address + branch.size
+                if branch.mnemonic in {"je", "jz"}:
+                    zero_successor = target
+                    nonzero_successor = fallthrough
+                else:
+                    zero_successor = fallthrough
+                    nonzero_successor = target
+                if self._reachable_within_function(
+                    zero_successor,
+                    success_return,
+                    candidate,
+                    following,
+                ) or not self._reachable_within_function(
+                    nonzero_successor,
+                    success_return,
+                    candidate,
+                    following,
+                ):
+                    closed_nonzero_checks = False
+                    break
+            if not closed_nonzero_checks:
+                continue
             if any(
                 self._reachable_within_function(
                     candidate,
@@ -4896,12 +5088,26 @@ class _DirectCfgRecovery:
                     forbidden_slots = frozenset(
                         {callback_slot, fact.cursor_slot, fact.remaining_slot}
                     )
+                    stability_scope = closure
+                    if lifetime_roots:
+                        if not lifetime_roots <= closure:
+                            continue
+                        lifetime_closures = tuple(
+                            self._direct_function_call_closure(root)
+                            for root in sorted(lifetime_roots)
+                        )
+                        if any(
+                            allocation_caller not in lifetime_closure
+                            for lifetime_closure in lifetime_closures
+                        ):
+                            continue
+                        stability_scope = frozenset().union(*lifetime_closures)
                     if any(
                         function_entry not in {allocator, fact.grow_target}
                         and self._function_absolute_writes(
                             function_entry, forbidden_slots
                         )
-                        for function_entry in closure
+                        for function_entry in stability_scope
                     ):
                         continue
                     reset_targets = frozenset(
@@ -4944,6 +5150,7 @@ class _DirectCfgRecovery:
                                 if grow_shape.finalizer_call is None
                                 else (grow_shape.finalizer_call.target,)
                             ),
+                            lifetime_roots=lifetime_roots,
                         )
                     )
         unique = tuple(dict.fromkeys(session_candidates))
@@ -4960,6 +5167,7 @@ class _DirectCfgRecovery:
             certificate.callback_target,
             certificate.setjmp_target,
             certificate.longjmp_target,
+            *certificate.lifetime_roots,
             *certificate.system_allocators,
             *certificate.finalizer_targets,
             *certificate.reset_targets,
@@ -5052,6 +5260,755 @@ class _DirectCfgRecovery:
             return True
         return False
 
+    def _global_append_unselected_clone_link(
+        self,
+        link_address: int,
+        clone_register: int,
+        parent_family: str,
+        parent_definition: int,
+        function_entry: int,
+        allocation_size: int,
+        target_field: int,
+        discriminator: tuple[int, frozenset[int]],
+        lifetime_roots: frozenset[int],
+    ) -> str | None:
+        """Prove a full fresh clone linked after publication stays unselected."""
+        clone_family = self._register_family(clone_register)
+        clone_definitions = self._register_definitions_across_blocks(
+            link_address, clone_family, function_entry
+        )
+        if not clone_definitions or len(clone_definitions) != 1:
+            return None
+        clone_definition = next(iter(clone_definitions))
+        definition = self._owned_decoded(clone_definition)
+        if definition.group(CS_GRP_CALL) and clone_family == "eax":
+            allocation_call = clone_definition
+        elif (
+            definition.id == X86_INS_MOV
+            and len(definition.operands) == 2
+            and definition.operands[0].type == X86_OP_REG
+            and self._register_family(definition.operands[0].reg) == clone_family
+            and definition.operands[1].type == X86_OP_REG
+            and self._register_family(definition.operands[1].reg) == "eax"
+        ):
+            call_definitions = self._register_definitions_across_blocks(
+                clone_definition, "eax", function_entry
+            )
+            if not call_definitions or len(call_definitions) != 1:
+                return None
+            allocation_call = next(iter(call_definitions))
+        else:
+            return None
+        allocator = self.direct_call_targets_by_source.get(allocation_call)
+        if (
+            allocator is None
+            or self._owned_fixed_bump_allocator_size_argument(allocator) is None
+            or (pushed := self._pushed_call_argument(allocation_call, 0)) is None
+            or pushed[1].type != X86_OP_IMM
+            or pushed[1].imm & 0xFFFF_FFFF != allocation_size
+        ):
+            return None
+
+        def register_is_identity(
+            address: int, register: int, family: str, definition_address: int
+        ) -> bool:
+            return self._register_family(
+                register
+            ) == family and self._register_definitions_across_blocks(
+                address, family, function_entry
+            ) == {definition_address}
+
+        copy_rows = [
+            self._owned_decoded(address)
+            for address in self._function_instruction_addresses_between(
+                function_entry, clone_definition, link_address
+            )
+            if self._owned_decoded(address).mnemonic
+            in {"movsb", "movsw", "movsd", "rep movsb", "rep movsw", "rep movsd"}
+        ]
+        if (
+            not copy_rows
+            or any(
+                left.address + left.size != right.address
+                for left, right in zip(copy_rows, copy_rows[1:])
+            )
+            or any(
+                address < copy_rows[-1].address
+                and self._owned_decoded(address).mnemonic == "std"
+                for address in self._function_instruction_addresses(function_entry)
+            )
+        ):
+            return None
+        copied_bytes = 0
+        for copy in copy_rows:
+            if copy.mnemonic.startswith("rep "):
+                count = self._resolve_register_constant_before(
+                    copy.address, x86_const.X86_REG_ECX
+                )
+                if count is None:
+                    return None
+                copied_bytes += (
+                    count
+                    * {
+                        "rep movsb": 1,
+                        "rep movsw": 2,
+                        "rep movsd": 4,
+                    }[copy.mnemonic]
+                )
+            else:
+                copied_bytes += {"movsb": 1, "movsw": 2, "movsd": 4}[copy.mnemonic]
+        if copied_bytes != allocation_size:
+            return None
+
+        def copy_pointer_setup(
+            destination_family: str,
+            source_family: str,
+            source_definition: int,
+        ) -> int | None:
+            candidates = []
+            for address in self._function_instruction_addresses_between(
+                function_entry,
+                clone_definition,
+                copy_rows[0].address,
+            ):
+                row = self._owned_decoded(address)
+                if (
+                    row.id not in {X86_INS_MOV, X86_INS_LEA}
+                    or len(row.operands) != 2
+                    or row.operands[0].type != X86_OP_REG
+                    or self._register_family(row.operands[0].reg) != destination_family
+                ):
+                    continue
+                source = row.operands[1]
+                if source.type == X86_OP_REG:
+                    matches = register_is_identity(
+                        address,
+                        source.reg,
+                        source_family,
+                        source_definition,
+                    )
+                else:
+                    matches = (
+                        row.id == X86_INS_LEA
+                        and source.type == X86_OP_MEM
+                        and source.mem.segment == X86_REG_INVALID
+                        and source.mem.base != X86_REG_INVALID
+                        and source.mem.index == X86_REG_INVALID
+                        and source.mem.disp == 0
+                        and register_is_identity(
+                            address,
+                            source.mem.base,
+                            source_family,
+                            source_definition,
+                        )
+                    )
+                if matches:
+                    candidates.append(address)
+            if len(candidates) != 1:
+                return None
+            setup = candidates[0]
+            if any(
+                self._register_family(register) == destination_family
+                for address in self._function_instruction_addresses_between(
+                    function_entry, setup + 1, copy_rows[0].address
+                )
+                for register in self._owned_decoded(address).regs_write
+            ):
+                return None
+            return setup
+
+        source_setup = copy_pointer_setup("esi", parent_family, parent_definition)
+        destination_setup = copy_pointer_setup("edi", clone_family, clone_definition)
+        if source_setup is None or destination_setup is None:
+            return None
+
+        discriminator_field, allowed_values = discriminator
+        discriminator_writers = []
+        target_writers = []
+        for address in self._function_instruction_addresses_between(
+            function_entry, clone_definition, 0x1_0000_0000
+        ):
+            row = self._owned_decoded(address)
+            if row.id != X86_INS_MOV or len(row.operands) != 2:
+                continue
+            destination, source = row.operands
+            if (
+                destination.type != X86_OP_MEM
+                or destination.mem.base == X86_REG_INVALID
+                or destination.mem.index != X86_REG_INVALID
+                or not register_is_identity(
+                    address,
+                    destination.mem.base,
+                    clone_family,
+                    clone_definition,
+                )
+            ):
+                continue
+            if (
+                destination.mem.disp == discriminator_field
+                and destination.size == 1
+                and source.type == X86_OP_IMM
+            ):
+                discriminator_writers.append((address, source.imm & 0xFF))
+            elif (
+                destination.mem.disp < target_field + 4
+                and target_field < destination.mem.disp + destination.size
+            ):
+                target_writers.append(address)
+        if (
+            len(discriminator_writers) != 1
+            or discriminator_writers[0][1] in allowed_values
+            or target_writers
+        ):
+            return None
+        tag_writer, tag_value = discriminator_writers[0]
+        following_entry = min(
+            (row for row in self.function_addresses if row > function_entry),
+            default=0x1_0000_0000,
+        )
+        returns = [
+            address
+            for address in self._function_instruction_addresses(function_entry)
+            if self._owned_decoded(address).group(CS_GRP_RET)
+            and self._reachable_within_function(
+                link_address,
+                address,
+                function_entry,
+                following_entry,
+            )
+        ]
+        if not returns or any(
+            self._reachable_within_function(
+                link_address,
+                return_address,
+                function_entry,
+                following_entry,
+                excluded=tag_writer,
+            )
+            for return_address in returns
+        ):
+            return None
+        states = self._relative_pointer_states(
+            function_entry,
+            root_call=allocation_call,
+            propagate_call_returns=False,
+        )
+        if (
+            not (
+                states is not None
+                and self._allocation_result_has_closed_nonnull_guard(
+                    allocation_call,
+                    link_address,
+                    function_entry,
+                    states,
+                )
+            )
+            and self._allocator_totality_certificate(
+                allocator,
+                function_entry,
+                lifetime_roots=lifetime_roots,
+            )
+            is None
+        ):
+            return None
+        return (
+            f"clone-allocation={allocation_call:#x};"
+            f"copy={copy_rows[0].address:#x}..{copy_rows[-1].address:#x};"
+            f"link={link_address:#x};tag={tag_value:#x}"
+        )
+
+    def _global_append_allocation_effect(
+        self,
+        publication: int,
+        pointer_slot: int,
+        target_field: int,
+        field_path: tuple[int, ...],
+        visited: frozenset[tuple[int, str]],
+        discriminator: tuple[int, frozenset[int]] | None = None,
+        lifetime_roots: frozenset[int] = frozenset(),
+    ) -> tuple[_AllocationPointeeEffect, int, int, bool] | None:
+        """Prove one fresh node was linked through and published to a tail."""
+        if not field_path or field_path[0] < 0:
+            return None
+        function_entry = self._registrar_function_entry(publication)
+        if function_entry is None:
+            return None
+        row = self._owned_decoded(publication)
+        if not (
+            row.id == X86_INS_MOV
+            and len(row.operands) == 2
+            and row.operands[0].type == X86_OP_MEM
+            and row.operands[0].size == 4
+            and row.operands[0].mem.segment == X86_REG_INVALID
+            and row.operands[0].mem.base == X86_REG_INVALID
+            and row.operands[0].mem.index == X86_REG_INVALID
+            and row.operands[0].mem.disp & 0xFFFF_FFFF == pointer_slot
+            and row.operands[1].type == X86_OP_REG
+            and row.operands[1].size == 4
+        ):
+            return None
+        allocation_family = self._register_family(row.operands[1].reg)
+        allocation_definitions = self._register_definitions_across_blocks(
+            publication, allocation_family, function_entry
+        )
+        if not allocation_definitions or len(allocation_definitions) != 1:
+            return None
+        allocation_definition = next(iter(allocation_definitions))
+        definition = self._owned_decoded(allocation_definition)
+        if definition.group(CS_GRP_CALL) and allocation_family == "eax":
+            allocation_call = allocation_definition
+        elif (
+            definition.id == X86_INS_MOV
+            and len(definition.operands) == 2
+            and definition.operands[0].type == X86_OP_REG
+            and self._register_family(definition.operands[0].reg) == allocation_family
+            and definition.operands[1].type == X86_OP_REG
+            and self._register_family(definition.operands[1].reg) == "eax"
+        ):
+            call_definitions = self._register_definitions_across_blocks(
+                allocation_definition, "eax", function_entry
+            )
+            if not call_definitions or len(call_definitions) != 1:
+                return None
+            allocation_call = next(iter(call_definitions))
+        else:
+            return None
+        call = self._owned_decoded(allocation_call)
+        allocator = self.direct_call_targets_by_source.get(allocation_call)
+        if allocator is None or not call.group(CS_GRP_CALL):
+            return None
+        size_argument = self._owned_fixed_bump_allocator_size_argument(allocator)
+        if size_argument is None:
+            return None
+        pushed_size = self._pushed_call_argument(allocation_call, size_argument)
+        if (
+            pushed_size is None
+            or pushed_size[1].type != X86_OP_IMM
+            or not 0
+            < (allocation_size := pushed_size[1].imm & 0xFFFF_FFFF)
+            <= 0x1000_0000
+            or target_field < 0
+            or target_field + 4 > allocation_size
+            or field_path[0] + 4 > allocation_size
+        ):
+            return None
+        self._note_producer_dependency(function_entry)
+        self._note_producer_dependency(allocator)
+
+        following_entry = min(
+            (value for value in self.function_addresses if value > function_entry),
+            default=0x1_0000_0000,
+        )
+
+        def allocation_register_at(address: int, register: int) -> bool:
+            return self._register_family(
+                register
+            ) == allocation_family and self._register_definitions_across_blocks(
+                address, allocation_family, function_entry
+            ) == {allocation_definition}
+
+        zero_writers: set[int] = set()
+        clone_link_candidates: list[tuple[int, int]] = []
+        link_writers: set[int] = set()
+        link_loads: set[int] = set()
+        discriminator_writers: set[int] = set()
+        discriminator_values: set[int] = set()
+        value_writers: set[int] = set()
+        value_candidates: list[tuple[int, Any]] = []
+        values: set[int] = set()
+        details: list[str] = []
+        for address in self._function_instruction_addresses(function_entry):
+            if address < allocation_definition or not self._reachable_within_function(
+                function_entry,
+                address,
+                function_entry,
+                following_entry,
+            ):
+                continue
+            candidate = self._owned_decoded(address)
+            if candidate.id != X86_INS_MOV or len(candidate.operands) != 2:
+                continue
+            destination, source = candidate.operands
+            if (
+                destination.type != X86_OP_MEM
+                or destination.mem.base == X86_REG_INVALID
+                or destination.mem.index != X86_REG_INVALID
+                or destination.size <= 0
+            ):
+                continue
+            base_is_allocation = allocation_register_at(address, destination.mem.base)
+            if base_is_allocation:
+                node_offset = destination.mem.disp
+                if node_offset < 0 or node_offset + destination.size > allocation_size:
+                    return None
+                if (
+                    node_offset < target_field + 4
+                    and target_field < node_offset + destination.size
+                ):
+                    if (
+                        node_offset == target_field
+                        and destination.size == 4
+                        and source.type == X86_OP_IMM
+                        and source.imm & 0xFFFF_FFFF == 0
+                    ):
+                        zero_writers.add(address)
+                    elif (
+                        node_offset == target_field
+                        and destination.size == 4
+                        and source.type == X86_OP_REG
+                        and address > publication
+                    ):
+                        clone_link_candidates.append((address, source.reg))
+                    else:
+                        return None
+                if discriminator is not None:
+                    discriminator_field, _allowed_values = discriminator
+                    if (
+                        node_offset < discriminator_field + 1
+                        and discriminator_field < node_offset + destination.size
+                    ):
+                        if not (
+                            node_offset == discriminator_field
+                            and destination.size == 1
+                            and source.type == X86_OP_IMM
+                        ):
+                            return None
+                        discriminator_writers.add(address)
+                        discriminator_values.add(source.imm & 0xFF)
+                if (
+                    node_offset < field_path[0] + 4
+                    and field_path[0] < node_offset + destination.size
+                ):
+                    if not (
+                        node_offset == field_path[0]
+                        and destination.size == 4
+                        and len(field_path) > 1
+                    ):
+                        return None
+                    value_candidates.append((address, source))
+                continue
+            if not (
+                destination.mem.disp == target_field
+                and destination.size == 4
+                and source.type == X86_OP_REG
+                and allocation_register_at(address, source.reg)
+            ):
+                continue
+            base_family = self._register_family(destination.mem.base)
+            if self._register_global_pointer_field_identity(
+                address, base_family, function_entry
+            ) != (pointer_slot, target_field):
+                continue
+            definitions = self._register_definitions_across_blocks(
+                address, base_family, function_entry
+            )
+            if not definitions or len(definitions) != 1:
+                return None
+            link_writers.add(address)
+            link_loads.update(definitions)
+
+        selected = True
+        initial_discriminator_writers = {
+            address for address in discriminator_writers if address < publication
+        }
+        if discriminator is not None:
+            _discriminator_field, allowed_values = discriminator
+            if not initial_discriminator_writers or not discriminator_values:
+                return None
+            selected = bool(discriminator_values & allowed_values)
+        clone_details = []
+        for clone_link, clone_register in clone_link_candidates:
+            if discriminator is None:
+                return None
+            clone_detail = self._global_append_unselected_clone_link(
+                clone_link,
+                clone_register,
+                allocation_family,
+                allocation_definition,
+                function_entry,
+                allocation_size,
+                target_field,
+                discriminator,
+                lifetime_roots,
+            )
+            if clone_detail is None:
+                return None
+            clone_details.append(clone_detail)
+        if selected:
+            if not value_candidates:
+                return None
+            self.producer_allocator_lifetime_contexts.append(lifetime_roots)
+            try:
+                for value_address, value_source in value_candidates:
+                    result = self._finite_object_byte_operand_values_before(
+                        value_address,
+                        value_source,
+                        function_entry,
+                        field_path[1:],
+                        visited,
+                    )
+                    if result is None:
+                        return None
+                    value_writers.add(value_address)
+                    values.update(result[0])
+                    details.append(f"payload={value_address:#x};{result[1]}")
+            finally:
+                popped = self.producer_allocator_lifetime_contexts.pop()
+                if popped != lifetime_roots:
+                    raise AssertionError(
+                        "producer allocator lifetime context stack corrupted"
+                    )
+
+        if (
+            len(zero_writers) != 1
+            or len(link_writers) != 1
+            or len(link_loads) != 1
+            or (selected and (not value_writers or not values))
+        ):
+            return None
+        required_before_publication = (
+            zero_writers | link_writers | initial_discriminator_writers
+        )
+        if any(
+            self._reachable_within_function(
+                allocation_definition,
+                publication,
+                function_entry,
+                following_entry,
+                excluded=required,
+            )
+            for required in required_before_publication
+        ):
+            return None
+        returns = [
+            address
+            for address in self._function_instruction_addresses(function_entry)
+            if self._owned_decoded(address).group(CS_GRP_RET)
+            and self._reachable_within_function(
+                publication,
+                address,
+                function_entry,
+                following_entry,
+            )
+        ]
+        if not returns:
+            return None
+        if selected and not any(
+            (
+                value_writer < publication
+                and not self._reachable_within_function(
+                    allocation_definition,
+                    publication,
+                    function_entry,
+                    following_entry,
+                    excluded=value_writer,
+                )
+            )
+            or (
+                value_writer > publication
+                and all(
+                    not self._reachable_within_function(
+                        publication,
+                        return_address,
+                        function_entry,
+                        following_entry,
+                        excluded=value_writer,
+                    )
+                    for return_address in returns
+                )
+            )
+            for value_writer in value_writers
+        ):
+            return None
+        allocation_states = self._relative_pointer_states(
+            function_entry,
+            root_call=allocation_call,
+            propagate_call_returns=False,
+        )
+        has_local_guard = bool(
+            allocation_states is not None
+            and self._allocation_result_has_closed_nonnull_guard(
+                allocation_call,
+                publication,
+                function_entry,
+                allocation_states,
+            )
+        )
+        totality = None
+        if not has_local_guard:
+            totality = self._allocator_totality_certificate(
+                allocator,
+                function_entry,
+                lifetime_roots=lifetime_roots,
+            )
+            if totality is None:
+                return None
+        self._check_count("max_finite_values", len(values))
+        return (
+            _AllocationPointeeEffect(
+                _AbstractObjectIdentity("global-append-allocation", allocation_call),
+                frozenset(values),
+                f"global-tail={pointer_slot:#x};"
+                f"allocator={allocator:#x};allocation={allocation_call:#x};"
+                f"link={next(iter(link_writers)):#x};"
+                f"publication={publication:#x};"
+                + (
+                    "local-nonnull-guard;"
+                    if totality is None
+                    else (
+                        f"allocator-session={totality.session_root:#x};"
+                        "lifetime-roots="
+                        + ",".join(
+                            f"{root:#x}" for root in sorted(totality.lifetime_roots)
+                        )
+                        + ";"
+                    )
+                )
+                + "|".join([*details, *clone_details]),
+            ),
+            next(iter(link_loads)),
+            next(iter(link_writers)),
+            selected,
+        )
+
+    def _closed_global_append_tail_effect(
+        self,
+        pointer_slot: int,
+        root_publication: int,
+        target_field: int,
+        field_path: tuple[int, ...],
+        visited: frozenset[tuple[int, str]],
+    ) -> _AllocationPointeeEffect | None:
+        """Summarize a zero-rooted, append-only global tail publication."""
+        key = (
+            root_publication,
+            "global-append-tail:"
+            f"{pointer_slot:#x}:{target_field}:"
+            f"{','.join(map(str, field_path))}",
+        )
+        if key in visited or not field_path:
+            return None
+        if (
+            not _is_mapped_span(self.image, pointer_slot, 4)
+            or int.from_bytes(
+                _read_loader_initialized(self.image, pointer_slot, 4), "little"
+            )
+            != 0
+        ):
+            return None
+        writes = self.global_slot_writes.get(pointer_slot, ())
+        if not writes or root_publication not in {
+            write.instruction_address for write in writes
+        }:
+            return None
+        self._note_producer_global_slot_dependency(pointer_slot)
+        values: set[int] = set()
+        details: list[str] = []
+        append_links: set[int] = set()
+        append_loads: set[int] = set()
+        next_visited = visited | {key}
+        object_guard = self._producer_object_guard_context(field_path)
+        discriminator = (
+            None
+            if object_guard is None
+            else (object_guard.discriminator_field, object_guard.values)
+        )
+        lifetime_closures: dict[int, frozenset[int]] = {}
+        lifetime_scope: frozenset[int] | None = None
+        if object_guard is not None:
+            root_owner = self._registrar_function_entry(root_publication)
+            if root_owner is None or not self._incoming_call_domain_is_closed(
+                root_owner
+            ):
+                return None
+            for call_address in sorted(
+                self.direct_call_sources_by_target.get(root_owner, set())
+            ):
+                lifetime_root = self._registrar_function_entry(call_address)
+                if lifetime_root is None:
+                    return None
+                closure = self._direct_function_call_closure(lifetime_root)
+                if object_guard.function_entry not in closure:
+                    return None
+                lifetime_closures[lifetime_root] = closure
+                self._note_producer_dependency(lifetime_root)
+            if not lifetime_closures:
+                return None
+            lifetime_scope = frozenset().union(*lifetime_closures.values())
+        for write in sorted(writes, key=lambda value: value.instruction_address):
+            if write.instruction_address == root_publication:
+                continue
+            lifetime_roots = frozenset()
+            if lifetime_closures:
+                write_owner = self._registrar_function_entry(write.instruction_address)
+                lifetime_roots = frozenset(
+                    root
+                    for root, closure in lifetime_closures.items()
+                    if write_owner in closure
+                )
+                if not lifetime_roots:
+                    continue
+            result = self._global_append_allocation_effect(
+                write.instruction_address,
+                pointer_slot,
+                target_field,
+                field_path,
+                next_visited,
+                discriminator,
+                lifetime_roots,
+            )
+            if result is None:
+                return None
+            effect, link_load, link_writer, selected = result
+            if selected:
+                values.update(effect.values)
+            details.append(effect.provenance)
+            append_loads.add(link_load)
+            append_links.add(link_writer)
+        if not values:
+            return None
+
+        for relocation in self.image.relocations:
+            if not (
+                relocation.type == 3
+                and _is_mapped_span(self.image, relocation.va, 4)
+                and int.from_bytes(
+                    _read_loader_initialized(self.image, relocation.va, 4),
+                    "little",
+                )
+                == pointer_slot
+            ):
+                continue
+            owner = self.byte_owners.get(relocation.va)
+            if owner is None or owner in append_loads:
+                continue
+            load = self._owned_decoded(owner)
+            function_entry = self._registrar_function_entry(owner)
+            if lifetime_scope is not None and function_entry not in lifetime_scope:
+                continue
+            if not (
+                function_entry is not None
+                and load.id == X86_INS_MOV
+                and len(load.operands) == 2
+                and load.operands[0].type == X86_OP_REG
+                and load.operands[1].type == X86_OP_MEM
+                and self._pointer_definition_preserves_field_without_escape(
+                    owner, function_entry, target_field
+                )
+            ):
+                return None
+        self._check_count("max_finite_values", len(values))
+        return _AllocationPointeeEffect(
+            _AbstractObjectIdentity("global-append-tail", pointer_slot),
+            frozenset(values),
+            f"global-append-tail={pointer_slot:#x};"
+            f"root-publication={root_publication:#x};"
+            + ("" if object_guard is None else f"{object_guard.provenance};")
+            + f"append-links={','.join(f'{value:#x}' for value in sorted(append_links))};"
+            + "|".join(details),
+            may_preserve_empty=True,
+        )
+
     def _direct_allocation_list_push_effect(
         self,
         function_entry: int,
@@ -5072,9 +6029,7 @@ class _DirectCfgRecovery:
         for call in sorted(self.direct_calls, key=lambda row: row.address):
             if not function_entry <= call.address < following_entry:
                 continue
-            size_argument = self._owned_fixed_bump_allocator_size_argument(
-                call.target
-            )
+            size_argument = self._owned_fixed_bump_allocator_size_argument(call.target)
             if size_argument is None:
                 continue
             pushed = self._pushed_call_argument(call.address, size_argument)
@@ -5106,9 +6061,7 @@ class _DirectCfgRecovery:
         def offsets(state, register):
             if state is None:
                 return frozenset()
-            return state[0][
-                family_index[self._register_family(register)]
-            ]
+            return state[0][family_index[self._register_family(register)]]
 
         publication = None
         byte_writers: set[int] = set()
@@ -5132,13 +6085,10 @@ class _DirectCfgRecovery:
                 and row.operands[1].mem.base != X86_REG_INVALID
                 and row.operands[1].mem.index == X86_REG_INVALID
             ):
-                outer_offsets = offsets(
-                    outer_state, row.operands[1].mem.base
-                )
+                outer_offsets = offsets(outer_state, row.operands[1].mem.base)
                 if (
                     len(outer_offsets) == 1
-                    and next(iter(outer_offsets))
-                    + row.operands[1].mem.disp
+                    and next(iter(outer_offsets)) + row.operands[1].mem.disp
                     == target_field
                 ):
                     old_head_reads.setdefault(
@@ -5147,9 +6097,7 @@ class _DirectCfgRecovery:
             for operand_index, operand in enumerate(row.operands):
                 if operand.type != X86_OP_MEM or operand.mem.base == X86_REG_INVALID:
                     continue
-                allocation_offsets = offsets(
-                    allocation_state, operand.mem.base
-                )
+                allocation_offsets = offsets(allocation_state, operand.mem.base)
                 if allocation_offsets:
                     if (
                         len(allocation_offsets) != 1
@@ -5174,16 +6122,12 @@ class _DirectCfgRecovery:
                             or row.operands[1].type != X86_OP_REG
                         ):
                             return None
-                        source_family = self._register_family(
-                            row.operands[1].reg
-                        )
+                        source_family = self._register_family(row.operands[1].reg)
                         definitions = self._register_definitions_across_blocks(
                             address, source_family, function_entry
                         )
-                        if (
-                            not definitions
-                            or definitions
-                            != old_head_reads.get(source_family, set())
+                        if not definitions or definitions != old_head_reads.get(
+                            source_family, set()
                         ):
                             return None
                         link_writers.add(address)
@@ -5204,9 +6148,7 @@ class _DirectCfgRecovery:
                             return None
                         byte_writers.add(address)
                         values.update(result[0])
-                        details.append(
-                            f"initializer={address:#x};{result[1]}"
-                        )
+                        details.append(f"initializer={address:#x};{result[1]}")
 
                 outer_offsets = offsets(outer_state, operand.mem.base)
                 if not outer_offsets:
@@ -5232,8 +6174,7 @@ class _DirectCfgRecovery:
                     or outer_offset != target_field
                     or len(row.operands) != 2
                     or row.operands[1].type != X86_OP_REG
-                    or offsets(allocation_state, row.operands[1].reg)
-                    != frozenset({0})
+                    or offsets(allocation_state, row.operands[1].reg) != frozenset({0})
                 ):
                     return None
                 publication = address
@@ -5258,10 +6199,15 @@ class _DirectCfgRecovery:
                     and row.id == X86_INS_MOV
                     and operand_index == 1
                 )
-                if not copied and not published and row.mnemonic not in {
-                    "cmp",
-                    "test",
-                }:
+                if (
+                    not copied
+                    and not published
+                    and row.mnemonic
+                    not in {
+                        "cmp",
+                        "test",
+                    }
+                ):
                     return None
         if (
             publication is None
@@ -5398,6 +6344,8 @@ class _DirectCfgRecovery:
         direct_effect = None if direct is None else direct[0]
         direct_publication = None if direct is None else direct[1]
         publishers: list[tuple[int, _AllocationPointeeEffect]] = []
+        association_clobbers: set[int] = set()
+        global_publications: set[int] = set()
         if direct_effect is not None:
             publishers.append((direct_publication, direct_effect))
         family_index = {
@@ -5418,17 +6366,45 @@ class _DirectCfgRecovery:
                 row.id == X86_INS_MOV
                 and len(row.operands) == 2
                 and row.operands[0].type == X86_OP_MEM
-                and self._relative_operand_offsets(
-                    address,
-                    row.operands[1],
-                    function_entry,
-                    argument_index,
-                    states,
+                and (
+                    source_offsets := self._relative_operand_offsets(
+                        address,
+                        row.operands[1],
+                        function_entry,
+                        argument_index,
+                        states,
+                    )
                 )
             ):
                 # Storing the tracked outer itself creates an unclosed alias,
                 # even when the destination is not relative to that outer.
-                return None
+                destination = row.operands[0]
+                pointer_slot = (
+                    destination.mem.disp & 0xFFFF_FFFF
+                    if (
+                        source_offsets == frozenset({0})
+                        and destination.size == 4
+                        and destination.mem.segment == X86_REG_INVALID
+                        and destination.mem.base == X86_REG_INVALID
+                        and destination.mem.index == X86_REG_INVALID
+                    )
+                    else None
+                )
+                global_effect = (
+                    None
+                    if pointer_slot is None or not association_clobbers
+                    else self._closed_global_append_tail_effect(
+                        pointer_slot,
+                        address,
+                        target_field,
+                        field_path,
+                        next_visited,
+                    )
+                )
+                if global_effect is None:
+                    return None
+                global_publications.add(address)
+                publishers.append((address, global_effect))
             for operand_index, operand in enumerate(row.operands):
                 if operand.type != X86_OP_MEM or operand.mem.base == X86_REG_INVALID:
                     continue
@@ -5449,6 +6425,7 @@ class _DirectCfgRecovery:
                     and write_offset < target_field + 4
                     and target_field < write_offset + operand.size
                     and address != direct_publication
+                    and address not in global_publications
                 ):
                     return None
             if not row.group(CS_GRP_CALL):
@@ -5482,6 +6459,20 @@ class _DirectCfgRecovery:
                 return None
             self._note_producer_dependency(target)
             callee_argument, alias_offset = aliases[0]
+            if callee_argument == 0 and self._strict_zero_fill_function(target):
+                size = self._pushed_call_argument(address, 1)
+                if size is None or size[1].type != X86_OP_IMM:
+                    return None
+                byte_count = size[1].imm & 0xFFFF_FFFF
+                association_offset = target_field - alias_offset
+                if association_offset >= byte_count or association_offset + 4 <= 0:
+                    continue
+                if not (
+                    association_offset >= 0 and association_offset + 4 <= byte_count
+                ):
+                    return None
+                association_clobbers.add(address)
+                continue
             effect = self._callee_argument_allocation_pointee_effect(
                 target,
                 callee_argument,
@@ -5495,6 +6486,8 @@ class _DirectCfgRecovery:
                 publishers.append((address, effect))
 
         if not publishers:
+            if association_clobbers:
+                return None
             return _AllocationPointeeEffect(
                 None,
                 frozenset(),
@@ -5511,6 +6504,17 @@ class _DirectCfgRecovery:
         if not returns:
             return None
         publisher_addresses = frozenset(address for address, _ in publishers)
+        if any(
+            self._reachable_within_function(
+                publisher,
+                clobber,
+                function_entry,
+                following_entry,
+            )
+            for publisher in publisher_addresses
+            for clobber in association_clobbers
+        ):
+            return None
         bypasses_all = any(
             self._reachable_within_function(
                 function_entry,
@@ -5522,9 +6526,7 @@ class _DirectCfgRecovery:
             for return_address in returns
         )
         values = frozenset(
-            value
-            for _publisher, effect in publishers
-            for value in effect.values
+            value for _publisher, effect in publishers for value in effect.values
         )
         if not values:
             return None
@@ -5535,9 +6537,7 @@ class _DirectCfgRecovery:
         generation = (
             publishers[0][1].generation
             if len(publishers) == 1 and not may_preserve_empty
-            else _AbstractObjectIdentity(
-                "finite-allocation-set", function_entry
-            )
+            else _AbstractObjectIdentity("finite-allocation-set", function_entry)
         )
         return _AllocationPointeeEffect(
             generation,
@@ -5613,15 +6613,14 @@ class _DirectCfgRecovery:
             default=0x1_0000_0000,
         )
         writers: set[int] = set()
+        association_clobbers: set[int] = set()
         pointee_offsets: set[int] = set()
         details: list[str] = []
         saw_return = False
         read_association = False
         next_visited = visited | {key, lineage_key}
 
-        for candidate_address in self._function_instruction_addresses(
-            function_entry
-        ):
+        for candidate_address in self._function_instruction_addresses(function_entry):
             state = states.get(candidate_address)
             if state is None or not self._reachable_within_function(
                 function_entry,
@@ -5657,9 +6656,7 @@ class _DirectCfgRecovery:
                     ]
                     if len(base_values) != 1:
                         return None
-                    write_offset = (
-                        next(iter(base_values)) + destination.mem.disp
-                    )
+                    write_offset = next(iter(base_values)) + destination.mem.disp
                     if write_offset != target_field:
                         # Publishing the tracked pointer anywhere except the
                         # selected association lets it escape this proof.
@@ -5673,8 +6670,7 @@ class _DirectCfgRecovery:
                     writers.add(candidate_address)
                     pointee_offsets.add(pointee_offset)
                     details.append(
-                        f"writer={candidate_address:#x};"
-                        f"pointee={pointee_offset:+#x}"
+                        f"writer={candidate_address:#x};pointee={pointee_offset:+#x}"
                     )
 
             for source in candidate.operands:
@@ -5685,9 +6681,7 @@ class _DirectCfgRecovery:
                 ):
                     continue
                 base_values = state[0][
-                    _REGISTER_FAMILIES.index(
-                        self._register_family(source.mem.base)
-                    )
+                    _REGISTER_FAMILIES.index(self._register_family(source.mem.base))
                 ]
                 if not base_values:
                     continue
@@ -5747,15 +6741,12 @@ class _DirectCfgRecovery:
             ecx_values = state[0][_REGISTER_FAMILIES.index("ecx")]
             target = self.direct_call_targets_by_source.get(candidate_address)
             if ecx_values and (
-                target is None
-                or self._function_reads_incoming_register(target, "ecx")
+                target is None or self._function_reads_incoming_register(target, "ecx")
             ):
                 return None
             aliases: list[tuple[int, int]] = []
             for callee_argument in range(8):
-                pushed = self._pushed_call_argument(
-                    candidate_address, callee_argument
-                )
+                pushed = self._pushed_call_argument(candidate_address, callee_argument)
                 if pushed is None:
                     break
                 offsets = self._relative_operand_offsets(
@@ -5776,6 +6767,24 @@ class _DirectCfgRecovery:
                 return None
             self._note_producer_dependency(target)
             callee_argument, alias_offset = aliases[0]
+            if callee_argument == 0 and self._strict_zero_fill_function(target):
+                size = self._pushed_call_argument(candidate_address, 1)
+                if size is None or size[1].type != X86_OP_IMM:
+                    return None
+                byte_count = size[1].imm & 0xFFFF_FFFF
+                association_offset = target_field - alias_offset
+                if association_offset >= byte_count or association_offset + 4 <= 0:
+                    continue
+                if not (
+                    association_offset >= 0 and association_offset + 4 <= byte_count
+                ):
+                    return None
+                association_clobbers.add(candidate_address)
+                details.append(
+                    f"callee={target:#x};call={candidate_address:#x};"
+                    "strict-zeroed-association"
+                )
+                continue
             effect = self._callee_argument_stack_pointee_effect(
                 target,
                 callee_argument,
@@ -5786,28 +6795,36 @@ class _DirectCfgRecovery:
                 return None
             if effect[0]:
                 writers.add(candidate_address)
-                pointee_offsets.update(
-                    alias_offset + offset for offset in effect[0]
-                )
+                pointee_offsets.update(alias_offset + offset for offset in effect[0])
                 details.append(
-                    f"callee={target:#x};call={candidate_address:#x};"
-                    f"{effect[1]}"
+                    f"callee={target:#x};call={candidate_address:#x};{effect[1]}"
                 )
 
         if not saw_return:
             return None
         if not writers:
+            if association_clobbers:
+                return None
             return frozenset(), (
                 f"callee={function_entry:#x};argument={argument_index};"
                 f"field={target_field:+#x};preserved"
             )
-        if (
-            len(writers) != 1
-            or len(pointee_offsets) != 1
-            or read_association
-        ):
+        if len(writers) != 1 or len(pointee_offsets) != 1 or read_association:
             # A publisher that also consumes the old/new association needs a
             # separate pointee-effect proof; do not assume that use is inert.
+            return None
+        writer = next(iter(writers))
+        if any(
+            self._reachable_within_function(
+                writer,
+                clobber,
+                function_entry,
+                following_entry,
+            )
+            for clobber in association_clobbers
+        ):
+            # A strict zero after the publisher replaces the association with
+            # null.  Loops that can revisit a prior zero are equally unsafe.
             return None
         returns = [
             candidate_address
@@ -6002,8 +7019,7 @@ class _DirectCfgRecovery:
             if adjusted_path[0] >= byte_count:
                 return frozenset(), "strict-zero-fill-disjoint"
             return frozenset({0}), (
-                f"callee={target:#x};call={call_address:#x};"
-                "strict-zero-fill"
+                f"callee={target:#x};call={call_address:#x};strict-zero-fill"
             )
         return self._callee_argument_byte_effect(
             target,
@@ -6023,8 +7039,7 @@ class _DirectCfgRecovery:
         """Prove a stack object's byte through all reaching field writes."""
         key = (
             address,
-            "stack-object-byte:"
-            f"{root_offset}:{','.join(map(str, field_path))}",
+            f"stack-object-byte:{root_offset}:{','.join(map(str, field_path))}",
         )
         if key in visited or not field_path:
             return None
@@ -6036,9 +7051,7 @@ class _DirectCfgRecovery:
         details = []
         writers = set()
         target_offset = root_offset + field_path[0]
-        for candidate_address in self._function_instruction_addresses(
-            function_entry
-        ):
+        for candidate_address in self._function_instruction_addresses(function_entry):
             if candidate_address >= address:
                 continue
             if not (
@@ -6069,11 +7082,10 @@ class _DirectCfgRecovery:
                 if effect is None:
                     return None
                 if effect[0]:
-                    writers.add(candidate_address)
                     values.update(effect[0])
-                    details.append(
-                        f"writer={candidate_address:#x};{effect[1]}"
-                    )
+                    if "optional-preserve" not in effect[1]:
+                        writers.add(candidate_address)
+                    details.append(f"writer={candidate_address:#x};{effect[1]}")
             if not candidate.operands:
                 continue
             destination = candidate.operands[0]
@@ -6090,8 +7102,7 @@ class _DirectCfgRecovery:
                 continue
             if len(field_path) == 1:
                 if not (
-                    write_offset <= target_offset
-                    < write_offset + destination.size
+                    write_offset <= target_offset < write_offset + destination.size
                 ):
                     continue
                 result = self._finite_byte_store_values(
@@ -6142,15 +7153,12 @@ class _DirectCfgRecovery:
             writers.add(candidate_address)
             values.update(result[0])
             details.append(f"writer={candidate_address:#x};{result[1]}")
-        if (
-            not values
-            or self._reachable_within_function(
-                function_entry,
-                address,
-                function_entry,
-                following_entry,
-                excluded=frozenset(writers),
-            )
+        if not values or self._reachable_within_function(
+            function_entry,
+            address,
+            function_entry,
+            following_entry,
+            excluded=frozenset(writers),
         ):
             return None
         self._check_count("max_finite_values", len(values))
@@ -6166,13 +7174,18 @@ class _DirectCfgRecovery:
         argument_index: int,
         field_path: tuple[int, ...],
         visited: frozenset[tuple[int, str]],
+        *,
+        excluded_addresses: frozenset[int] = frozenset(),
     ) -> tuple[frozenset[int], str] | None:
         query_key = (
-            "producer-argument-v3",
+            "producer-argument-v6",
             address,
             function_entry,
             argument_index,
             field_path,
+            tuple(sorted(excluded_addresses)),
+            self._producer_exact_call_context_signature(),
+            self._producer_allocator_lifetime_context_signature(),
         )
         return self._producer_domain_cached(
             query_key,
@@ -6184,8 +7197,30 @@ class _DirectCfgRecovery:
                     argument_index,
                     field_path,
                     visited,
+                    excluded_addresses=excluded_addresses,
                 )
             ),
+        )
+
+    def _function_has_canonical_ebp_frame(self, function_entry: int) -> bool:
+        first = self.instructions.get(function_entry)
+        second = (
+            None if first is None else self.instructions.get(first.address + first.size)
+        )
+        if first is None or second is None:
+            return False
+        first_decoded = self._owned_decoded(first.address)
+        second_decoded = self._owned_decoded(second.address)
+        return (
+            first_decoded.mnemonic == "push"
+            and len(first_decoded.operands) == 1
+            and first_decoded.operands[0].type == X86_OP_REG
+            and self._register_family(first_decoded.operands[0].reg) == "ebp"
+            and second_decoded.id == X86_INS_MOV
+            and len(second_decoded.operands) == 2
+            and all(operand.type == X86_OP_REG for operand in second_decoded.operands)
+            and self._register_family(second_decoded.operands[0].reg) == "ebp"
+            and self._register_family(second_decoded.operands[1].reg) == "esp"
         )
 
     def _finite_stack_slot_pointer_object_byte_values_before(
@@ -6199,8 +7234,7 @@ class _DirectCfgRecovery:
         """Follow a pointer reloaded from one exact logical stack slot."""
         key = (
             address,
-            "stack-slot-pointer-byte:"
-            f"{slot_offset}:{','.join(map(str, field_path))}",
+            f"stack-slot-pointer-byte:{slot_offset}:{','.join(map(str, field_path))}",
         )
         if key in visited or not field_path:
             return None
@@ -6212,9 +7246,42 @@ class _DirectCfgRecovery:
         details = []
         writers = set()
         self._note_stack_call_dependencies_before(address, function_entry)
-        for candidate_address in self._function_instruction_addresses(
-            function_entry
-        ):
+
+        def is_postdominated_by_exact_slot_writer(
+            candidate_address: int,
+        ) -> bool:
+            for later_address in self._function_instruction_addresses_between(
+                function_entry,
+                candidate_address + 1,
+                address,
+            ):
+                later = self._owned_decoded(later_address)
+                if later.id != X86_INS_MOV or len(later.operands) != 2:
+                    continue
+                destination = later.operands[0]
+                if (
+                    destination.type != X86_OP_MEM
+                    or not destination.access & CS_AC_WRITE
+                    or destination.size != 4
+                    or self._stack_operand_logical_offset(
+                        later_address,
+                        destination,
+                        function_entry,
+                    )
+                    != slot_offset
+                ):
+                    continue
+                if not self._reachable_within_function(
+                    candidate_address,
+                    address,
+                    function_entry,
+                    following_entry,
+                    excluded=later_address,
+                ):
+                    return True
+            return False
+
+        for candidate_address in self._function_instruction_addresses(function_entry):
             if candidate_address >= address or not (
                 self._reachable_within_function(
                     function_entry,
@@ -6247,7 +7314,10 @@ class _DirectCfgRecovery:
                     candidate_address, destination, function_entry
                 )
                 if write_offset is None:
-                    if base_family in {"esp", "ebp"}:
+                    if base_family == "esp" or (
+                        base_family == "ebp"
+                        and self._function_has_canonical_ebp_frame(function_entry)
+                    ):
                         return None
                     continue
                 if not (
@@ -6271,21 +7341,18 @@ class _DirectCfgRecovery:
                     visited | {key},
                 )
                 if result is None:
+                    if is_postdominated_by_exact_slot_writer(candidate_address):
+                        continue
                     return None
                 writers.add(candidate_address)
                 values.update(result[0])
-                details.append(
-                    f"writer={candidate_address:#x};{result[1]}"
-                )
-        if (
-            not values
-            or self._reachable_within_function(
-                function_entry,
-                address,
-                function_entry,
-                following_entry,
-                excluded=frozenset(writers),
-            )
+                details.append(f"writer={candidate_address:#x};{result[1]}")
+        if not values or self._reachable_within_function(
+            function_entry,
+            address,
+            function_entry,
+            following_entry,
+            excluded=frozenset(writers),
         ):
             return None
         self._check_count("max_finite_values", len(values))
@@ -6301,16 +7368,25 @@ class _DirectCfgRecovery:
         argument_index: int,
         field_path: tuple[int, ...],
         visited: frozenset[tuple[int, str]],
+        *,
+        excluded_addresses: frozenset[int] = frozenset(),
     ) -> tuple[frozenset[int], str] | None:
         """Follow one typed object byte through a closed caller domain."""
         key = (
             function_entry,
             "argument-object-byte:"
-            f"{argument_index}:{','.join(map(str, field_path))}",
+            f"{argument_index}:{','.join(map(str, field_path))}:excluded="
+            f"{','.join(map(str, sorted(excluded_addresses)))}",
         )
         lineage_key = (
             function_entry,
-            f"argument-object-lineage:{argument_index}",
+            f"argument-object-lineage:{argument_index}:"
+            + (
+                "closed-domain"
+                if (exact_context := self._producer_exact_call_context(function_entry))
+                is None
+                else f"call={exact_context[0]:#x}:caller={exact_context[1]:#x}"
+            ),
         )
         if key in visited or lineage_key in visited or not field_path:
             return None
@@ -6319,10 +7395,54 @@ class _DirectCfgRecovery:
         # to the paths that can still reach this exact observation: retail
         # consumers commonly pass the object to the computed callback only
         # after MOVZX has already captured the dispatch byte.
+        optional_effect = None
         if not self._function_argument_preserves_field_before(
             address, function_entry, argument_index, field_path[0]
         ):
-            return None
+            return_effect = self._callee_argument_byte_effect(
+                function_entry,
+                argument_index,
+                field_path,
+                visited,
+                end_address=address,
+                excluded_addresses=excluded_addresses,
+            )
+            if return_effect is None:
+                return None
+            if return_effect[0] and "optional-preserve" not in return_effect[1]:
+                return return_effect[0], (
+                    f"callee-return={address:#x};{return_effect[1]}"
+                )
+            if return_effect[0]:
+                optional_effect = return_effect
+        exact_context = self._producer_exact_call_context(function_entry)
+        if exact_context is not None:
+            call_address, caller_entry = exact_context
+            pushed = self._pushed_call_argument(call_address, argument_index)
+            if pushed is None or pushed[2] != caller_entry:
+                return None
+            result = self._finite_object_byte_operand_values_before(
+                pushed[0].address,
+                pushed[1],
+                caller_entry,
+                field_path,
+                visited | {key, lineage_key},
+            )
+            if result is None or not result[0]:
+                return None
+            values = set(result[0])
+            if optional_effect is not None:
+                values.update(optional_effect[0])
+            self._check_count("max_finite_values", len(values))
+            return frozenset(values), (
+                f"exact-caller={call_address:#x};"
+                f"argument={argument_index};{result[1]}"
+                + (
+                    f";callee-return={address:#x};{optional_effect[1]}"
+                    if optional_effect is not None
+                    else ""
+                )
+            )
         if not self._incoming_call_domain_is_closed(function_entry):
             return None
         callers = self._incoming_call_sites(function_entry)
@@ -6331,9 +7451,7 @@ class _DirectCfgRecovery:
         values: set[int] = set()
         details = []
         for call_address in callers:
-            pushed = self._pushed_call_argument(
-                call_address, argument_index
-            )
+            pushed = self._pushed_call_argument(call_address, argument_index)
             if pushed is None:
                 return None
             result = self._finite_object_byte_operand_values_before(
@@ -6349,6 +7467,9 @@ class _DirectCfgRecovery:
             details.append(f"caller={call_address:#x};{result[1]}")
         if not values:
             return None
+        if optional_effect is not None:
+            values.update(optional_effect[0])
+            details.append(f"callee-return={address:#x};{optional_effect[1]}")
         self._check_count("max_finite_values", len(values))
         return (
             frozenset(values),
@@ -6382,9 +7503,7 @@ class _DirectCfgRecovery:
                 field_path,
                 visited,
             )
-        argument_index = self._stack_argument_index_at(
-            address, operand, function_entry
-        )
+        argument_index = self._stack_argument_index_at(address, operand, function_entry)
         if argument_index is None:
             return None
         return self._finite_argument_object_byte_values_before(
@@ -6395,6 +7514,179 @@ class _DirectCfgRecovery:
             visited,
         )
 
+    def _object_byte_case_guard_before(
+        self,
+        address: int,
+        register_family: str,
+        function_entry: int,
+        field_path: tuple[int, ...],
+    ) -> _ObjectByteGuard | None:
+        """Recover an exact byte equality from a direct or switch case."""
+        if not field_path:
+            return None
+        following_entry = min(
+            (value for value in self.function_addresses if value > function_entry),
+            default=0x1_0000_0000,
+        )
+        observation_definitions = self._register_definitions_across_blocks(
+            address, register_family, function_entry
+        )
+        if not observation_definitions:
+            return None
+
+        case_start = address
+        while case_start not in self.block_starts:
+            previous = self._previous_instruction(case_start)
+            if previous is None or previous.address < function_entry:
+                return None
+            case_start = previous.address
+        incoming = self.incoming_edges.get(case_start, set())
+        if len(incoming) == 1:
+            branch_address, edge_kind = next(iter(incoming))
+            branch = self._owned_decoded(branch_address)
+            compare_instruction = self._previous_instruction(branch_address)
+            if compare_instruction is not None:
+                compare = self._owned_decoded(compare_instruction.address)
+                equality_arm = (
+                    branch.mnemonic in {"jne", "jnz"} and edge_kind == "fallthrough"
+                ) or (
+                    branch.mnemonic in {"je", "jz"}
+                    and edge_kind != "fallthrough"
+                    and self._direct_target(branch) == case_start
+                )
+                if (
+                    equality_arm
+                    and compare.id == x86_const.X86_INS_CMP
+                    and len(compare.operands) == 2
+                    and compare.operands[0].type == X86_OP_MEM
+                    and compare.operands[0].size == 1
+                    and compare.operands[0].mem.segment == X86_REG_INVALID
+                    and compare.operands[0].mem.base != X86_REG_INVALID
+                    and compare.operands[0].mem.index == X86_REG_INVALID
+                    and self._register_family(compare.operands[0].mem.base)
+                    == register_family
+                    and compare.operands[1].type == X86_OP_IMM
+                    and self._register_definitions_across_blocks(
+                        compare.address, register_family, function_entry
+                    )
+                    == observation_definitions
+                ):
+                    value = compare.operands[1].imm & 0xFF
+                    return _ObjectByteGuard(
+                        function_entry,
+                        address,
+                        register_family,
+                        field_path,
+                        compare.operands[0].mem.disp,
+                        frozenset({value}),
+                        compare.address,
+                        f"byte-equality={compare.address:#x};value={value:#x}",
+                    )
+
+        candidates: list[_ObjectByteGuard] = []
+        for table in self.jump_tables.values():
+            if self._registrar_function_entry(table.address) != function_entry:
+                continue
+            reaching_indices = [
+                table.index_min + index
+                for index, target in enumerate(table.targets)
+                if target in self.instructions
+                and self._reachable_within_function(
+                    target,
+                    address,
+                    function_entry,
+                    following_entry,
+                    excluded=table.address,
+                )
+            ]
+            if not reaching_indices:
+                continue
+            transfer = self._owned_decoded(table.address)
+            indexed = next(
+                (
+                    operand
+                    for operand in transfer.operands
+                    if operand.type == X86_OP_MEM
+                    and operand.mem.index != X86_REG_INVALID
+                ),
+                None,
+            )
+            if indexed is None:
+                continue
+            index_family = self._register_family(indexed.mem.index)
+            adjustment = 0
+            cursor = table.guard_address
+            guarded_load = None
+            for _ in range(16):
+                previous = self._previous_instruction(cursor)
+                if previous is None:
+                    break
+                decoded = self._owned_decoded(previous.address)
+                if (
+                    decoded.mnemonic in {"sub", "add"}
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_REG
+                    and self._register_family(decoded.operands[0].reg) == index_family
+                    and decoded.operands[1].type == X86_OP_IMM
+                ):
+                    immediate = decoded.operands[1].imm & 0xFFFF_FFFF
+                    adjustment += immediate if decoded.mnemonic == "sub" else -immediate
+                    cursor = previous.address
+                    continue
+                if (
+                    decoded.id == x86_const.X86_INS_MOVZX
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_REG
+                    and self._register_family(decoded.operands[0].reg) == index_family
+                    and decoded.operands[1].type == X86_OP_MEM
+                    and decoded.operands[1].size == 1
+                    and decoded.operands[1].mem.segment == X86_REG_INVALID
+                    and decoded.operands[1].mem.base != X86_REG_INVALID
+                    and decoded.operands[1].mem.index == X86_REG_INVALID
+                    and self._register_family(decoded.operands[1].mem.base)
+                    == register_family
+                    and self._register_definitions_across_blocks(
+                        decoded.address, register_family, function_entry
+                    )
+                    == observation_definitions
+                ):
+                    guarded_load = decoded
+                    break
+                if (
+                    decoded.group(CS_GRP_CALL)
+                    or decoded.group(CS_GRP_JUMP)
+                    or decoded.group(CS_GRP_RET)
+                    or any(
+                        self._register_family(register) == index_family
+                        for register in decoded.regs_write
+                        if register != x86_const.X86_REG_EFLAGS
+                    )
+                ):
+                    break
+                cursor = previous.address
+            if guarded_load is None:
+                continue
+            values = frozenset(
+                (index + adjustment) & 0xFF for index in reaching_indices
+            )
+            if not values:
+                continue
+            candidates.append(
+                _ObjectByteGuard(
+                    function_entry,
+                    address,
+                    register_family,
+                    field_path,
+                    guarded_load.operands[1].mem.disp,
+                    values,
+                    table.address,
+                    f"byte-switch={table.address:#x};"
+                    f"values={','.join(f'{value:#x}' for value in sorted(values))}",
+                )
+            )
+        unique = tuple(dict.fromkeys(candidates))
+        return unique[0] if len(unique) == 1 else None
+
     def _finite_object_byte_register_values_before(
         self,
         address: int,
@@ -6403,26 +7695,43 @@ class _DirectCfgRecovery:
         field_path: tuple[int, ...],
         visited: frozenset[tuple[int, str]],
     ) -> tuple[frozenset[int], str] | None:
-        query_key = (
-            "producer-register-v3",
+        guard = self._object_byte_case_guard_before(
             address,
             register_family,
             function_entry,
             field_path,
         )
-        return self._producer_domain_cached(
-            query_key,
-            function_entry,
-            lambda: (
-                self._finite_object_byte_register_values_before_uncached(
-                    address,
-                    register_family,
-                    function_entry,
-                    field_path,
-                    visited,
-                )
-            ),
-        )
+        if guard is not None:
+            self.producer_object_guard_contexts.append(guard)
+        try:
+            query_key = (
+                "producer-register-v4",
+                address,
+                register_family,
+                function_entry,
+                field_path,
+                self._producer_exact_call_context_signature(),
+                self._producer_object_guard_context_signature(),
+                self._producer_allocator_lifetime_context_signature(),
+            )
+            return self._producer_domain_cached(
+                query_key,
+                function_entry,
+                lambda: (
+                    self._finite_object_byte_register_values_before_uncached(
+                        address,
+                        register_family,
+                        function_entry,
+                        field_path,
+                        visited,
+                    )
+                ),
+            )
+        finally:
+            if guard is not None:
+                popped = self.producer_object_guard_contexts.pop()
+                if popped != guard:
+                    raise AssertionError("producer object guard stack corrupted")
 
     def _finite_object_byte_call_return_values_before(
         self,
@@ -6471,13 +7780,20 @@ class _DirectCfgRecovery:
         details = []
         next_visited = visited | {key}
         for return_address in returns:
-            result = self._finite_object_byte_register_values_before(
-                return_address,
-                "eax",
-                call_target,
-                field_path,
-                next_visited,
-            )
+            context = (call_target, call_address, caller_entry)
+            self.producer_exact_call_contexts.append(context)
+            try:
+                result = self._finite_object_byte_register_values_before(
+                    return_address,
+                    "eax",
+                    call_target,
+                    field_path,
+                    next_visited,
+                )
+            finally:
+                popped = self.producer_exact_call_contexts.pop()
+                if popped != context:
+                    raise AssertionError("producer call context stack corrupted")
             if result is None:
                 return None
             values.update(result[0])
@@ -6487,7 +7803,452 @@ class _DirectCfgRecovery:
         self._check_count("max_finite_values", len(values))
         return (
             frozenset(values),
-            f"call={call_address:#x};target={call_target:#x};"
+            f"call={call_address:#x};target={call_target:#x};" + "|".join(details),
+        )
+
+    def _fresh_allocation_origin_calls_before(
+        self,
+        address: int,
+        register_family: str,
+        function_entry: int,
+        active: frozenset[tuple[int, str]] = frozenset(),
+    ) -> frozenset[int] | None:
+        """Trace pure register copies back to fixed bump allocations."""
+        key = (address, register_family)
+        if key in active:
+            return None
+        definitions = self._register_definitions_across_blocks(
+            address, register_family, function_entry
+        )
+        if not definitions:
+            return None
+        origins: set[int] = set()
+        next_active = active | {key}
+        for definition_address in definitions:
+            definition = self._owned_decoded(definition_address)
+            if definition.group(CS_GRP_CALL) and register_family == "eax":
+                target = self.direct_call_targets_by_source.get(definition_address)
+                if (
+                    target is None
+                    or self._owned_fixed_bump_allocator_size_argument(target) is None
+                ):
+                    return None
+                origins.add(definition_address)
+                continue
+            if not (
+                definition.id in {X86_INS_MOV, X86_INS_LEA}
+                and len(definition.operands) == 2
+                and definition.operands[0].type == X86_OP_REG
+                and self._register_family(definition.operands[0].reg) == register_family
+            ):
+                return None
+            source = definition.operands[1]
+            if source.type == X86_OP_REG:
+                source_family = self._register_family(source.reg)
+            elif (
+                definition.id == X86_INS_LEA
+                and source.type == X86_OP_MEM
+                and source.mem.segment == X86_REG_INVALID
+                and source.mem.base != X86_REG_INVALID
+                and source.mem.index == X86_REG_INVALID
+                and source.mem.disp == 0
+            ):
+                source_family = self._register_family(source.mem.base)
+            else:
+                return None
+            nested = self._fresh_allocation_origin_calls_before(
+                definition_address,
+                source_family,
+                function_entry,
+                next_active,
+            )
+            if not nested:
+                return None
+            origins.update(nested)
+        return frozenset(origins) if origins else None
+
+    def _fresh_allocation_pointer_is_local_until(
+        self,
+        allocation_call: int,
+        observation_address: int,
+        function_entry: int,
+    ) -> bool:
+        """Prove one fresh address is not published or passed before use."""
+        call = self.instructions.get(allocation_call)
+        if call is None or allocation_call >= observation_address:
+            return False
+        start_address = allocation_call + call.size
+        states = self._relative_pointer_states(
+            function_entry,
+            root_call=allocation_call,
+            propagate_call_returns=False,
+            stop_address=observation_address,
+        )
+        if states is None or observation_address not in states:
+            return False
+        following_entry = min(
+            (row for row in self.function_addresses if row > function_entry),
+            default=0x1_0000_0000,
+        )
+
+        def operand_offsets(address: int, operand) -> frozenset[int]:
+            return self._relative_operand_offsets(
+                address,
+                operand,
+                function_entry,
+                None,
+                states,
+            )
+
+        for address in self._function_instruction_addresses(function_entry):
+            if not start_address <= address <= observation_address:
+                continue
+            state = states.get(address)
+            if state is None or not (
+                self._reachable_within_function(
+                    start_address,
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+                and self._reachable_within_function(
+                    address,
+                    observation_address,
+                    function_entry,
+                    following_entry,
+                )
+            ):
+                continue
+            row = self._owned_decoded(address)
+            if row.id == X86_INS_MOV and len(row.operands) == 2:
+                destination, source = row.operands
+                if (
+                    destination.type == X86_OP_MEM
+                    and source.size == 4
+                    and operand_offsets(address, source)
+                ):
+                    return False
+            if row.group(CS_GRP_CALL):
+                if any(
+                    operand.type == X86_OP_REG and operand_offsets(address, operand)
+                    for operand in row.operands
+                ):
+                    return False
+                ecx_offsets = state[0][_REGISTER_FAMILIES.index("ecx")]
+                target = self.direct_call_targets_by_source.get(address)
+                if ecx_offsets and (
+                    target is None
+                    or self._function_reads_incoming_register(target, "ecx")
+                ):
+                    return False
+                for argument_index in range(8):
+                    pushed = self._pushed_call_argument(address, argument_index)
+                    if pushed is None:
+                        break
+                    if operand_offsets(pushed[0].address, pushed[1]):
+                        return False
+            if row.group(CS_GRP_RET) and state[0][_REGISTER_FAMILIES.index("eax")]:
+                return False
+        return True
+
+    def _finite_fresh_allocation_object_byte_values_before(
+        self,
+        allocation_call: int,
+        observation_address: int,
+        function_entry: int,
+        field_path: tuple[int, ...],
+        visited: frozenset[tuple[int, str]],
+    ) -> tuple[frozenset[int], str] | None:
+        """Prove a nested byte initialized in one fresh allocation."""
+        key = (
+            allocation_call,
+            "fresh-allocation-object-byte:"
+            f"{observation_address:#x}:{','.join(map(str, field_path))}",
+        )
+        if key in visited or not field_path or field_path[0] < 0:
+            return None
+        allocator = self.direct_call_targets_by_source.get(allocation_call)
+        if allocator is None:
+            return None
+        size_argument = self._owned_fixed_bump_allocator_size_argument(allocator)
+        pushed_size = (
+            None
+            if size_argument is None
+            else self._pushed_call_argument(allocation_call, size_argument)
+        )
+        if (
+            pushed_size is None
+            or pushed_size[1].type != X86_OP_IMM
+            or not 0
+            < (allocation_size := pushed_size[1].imm & 0xFFFF_FFFF)
+            <= 0x1000_0000
+            or field_path[0] + (1 if len(field_path) == 1 else 4) > allocation_size
+        ):
+            return None
+        following_entry = min(
+            (row for row in self.function_addresses if row > function_entry),
+            default=0x1_0000_0000,
+        )
+        call_instruction = self.instructions.get(allocation_call)
+        if (
+            call_instruction is None
+            or not function_entry
+            <= allocation_call
+            < observation_address
+            < following_entry
+        ):
+            return None
+        start_address = allocation_call + call_instruction.size
+        if not self._reachable_within_function(
+            start_address,
+            observation_address,
+            function_entry,
+            following_entry,
+        ):
+            return None
+        states = self._relative_pointer_states(
+            function_entry,
+            root_call=allocation_call,
+            propagate_call_returns=False,
+            stop_address=observation_address,
+        )
+        if states is None or observation_address not in states:
+            return None
+        family_index = {
+            family: index for index, family in enumerate(_REGISTER_FAMILIES)
+        }
+
+        def offsets(state, register) -> frozenset[int]:
+            if state is None:
+                return frozenset()
+            return state[0][family_index[self._register_family(register)]]
+
+        target_field = field_path[0]
+        writers: set[int] = set()
+        empty_writers: set[int] = set()
+        values: set[int] = set()
+        details: list[str] = []
+        next_visited = visited | {key}
+        for address in self._function_instruction_addresses(function_entry):
+            if not start_address <= address < observation_address:
+                continue
+            state = states.get(address)
+            if state is None or not (
+                self._reachable_within_function(
+                    start_address,
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+                and self._reachable_within_function(
+                    address,
+                    observation_address,
+                    function_entry,
+                    following_entry,
+                )
+            ):
+                continue
+            row = self._owned_decoded(address)
+            for operand_index, destination in enumerate(row.operands):
+                if (
+                    destination.type != X86_OP_MEM
+                    or destination.mem.base == X86_REG_INVALID
+                ):
+                    continue
+                base_offsets = offsets(state, destination.mem.base)
+                if not base_offsets:
+                    continue
+                if (
+                    len(base_offsets) != 1
+                    or destination.mem.index != X86_REG_INVALID
+                    or destination.size <= 0
+                ):
+                    return None
+                write_offset = next(iter(base_offsets)) + destination.mem.disp
+                if (
+                    write_offset < 0
+                    or write_offset + destination.size > allocation_size
+                ):
+                    return None
+                if not (
+                    destination.access & CS_AC_WRITE
+                    and write_offset < target_field + (1 if len(field_path) == 1 else 4)
+                    and target_field < write_offset + destination.size
+                ):
+                    continue
+                if len(field_path) == 1:
+                    result = self._finite_byte_store_values(
+                        row,
+                        target_field - write_offset,
+                        function_entry,
+                        next_visited,
+                    )
+                elif (
+                    row.id == X86_INS_MOV
+                    and len(row.operands) == 2
+                    and operand_index == 0
+                    and write_offset == target_field
+                    and destination.size == 4
+                ):
+                    source = row.operands[1]
+                    if source.type == X86_OP_IMM and source.imm & 0xFFFF_FFFF == 0:
+                        empty_writers.add(address)
+                        details.append(f"writer={address:#x};null-association")
+                        continue
+                    result = self._finite_object_byte_operand_values_before(
+                        address,
+                        source,
+                        function_entry,
+                        field_path[1:],
+                        next_visited,
+                    )
+                else:
+                    return None
+                if result is None:
+                    return None
+                if not result[0]:
+                    if "optional-empty-association" not in result[1]:
+                        return None
+                    empty_writers.add(address)
+                    details.append(f"writer={address:#x};{result[1]}")
+                    continue
+                writers.add(address)
+                values.update(result[0])
+                details.append(f"writer={address:#x};{result[1]}")
+
+            if row.group(CS_GRP_CALL):
+                target = self.direct_call_targets_by_source.get(address)
+                ecx_offsets = offsets(
+                    state,
+                    x86_const.X86_REG_ECX,
+                )
+                if ecx_offsets and (
+                    target is None
+                    or self._function_reads_incoming_register(target, "ecx")
+                ):
+                    return None
+                for callee_argument in range(8):
+                    pushed = self._pushed_call_argument(address, callee_argument)
+                    if pushed is None:
+                        break
+                    argument_offsets = self._relative_operand_offsets(
+                        pushed[0].address,
+                        pushed[1],
+                        function_entry,
+                        None,
+                        states,
+                    )
+                    if not argument_offsets:
+                        continue
+                    if len(argument_offsets) != 1 or target is None:
+                        return None
+                    alias_offset = next(iter(argument_offsets))
+                    adjusted_field = target_field - alias_offset
+                    if (
+                        callee_argument == 0
+                        and adjusted_field >= 0
+                        and self._strict_zero_fill_function(target)
+                    ):
+                        size = self._pushed_call_argument(address, 1)
+                        if size is None or size[1].type != X86_OP_IMM:
+                            return None
+                        byte_count = size[1].imm & 0xFFFF_FFFF
+                        if adjusted_field >= byte_count:
+                            continue
+                        if len(field_path) == 1:
+                            writers.add(address)
+                            values.add(0)
+                            details.append(f"writer={address:#x};strict-zero-fill")
+                        elif adjusted_field + 4 <= byte_count:
+                            empty_writers.add(address)
+                            details.append(
+                                f"writer={address:#x};strict-zeroed-association"
+                            )
+                        else:
+                            return None
+                        continue
+                    if not self._function_argument_preserves_field(
+                        target,
+                        callee_argument,
+                        adjusted_field,
+                    ) or (
+                        len(field_path) > 1
+                        and not self._function_argument_does_not_read_field(
+                            target,
+                            callee_argument,
+                            adjusted_field,
+                        )
+                    ):
+                        return None
+
+            if row.id == X86_INS_MOV and len(row.operands) == 2:
+                destination, source = row.operands
+                source_offsets = self._relative_operand_offsets(
+                    address,
+                    source,
+                    function_entry,
+                    None,
+                    states,
+                )
+                if (
+                    source_offsets
+                    and destination.type == X86_OP_MEM
+                    and not offsets(state, destination.mem.base)
+                ):
+                    return None
+
+        initializers = frozenset(writers | empty_writers)
+        if not initializers or self._reachable_within_function(
+            start_address,
+            observation_address,
+            function_entry,
+            following_entry,
+            excluded=initializers,
+        ):
+            return None
+        may_be_empty = any(
+            self._reachable_within_function(
+                empty_writer,
+                observation_address,
+                function_entry,
+                following_entry,
+                excluded=frozenset(writers),
+            )
+            for empty_writer in empty_writers
+        )
+        if not values and not may_be_empty:
+            return None
+        has_local_guard = self._allocation_result_has_closed_nonnull_guard(
+            allocation_call,
+            observation_address,
+            function_entry,
+            states,
+        )
+        totality = None
+        if not has_local_guard:
+            totality = self._allocator_totality_certificate(
+                allocator,
+                function_entry,
+                lifetime_roots=(self._producer_allocator_lifetime_context()),
+            )
+            if totality is None:
+                return None
+        self._check_count("max_finite_values", len(values))
+        return (
+            frozenset(values),
+            f"fresh-allocation={allocation_call:#x};"
+            f"allocator={allocator:#x};size={allocation_size:#x};"
+            + (
+                "local-nonnull-guard;"
+                if totality is None
+                else (
+                    f"allocator-session={totality.session_root:#x};"
+                    "lifetime-roots="
+                    + ",".join(f"{root:#x}" for root in sorted(totality.lifetime_roots))
+                    + ";"
+                )
+            )
+            + ("optional-empty-association;" if may_be_empty else "")
             + "|".join(details),
         )
 
@@ -6501,8 +8262,7 @@ class _DirectCfgRecovery:
     ) -> tuple[frozenset[int], str] | None:
         key = (
             address,
-            "register-object-byte:"
-            f"{register_family}:{','.join(map(str, field_path))}",
+            f"register-object-byte:{register_family}:{','.join(map(str, field_path))}",
         )
         if key in visited:
             return None
@@ -6517,6 +8277,34 @@ class _DirectCfgRecovery:
                 field_path,
                 visited | {key},
             )
+        allocation_origins = self._fresh_allocation_origin_calls_before(
+            address,
+            register_family,
+            function_entry,
+        )
+        if allocation_origins:
+            values: set[int] = set()
+            details = []
+            for allocation_call in sorted(allocation_origins):
+                result = self._finite_fresh_allocation_object_byte_values_before(
+                    allocation_call,
+                    address,
+                    function_entry,
+                    field_path,
+                    visited | {key},
+                )
+                if result is None:
+                    return None
+                values.update(result[0])
+                details.append(result[1])
+            if not values:
+                if details and all(
+                    "optional-empty-association" in detail for detail in details
+                ):
+                    return frozenset(), "|".join(details)
+                return None
+            self._check_count("max_finite_values", len(values))
+            return frozenset(values), "|".join(details)
         definitions = self._register_definitions_across_blocks(
             address, register_family, function_entry
         )
@@ -6524,15 +8312,37 @@ class _DirectCfgRecovery:
             return None
         values: set[int] = set()
         details = []
+        saw_optional_empty = False
         for definition_address in sorted(definitions):
             definition = self._owned_decoded(definition_address)
             if (
-                definition.group(CS_GRP_CALL)
-                and register_family == "eax"
-            ):
-                target = self.direct_call_targets_by_source.get(
-                    definition_address
+                definition.id == X86_INS_XOR
+                and len(definition.operands) == 2
+                and all(
+                    operand.type == X86_OP_REG and operand.size == 4
+                    for operand in definition.operands
                 )
+                and all(
+                    self._register_family(operand.reg) == register_family
+                    for operand in definition.operands
+                )
+            ) or (
+                definition.id == X86_INS_MOV
+                and len(definition.operands) == 2
+                and definition.operands[0].type == X86_OP_REG
+                and definition.operands[0].size == 4
+                and self._register_family(definition.operands[0].reg) == register_family
+                and definition.operands[1].type == X86_OP_IMM
+                and definition.operands[1].imm & 0xFFFF_FFFF == 0
+            ):
+                saw_optional_empty = True
+                details.append(
+                    f"definition={definition_address:#x};"
+                    "optional-empty-association;null-pointer"
+                )
+                continue
+            if definition.group(CS_GRP_CALL) and register_family == "eax":
+                target = self.direct_call_targets_by_source.get(definition_address)
                 if target is None:
                     return None
                 result = self._finite_object_byte_call_return_values_before(
@@ -6545,27 +8355,53 @@ class _DirectCfgRecovery:
                 if result is None:
                     return None
                 values.update(result[0])
-                details.append(
-                    f"definition={definition_address:#x};{result[1]}"
-                )
+                details.append(f"definition={definition_address:#x};{result[1]}")
                 continue
             if (
                 definition.id != X86_INS_MOV
                 or len(definition.operands) != 2
                 or definition.operands[0].type != X86_OP_REG
-                or self._register_family(definition.operands[0].reg)
-                != register_family
+                or self._register_family(definition.operands[0].reg) != register_family
             ):
                 return None
             source = definition.operands[1]
             if source.type == X86_OP_REG:
-                result = self._finite_object_byte_register_values_before(
+                source_family = self._register_family(source.reg)
+                source_allocations = self._fresh_allocation_origin_calls_before(
                     definition_address,
-                    self._register_family(source.reg),
+                    source_family,
                     function_entry,
-                    field_path,
-                    visited | {key},
                 )
+                if source_allocations:
+                    copied_values: set[int] = set()
+                    copied_details = []
+                    for allocation_call in sorted(source_allocations):
+                        copied = (
+                            self._finite_fresh_allocation_object_byte_values_before(
+                                allocation_call,
+                                address,
+                                function_entry,
+                                field_path,
+                                visited | {key},
+                            )
+                        )
+                        if copied is None:
+                            return None
+                        copied_values.update(copied[0])
+                        copied_details.append(copied[1])
+                    result = (
+                        frozenset(copied_values),
+                        "fresh-pointer-copy="
+                        f"{definition_address:#x};" + "|".join(copied_details),
+                    )
+                else:
+                    result = self._finite_object_byte_register_values_before(
+                        definition_address,
+                        source_family,
+                        function_entry,
+                        field_path,
+                        visited | {key},
+                    )
             elif (
                 source.type == X86_OP_MEM
                 and source.mem.segment == X86_REG_INVALID
@@ -6575,8 +8411,7 @@ class _DirectCfgRecovery:
                 if (
                     field_path[0] == 0
                     and source.mem.disp == 0
-                    and self._register_family(source.mem.base)
-                    == register_family
+                    and self._register_family(source.mem.base) == register_family
                     and definition_address
                     in self._register_definitions_across_blocks(
                         definition_address,
@@ -6601,43 +8436,41 @@ class _DirectCfgRecovery:
                 )
                 if definition_argument is not None:
                     result = self._finite_argument_object_byte_values_before(
-                        definition_address,
+                        address,
                         function_entry,
                         definition_argument,
+                        field_path,
+                        visited | {key},
+                        excluded_addresses=frozenset(
+                            other_definition
+                            for other_definition in definitions
+                            if other_definition != definition_address
+                        ),
+                    )
+                    if result is None:
+                        return None
+                    values.update(result[0])
+                    details.append(f"definition={definition_address:#x};{result[1]}")
+                    continue
+                stack_slot = self._stack_operand_logical_offset(
+                    definition_address, source, function_entry
+                )
+                if stack_slot is not None:
+                    result = self._finite_stack_slot_pointer_object_byte_values_before(
+                        definition_address,
+                        stack_slot,
+                        function_entry,
                         field_path,
                         visited | {key},
                     )
                     if result is None:
                         return None
                     values.update(result[0])
-                    details.append(
-                        f"definition={definition_address:#x};{result[1]}"
-                    )
-                    continue
-                stack_slot = self._stack_operand_logical_offset(
-                    definition_address, source, function_entry
-                )
-                if stack_slot is not None:
-                    result = (
-                        self._finite_stack_slot_pointer_object_byte_values_before(
-                            definition_address,
-                            stack_slot,
-                            function_entry,
-                            field_path,
-                            visited | {key},
-                        )
-                    )
-                    if result is None:
-                        return None
-                    values.update(result[0])
-                    details.append(
-                        f"definition={definition_address:#x};{result[1]}"
-                    )
+                    details.append(f"definition={definition_address:#x};{result[1]}")
                     continue
                 guarded_zero_link = (
                     source.mem.disp == 0
-                    and self._register_family(source.mem.base)
-                    == register_family
+                    and self._register_family(source.mem.base) == register_family
                     and definition_address
                     in self._register_definitions_across_blocks(
                         definition_address,
@@ -6661,6 +8494,18 @@ class _DirectCfgRecovery:
                     )
                 ):
                     return None
+                if guarded_zero_link and any(
+                    "global-append-tail=" in detail for detail in details
+                ):
+                    # The global-tail certificate already quantifies over
+                    # every appended generation.  A guarded ``node=node[0]``
+                    # loop therefore preserves that same finite domain
+                    # instead of growing the structural path without bound.
+                    details.append(
+                        f"definition={definition_address:#x};"
+                        "closed-global-append-link-induction"
+                    )
+                    continue
                 parent_path = (source.mem.disp, *field_path)
                 result = self._finite_object_byte_register_values_before(
                     definition_address,
@@ -6669,9 +8514,30 @@ class _DirectCfgRecovery:
                     parent_path,
                     visited | {key},
                 )
+                parent_family = self._register_family(source.mem.base)
+                parent_definitions = self._register_definitions_across_blocks(
+                    definition_address,
+                    parent_family,
+                    function_entry,
+                )
+                closed_global_append_parent = bool(
+                    result is not None
+                    and "global-append-tail=" in result[1]
+                    and parent_definitions
+                    and all(
+                        self._pointer_definition_has_closed_nonnull_guard(
+                            parent_definition,
+                            definition_address,
+                            function_entry,
+                            parent_family,
+                        )
+                        for parent_definition in parent_definitions
+                    )
+                )
                 if (
                     result is not None
                     and "optional-empty-association" in result[1]
+                    and not closed_global_append_parent
                     and not self._pointer_definition_has_closed_nonnull_guard(
                         definition_address,
                         address,
@@ -6691,10 +8557,13 @@ class _DirectCfgRecovery:
             if result is None:
                 return None
             values.update(result[0])
-            details.append(
-                f"definition={definition_address:#x};{result[1]}"
-            )
+            details.append(f"definition={definition_address:#x};{result[1]}")
         if not values:
+            if saw_optional_empty:
+                return (
+                    frozenset(),
+                    f"object-register={register_family};" + "|".join(details),
+                )
             return None
         self._check_count("max_finite_values", len(values))
         return (
@@ -6727,8 +8596,7 @@ class _DirectCfgRecovery:
             test.mnemonic == "cmp"
             and len(test.operands) == 2
             and test.operands[0].type == X86_OP_REG
-            and self._register_family(test.operands[0].reg)
-            == register_family
+            and self._register_family(test.operands[0].reg) == register_family
             and test.operands[1].type == X86_OP_IMM
             and test.operands[1].imm & 0xFFFF_FFFF == 0
         )
@@ -6786,9 +8654,7 @@ class _DirectCfgRecovery:
                 instruction.address, memory.index
             )
         if guard is None:
-            guard = self._movzx_guard_for_index(
-                instruction.address, memory.index
-            )
+            guard = self._movzx_guard_for_index(instruction.address, memory.index)
         if guard is None:
             self._computed_flow_blocker(
                 instruction,
@@ -6828,8 +8694,8 @@ class _DirectCfgRecovery:
             self._allow_movzx_producer_domains
             and operator == "movzx"
             and any(
-            relocation_types.get(base + index * entry_width) != 3
-            for index in range(index_min, index_max + 1)
+                relocation_types.get(base + index * entry_width) != 3
+                for index in range(index_min, index_max + 1)
             )
         ):
             narrowed = self._movzx_guard_for_index(
@@ -6871,10 +8737,7 @@ class _DirectCfgRecovery:
                     f"index={index};address={entry_address:#x}",
                 )
                 return False
-            if (
-                require_relocated_entries
-                and relocation_types.get(entry_address) != 3
-            ):
+            if require_relocated_entries and relocation_types.get(entry_address) != 3:
                 self._computed_flow_blocker(
                     instruction,
                     f"{operator}-domain table entry lacks a type-3 relocation: "
@@ -6953,14 +8816,10 @@ class _DirectCfgRecovery:
                 )
             )
             category = (
-                "callback-table-entry"
-                if flow_kind == "call"
-                else "jump-table-entry"
+                "callback-table-entry" if flow_kind == "call" else "jump-table-entry"
             )
             edge_kind = (
-                "indirect-call-table"
-                if flow_kind == "call"
-                else "indirect-jump-table"
+                "indirect-call-table" if flow_kind == "call" else "indirect-jump-table"
             )
             for entry_address, raw, target in entry_rows:
                 self.seed_records.add(
@@ -7009,16 +8868,10 @@ class _DirectCfgRecovery:
                 and len(decoded.operands) == 2
                 and decoded.operands[0].type == X86_OP_REG
                 and decoded.operands[0].size == 4
-                and self._register_family(decoded.operands[0].reg)
-                == index_family
+                and self._register_family(decoded.operands[0].reg) == index_family
             ):
-                source_address = self._absolute_memory_operand(
-                    decoded.operands[1]
-                )
-                if (
-                    source_address is not None
-                    and decoded.operands[1].size == 4
-                ):
+                source_address = self._absolute_memory_operand(decoded.operands[1])
+                if source_address is not None and decoded.operands[1].size == 4:
                     return source_address
                 return None
             if (
@@ -7036,9 +8889,7 @@ class _DirectCfgRecovery:
         return None
 
     def _registrar_function_entry(self, address: int) -> int | None:
-        if len(self.sorted_function_addresses_cache) != len(
-            self.function_addresses
-        ):
+        if len(self.sorted_function_addresses_cache) != len(self.function_addresses):
             self.sorted_function_addresses_cache = tuple(
                 sorted(self.function_addresses)
             )
@@ -7080,9 +8931,7 @@ class _DirectCfgRecovery:
                 and decoded.operands[0].size == 4
                 and decoded.operands[1].size == 1
             ):
-                bounded.add(
-                    self._register_family(decoded.operands[0].reg)
-                )
+                bounded.add(self._register_family(decoded.operands[0].reg))
             elif (
                 decoded.mnemonic in {"mov", "movsx"}
                 and len(decoded.operands) == 2
@@ -7116,9 +8965,7 @@ class _DirectCfgRecovery:
                 and self._register_family(decoded.operands[0].reg)
                 == self._register_family(decoded.operands[1].reg)
             ):
-                bounded.add(
-                    self._register_family(decoded.operands[0].reg)
-                )
+                bounded.add(self._register_family(decoded.operands[0].reg))
             else:
                 written = {
                     self._register_family(row.reg)
@@ -7190,19 +9037,15 @@ class _DirectCfgRecovery:
                 decoded.mnemonic == "movsx"
                 and len(decoded.operands) == 2
                 and decoded.operands[0].type == X86_OP_REG
-                and self._register_family(decoded.operands[0].reg)
-                == index_family
+                and self._register_family(decoded.operands[0].reg) == index_family
                 and decoded.operands[1].type == X86_OP_REG
                 and decoded.operands[1].size == 2
             ):
-                source_family = self._register_family(
-                    decoded.operands[1].reg
-                )
+                source_family = self._register_family(decoded.operands[1].reg)
                 cursor = previous.address
                 break
             if any(
-                self._register_family(row) == index_family
-                for row in decoded.regs_write
+                self._register_family(row) == index_family for row in decoded.regs_write
             ):
                 return None
             cursor = previous.address
@@ -7213,11 +9056,7 @@ class _DirectCfgRecovery:
             if previous is None:
                 return None
             call = next(
-                (
-                    row
-                    for row in self.direct_calls
-                    if row.address == previous.address
-                ),
+                (row for row in self.direct_calls if row.address == previous.address),
                 None,
             )
             if call is not None:
@@ -7257,9 +9096,7 @@ class _DirectCfgRecovery:
             or memory.scale != 4
         ):
             return False
-        producer = self._byte_return_producer_before(
-            instruction.address, memory.index
-        )
+        producer = self._byte_return_producer_before(instruction.address, memory.index)
         if producer is None:
             return False
         producer_call, producer_entry = producer
@@ -7336,8 +9173,6 @@ class _DirectCfgRecovery:
         self._record_fixpoint_update()
         return True
 
-
-
     def _zero_excluding_guard(
         self, mutation_address: int, count_slot: int, transfer_address: int
     ) -> bool:
@@ -7373,8 +9208,7 @@ class _DirectCfgRecovery:
             if (
                 decoded.mnemonic == "cmp"
                 and len(decoded.operands) == 2
-                and self._absolute_memory_operand(decoded.operands[0])
-                == count_slot
+                and self._absolute_memory_operand(decoded.operands[0]) == count_slot
                 and decoded.operands[0].size == 4
                 and decoded.operands[1].type == X86_OP_IMM
                 and decoded.operands[1].imm & 0xFFFF_FFFF == 0
@@ -7410,9 +9244,7 @@ class _DirectCfgRecovery:
             or memory.scale != 4
         ):
             return False
-        count_slot = self._count_slot_loaded_before(
-            instruction.address, memory.index
-        )
+        count_slot = self._count_slot_loaded_before(instruction.address, memory.index)
         if count_slot is None:
             return False
         try:
@@ -7423,9 +9255,7 @@ class _DirectCfgRecovery:
             return False
         mutations = [
             self._owned_decoded(address)
-            for address in sorted(
-                self.absolute_memory_writes.get(count_slot, ())
-            )
+            for address in sorted(self.absolute_memory_writes.get(count_slot, ()))
         ]
         if any(
             row.mnemonic != "dec"
@@ -7470,9 +9300,7 @@ class _DirectCfgRecovery:
         ):
             return False
         table_base = memory.disp & 0xFFFF_FFFF
-        count_slot = self._count_slot_loaded_before(
-            instruction.address, memory.index
-        )
+        count_slot = self._count_slot_loaded_before(instruction.address, memory.index)
         if count_slot is None:
             return False
         try:
@@ -7511,11 +9339,7 @@ class _DirectCfgRecovery:
         if registrar_entry is None:
             return False
         following_entry = min(
-            (
-                entry
-                for entry in self.function_addresses
-                if entry > registrar_entry
-            ),
+            (entry for entry in self.function_addresses if entry > registrar_entry),
             default=0x1_0000_0000,
         )
 
@@ -7527,8 +9351,7 @@ class _DirectCfgRecovery:
             if (
                 candidate.mnemonic == "cmp"
                 and len(candidate.operands) == 2
-                and self._absolute_memory_operand(candidate.operands[0])
-                == count_slot
+                and self._absolute_memory_operand(candidate.operands[0]) == count_slot
                 and candidate.operands[0].size == 4
                 and candidate.operands[1].type == X86_OP_IMM
             ):
@@ -7554,9 +9377,7 @@ class _DirectCfgRecovery:
 
         count_mutations = [
             self._owned_decoded(address)
-            for address in sorted(
-                self.absolute_memory_writes.get(count_slot, ())
-            )
+            for address in sorted(self.absolute_memory_writes.get(count_slot, ()))
         ]
         if (
             not count_mutations
@@ -7582,7 +9403,10 @@ class _DirectCfgRecovery:
         callers = []
         for call in self._direct_calls_to(registrar_entry):
             push = self._previous_instruction(call.address)
-            if push is None or push.address not in self.accepted_initializer_instructions:
+            if (
+                push is None
+                or push.address not in self.accepted_initializer_instructions
+            ):
                 return False
             push_decoded = self._owned_decoded(push.address)
             if (
@@ -7643,9 +9467,7 @@ class _DirectCfgRecovery:
                     category="registrar-callback-entry",
                     provenance_address=push.address,
                     provenance_bytes=push.bytes_hex,
-                    detail=(
-                        f"{provenance};registrar-call={call.address:#x}"
-                    ),
+                    detail=(f"{provenance};registrar-call={call.address:#x}"),
                     is_function=True,
                 )
             )
@@ -7709,8 +9531,7 @@ class _DirectCfgRecovery:
                 operand.type == X86_OP_IMM
                 and pushed.imm_size == 4
                 and any(
-                    row.type == 3
-                    and row.va == pushed.address + pushed.imm_offset
+                    row.type == 3 and row.va == pushed.address + pushed.imm_offset
                     for row in self.image.relocations
                 )
             ):
@@ -7723,9 +9544,7 @@ class _DirectCfgRecovery:
                 f"unmodelled-import={imported.dll}!"
                 f"{imported.name or imported.ordinal};"
                 "relocated-cdecl-arguments="
-                + ",".join(
-                    f"{target:#x}" for target in sorted(escaped_targets)
-                )
+                + ",".join(f"{target:#x}" for target in sorted(escaped_targets))
             )
             self.external_escapes.add(
                 ExternalCodePointerEscape(
@@ -7766,25 +9585,19 @@ class _DirectCfgRecovery:
         writes = self.global_slot_writes.get(slot, ())
         nonzero = {value for value in possible_values if value}
         edge_kind = f"indirect-{flow_kind}-global-slot"
-        self._require_retained_pre_finite_targets_sound(
-            instruction, edge_kind, nonzero
-        )
+        self._require_retained_pre_finite_targets_sound(instruction, edge_kind, nonzero)
         if not nonzero:
             self.diagnostics.add(
                 OwnershipDiagnostic(
                     kind="proven-unreachable-control",
                     address=instruction.address,
                     detail=(
-                        f"global slot remains zero: slot={slot:#x};"
-                        f"writes={len(writes)}"
+                        f"global slot remains zero: slot={slot:#x};writes={len(writes)}"
                     ),
                 )
             )
             return True
-        if any(
-            not _is_executable_span(self.image, value, 1)
-            for value in nonzero
-        ):
+        if any(not _is_executable_span(self.image, value, 1) for value in nonzero):
             return False
         provenance = f"slot={slot:#x};{slot_detail}"
         for target in sorted(nonzero):
@@ -7833,8 +9646,7 @@ class _DirectCfgRecovery:
                 decoded.id != X86_INS_MOV
                 or len(decoded.operands) != 2
                 or decoded.operands[0].type != X86_OP_REG
-                or self._register_family(decoded.operands[0].reg)
-                != register_family
+                or self._register_family(decoded.operands[0].reg) != register_family
             ):
                 return None
             source = decoded.operands[1]
@@ -7858,9 +9670,8 @@ class _DirectCfgRecovery:
             ):
                 return None
             slot = source.mem.disp & 0xFFFF_FFFF
-            if (
-                not _is_mapped_span(self.image, slot, 4)
-                or _is_executable_span(self.image, slot, 4)
+            if not _is_mapped_span(self.image, slot, 4) or _is_executable_span(
+                self.image, slot, 4
             ):
                 return None
             origins.add((definition, slot))
@@ -7881,9 +9692,7 @@ class _DirectCfgRecovery:
         function_entry = self._registrar_function_entry(instruction.address)
         if function_entry is None:
             return False
-        node_family = self._register_family(
-            decoded.operands[0].mem.base
-        )
+        node_family = self._register_family(decoded.operands[0].mem.base)
         node_definitions = self._register_definitions_across_blocks(
             instruction.address, node_family, function_entry
         )
@@ -7899,15 +9708,12 @@ class _DirectCfgRecovery:
                 node_definition.id != X86_INS_MOV
                 or len(node_definition.operands) != 2
                 or node_definition.operands[0].type != X86_OP_REG
-                or self._register_family(node_definition.operands[0].reg)
-                != node_family
+                or self._register_family(node_definition.operands[0].reg) != node_family
                 or node_definition.operands[1].type != X86_OP_REG
             ):
                 return False
             current = node_definition.operands[1]
-            guard = self._dominating_nonzero_guard(
-                definition, current, function_entry
-            )
+            guard = self._dominating_nonzero_guard(definition, current, function_entry)
             if guard is None:
                 return False
             origins = self._absolute_global_load_origins_before(
@@ -7958,9 +9764,7 @@ class _DirectCfgRecovery:
                 writer_entry = self._registrar_function_entry(address)
                 if writer_entry is None:
                     return False
-                source_family = self._register_family(
-                    candidate.operands[1].reg
-                )
+                source_family = self._register_family(candidate.operands[1].reg)
                 source_definitions = self._register_definitions_across_blocks(
                     address, source_family, writer_entry
                 )
@@ -7973,12 +9777,9 @@ class _DirectCfgRecovery:
                         source_decoded.id != X86_INS_MOV
                         or len(source_decoded.operands) != 2
                         or source_decoded.operands[1].type != X86_OP_MEM
-                        or source_decoded.operands[1].mem.segment
-                        != X86_REG_INVALID
-                        or source_decoded.operands[1].mem.base
-                        == X86_REG_INVALID
-                        or source_decoded.operands[1].mem.index
-                        != X86_REG_INVALID
+                        or source_decoded.operands[1].mem.segment != X86_REG_INVALID
+                        or source_decoded.operands[1].mem.base == X86_REG_INVALID
+                        or source_decoded.operands[1].mem.index != X86_REG_INVALID
                     ):
                         return False
                     current_family = self._register_family(
@@ -7990,9 +9791,7 @@ class _DirectCfgRecovery:
                         writer_entry,
                         frozenset(),
                     )
-                    if origins is None or {row[1] for row in origins} != {
-                        slot
-                    }:
+                    if origins is None or {row[1] for row in origins} != {slot}:
                         return False
                     for load_address, _ in origins:
                         load = self._owned_decoded(load_address)
@@ -8009,8 +9808,7 @@ class _DirectCfgRecovery:
                 writes.append(address)
 
         recorded_writes = {
-            row.instruction_address
-            for row in self.global_slot_writes.get(slot, ())
+            row.instruction_address for row in self.global_slot_writes.get(slot, ())
         }
         if set(writes) != recorded_writes:
             return False
@@ -8090,8 +9888,7 @@ class _DirectCfgRecovery:
                 decoded.id != X86_INS_MOV
                 or len(decoded.operands) != 2
                 or decoded.operands[0].type != X86_OP_REG
-                or self._register_family(decoded.operands[0].reg)
-                != register_family
+                or self._register_family(decoded.operands[0].reg) != register_family
             ):
                 return None
             source = decoded.operands[1]
@@ -8129,10 +9926,7 @@ class _DirectCfgRecovery:
         self, decoded, instruction: Instruction, *, flow_kind: str
     ) -> bool:
         """Resolve a callback loaded from a finite indexed global registry."""
-        if (
-            len(decoded.operands) != 1
-            or decoded.operands[0].type != X86_OP_REG
-        ):
+        if len(decoded.operands) != 1 or decoded.operands[0].type != X86_OP_REG:
             return False
         function_entry = self._registrar_function_entry(instruction.address)
         if function_entry is None:
@@ -8252,17 +10046,13 @@ class _DirectCfgRecovery:
             )
 
         for slot in sorted(slot_addresses):
-            direct_values = self._finite_global_slot_values(
-                slot, frozenset()
-            )
+            direct_values = self._finite_global_slot_values(slot, frozenset())
             if direct_values is None:
                 return False
             slot_values, slot_detail = direct_values
             values.update(slot_values)
             if self.global_slot_writes.get(slot):
-                write_details.append(
-                    f"direct-slot={slot:#x};{slot_detail}"
-                )
+                write_details.append(f"direct-slot={slot:#x};{slot_detail}")
 
         if 0 in values:
             guard = self._dominating_nonzero_guard(
@@ -8271,21 +10061,16 @@ class _DirectCfgRecovery:
             if guard is None:
                 return False
             values.remove(0)
-        if (
-            not values
-            or any(
-                not _is_executable_span(self.image, target, 1)
-                or target not in self.instructions
-                or target not in self.function_addresses
-                for target in values
-            )
+        if not values or any(
+            not _is_executable_span(self.image, target, 1)
+            or target not in self.instructions
+            or target not in self.function_addresses
+            for target in values
         ):
             return False
 
         edge_kind = f"indirect-{flow_kind}-indexed-global-slot"
-        self._require_retained_pre_finite_targets_sound(
-            instruction, edge_kind, values
-        )
+        self._require_retained_pre_finite_targets_sound(instruction, edge_kind, values)
         provenance = (
             f"base={base:#x};scale={scale};indices="
             + ",".join(f"{row:#x}" for row in sorted(load_indices))
@@ -8315,9 +10100,7 @@ class _DirectCfgRecovery:
             self._record_finite_target(target)
             self._enqueue(target, is_function=flow_kind == "call")
         for slot in sorted(slot_addresses):
-            self.data_evidence.add(
-                _DataEvidence(slot, slot + 4, provenance)
-            )
+            self.data_evidence.add(_DataEvidence(slot, slot + 4, provenance))
         return True
 
     def _finite_global_slot_values(
@@ -8352,9 +10135,7 @@ class _DirectCfgRecovery:
             decoded_write = self._owned_decoded(write.instruction_address)
             if decoded_write.id != X86_INS_MOV or len(decoded_write.operands) != 2:
                 return None
-            function_entry = self._registrar_function_entry(
-                write.instruction_address
-            )
+            function_entry = self._registrar_function_entry(write.instruction_address)
             if function_entry is None:
                 return None
             self._note_producer_dependency(function_entry)
@@ -8446,11 +10227,7 @@ class _DirectCfgRecovery:
             definition.operands[1].mem,
             function_entry,
         )
-        return (
-            None
-            if logical is None
-            else (logical, definition_address)
-        )
+        return None if logical is None else (logical, definition_address)
 
     def _strict_zero_fill_function(self, function_entry: int) -> bool:
         """Recognize a closed ``zero_bytes(destination, size)`` helper."""
@@ -8477,20 +10254,15 @@ class _DirectCfgRecovery:
             len(stores) != 1
             or not returns
             or any(
-                self._owned_decoded(address).group(CS_GRP_CALL)
-                for address in addresses
+                self._owned_decoded(address).group(CS_GRP_CALL) for address in addresses
             )
         ):
             return False
         store = stores[0]
         if (
-            self._register_argument_index_across_blocks(
-                store, "edi", function_entry
-            )
+            self._register_argument_index_across_blocks(store, "edi", function_entry)
             != 0
-            or self._register_argument_index_across_blocks(
-                store, "ecx", function_entry
-            )
+            or self._register_argument_index_across_blocks(store, "ecx", function_entry)
             != 1
         ):
             return False
@@ -8498,10 +10270,7 @@ class _DirectCfgRecovery:
         if zero_states is None:
             return False
         zero_state = zero_states.get(store)
-        if (
-            zero_state is None
-            or zero_state[_REGISTER_FAMILIES.index("eax")] != 1
-        ):
+        if zero_state is None or zero_state[_REGISTER_FAMILIES.index("eax")] != 1:
             return False
         following_entry = min(
             (row for row in self.function_addresses if row > function_entry),
@@ -8561,9 +10330,7 @@ class _DirectCfgRecovery:
             return None
         saved_offset = next(iter(saved_offsets))
         saves = []
-        for candidate_address in self._function_instruction_addresses(
-            function_entry
-        ):
+        for candidate_address in self._function_instruction_addresses(function_entry):
             if candidate_address >= write_address:
                 break
             candidate = self._owned_decoded(candidate_address)
@@ -8753,14 +10520,9 @@ class _DirectCfgRecovery:
         unresolved_writes = []
         for write in writes:
             decoded = self._owned_decoded(write.instruction_address)
-            if (
-                decoded.id != X86_INS_MOV
-                or len(decoded.operands) != 2
-            ):
+            if decoded.id != X86_INS_MOV or len(decoded.operands) != 2:
                 return None
-            function_entry = self._registrar_function_entry(
-                write.instruction_address
-            )
+            function_entry = self._registrar_function_entry(write.instruction_address)
             if function_entry is not None:
                 self._note_producer_dependency(function_entry)
             if write.value is not None:
@@ -8799,9 +10561,7 @@ class _DirectCfgRecovery:
                     self._note_producer_dependency(caller_entry)
 
         saves = []
-        restorations_by_function: dict[
-            int, list[tuple[int, int, int]]
-        ] = {}
+        restorations_by_function: dict[int, list[tuple[int, int, int]]] = {}
         for write, decoded, function_entry in unresolved_writes:
             publication_addresses = tuple(
                 publications_by_function.get(function_entry, ())
@@ -8820,15 +10580,11 @@ class _DirectCfgRecovery:
             restorations_by_function.setdefault(function_entry, []).append(
                 (write.instruction_address, save, saved_offset)
             )
-        for function_entry, publication_addresses in (
-            publications_by_function.items()
-        ):
+        for function_entry, publication_addresses in publications_by_function.items():
             function_slot_writes = frozenset(
                 write.instruction_address
                 for write in writes
-                if self._registrar_function_entry(
-                    write.instruction_address
-                )
+                if self._registrar_function_entry(write.instruction_address)
                 == function_entry
             )
             if not self._global_stack_publications_are_lifo_closed(
@@ -8844,11 +10600,7 @@ class _DirectCfgRecovery:
         for publication, function_entry, logical_base, defining_lea in publications:
             target_logical = logical_base + displacement
             following_entry = min(
-                (
-                    row
-                    for row in self.function_addresses
-                    if row > function_entry
-                ),
+                (row for row in self.function_addresses if row > function_entry),
                 default=0x1_0000_0000,
             )
             zero_candidates = []
@@ -8857,8 +10609,7 @@ class _DirectCfgRecovery:
                     row
                     for row in self.direct_calls
                     if row.address < publication
-                    and self._registrar_function_entry(row.address)
-                    == function_entry
+                    and self._registrar_function_entry(row.address) == function_entry
                     and self._strict_zero_fill_function(row.target)
                 ),
                 key=lambda row: row.address,
@@ -8959,14 +10710,11 @@ class _DirectCfgRecovery:
                     if result is None or not result[0]:
                         return None
                     values.update(result[0])
-                    field_writes.append(
-                        f"{candidate_address:#x}:{result[1]}"
-                    )
+                    field_writes.append(f"{candidate_address:#x}:{result[1]}")
             publication_details.append(
                 f"publish={publication:#x};lea={defining_lea:#x};"
                 f"zero-fill={zero_call:#x}/{zero_base:+#x}/{zero_size:#x};"
-                "field-writes="
-                + (",".join(field_writes) if field_writes else "none")
+                "field-writes=" + (",".join(field_writes) if field_writes else "none")
             )
         self._check_count("max_finite_values", len(values))
         result = (
@@ -8995,9 +10743,7 @@ class _DirectCfgRecovery:
         if origins is None or len({row[1] for row in origins}) != 1:
             return None
         slot = origins[0][1]
-        result = self._global_stack_field_values(
-            slot, memory.disp, visited
-        )
+        result = self._global_stack_field_values(slot, memory.disp, visited)
         if result is None:
             return None
         values, detail = result
@@ -9013,9 +10759,7 @@ class _DirectCfgRecovery:
         """Bind stack-state proofs to finite callees crossed before a use."""
         if not self.producer_dependency_collectors:
             return
-        for call_address in self._function_instruction_addresses(
-            function_entry
-        ):
+        for call_address in self._function_instruction_addresses(function_entry):
             if call_address >= address:
                 break
             if not self._owned_decoded(call_address).group(CS_GRP_CALL):
@@ -9050,18 +10794,12 @@ class _DirectCfgRecovery:
                     first_decoded.mnemonic == "push"
                     and len(first_decoded.operands) == 1
                     and first_decoded.operands[0].type == X86_OP_REG
-                    and self._register_family(first_decoded.operands[0].reg)
-                    == "ebp"
+                    and self._register_family(first_decoded.operands[0].reg) == "ebp"
                     and second_decoded.id == X86_INS_MOV
                     and len(second_decoded.operands) == 2
-                    and all(
-                        row.type == X86_OP_REG
-                        for row in second_decoded.operands
-                    )
-                    and self._register_family(second_decoded.operands[0].reg)
-                    == "ebp"
-                    and self._register_family(second_decoded.operands[1].reg)
-                    == "esp"
+                    and all(row.type == X86_OP_REG for row in second_decoded.operands)
+                    and self._register_family(second_decoded.operands[0].reg) == "ebp"
+                    and self._register_family(second_decoded.operands[1].reg) == "esp"
                 )
                 if canonical_frame:
                     if self._register_definitions_across_blocks(
@@ -9073,13 +10811,9 @@ class _DirectCfgRecovery:
                     return operand.mem.disp // 4 - 2
         self._note_stack_call_dependencies_before(address, function_entry)
         stack_states = self._function_stack_states(function_entry)
-        stack_state = (
-            None if stack_states is None else stack_states.get(address)
-        )
+        stack_state = None if stack_states is None else stack_states.get(address)
         if stack_state is None:
-            stack_state = self._linear_stack_state_before(
-                address, function_entry
-            )
+            stack_state = self._linear_stack_state_before(address, function_entry)
         if stack_state is None:
             return None
         sp_delta, bp_delta = stack_state
@@ -9139,9 +10873,7 @@ class _DirectCfgRecovery:
                 and decoded.operands[1].type == X86_OP_IMM
             ):
                 amount = decoded.operands[1].imm & 0xFFFF_FFFF
-                sp_delta += (
-                    amount if decoded.mnemonic == "add" else -amount
-                )
+                sp_delta += amount if decoded.mnemonic == "add" else -amount
                 handled_esp_write = True
             elif (
                 decoded.mnemonic == "mov"
@@ -9169,8 +10901,7 @@ class _DirectCfgRecovery:
                 handled_ebp_write = True
 
             written_families = {
-                self._register_family(register)
-                for register in decoded.regs_write
+                self._register_family(register) for register in decoded.regs_write
             } | {
                 self._register_family(operand.reg)
                 for operand in decoded.operands
@@ -9203,9 +10934,7 @@ class _DirectCfgRecovery:
             (row for row in self.function_addresses if row > function_entry),
             default=0x1_0000_0000,
         )
-        states: dict[int, tuple[int, frozenset[int]] | None] = {
-            function_entry: None
-        }
+        states: dict[int, tuple[int, frozenset[int]] | None] = {function_entry: None}
         pending = [function_entry]
         queued = {function_entry}
         iterations = 0
@@ -9230,8 +10959,7 @@ class _DirectCfgRecovery:
                 decoded.id == X86_INS_MOV
                 and len(decoded.operands) == 2
                 and decoded.operands[0].type == X86_OP_REG
-                and self._register_family(decoded.operands[0].reg)
-                == register_family
+                and self._register_family(decoded.operands[0].reg) == register_family
             ):
                 source = decoded.operands[1]
                 if (
@@ -9249,8 +10977,7 @@ class _DirectCfgRecovery:
                         else (argument_index, frozenset({current}))
                     )
             elif (
-                decoded.group(CS_GRP_CALL)
-                and register_family in {"eax", "ecx", "edx"}
+                decoded.group(CS_GRP_CALL) and register_family in {"eax", "ecx", "edx"}
             ) or writes_family:
                 output = None
             else:
@@ -9263,9 +10990,7 @@ class _DirectCfgRecovery:
                 successors = (next_address,)
             elif decoded.group(CS_GRP_JUMP):
                 successors = tuple(
-                    sorted(
-                        self.non_call_successors.get(decoded.address, ())
-                    )
+                    sorted(self.non_call_successors.get(decoded.address, ()))
                 )
                 if not successors:
                     return None
@@ -9359,8 +11084,7 @@ class _DirectCfgRecovery:
                 }
                 and len(decoded.operands) == 2
                 and decoded.operands[0].type == X86_OP_REG
-                and self._register_family(decoded.operands[0].reg)
-                == register_family
+                and self._register_family(decoded.operands[0].reg) == register_family
             ):
                 source = decoded.operands[1]
                 if (
@@ -9376,10 +11100,8 @@ class _DirectCfgRecovery:
                 and len(decoded.operands) == 2
                 and all(row.type == X86_OP_REG for row in decoded.operands)
                 and decoded.operands[0].size == 4
-                and self._register_family(decoded.operands[0].reg)
-                == register_family
-                and self._register_family(decoded.operands[1].reg)
-                == register_family
+                and self._register_family(decoded.operands[0].reg) == register_family
+                and self._register_family(decoded.operands[1].reg) == register_family
             ):
                 output = frozenset({current})
             elif decoded.group(CS_GRP_CALL) and register_family == "eax":
@@ -9388,8 +11110,7 @@ class _DirectCfgRecovery:
                 # the definition lets those fail-closed proofs inspect it.
                 output = frozenset({current})
             elif (
-                decoded.group(CS_GRP_CALL)
-                and register_family in {"eax", "ecx", "edx"}
+                decoded.group(CS_GRP_CALL) and register_family in {"eax", "ecx", "edx"}
             ) or writes_family:
                 output = None
             else:
@@ -9402,9 +11123,7 @@ class _DirectCfgRecovery:
                 successors = (next_address,)
             elif decoded.group(CS_GRP_JUMP):
                 successors = tuple(
-                    sorted(
-                        self.non_call_successors.get(decoded.address, ())
-                    )
+                    sorted(self.non_call_successors.get(decoded.address, ()))
                 )
                 if not successors:
                     return None
@@ -9450,11 +11169,35 @@ class _DirectCfgRecovery:
         cache_key = (
             function_entry,
             argument_index,
+            self._producer_exact_call_context_signature(),
             self._summary_fact_signature(),
             tuple(sorted(self.incoming_edges.get(function_entry, ()))),
         )
         if cache_key in self.finite_argument_cache:
             return self.finite_argument_cache[cache_key]
+        exact_context = self._producer_exact_call_context(function_entry)
+        if exact_context is not None:
+            call_address, caller_entry = exact_context
+            pushed = self._pushed_call_argument(call_address, argument_index)
+            if pushed is None or pushed[2] != caller_entry:
+                self.finite_argument_cache[cache_key] = None
+                return None
+            result = self._finite_operand_values_before(
+                pushed[0].address,
+                pushed[1],
+                caller_entry,
+                visited | {key},
+            )
+            if result is None or not result[0]:
+                self.finite_argument_cache[cache_key] = None
+                return None
+            values, detail = result
+            final = (
+                values,
+                f"exact-caller={call_address:#x};argument={argument_index};{detail}",
+            )
+            self.finite_argument_cache[cache_key] = final
+            return final
         if not self._incoming_call_domain_is_closed(function_entry):
             self.finite_argument_cache[cache_key] = None
             return None
@@ -9475,9 +11218,7 @@ class _DirectCfgRecovery:
                 decoded = self._owned_decoded(previous.address)
                 if decoded.mnemonic == "push" and len(decoded.operands) == 1:
                     if remaining == 0:
-                        caller_entry = self._registrar_function_entry(
-                            call_address
-                        )
+                        caller_entry = self._registrar_function_entry(call_address)
                         if caller_entry is None:
                             self.finite_argument_cache[cache_key] = None
                             return None
@@ -9494,9 +11235,7 @@ class _DirectCfgRecovery:
                             and decoded.operands[0].type == X86_OP_REG
                             and self._register_argument_index_across_blocks(
                                 previous.address,
-                                self._register_family(
-                                    decoded.operands[0].reg
-                                ),
+                                self._register_family(decoded.operands[0].reg),
                                 function_entry,
                             )
                             == argument_index
@@ -9574,11 +11313,7 @@ class _DirectCfgRecovery:
                         )
         if argument_result is not None and stack_states is not None:
             following_entry = min(
-                (
-                    row
-                    for row in self.function_addresses
-                    if row > function_entry
-                ),
+                (row for row in self.function_addresses if row > function_entry),
                 default=0x1_0000_0000,
             )
             reaching_writes = []
@@ -9586,9 +11321,7 @@ class _DirectCfgRecovery:
                 if not function_entry <= write_address < following_entry:
                     continue
                 decoded_write = self._owned_decoded(write_address)
-                if decoded_write.id != X86_INS_MOV or len(
-                    decoded_write.operands
-                ) != 2:
+                if decoded_write.id != X86_INS_MOV or len(decoded_write.operands) != 2:
                     continue
                 destination = decoded_write.operands[0]
                 if (
@@ -9603,13 +11336,10 @@ class _DirectCfgRecovery:
                 if write_base not in {"esp", "ebp"}:
                     continue
                 write_sp, write_bp = write_state
-                write_base_delta = (
-                    write_sp if write_base == "esp" else write_bp
-                )
+                write_base_delta = write_sp if write_base == "esp" else write_bp
                 if (
                     write_base_delta is None
-                    or write_base_delta + destination.mem.disp
-                    != logical_offset
+                    or write_base_delta + destination.mem.disp != logical_offset
                     or not self._reachable_within_function(
                         function_entry,
                         write_address,
@@ -9640,8 +11370,7 @@ class _DirectCfgRecovery:
                     write_values, write_detail = write_result
                     values.update(write_values)
                     details.append(
-                        f"stack-write={decoded_write.address:#x};"
-                        f"{write_detail}"
+                        f"stack-write={decoded_write.address:#x};{write_detail}"
                     )
                 return frozenset(values), ";".join(details)
         if logical_offset is not None:
@@ -9679,8 +11408,7 @@ class _DirectCfgRecovery:
                     and destination.mem.segment == X86_REG_INVALID
                     and destination.mem.index == X86_REG_INVALID
                     and destination.mem.base != X86_REG_INVALID
-                    and self._register_family(destination.mem.base)
-                    == base_family
+                    and self._register_family(destination.mem.base) == base_family
                     and destination.mem.disp == displacement
                 ):
                     result = self._finite_operand_values_before(
@@ -9767,9 +11495,7 @@ class _DirectCfgRecovery:
 
         matches = []
         for argument_index in range(16):
-            pushed = self._pushed_call_argument(
-                call.address, argument_index
-            )
+            pushed = self._pushed_call_argument(call.address, argument_index)
             if pushed is None:
                 break
             push_instruction, operand, caller_entry = pushed
@@ -9804,16 +11530,12 @@ class _DirectCfgRecovery:
             if pointer_state is None:
                 continue
             pointer_delta = (
-                pointer_state[0]
-                if pointer_base == "esp"
-                else pointer_state[1]
+                pointer_state[0] if pointer_base == "esp" else pointer_state[1]
             )
             if pointer_delta is None:
                 continue
             pointer_offset = pointer_delta + pointer.disp
-            output = self._fixed_output_argument_values(
-                call.target, argument_index
-            )
+            output = self._fixed_output_argument_values(call.target, argument_index)
             if output is None:
                 continue
             field, values, detail = output
@@ -9855,9 +11577,7 @@ class _DirectCfgRecovery:
         writes = []
         for rows in self.dynamic_field_writes.values():
             for row in rows:
-                if not (
-                    function_entry <= row.instruction_address < following_entry
-                ):
+                if not (function_entry <= row.instruction_address < following_entry):
                     continue
                 decoded = self._owned_decoded(row.instruction_address)
                 if (
@@ -9871,9 +11591,7 @@ class _DirectCfgRecovery:
                     or decoded.operands[1].type != X86_OP_IMM
                     or self._register_argument_index_across_blocks(
                         row.instruction_address,
-                        self._register_family(
-                            decoded.operands[0].mem.base
-                        ),
+                        self._register_family(decoded.operands[0].mem.base),
                         function_entry,
                     )
                     != argument_index
@@ -9917,8 +11635,7 @@ class _DirectCfgRecovery:
         return (
             decoded.operands[0].mem.disp,
             frozenset({value}),
-            f"fixed-output-store={write.instruction_address:#x};"
-            f"value={value:#x}",
+            f"fixed-output-store={write.instruction_address:#x};value={value:#x}",
         )
 
     def _function_stack_states(
@@ -9931,9 +11648,7 @@ class _DirectCfgRecovery:
         )
         if cache_key in self.stack_state_cache:
             return self.stack_state_cache[cache_key]
-        states: dict[int, tuple[int, int | None]] = {
-            function_entry: (0, None)
-        }
+        states: dict[int, tuple[int, int | None]] = {function_entry: (0, None)}
         pending = [function_entry]
         queued = {function_entry}
         iterations = 0
@@ -9992,8 +11707,7 @@ class _DirectCfgRecovery:
                 handled_ebp_write = True
 
             written_families = {
-                self._register_family(register)
-                for register in decoded.regs_write
+                self._register_family(register) for register in decoded.regs_write
             } | {
                 self._register_family(operand.reg)
                 for operand in decoded.operands
@@ -10023,9 +11737,7 @@ class _DirectCfgRecovery:
                     successors = (decoded.address + decoded.size,)
             elif decoded.group(CS_GRP_JUMP):
                 successors = tuple(
-                    sorted(
-                        self.non_call_successors.get(decoded.address, ())
-                    )
+                    sorted(self.non_call_successors.get(decoded.address, ()))
                 )
                 if not successors:
                     self.stack_state_cache[cache_key] = None
@@ -10096,10 +11808,7 @@ class _DirectCfgRecovery:
                 continue
             if not decoded.operands:
                 cleanups.add(0)
-            elif (
-                len(decoded.operands) == 1
-                and decoded.operands[0].type == X86_OP_IMM
-            ):
+            elif len(decoded.operands) == 1 and decoded.operands[0].type == X86_OP_IMM:
                 cleanups.add(decoded.operands[0].imm & 0xFFFF_FFFF)
             else:
                 self.callee_cleanup_cache[cache_key] = None
@@ -10116,10 +11825,7 @@ class _DirectCfgRecovery:
             for row in self.diagnostics
         ):
             return None
-        cleanups = {
-            self._closed_function_stack_cleanup(target)
-            for target in targets
-        }
+        cleanups = {self._closed_function_stack_cleanup(target) for target in targets}
         if None in cleanups or len(cleanups) != 1:
             return None
         return next(iter(cleanups))
@@ -10143,8 +11849,7 @@ class _DirectCfgRecovery:
                 values, detail = finite_argument
                 if len(argument_definitions) == 1:
                     definition_detail = (
-                        "dominating-definition="
-                        f"{next(iter(argument_definitions)):#x}"
+                        f"dominating-definition={next(iter(argument_definitions)):#x}"
                     )
                 else:
                     definition_detail = "reaching-definitions=" + ",".join(
@@ -10171,8 +11876,7 @@ class _DirectCfgRecovery:
                 decoded.id not in {X86_INS_MOV, X86_INS_LEA}
                 or len(decoded.operands) != 2
                 or decoded.operands[0].type != X86_OP_REG
-                or self._register_family(decoded.operands[0].reg)
-                != register_family
+                or self._register_family(decoded.operands[0].reg) != register_family
             ):
                 return None
             result = self._finite_operand_values_before(
@@ -10268,15 +11972,12 @@ class _DirectCfgRecovery:
                         f"register={register_family};"
                         f"definition={previous.address:#x};{detail}",
                     )
-                affine_loop, affine_values = (
-                    self._finite_affine_loop_register_values(
-                        address, register_family, function_entry
-                    )
+                affine_loop, affine_values = self._finite_affine_loop_register_values(
+                    address, register_family, function_entry
                 )
                 return affine_values if affine_loop else None
             if (
-                decoded.group(CS_GRP_CALL)
-                and register_family in {"eax", "ecx", "edx"}
+                decoded.group(CS_GRP_CALL) and register_family in {"eax", "ecx", "edx"}
             ) or decoded.group(CS_GRP_RET):
                 return None
             if decoded.group(CS_GRP_JUMP):
@@ -10460,8 +12161,7 @@ class _DirectCfgRecovery:
                 or reset.mnemonic != "mov"
                 or len(reset.operands) != 2
                 or reset.operands[0].type != X86_OP_REG
-                or self._register_family(reset.operands[0].reg)
-                != register_family
+                or self._register_family(reset.operands[0].reg) != register_family
                 or reset.operands[1].type != X86_OP_IMM
             ):
                 return True, None
@@ -10515,8 +12215,7 @@ class _DirectCfgRecovery:
                 decoded.mnemonic == "inc"
                 and len(decoded.operands) == 1
                 and decoded.operands[0].type == X86_OP_REG
-                and self._register_family(decoded.operands[0].reg)
-                == counter_family
+                and self._register_family(decoded.operands[0].reg) == counter_family
             ):
                 counter_increments += 1
         if stride is None or counter_increments != 1:
@@ -10532,15 +12231,13 @@ class _DirectCfgRecovery:
                 destination, source = decoded.operands
                 if (
                     destination.type == X86_OP_REG
-                    and self._register_family(destination.reg)
-                    == register_family
+                    and self._register_family(destination.reg) == register_family
                     and source.type == X86_OP_IMM
                 ):
                     base = source.imm & 0xFFFF_FFFF
                 if (
                     destination.type == X86_OP_REG
-                    and self._register_family(destination.reg)
-                    == counter_family
+                    and self._register_family(destination.reg) == counter_family
                     and source.type == X86_OP_IMM
                     and source.imm == 0
                 ):
@@ -10549,17 +12246,14 @@ class _DirectCfgRecovery:
                 decoded.mnemonic == "xor"
                 and len(decoded.operands) == 2
                 and all(operand.type == X86_OP_REG for operand in decoded.operands)
-                and self._register_family(decoded.operands[0].reg)
-                == counter_family
-                and self._register_family(decoded.operands[1].reg)
-                == counter_family
+                and self._register_family(decoded.operands[0].reg) == counter_family
+                and self._register_family(decoded.operands[1].reg) == counter_family
             ):
                 counter_zero = True
         if base is None or not counter_zero:
             return True, None
         values = frozenset(
-            (base + index * stride) & 0xFFFF_FFFF
-            for index in range(count)
+            (base + index * stride) & 0xFFFF_FFFF for index in range(count)
         )
         self._check_count("max_finite_values", len(values))
         return (
@@ -10602,9 +12296,7 @@ class _DirectCfgRecovery:
                 return frozenset({absolute}), f"absolute-address={absolute:#x}"
             self._note_producer_global_slot_dependency(absolute)
             if operand.size == 4 and self.global_slot_writes.get(absolute):
-                global_values = self._finite_global_slot_values(
-                    absolute, visited
-                )
+                global_values = self._finite_global_slot_values(absolute, visited)
                 if global_values is None:
                     return None
                 values, detail = global_values
@@ -10699,17 +12391,12 @@ class _DirectCfgRecovery:
                         write_values, write_detail = write_result
                         combined_values.update(write_values)
                         write_details.append(
-                            f"stack-write={write_address:#x};"
-                            f"{write_detail}"
+                            f"stack-write={write_address:#x};{write_detail}"
                         )
                     return (
                         frozenset(combined_values),
                         f"stack-argument={argument_index};{detail}"
-                        + (
-                            ";" + ";".join(write_details)
-                            if write_details
-                            else ""
-                        ),
+                        + (";" + ";".join(write_details) if write_details else ""),
                     )
             local_field = self._finite_local_field_store_before(
                 address,
@@ -10743,10 +12430,8 @@ class _DirectCfgRecovery:
             address, base_family, function_entry, visited
         )
         if base is None and operand.size == 4:
-            global_stack_field = (
-                self._finite_global_stack_field_values_before(
-                    address, memory, function_entry, visited
-                )
+            global_stack_field = self._finite_global_stack_field_values_before(
+                address, memory, function_entry, visited
             )
             if global_stack_field is not None:
                 return global_stack_field
@@ -10783,9 +12468,7 @@ class _DirectCfgRecovery:
         for value in base_values:
             field_address = (value + displacement) & 0xFFFF_FFFF
             if self.global_slot_writes.get(field_address):
-                runtime_field = self._finite_global_slot_values(
-                    field_address, visited
-                )
+                runtime_field = self._finite_global_slot_values(field_address, visited)
                 if runtime_field is None:
                     return None
                 field_values, field_detail = runtime_field
@@ -10871,9 +12554,7 @@ class _DirectCfgRecovery:
         if cache_key in self.copied_argument_origin_cache:
             return True
         key = (function_entry, 0x3_0000_0000 + argument_index)
-        if key in visited or not self._incoming_call_domain_is_closed(
-            function_entry
-        ):
+        if key in visited or not self._incoming_call_domain_is_closed(function_entry):
             return False
         next_visited = visited | {key}
         for call_address in self._incoming_call_sites(function_entry):
@@ -10955,11 +12636,7 @@ class _DirectCfgRecovery:
             self.dynamic_field_writes.get(target_field, ()),
             key=lambda row: row.instruction_address,
         ):
-            if not (
-                function_entry
-                <= write.instruction_address
-                < following_entry
-            ):
+            if not (function_entry <= write.instruction_address < following_entry):
                 continue
             decoded = self._owned_decoded(write.instruction_address)
             if not (
@@ -10974,69 +12651,51 @@ class _DirectCfgRecovery:
                 and decoded.operands[1].type == X86_OP_REG
             ):
                 continue
-            descriptor_family = self._register_family(
-                decoded.operands[1].reg
-            )
+            descriptor_family = self._register_family(decoded.operands[1].reg)
             descriptor_argument = self._register_argument_origin_index(
                 decoded.address, descriptor_family, function_entry
             )
             if descriptor_argument is None:
                 continue
-            holder_family = self._register_family(
-                decoded.operands[0].mem.base
-            )
+            holder_family = self._register_family(decoded.operands[0].mem.base)
             holder_definitions = self._register_definitions_across_blocks(
                 decoded.address, holder_family, function_entry
             )
             if not holder_definitions or len(holder_definitions) != 1:
                 continue
-            holder_load = self._owned_decoded(
-                next(iter(holder_definitions))
-            )
+            holder_load = self._owned_decoded(next(iter(holder_definitions)))
             if not (
                 holder_load.id == X86_INS_MOV
                 and len(holder_load.operands) == 2
                 and holder_load.operands[0].type == X86_OP_REG
                 and holder_load.operands[1].type == X86_OP_MEM
                 and holder_load.operands[1].size == 4
-                and holder_load.operands[1].mem.segment
-                == X86_REG_INVALID
-                and holder_load.operands[1].mem.base
-                != X86_REG_INVALID
-                and holder_load.operands[1].mem.index
-                == X86_REG_INVALID
+                and holder_load.operands[1].mem.segment == X86_REG_INVALID
+                and holder_load.operands[1].mem.base != X86_REG_INVALID
+                and holder_load.operands[1].mem.index == X86_REG_INVALID
                 and holder_load.operands[1].mem.disp == pointer_field
             ):
                 continue
-            runtime_family = self._register_family(
-                holder_load.operands[1].mem.base
-            )
+            runtime_family = self._register_family(holder_load.operands[1].mem.base)
             runtime_definitions = self._register_definitions_across_blocks(
                 holder_load.address, runtime_family, function_entry
             )
             if not runtime_definitions or len(runtime_definitions) != 1:
                 continue
-            runtime_load = self._owned_decoded(
-                next(iter(runtime_definitions))
-            )
+            runtime_load = self._owned_decoded(next(iter(runtime_definitions)))
             if not (
                 runtime_load.id == X86_INS_MOV
                 and len(runtime_load.operands) == 2
                 and runtime_load.operands[0].type == X86_OP_REG
                 and runtime_load.operands[1].type == X86_OP_MEM
                 and runtime_load.operands[1].size == 4
-                and runtime_load.operands[1].mem.segment
-                == X86_REG_INVALID
-                and runtime_load.operands[1].mem.base
-                != X86_REG_INVALID
-                and runtime_load.operands[1].mem.index
-                == X86_REG_INVALID
+                and runtime_load.operands[1].mem.segment == X86_REG_INVALID
+                and runtime_load.operands[1].mem.base != X86_REG_INVALID
+                and runtime_load.operands[1].mem.index == X86_REG_INVALID
                 and runtime_load.operands[1].mem.disp == object_field
                 and self._register_argument_origin_index(
                     runtime_load.address,
-                    self._register_family(
-                        runtime_load.operands[1].mem.base
-                    ),
+                    self._register_family(runtime_load.operands[1].mem.base),
                     function_entry,
                 )
                 == descriptor_argument
@@ -11044,9 +12703,7 @@ class _DirectCfgRecovery:
                 continue
             returns = [
                 address
-                for address in self._function_instruction_addresses(
-                    function_entry
-                )
+                for address in self._function_instruction_addresses(function_entry)
                 if self._owned_decoded(address).group(CS_GRP_RET)
                 and self._reachable_within_function(
                     function_entry,
@@ -11140,14 +12797,9 @@ class _DirectCfgRecovery:
 
         function_calls = [
             DirectCall(source, target)
-            for source in self._function_instruction_addresses(
-                function_entry
-            )
+            for source in self._function_instruction_addresses(function_entry)
             if source < address
-            and (
-                target := self.direct_call_targets_by_source.get(source)
-            )
-            is not None
+            and (target := self.direct_call_targets_by_source.get(source)) is not None
         ]
         for call in function_calls:
             if call.address >= address:
@@ -11160,9 +12812,7 @@ class _DirectCfgRecovery:
             )
             if relation is None:
                 continue
-            pushed = self._pushed_call_argument(
-                call.address, relation[0]
-            )
+            pushed = self._pushed_call_argument(call.address, relation[0])
             pushed_argument = (
                 None
                 if pushed is None
@@ -11179,18 +12829,15 @@ class _DirectCfgRecovery:
                     function_entry,
                 )
             )
-            descriptor_definitions = (
-                self._register_definitions_across_blocks(
-                    address,
-                    descriptor_family,
-                    function_entry,
-                )
+            descriptor_definitions = self._register_definitions_across_blocks(
+                address,
+                descriptor_family,
+                function_entry,
             )
             same_register = bool(
                 pushed is not None
                 and pushed[1].type == X86_OP_REG
-                and self._register_family(pushed[1].reg)
-                == descriptor_family
+                and self._register_family(pushed[1].reg) == descriptor_family
                 and pushed_definitions
                 and pushed_definitions == descriptor_definitions
             )
@@ -11208,10 +12855,7 @@ class _DirectCfgRecovery:
                 excluded=call.address,
             ):
                 continue
-            if any(
-                call.address < other.address < address
-                for other in function_calls
-            ):
+            if any(call.address < other.address < address for other in function_calls):
                 continue
             self.initialized_back_reference_cache.add(cache_key)
             return True
@@ -11252,30 +12896,23 @@ class _DirectCfgRecovery:
         if cache_key in self.initialized_back_reference_cache:
             return True
         key = cache_key[:6]
-        if key in visited or not self._incoming_call_domain_is_closed(
-            function_entry
-        ):
+        if key in visited or not self._incoming_call_domain_is_closed(function_entry):
             return False
         next_visited = visited | {key}
         callers = self._incoming_call_sites(function_entry)
         if not callers:
             return False
         for call_address in callers:
-            pushed = self._pushed_call_argument(
-                call_address, argument_index
-            )
-            if (
-                pushed is None
-                or not (
-                    self._operand_back_reference_is_initialized(
-                        pushed[0].address,
-                        pushed[1],
-                        pushed[2],
-                        object_field,
-                        pointer_field,
-                        target_field,
-                        next_visited,
-                    )
+            pushed = self._pushed_call_argument(call_address, argument_index)
+            if pushed is None or not (
+                self._operand_back_reference_is_initialized(
+                    pushed[0].address,
+                    pushed[1],
+                    pushed[2],
+                    object_field,
+                    pointer_field,
+                    target_field,
+                    next_visited,
                 )
             ):
                 return False
@@ -11297,14 +12934,9 @@ class _DirectCfgRecovery:
         )
         function_calls = [
             DirectCall(source, target)
-            for source in self._function_instruction_addresses(
-                function_entry
-            )
+            for source in self._function_instruction_addresses(function_entry)
             if source < address
-            and (
-                target := self.direct_call_targets_by_source.get(source)
-            )
-            is not None
+            and (target := self.direct_call_targets_by_source.get(source)) is not None
         ]
         for call in function_calls:
             relation = self._back_reference_initializer(
@@ -11316,9 +12948,13 @@ class _DirectCfgRecovery:
             if relation is None:
                 continue
             pushed = self._pushed_call_argument(call.address, relation[0])
-            if pushed is None or self._operand_argument_index(
-                pushed[0].address, pushed[1], function_entry
-            ) != argument_index:
+            if (
+                pushed is None
+                or self._operand_argument_index(
+                    pushed[0].address, pushed[1], function_entry
+                )
+                != argument_index
+            ):
                 continue
             if self._reachable_within_function(
                 function_entry,
@@ -11343,11 +12979,14 @@ class _DirectCfgRecovery:
                     )
                     if other_pushed is None:
                         break
-                    if self._operand_argument_index(
-                        other_pushed[0].address,
-                        other_pushed[1],
-                        function_entry,
-                    ) == argument_index:
+                    if (
+                        self._operand_argument_index(
+                            other_pushed[0].address,
+                            other_pushed[1],
+                            function_entry,
+                        )
+                        == argument_index
+                    ):
                         descriptor_escapes = True
                         break
                 if descriptor_escapes:
@@ -11366,18 +13005,13 @@ class _DirectCfgRecovery:
                     and decoded.operands[0].size == 4
                     and decoded.operands[1].type == X86_OP_MEM
                     and decoded.operands[1].size == 4
-                    and decoded.operands[1].mem.segment
-                    == X86_REG_INVALID
-                    and decoded.operands[1].mem.base
-                    != X86_REG_INVALID
-                    and decoded.operands[1].mem.index
-                    == X86_REG_INVALID
+                    and decoded.operands[1].mem.segment == X86_REG_INVALID
+                    and decoded.operands[1].mem.base != X86_REG_INVALID
+                    and decoded.operands[1].mem.index == X86_REG_INVALID
                     and decoded.operands[1].mem.disp == object_field
                     and self._register_argument_index_across_blocks(
                         decoded.address,
-                        self._register_family(
-                            decoded.operands[1].mem.base
-                        ),
+                        self._register_family(decoded.operands[1].mem.base),
                         function_entry,
                     )
                     == argument_index
@@ -11411,9 +13045,7 @@ class _DirectCfgRecovery:
         target_field: int,
         visited: frozenset[tuple[Any, ...]],
     ) -> bool:
-        argument_index = self._operand_argument_index(
-            address, operand, function_entry
-        )
+        argument_index = self._operand_argument_index(address, operand, function_entry)
         if argument_index is not None and (
             self._argument_back_reference_is_initialized_locally(
                 address,
@@ -11482,11 +13114,7 @@ class _DirectCfgRecovery:
             function_entry,
             frozenset(),
         )
-        return bool(
-            finite is not None
-            and finite[0]
-            and finite[0] <= source_bases
-        )
+        return bool(finite is not None and finite[0] and finite[0] <= source_bases)
 
     def _argument_has_runtime_descriptor_field_origin(
         self,
@@ -11517,18 +13145,14 @@ class _DirectCfgRecovery:
             pointer_field,
             target_field,
         )
-        if key in visited or not self._incoming_call_domain_is_closed(
-            function_entry
-        ):
+        if key in visited or not self._incoming_call_domain_is_closed(function_entry):
             return False
         callers = self._incoming_call_sites(function_entry)
         if not callers:
             return False
         next_visited = visited | {key}
         for call_address in callers:
-            pushed = self._pushed_call_argument(
-                call_address, argument_index
-            )
+            pushed = self._pushed_call_argument(call_address, argument_index)
             if pushed is None or not (
                 self._operand_has_runtime_descriptor_field_origin(
                     pushed[0].address,
@@ -11604,9 +13228,7 @@ class _DirectCfgRecovery:
                 return False
         return True
 
-    def _relocated_global_zeroing_reference(
-        self, owner: int, slot: int
-    ) -> bool:
+    def _relocated_global_zeroing_reference(self, owner: int, slot: int) -> bool:
         decoded = self._owned_decoded(owner)
         if not (
             decoded.id == X86_INS_MOV
@@ -11617,8 +13239,7 @@ class _DirectCfgRecovery:
             and decoded.operands[1].imm & 0xFFFF_FFFF == slot
             and decoded.imm_size == 4
             and any(
-                row.type == 3
-                and row.va == decoded.address + decoded.imm_offset
+                row.type == 3 and row.va == decoded.address + decoded.imm_offset
                 for row in self.image.relocations
             )
         ):
@@ -11656,8 +13277,7 @@ class _DirectCfgRecovery:
                 and state is not None
                 and state[_REGISTER_FAMILIES.index("eax")] == 1
                 and not any(
-                    row < address
-                    and self._owned_decoded(row).mnemonic == "std"
+                    row < address and self._owned_decoded(row).mnemonic == "std"
                     for row in addresses
                 )
             ):
@@ -11712,9 +13332,7 @@ class _DirectCfgRecovery:
                 ):
                     continue
                 base_values = state[0][
-                    _REGISTER_FAMILIES.index(
-                        self._register_family(operand.mem.base)
-                    )
+                    _REGISTER_FAMILIES.index(self._register_family(operand.mem.base))
                 ]
                 if not base_values:
                     continue
@@ -11748,9 +13366,7 @@ class _DirectCfgRecovery:
                     return False
             if not decoded.group(CS_GRP_CALL):
                 continue
-            targets = tuple(
-                sorted(self.call_targets_by_source.get(address, ()))
-            )
+            targets = tuple(sorted(self.call_targets_by_source.get(address, ())))
             if state[0][_REGISTER_FAMILIES.index("ecx")] and (
                 not targets
                 or any(
@@ -11760,9 +13376,7 @@ class _DirectCfgRecovery:
             ):
                 return False
             for argument_index in range(8):
-                pushed = self._pushed_call_argument(
-                    address, argument_index
-                )
+                pushed = self._pushed_call_argument(address, argument_index)
                 if pushed is None:
                     break
                 values = self._relative_operand_offsets(
@@ -11853,8 +13467,7 @@ class _DirectCfgRecovery:
                         operand.size <= 0
                         or any(
                             value + operand.mem.disp < field + 4
-                            and field
-                            < value + operand.mem.disp + operand.size
+                            and field < value + operand.mem.disp + operand.size
                             for value in base_values
                         )
                     )
@@ -11884,9 +13497,7 @@ class _DirectCfgRecovery:
                 ):
                     return False
                 for argument_index in range(8):
-                    pushed = self._pushed_call_argument(
-                        address, argument_index
-                    )
+                    pushed = self._pushed_call_argument(address, argument_index)
                     if pushed is None:
                         break
                     values = self._relative_operand_offsets(
@@ -11917,9 +13528,7 @@ class _DirectCfgRecovery:
                             )
                         ):
                             return False
-            if decoded.group(CS_GRP_RET) and state[0][
-                _REGISTER_FAMILIES.index("eax")
-            ]:
+            if decoded.group(CS_GRP_RET) and state[0][_REGISTER_FAMILIES.index("eax")]:
                 if self._incoming_call_domain_is_closed(function_entry):
                     callers = self._incoming_call_sites(function_entry)
                 else:
@@ -11955,9 +13564,7 @@ class _DirectCfgRecovery:
                     caller_entry = self._registrar_function_entry(caller)
                     if caller_entry is None:
                         return False
-                    for value in state[0][
-                        _REGISTER_FAMILIES.index("eax")
-                    ]:
+                    for value in state[0][_REGISTER_FAMILIES.index("eax")]:
                         if not (
                             self._pointer_definition_preserves_field_without_escape(
                                 None,
@@ -11980,9 +13587,7 @@ class _DirectCfgRecovery:
         self, function_entry: int
     ) -> tuple[int, ...] | None:
         """Enumerate raw direct callers when the target is not address-taken."""
-        decoded = set(
-            self.direct_call_sources_by_target.get(function_entry, ())
-        )
+        decoded = set(self.direct_call_sources_by_target.get(function_entry, ()))
         raw = self._raw_direct_call_sites(function_entry)
         if (
             not raw
@@ -12012,10 +13617,7 @@ class _DirectCfgRecovery:
         result = False
         try:
             call = self._decode_one(call_address)
-            if not (
-                call.group(CS_GRP_CALL)
-                and self._direct_target(call) == target
-            ):
+            if not (call.group(CS_GRP_CALL) and self._direct_target(call) == target):
                 return False
             address = call.address + call.size
             for _ in range(64):
@@ -12084,11 +13686,7 @@ class _DirectCfgRecovery:
         states: dict[int, tuple[tuple[frozenset[int], ...], int]],
     ) -> bool:
         """Prove a stored subregister was overwritten independently."""
-        if (
-            operand.type != X86_OP_REG
-            or operand.size <= 0
-            or operand.size >= 4
-        ):
+        if operand.type != X86_OP_REG or operand.size <= 0 or operand.size >= 4:
             return False
         family = self._register_family(operand.reg)
         definitions = self._register_definitions_across_blocks(
@@ -12121,9 +13719,7 @@ class _DirectCfgRecovery:
         published_base: int,
         field: int = 0,
     ) -> bool:
-        finite = self._finite_global_slot_values(
-            pointer_slot, frozenset()
-        )
+        finite = self._finite_global_slot_values(pointer_slot, frozenset())
         if finite is None or finite[0] - {0} != {published_base}:
             return False
         for write in self.global_slot_writes.get(pointer_slot, ()):
@@ -12131,15 +13727,11 @@ class _DirectCfgRecovery:
             if not (
                 decoded.id == X86_INS_MOV
                 and len(decoded.operands) == 2
-                and self._absolute_memory_operand(decoded.operands[0])
-                == pointer_slot
+                and self._absolute_memory_operand(decoded.operands[0]) == pointer_slot
             ):
                 return False
             source = decoded.operands[1]
-            if (
-                source.type == X86_OP_IMM
-                and source.imm & 0xFFFF_FFFF == 0
-            ):
+            if source.type == X86_OP_IMM and source.imm & 0xFFFF_FFFF == 0:
                 continue
             if not self._operand_is_closed_relocated_address(
                 decoded.address,
@@ -12153,16 +13745,12 @@ class _DirectCfgRecovery:
         references = []
         saw_load = False
         for relocation in self.image.relocations:
-            relocation_types.setdefault(relocation.va, []).append(
-                relocation.type
-            )
+            relocation_types.setdefault(relocation.va, []).append(relocation.type)
             if not (
                 relocation.type == 3
                 and _is_mapped_span(self.image, relocation.va, 4)
                 and int.from_bytes(
-                    _read_loader_initialized(
-                        self.image, relocation.va, 4
-                    ),
+                    _read_loader_initialized(self.image, relocation.va, 4),
                     "little",
                 )
                 == pointer_slot
@@ -12210,10 +13798,7 @@ class _DirectCfgRecovery:
         return (
             saw_load
             and bool(references)
-            and all(
-                relocation_types[address] == [3]
-                for address in references
-            )
+            and all(relocation_types[address] == [3] for address in references)
         )
 
     def _relocated_global_pointer_publication(
@@ -12231,8 +13816,7 @@ class _DirectCfgRecovery:
             and decoded.operands[1].type == X86_OP_IMM
             and decoded.operands[1].size == 4
             and decoded.operands[1].imm & 0xFFFF_FFFF == published_field
-            and relocation_address
-            == decoded.address + decoded.imm_offset
+            and relocation_address == decoded.address + decoded.imm_offset
         ):
             return False
         pointer_slot = self._absolute_memory_operand(decoded.operands[0])
@@ -12307,9 +13891,7 @@ class _DirectCfgRecovery:
                 passed_pointer = False
                 return_may_alias = False
                 for callee_argument in range(8):
-                    pushed = self._pushed_call_argument(
-                        address, callee_argument
-                    )
+                    pushed = self._pushed_call_argument(address, callee_argument)
                     if pushed is None:
                         break
                     values = self._relative_operand_offsets(
@@ -12323,9 +13905,7 @@ class _DirectCfgRecovery:
                         continue
                     passed_pointer = True
                     if target is None or not (
-                        self._function_argument_does_not_escape(
-                            target, callee_argument
-                        )
+                        self._function_argument_does_not_escape(target, callee_argument)
                         or (
                             values == frozenset({0})
                             and self._function_argument_escapes_only_to_closed_global_pointer(
@@ -12341,9 +13921,7 @@ class _DirectCfgRecovery:
                     return_offsets = self._function_argument_return_offsets(
                         target, callee_argument
                     )
-                    return_may_alias |= (
-                        return_offsets is None or bool(return_offsets)
-                    )
+                    return_may_alias |= return_offsets is None or bool(return_offsets)
                 if (
                     passed_pointer
                     and return_may_alias
@@ -12391,9 +13969,7 @@ class _DirectCfgRecovery:
             if self._registrar_function_entry(call.address) != function_entry:
                 continue
             for argument_index in range(8):
-                pushed = self._pushed_call_argument(
-                    call.address, argument_index
-                )
+                pushed = self._pushed_call_argument(call.address, argument_index)
                 if pushed is None:
                     break
                 if pushed[0].address == owner:
@@ -12420,18 +13996,14 @@ class _DirectCfgRecovery:
         visited: frozenset[tuple[int, int, int]],
     ) -> bool:
         key = (function_entry, argument_index, target)
-        if key in visited or not self._incoming_call_domain_is_closed(
-            function_entry
-        ):
+        if key in visited or not self._incoming_call_domain_is_closed(function_entry):
             return False
         callers = self._incoming_call_sites(function_entry)
         if not callers:
             return False
         next_visited = visited | {key}
         for call_address in callers:
-            pushed = self._pushed_call_argument(
-                call_address, argument_index
-            )
+            pushed = self._pushed_call_argument(call_address, argument_index)
             if pushed is None or not self._operand_is_closed_relocated_address(
                 pushed[0].address,
                 pushed[1],
@@ -12458,14 +14030,11 @@ class _DirectCfgRecovery:
                 operand.imm & 0xFFFF_FFFF == target
                 and decoded.imm_size == 4
                 and any(
-                    row.type == 3
-                    and row.va == decoded.address + decoded.imm_offset
+                    row.type == 3 and row.va == decoded.address + decoded.imm_offset
                     for row in self.image.relocations
                 )
             )
-        argument_index = self._operand_argument_index(
-            address, operand, function_entry
-        )
+        argument_index = self._operand_argument_index(address, operand, function_entry)
         if argument_index is not None:
             return self._argument_is_closed_relocated_address(
                 function_entry,
@@ -12553,19 +14122,13 @@ class _DirectCfgRecovery:
                 and len(decoded.operands) == 2
                 and decoded.operands[0].type == X86_OP_MEM
                 and decoded.operands[0].size == 4
-                and self._absolute_memory_operand(decoded.operands[0])
-                == slot
+                and self._absolute_memory_operand(decoded.operands[0]) == slot
             ):
                 return False
             source = decoded.operands[1]
-            if (
-                source.type == X86_OP_IMM
-                and source.imm & 0xFFFF_FFFF == 0
-            ):
+            if source.type == X86_OP_IMM and source.imm & 0xFFFF_FFFF == 0:
                 continue
-            writer_entry = self._registrar_function_entry(
-                write.instruction_address
-            )
+            writer_entry = self._registrar_function_entry(write.instruction_address)
             if writer_entry is None or not (
                 self._operand_has_runtime_descriptor_field_origin(
                     write.instruction_address,
@@ -12590,25 +14153,24 @@ class _DirectCfgRecovery:
                     and operand.access & CS_AC_WRITE
                     and self._absolute_memory_operand(operand) == address
                 }
-                if any(
-                    address < slot + 4 and slot < address + width
-                    for width in widths
-                ) and writer not in write_addresses:
+                if (
+                    any(
+                        address < slot + 4 and slot < address + width
+                        for width in widths
+                    )
+                    and writer not in write_addresses
+                ):
                     return False
 
         relocation_types: dict[int, list[int]] = {}
         references = []
         for relocation in self.image.relocations:
-            relocation_types.setdefault(relocation.va, []).append(
-                relocation.type
-            )
+            relocation_types.setdefault(relocation.va, []).append(relocation.type)
             if not (
                 relocation.type == 3
                 and _is_mapped_span(self.image, relocation.va, 4)
                 and int.from_bytes(
-                    _read_loader_initialized(
-                        self.image, relocation.va, 4
-                    ),
+                    _read_loader_initialized(self.image, relocation.va, 4),
                     "little",
                 )
                 == slot
@@ -12672,9 +14234,7 @@ class _DirectCfgRecovery:
                 source_bases,
                 visited,
             )
-        argument_index = self._stack_argument_index_at(
-            address, operand, function_entry
-        )
+        argument_index = self._stack_argument_index_at(address, operand, function_entry)
         if argument_index is not None:
             return self._argument_has_runtime_descriptor_field_origin(
                 function_entry,
@@ -12688,10 +14248,7 @@ class _DirectCfgRecovery:
         if operand.type != X86_OP_MEM or operand.size != 4:
             return False
         memory = operand.mem
-        if (
-            memory.segment != X86_REG_INVALID
-            or memory.index != X86_REG_INVALID
-        ):
+        if memory.segment != X86_REG_INVALID or memory.index != X86_REG_INVALID:
             return False
         if memory.base == X86_REG_INVALID:
             return self._global_has_runtime_descriptor_field_origin(
@@ -12853,17 +14410,12 @@ class _DirectCfgRecovery:
                 and definition.operands[0].type == X86_OP_REG
                 and definition.operands[1].type == X86_OP_MEM
                 and definition.operands[1].size == 4
-                and definition.operands[1].mem.segment
-                == X86_REG_INVALID
-                and definition.operands[1].mem.base
-                != X86_REG_INVALID
-                and definition.operands[1].mem.index
-                == X86_REG_INVALID
+                and definition.operands[1].mem.segment == X86_REG_INVALID
+                and definition.operands[1].mem.base != X86_REG_INVALID
+                and definition.operands[1].mem.index == X86_REG_INVALID
                 and self._register_has_runtime_descriptor_field_origin(
                     definition.address,
-                    self._register_family(
-                        definition.operands[1].mem.base
-                    ),
+                    self._register_family(definition.operands[1].mem.base),
                     function_entry,
                     definition.operands[1].mem.disp,
                     memory.disp,
@@ -12893,20 +14445,13 @@ class _DirectCfgRecovery:
             function_entry
             for row, instruction in self.instructions.items()
             if instruction.mnemonic == "rep movsd"
-            and (
-                function_entry := self._registrar_function_entry(row)
-            )
-            is not None
+            and (function_entry := self._registrar_function_entry(row)) is not None
         }
         candidates = []
         ordered_instructions = sorted(self.instructions)
         for function_entry in sorted(candidate_functions):
             following_entry = min(
-                (
-                    row
-                    for row in self.function_addresses
-                    if row > function_entry
-                ),
+                (row for row in self.function_addresses if row > function_entry),
                 default=0x1_0000_0000,
             )
             mnemonics = [
@@ -12914,10 +14459,7 @@ class _DirectCfgRecovery:
                 for row in ordered_instructions
                 if function_entry <= row < following_entry
             ]
-            if (
-                mnemonics.count("rep movsd") != 1
-                or mnemonics.count("movsd") != 6
-            ):
+            if mnemonics.count("rep movsd") != 1 or mnemonics.count("movsd") != 6:
                 continue
             has_nine_dword_copy = False
             for row in ordered_instructions:
@@ -12943,14 +14485,11 @@ class _DirectCfgRecovery:
             return None
         copy_function = candidates[0]
         decoded_call_sites = {
-            row.address
-            for row in self.direct_calls
-            if row.target == copy_function
+            row.address for row in self.direct_calls if row.target == copy_function
         }
         if (
             not decoded_call_sites
-            or self._raw_direct_call_sites(copy_function)
-            != decoded_call_sites
+            or self._raw_direct_call_sites(copy_function) != decoded_call_sites
             or any(row.va == copy_function for row in self.image.exports)
             or any(
                 row.type == 3
@@ -13000,9 +14539,7 @@ class _DirectCfgRecovery:
         visited: frozenset[tuple[int, int]],
     ) -> bool:
         key = (function_entry, argument_index)
-        if key in visited or not self._incoming_call_domain_is_closed(
-            function_entry
-        ):
+        if key in visited or not self._incoming_call_domain_is_closed(function_entry):
             return False
         cache_key = (
             function_entry,
@@ -13014,9 +14551,7 @@ class _DirectCfgRecovery:
         if cache_key in self.copy_origin_cache:
             return self.copy_origin_cache[cache_key]
         for call_address in self._incoming_call_sites(function_entry):
-            pushed = self._pushed_call_argument(
-                call_address, argument_index
-            )
+            pushed = self._pushed_call_argument(call_address, argument_index)
             if pushed is None or not (
                 self._operand_has_copy_constructor_origin(
                     pushed[0].address,
@@ -13048,9 +14583,7 @@ class _DirectCfgRecovery:
                 copy_function,
                 visited,
             )
-        argument_index = self._stack_argument_index_at(
-            address, operand, function_entry
-        )
+        argument_index = self._stack_argument_index_at(address, operand, function_entry)
         if argument_index is not None:
             return self._argument_has_copy_constructor_origin(
                 function_entry,
@@ -13148,14 +14681,9 @@ class _DirectCfgRecovery:
             ):
                 return False
             source = decoded.operands[1]
-            if (
-                source.type == X86_OP_IMM
-                and source.imm & 0xFFFF_FFFF == 0
-            ):
+            if source.type == X86_OP_IMM and source.imm & 0xFFFF_FFFF == 0:
                 continue
-            writer_entry = self._registrar_function_entry(
-                write.instruction_address
-            )
+            writer_entry = self._registrar_function_entry(write.instruction_address)
             if writer_entry is None or not (
                 self._operand_has_copy_constructor_origin(
                     write.instruction_address,
@@ -13177,27 +14705,30 @@ class _DirectCfgRecovery:
                     and operand.access & CS_AC_WRITE
                     and self._absolute_memory_operand(operand) == address
                 }
-                if any(
-                    address < slot + 4 and slot < address + width
-                    for width in widths
-                ) and writer not in write_addresses:
+                if (
+                    any(
+                        address < slot + 4 and slot < address + width
+                        for width in widths
+                    )
+                    and writer not in write_addresses
+                ):
                     return False
 
         relocation_types: dict[int, list[int]] = {}
         references = []
         for relocation in self.image.relocations:
-            relocation_types.setdefault(relocation.va, []).append(
-                relocation.type
-            )
+            relocation_types.setdefault(relocation.va, []).append(relocation.type)
             if not (
-                relocation.type == 3
-                and _is_mapped_span(self.image, relocation.va, 4)
+                relocation.type == 3 and _is_mapped_span(self.image, relocation.va, 4)
             ):
                 continue
-            if int.from_bytes(
-                _read_loader_initialized(self.image, relocation.va, 4),
-                "little",
-            ) != slot:
+            if (
+                int.from_bytes(
+                    _read_loader_initialized(self.image, relocation.va, 4),
+                    "little",
+                )
+                != slot
+            ):
                 continue
             owner = self.byte_owners.get(relocation.va)
             if owner is None:
@@ -13257,9 +14788,7 @@ class _DirectCfgRecovery:
                 copy_function,
                 visited,
             )
-        argument_index = self._stack_argument_index_at(
-            address, operand, function_entry
-        )
+        argument_index = self._stack_argument_index_at(address, operand, function_entry)
         if argument_index is None:
             return False
         key = (function_entry, 0x1_0000_0000 + argument_index)
@@ -13281,36 +14810,26 @@ class _DirectCfgRecovery:
                 return False
         return True
 
-    def _function_instruction_addresses(
-        self, function_entry: int
-    ) -> tuple[int, ...]:
+    def _function_instruction_addresses(self, function_entry: int) -> tuple[int, ...]:
         index_revision = (
             len(self.instructions),
             len(self.function_addresses),
         )
         if self.function_address_index_revision != index_revision:
-            self.sorted_instruction_addresses = tuple(
-                sorted(self.instructions)
-            )
-            self.sorted_function_addresses = tuple(
-                sorted(self.function_addresses)
-            )
+            self.sorted_instruction_addresses = tuple(sorted(self.instructions))
+            self.sorted_function_addresses = tuple(sorted(self.function_addresses))
             self.function_instruction_cache.clear()
             self.function_address_index_revision = index_revision
         cached = self.function_instruction_cache.get(function_entry)
         if cached is not None:
             return cached
-        following_index = bisect_right(
-            self.sorted_function_addresses, function_entry
-        )
+        following_index = bisect_right(self.sorted_function_addresses, function_entry)
         following_entry = (
             self.sorted_function_addresses[following_index]
             if following_index < len(self.sorted_function_addresses)
             else 0x1_0000_0000
         )
-        slice_start = bisect_left(
-            self.sorted_instruction_addresses, function_entry
-        )
+        slice_start = bisect_left(self.sorted_instruction_addresses, function_entry)
         slice_end = bisect_left(
             self.sorted_instruction_addresses,
             following_entry,
@@ -13349,9 +14868,7 @@ class _DirectCfgRecovery:
         if cache_key in self.partial_alias_death_cache:
             return self.partial_alias_death_cache[cache_key]
         self.partial_alias_death_cache[cache_key] = False
-        start = self._summary_successors(
-            address, function_entry, following_entry
-        )
+        start = self._summary_successors(address, function_entry, following_entry)
         if not start:
             return False
         active: set[int] = set()
@@ -13385,10 +14902,7 @@ class _DirectCfgRecovery:
                 and not operand.access & CS_AC_READ
                 for operand in family_operands
             )
-            if (
-                decoded.group(CS_GRP_CALL)
-                and register_family in {"eax", "ecx", "edx"}
-            ):
+            if decoded.group(CS_GRP_CALL) and register_family in {"eax", "ecx", "edx"}:
                 full_definition = True
 
             pointer_use = any(
@@ -13407,8 +14921,7 @@ class _DirectCfgRecovery:
                 and len(decoded.operands) == 2
                 and decoded.operands[1].type == X86_OP_REG
                 and decoded.operands[1].size == 4
-                and self._register_family(decoded.operands[1].reg)
-                == register_family
+                and self._register_family(decoded.operands[1].reg) == register_family
                 and (
                     decoded.operands[0].type == X86_OP_MEM
                     or (
@@ -13425,10 +14938,7 @@ class _DirectCfgRecovery:
                 for operand in decoded.operands
             ):
                 pointer_use = True
-            if (
-                decoded.group(CS_GRP_RET)
-                or decoded.group(CS_GRP_IRET)
-            ):
+            if decoded.group(CS_GRP_RET) or decoded.group(CS_GRP_IRET):
                 pointer_use |= register_family == "eax"
                 result = not pointer_use
             elif pointer_use:
@@ -13469,10 +14979,13 @@ class _DirectCfgRecovery:
         arithmetic, an unowned path, or an excessive offset domain fails
         closed.
         """
-        if sum(
-            value is not None
-            for value in (argument_index, root_call, root_definition)
-        ) != 1:
+        if (
+            sum(
+                value is not None
+                for value in (argument_index, root_call, root_definition)
+            )
+            != 1
+        ):
             return None
         cache_key = (
             function_entry,
@@ -13500,9 +15013,7 @@ class _DirectCfgRecovery:
             if not function_entry <= stop_address < following_entry:
                 return None
             predecessors: dict[int, set[int]] = {}
-            for candidate in self._function_instruction_addresses(
-                function_entry
-            ):
+            for candidate in self._function_instruction_addresses(function_entry):
                 for successor in self._summary_successors(
                     candidate, function_entry, following_entry
                 ):
@@ -13515,21 +15026,16 @@ class _DirectCfgRecovery:
                     if predecessor in reverse_reachable:
                         continue
                     reverse_reachable.add(predecessor)
-                    self.limits.check(
-                        "max_summary_iterations", len(reverse_reachable)
-                    )
+                    self.limits.check("max_summary_iterations", len(reverse_reachable))
                     reverse_pending.append(predecessor)
             if function_entry not in reverse_reachable:
                 return None
             observation_region = frozenset(reverse_reachable)
         empty = tuple(frozenset() for _ in _REGISTER_FAMILIES)
         family_index = {
-            family: index
-            for index, family in enumerate(_REGISTER_FAMILIES)
+            family: index for index, family in enumerate(_REGISTER_FAMILIES)
         }
-        states: dict[
-            int, tuple[tuple[frozenset[int], ...], int]
-        ] = {
+        states: dict[int, tuple[tuple[frozenset[int], ...], int]] = {
             function_entry: (
                 empty,
                 1 if root_call is not None or root_definition is not None else 2,
@@ -13541,8 +15047,10 @@ class _DirectCfgRecovery:
 
         def normalize(values) -> frozenset[int]:
             result = frozenset(values)
-            if collapse_nonnegative_offsets and result and all(
-                value >= 0 for value in result
+            if (
+                collapse_nonnegative_offsets
+                and result
+                and all(value >= 0 for value in result)
             ):
                 return frozenset({0})
             return result
@@ -13563,19 +15071,13 @@ class _DirectCfgRecovery:
                 continue
 
             def register_offsets(register: int) -> frozenset[int]:
-                return offsets[
-                    family_index[self._register_family(register)]
-                ]
+                return offsets[family_index[self._register_family(register)]]
 
             if decoded.group(CS_GRP_CALL):
                 returned_offsets: set[int] = set()
-                targets = tuple(
-                    sorted(self.call_targets_by_source.get(current, ()))
-                )
+                targets = tuple(sorted(self.call_targets_by_source.get(current, ())))
                 for callee_argument in range(8) if propagate_call_returns else ():
-                    pushed = self._pushed_call_argument(
-                        current, callee_argument
-                    )
+                    pushed = self._pushed_call_argument(current, callee_argument)
                     if pushed is None:
                         break
                     argument_offsets = self._relative_operand_offsets(
@@ -13592,10 +15094,8 @@ class _DirectCfgRecovery:
                             return None
                         continue
                     for target in targets:
-                        return_offsets = (
-                            self._function_argument_return_offsets(
-                                target, callee_argument
-                            )
+                        return_offsets = self._function_argument_return_offsets(
+                            target, callee_argument
                         )
                         if return_offsets is None:
                             return None
@@ -13606,9 +15106,7 @@ class _DirectCfgRecovery:
                         )
                 for family in ("eax", "ecx", "edx"):
                     offsets[family_index[family]] = frozenset()
-                offsets[family_index["eax"]] = frozenset(
-                    returned_offsets
-                )
+                offsets[family_index["eax"]] = frozenset(returned_offsets)
                 if current == root_call:
                     if seen not in {1, 3}:
                         return None
@@ -13617,14 +15115,20 @@ class _DirectCfgRecovery:
             elif decoded.id == X86_INS_MOV and len(decoded.operands) == 2:
                 destination, source = decoded.operands
                 if destination.type == X86_OP_REG:
-                    destination_family = self._register_family(
-                        destination.reg
-                    )
+                    destination_family = self._register_family(destination.reg)
                     destination_index = family_index[destination_family]
                     if destination.size != 4 and offsets[destination_index]:
                         if allow_partial_taint:
                             value = offsets[destination_index]
                             offsets[destination_index] = value
+                            destination = None
+                        elif self._partial_register_alias_is_dead_before_pointer_use(
+                            current,
+                            destination_family,
+                            function_entry,
+                            following_entry,
+                        ):
+                            offsets[destination_index] = frozenset()
                             destination = None
                         else:
                             return None
@@ -13648,9 +15152,7 @@ class _DirectCfgRecovery:
                 destination, source = decoded.operands
                 if destination.type != X86_OP_REG or source.type != X86_OP_MEM:
                     return None
-                destination_index = family_index[
-                    self._register_family(destination.reg)
-                ]
+                destination_index = family_index[self._register_family(destination.reg)]
                 base_values = (
                     frozenset()
                     if source.mem.base == X86_REG_INVALID
@@ -13692,9 +15194,7 @@ class _DirectCfgRecovery:
                 and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFF
             ):
                 destination = decoded.operands[0]
-                destination_index = family_index[
-                    self._register_family(destination.reg)
-                ]
+                destination_index = family_index[self._register_family(destination.reg)]
                 previous = self._previous_instruction(current)
                 canonical_setcc = False
                 if previous is not None:
@@ -13749,9 +15249,7 @@ class _DirectCfgRecovery:
                         )
                     ):
                         return None
-                    offsets[destination_index] = normalize(
-                        offsets[destination_index]
-                    )
+                    offsets[destination_index] = normalize(offsets[destination_index])
             elif (
                 decoded.id == X86_INS_XOR
                 and len(decoded.operands) == 2
@@ -13762,10 +15260,7 @@ class _DirectCfgRecovery:
                 destination_index = family_index[
                     self._register_family(decoded.operands[0].reg)
                 ]
-                if (
-                    decoded.operands[0].size != 4
-                    and offsets[destination_index]
-                ):
+                if decoded.operands[0].size != 4 and offsets[destination_index]:
                     if not allow_partial_taint:
                         if not self._partial_register_alias_is_dead_before_pointer_use(
                             current,
@@ -13780,30 +15275,22 @@ class _DirectCfgRecovery:
             elif decoded.mnemonic in {"stosb", "stosd"}:
                 step = 1 if decoded.mnemonic == "stosb" else 4
                 index = family_index["edi"]
-                offsets[index] = normalize(
-                    value + step for value in offsets[index]
-                )
+                offsets[index] = normalize(value + step for value in offsets[index])
             elif decoded.mnemonic in {
                 "rep movsb",
                 "rep movsw",
                 "rep movsd",
             }:
                 if any(
-                    row < current
-                    and self._owned_decoded(row).mnemonic == "std"
-                    for row in self._function_instruction_addresses(
-                        function_entry
-                    )
+                    row < current and self._owned_decoded(row).mnemonic == "std"
+                    for row in self._function_instruction_addresses(function_entry)
                 ):
                     return None
                 count = self._resolve_register_constant_before(
                     current, x86_const.X86_REG_ECX
                 )
                 if count is None:
-                    if any(
-                        offsets[family_index[family]]
-                        for family in ("esi", "edi")
-                    ):
+                    if any(offsets[family_index[family]] for family in ("esi", "edi")):
                         return None
                 else:
                     step = {
@@ -13814,32 +15301,22 @@ class _DirectCfgRecovery:
                     for family in ("esi", "edi"):
                         index = family_index[family]
                         offsets[index] = normalize(
-                            value + count * step
-                            for value in offsets[index]
+                            value + count * step for value in offsets[index]
                         )
                 offsets[family_index["ecx"]] = frozenset()
             elif decoded.mnemonic in {"movsb", "movsw", "movsd"}:
                 if any(
-                    row < current
-                    and self._owned_decoded(row).mnemonic == "std"
-                    for row in self._function_instruction_addresses(
-                        function_entry
-                    )
+                    row < current and self._owned_decoded(row).mnemonic == "std"
+                    for row in self._function_instruction_addresses(function_entry)
                 ):
                     return None
-                step = {"movsb": 1, "movsw": 2, "movsd": 4}[
-                    decoded.mnemonic
-                ]
+                step = {"movsb": 1, "movsw": 2, "movsd": 4}[decoded.mnemonic]
                 for family in ("esi", "edi"):
                     index = family_index[family]
-                    offsets[index] = normalize(
-                        value + step for value in offsets[index]
-                    )
+                    offsets[index] = normalize(value + step for value in offsets[index])
             elif decoded.mnemonic == "lodsb":
                 index = family_index["esi"]
-                offsets[index] = normalize(
-                    value + 1 for value in offsets[index]
-                )
+                offsets[index] = normalize(value + 1 for value in offsets[index])
                 eax_index = family_index["eax"]
                 if offsets[eax_index]:
                     return None
@@ -13850,9 +15327,7 @@ class _DirectCfgRecovery:
             elif decoded.mnemonic == "pop" and decoded.operands:
                 if decoded.operands[0].type == X86_OP_REG:
                     offsets[
-                        family_index[
-                            self._register_family(decoded.operands[0].reg)
-                        ]
+                        family_index[self._register_family(decoded.operands[0].reg)]
                     ] = frozenset()
             else:
                 written_families = {
@@ -13877,22 +15352,35 @@ class _DirectCfgRecovery:
                             and self._register_family(row.reg) == family
                         ]
                         if any(
-                            row.size == 4
-                            and not row.access & CS_AC_READ
+                            row.size == 4 and not row.access & CS_AC_READ
                             for row in written_operands
                         ):
                             offsets[index] = frozenset()
-                        elif allow_partial_taint and written_operands and all(
-                            row.size < 4 for row in written_operands
+                        elif (
+                            allow_partial_taint
+                            and written_operands
+                            and all(row.size < 4 for row in written_operands)
                         ):
                             continue
-                        elif written_operands and all(
-                            row.size < 4 for row in written_operands
-                        ) and self._partial_register_alias_is_dead_before_pointer_use(
-                            current,
-                            family,
-                            function_entry,
-                            following_entry,
+                        elif (
+                            written_operands
+                            and all(row.size < 4 for row in written_operands)
+                            and self._partial_register_alias_is_dead_before_pointer_use(
+                                current,
+                                family,
+                                function_entry,
+                                following_entry,
+                            )
+                        ):
+                            offsets[index] = frozenset()
+                        elif (
+                            written_operands
+                            and self._partial_register_alias_is_dead_before_pointer_use(
+                                current,
+                                family,
+                                function_entry,
+                                following_entry,
+                            )
                         ):
                             offsets[index] = frozenset()
                         else:
@@ -13971,14 +15459,12 @@ class _DirectCfgRecovery:
             subtract.mnemonic == "sub"
             and len(subtract.operands) == 2
             and all(row.type == X86_OP_REG for row in subtract.operands)
-            and self._register_family(subtract.operands[0].reg)
-            == register_family
+            and self._register_family(subtract.operands[0].reg) == register_family
             and self._register_family(subtract.operands[1].reg) == "ecx"
             and constant.id == X86_INS_MOV
             and len(constant.operands) == 2
             and constant.operands[0].type == X86_OP_REG
-            and self._register_family(constant.operands[0].reg)
-            == register_family
+            and self._register_family(constant.operands[0].reg) == register_family
             and constant.operands[1].type == X86_OP_IMM
             and constant.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFFE
         ):
@@ -13999,8 +15485,7 @@ class _DirectCfgRecovery:
                 and len(row.operands) == 2
                 and all(value.type == X86_OP_REG for value in row.operands)
                 and all(
-                    self._register_family(value.reg) == "eax"
-                    for value in row.operands
+                    self._register_family(value.reg) == "eax" for value in row.operands
                 )
                 for row in rows[2:]
             )
@@ -14021,9 +15506,7 @@ class _DirectCfgRecovery:
             family = self._register_family(operand.reg)
             return state[0][_REGISTER_FAMILIES.index(family)]
         if argument_index is not None and (
-            self._stack_argument_index_at(
-                address, operand, function_entry
-            )
+            self._stack_argument_index_at(address, operand, function_entry)
             == argument_index
         ):
             return frozenset({0})
@@ -14104,20 +15587,14 @@ class _DirectCfgRecovery:
                 )
             else:
                 returns = []
-                for address in self._function_instruction_addresses(
-                    function_entry
-                ):
+                for address in self._function_instruction_addresses(function_entry):
                     if not self._owned_decoded(address).group(CS_GRP_RET):
                         continue
                     state = states.get(address)
                     if state is None:
                         continue
-                    returns.append(
-                        state[0][_REGISTER_FAMILIES.index("eax")]
-                    )
-                result = (
-                    frozenset().union(*returns) if returns else None
-                )
+                    returns.append(state[0][_REGISTER_FAMILIES.index("eax")])
+                result = frozenset().union(*returns) if returns else None
         finally:
             self.argument_return_offset_active.remove(cache_key)
         self.argument_return_offset_cache[cache_key] = result
@@ -14155,8 +15632,7 @@ class _DirectCfgRecovery:
                     and len(definition.operands) == 2
                     and definition.operands[0].type == X86_OP_REG
                     and definition.operands[0].size == 4
-                    and self._register_family(definition.operands[0].reg)
-                    == "eax"
+                    and self._register_family(definition.operands[0].reg) == "eax"
                     and definition.operands[1].type == X86_OP_IMM
                 )
                 zero = (
@@ -14200,15 +15676,12 @@ class _DirectCfgRecovery:
             decoded = self._owned_decoded(address)
             if decoded.id == X86_INS_MOV and len(decoded.operands) == 2:
                 destination, source = decoded.operands
-                if (
-                    destination.type == X86_OP_MEM
-                    and self._relative_operand_offsets(
-                        address,
-                        source,
-                        function_entry,
-                        argument_index,
-                        states,
-                    )
+                if destination.type == X86_OP_MEM and self._relative_operand_offsets(
+                    address,
+                    source,
+                    function_entry,
+                    argument_index,
+                    states,
                 ):
                     return False
             if decoded.group(CS_GRP_CALL):
@@ -14221,9 +15694,7 @@ class _DirectCfgRecovery:
                 passed_pointer = False
                 return_may_alias = False
                 for callee_argument in range(8):
-                    pushed = self._pushed_call_argument(
-                        address, callee_argument
-                    )
+                    pushed = self._pushed_call_argument(address, callee_argument)
                     if pushed is None:
                         break
                     values = self._relative_operand_offsets(
@@ -14245,9 +15716,7 @@ class _DirectCfgRecovery:
                     return_offsets = self._function_argument_return_offsets(
                         target, callee_argument
                     )
-                    return_may_alias |= (
-                        return_offsets is None or bool(return_offsets)
-                    )
+                    return_may_alias |= return_offsets is None or bool(return_offsets)
                 if (
                     passed_pointer
                     and return_may_alias
@@ -14300,22 +15769,17 @@ class _DirectCfgRecovery:
                     if register == X86_REG_INVALID:
                         continue
                     if state[0][
-                        _REGISTER_FAMILIES.index(
-                            self._register_family(register)
-                        )
+                        _REGISTER_FAMILIES.index(self._register_family(register))
                     ]:
                         return False
             if decoded.id == X86_INS_MOV and len(decoded.operands) == 2:
                 destination, source = decoded.operands
-                if (
-                    destination.type == X86_OP_MEM
-                    and self._relative_operand_offsets(
-                        address,
-                        source,
-                        function_entry,
-                        argument_index,
-                        states,
-                    )
+                if destination.type == X86_OP_MEM and self._relative_operand_offsets(
+                    address,
+                    source,
+                    function_entry,
+                    argument_index,
+                    states,
                 ):
                     return False
             if decoded.group(CS_GRP_CALL):
@@ -14326,9 +15790,7 @@ class _DirectCfgRecovery:
                 ):
                     return False
                 for callee_argument in range(8):
-                    pushed = self._pushed_call_argument(
-                        address, callee_argument
-                    )
+                    pushed = self._pushed_call_argument(address, callee_argument)
                     if pushed is None:
                         break
                     if not self._relative_operand_offsets(
@@ -14396,9 +15858,7 @@ class _DirectCfgRecovery:
                         if register == X86_REG_INVALID:
                             continue
                         if state[0][
-                            _REGISTER_FAMILIES.index(
-                                self._register_family(register)
-                            )
+                            _REGISTER_FAMILIES.index(self._register_family(register))
                         ]:
                             return False
             if decoded.id == X86_INS_MOV and len(decoded.operands) == 2:
@@ -14421,9 +15881,7 @@ class _DirectCfgRecovery:
                 ):
                     return False
                 for argument_index in range(8):
-                    pushed = self._pushed_call_argument(
-                        address, argument_index
-                    )
+                    pushed = self._pushed_call_argument(address, argument_index)
                     if pushed is None:
                         break
                     if not self._relative_operand_offsets(
@@ -14443,9 +15901,7 @@ class _DirectCfgRecovery:
             if decoded.group(CS_GRP_RET) and any(state[0]):
                 if not self._direct_call_domain_is_closed(function_entry):
                     return False
-                callers = self.direct_call_sources_by_target.get(
-                    function_entry, set()
-                )
+                callers = self.direct_call_sources_by_target.get(function_entry, set())
                 if not callers:
                     return False
                 for caller in callers:
@@ -14487,23 +15943,26 @@ class _DirectCfgRecovery:
             live = states[address]
             decoded = self._owned_decoded(address)
             if live:
-                reads = any(
-                    self._register_family(register) == register_family
-                    for register in decoded.regs_read
-                ) or any(
-                    row.type == X86_OP_REG
-                    and row.access & CS_AC_READ
-                    and self._register_family(row.reg) == register_family
-                    for row in decoded.operands
-                ) or any(
-                    row.type == X86_OP_MEM
-                    and any(
-                        register != X86_REG_INVALID
-                        and self._register_family(register)
-                        == register_family
-                        for register in (row.mem.base, row.mem.index)
+                reads = (
+                    any(
+                        self._register_family(register) == register_family
+                        for register in decoded.regs_read
                     )
-                    for row in decoded.operands
+                    or any(
+                        row.type == X86_OP_REG
+                        and row.access & CS_AC_READ
+                        and self._register_family(row.reg) == register_family
+                        for row in decoded.operands
+                    )
+                    or any(
+                        row.type == X86_OP_MEM
+                        and any(
+                            register != X86_REG_INVALID
+                            and self._register_family(register) == register_family
+                            for register in (row.mem.base, row.mem.index)
+                        )
+                        for row in decoded.operands
+                    )
                 )
                 if reads:
                     return True
@@ -14514,11 +15973,16 @@ class _DirectCfgRecovery:
                 and row.access & CS_AC_WRITE
                 and self._register_family(row.reg) == register_family
             ]
-            killed = decoded.group(CS_GRP_CALL) and register_family in {
-                "eax",
-                "ecx",
-                "edx",
-            } or any(row.size == 4 for row in writes)
+            killed = (
+                decoded.group(CS_GRP_CALL)
+                and register_family
+                in {
+                    "eax",
+                    "ecx",
+                    "edx",
+                }
+                or any(row.size == 4 for row in writes)
+            )
             output = live and not killed
             for successor in self._summary_successors(
                 address, function_entry, following_entry
@@ -14541,9 +16005,7 @@ class _DirectCfgRecovery:
     ) -> int | None:
         rows = [
             self._owned_decoded(address)
-            for address in self._function_instruction_addresses(
-                function_entry
-            )
+            for address in self._function_instruction_addresses(function_entry)
         ]
         if (
             not rows
@@ -14655,9 +16117,9 @@ class _DirectCfgRecovery:
                 ):
                     return None
         if not (
-            pointer_loads[0].address < pointer_copies[0].address
+            pointer_loads[0].address < pointer_copies[0].address < bound_adds[0].address
+            and bound_load.address
             < bound_adds[0].address
-            and bound_load.address < bound_adds[0].address
             < unsigned_backedges[0].address
             < remaining_counts[0].address
         ):
@@ -14758,9 +16220,7 @@ class _DirectCfgRecovery:
                 ):
                     continue
                 base_values = state[0][
-                    _REGISTER_FAMILIES.index(
-                        self._register_family(operand.mem.base)
-                    )
+                    _REGISTER_FAMILIES.index(self._register_family(operand.mem.base))
                 ]
                 if not base_values:
                     continue
@@ -14778,9 +16238,7 @@ class _DirectCfgRecovery:
                     return False
             if not decoded.group(CS_GRP_CALL):
                 continue
-            targets = tuple(
-                sorted(self.call_targets_by_source.get(address, ()))
-            )
+            targets = tuple(sorted(self.call_targets_by_source.get(address, ())))
             ecx_values = state[0][_REGISTER_FAMILIES.index("ecx")]
             if ecx_values and (
                 not targets
@@ -14791,9 +16249,7 @@ class _DirectCfgRecovery:
             ):
                 return False
             for callee_argument in range(8):
-                pushed = self._pushed_call_argument(
-                    address, callee_argument
-                )
+                pushed = self._pushed_call_argument(address, callee_argument)
                 if pushed is None:
                     break
                 values = self._relative_operand_offsets(
@@ -14860,9 +16316,7 @@ class _DirectCfgRecovery:
         )
         if states is None:
             result = field + 4 <= 0 and (
-                self._is_forward_bounded_string_writer(
-                    function_entry, argument_index
-                )
+                self._is_forward_bounded_string_writer(function_entry, argument_index)
                 or (
                     argument_index in {0, 1}
                     and (
@@ -14888,9 +16342,7 @@ class _DirectCfgRecovery:
                 ):
                     continue
                 base_values = state[0][
-                    _REGISTER_FAMILIES.index(
-                        self._register_family(operand.mem.base)
-                    )
+                    _REGISTER_FAMILIES.index(self._register_family(operand.mem.base))
                 ]
                 if not base_values:
                     continue
@@ -14917,9 +16369,7 @@ class _DirectCfgRecovery:
                 passed_pointer = False
                 return_may_alias = False
                 for callee_argument in range(8):
-                    pushed = self._pushed_call_argument(
-                        address, callee_argument
-                    )
+                    pushed = self._pushed_call_argument(address, callee_argument)
                     if pushed is None:
                         break
                     values = self._relative_operand_offsets(
@@ -14934,8 +16384,8 @@ class _DirectCfgRecovery:
                         return_offsets = self._function_argument_return_offsets(
                             target, callee_argument
                         )
-                        return_may_alias |= (
-                            return_offsets is None or bool(return_offsets)
+                        return_may_alias |= return_offsets is None or bool(
+                            return_offsets
                         )
                     for value in values:
                         preserved = (
@@ -15033,9 +16483,7 @@ class _DirectCfgRecovery:
                 ):
                     continue
                 base_values = state[0][
-                    _REGISTER_FAMILIES.index(
-                        self._register_family(operand.mem.base)
-                    )
+                    _REGISTER_FAMILIES.index(self._register_family(operand.mem.base))
                 ]
                 if not base_values:
                     continue
@@ -15062,9 +16510,7 @@ class _DirectCfgRecovery:
                 passed_pointer = False
                 return_may_alias = False
                 for callee_argument in range(8):
-                    pushed = self._pushed_call_argument(
-                        address, callee_argument
-                    )
+                    pushed = self._pushed_call_argument(address, callee_argument)
                     if pushed is None:
                         break
                     values = self._relative_operand_offsets(
@@ -15079,8 +16525,8 @@ class _DirectCfgRecovery:
                         return_offsets = self._function_argument_return_offsets(
                             target, callee_argument
                         )
-                        return_may_alias |= (
-                            return_offsets is None or bool(return_offsets)
+                        return_may_alias |= return_offsets is None or bool(
+                            return_offsets
                         )
                     for value in values:
                         if target is None or not (
@@ -15147,9 +16593,7 @@ class _DirectCfgRecovery:
                 ):
                     continue
                 base_values = state[0][
-                    _REGISTER_FAMILIES.index(
-                        self._register_family(operand.mem.base)
-                    )
+                    _REGISTER_FAMILIES.index(self._register_family(operand.mem.base))
                 ]
                 if not base_values:
                     continue
@@ -15161,8 +16605,7 @@ class _DirectCfgRecovery:
                     return False
                 if any(
                     value + operand.mem.disp < pointer_field + 4
-                    and pointer_field
-                    < value + operand.mem.disp + operand.size
+                    and pointer_field < value + operand.mem.disp + operand.size
                     for value in base_values
                 ):
                     return False
@@ -15177,9 +16620,7 @@ class _DirectCfgRecovery:
                 passed_pointer = False
                 return_may_alias = False
                 for callee_argument in range(8):
-                    pushed = self._pushed_call_argument(
-                        address, callee_argument
-                    )
+                    pushed = self._pushed_call_argument(address, callee_argument)
                     if pushed is None:
                         break
                     values = self._relative_operand_offsets(
@@ -15194,8 +16635,8 @@ class _DirectCfgRecovery:
                         return_offsets = self._function_argument_return_offsets(
                             target, callee_argument
                         )
-                        return_may_alias |= (
-                            return_offsets is None or bool(return_offsets)
+                        return_may_alias |= return_offsets is None or bool(
+                            return_offsets
                         )
                     for value in values:
                         relative_field = pointer_field - value
@@ -15253,13 +16694,9 @@ class _DirectCfgRecovery:
                     )
                     if source.type == X86_OP_REG:
                         value = values[
-                            _REGISTER_FAMILIES.index(
-                                self._register_family(source.reg)
-                            )
+                            _REGISTER_FAMILIES.index(self._register_family(source.reg))
                         ]
-                    elif source.type == X86_OP_IMM and (
-                        source.imm & 0xFFFF_FFFF == 0
-                    ):
+                    elif source.type == X86_OP_IMM and (source.imm & 0xFFFF_FFFF == 0):
                         value = 1
                     else:
                         value = 2
@@ -15309,9 +16746,7 @@ class _DirectCfgRecovery:
             self.limits.check("max_summary_iterations", iterations)
         return states
 
-    def _zeroing_wrapper_size_argument(
-        self, function_entry: int
-    ) -> int | None:
+    def _zeroing_wrapper_size_argument(self, function_entry: int) -> int | None:
         cache_key = (
             function_entry,
             self._summary_fact_signature(),
@@ -15351,9 +16786,7 @@ class _DirectCfgRecovery:
         if (
             repeat_pointer_state is None
             or repeat_pointer_state[1] != 2
-            or repeat_pointer_state[0][
-                _REGISTER_FAMILIES.index("edi")
-            ]
+            or repeat_pointer_state[0][_REGISTER_FAMILIES.index("edi")]
             != frozenset({0})
             or repeat_zero_state is None
             or repeat_zero_state[_REGISTER_FAMILIES.index("eax")] != 1
@@ -15364,13 +16797,10 @@ class _DirectCfgRecovery:
             if (
                 state is None
                 or state[1] != 2
-                or state[0][_REGISTER_FAMILIES.index("eax")]
-                != frozenset({0})
+                or state[0][_REGISTER_FAMILIES.index("eax")] != frozenset({0})
             ):
                 return None
-            fallthrough = allocation_call + self.instructions[
-                allocation_call
-            ].size
+            fallthrough = allocation_call + self.instructions[allocation_call].size
             if self._reachable_within_function(
                 fallthrough,
                 return_address,
@@ -15389,19 +16819,13 @@ class _DirectCfgRecovery:
             if argument_states is None:
                 continue
             repeat_argument_state = argument_states.get(repeat_store)
-            if (
-                repeat_argument_state is None
-                or repeat_argument_state[0][
-                    _REGISTER_FAMILIES.index("ecx")
-                ]
-                != frozenset({0})
-            ):
+            if repeat_argument_state is None or repeat_argument_state[0][
+                _REGISTER_FAMILIES.index("ecx")
+            ] != frozenset({0}):
                 continue
             passed_to_allocator = False
             for callee_argument in range(8):
-                pushed = self._pushed_call_argument(
-                    allocation_call, callee_argument
-                )
+                pushed = self._pushed_call_argument(allocation_call, callee_argument)
                 if pushed is None:
                     break
                 if self._relative_operand_offsets(
@@ -15453,8 +16877,7 @@ class _DirectCfgRecovery:
                         return False
                     overlaps = any(
                         value + operand.mem.disp < field + 4
-                        and field
-                        < value + operand.mem.disp + operand.size
+                        and field < value + operand.mem.disp + operand.size
                         for value in base_values
                     )
                     if overlaps and not (
@@ -15477,9 +16900,7 @@ class _DirectCfgRecovery:
                 passed_pointer = False
                 return_may_alias = False
                 for callee_argument in range(8):
-                    pushed = self._pushed_call_argument(
-                        address, callee_argument
-                    )
+                    pushed = self._pushed_call_argument(address, callee_argument)
                     if pushed is None:
                         break
                     values = self._relative_operand_offsets(
@@ -15494,8 +16915,8 @@ class _DirectCfgRecovery:
                         return_offsets = self._function_argument_return_offsets(
                             target, callee_argument
                         )
-                        return_may_alias |= (
-                            return_offsets is None or bool(return_offsets)
+                        return_may_alias |= return_offsets is None or bool(
+                            return_offsets
                         )
                     for value in values:
                         preserved = (
@@ -15532,17 +16953,13 @@ class _DirectCfgRecovery:
                     return False
             if decoded.group(CS_GRP_RET):
                 saw_return = True
-                if (
-                    state[1] != 2
-                    or state[0][_REGISTER_FAMILIES.index("eax")]
-                    != frozenset({0})
-                ):
+                if state[1] != 2 or state[0][
+                    _REGISTER_FAMILIES.index("eax")
+                ] != frozenset({0}):
                     return False
         return saw_return
 
-    def _function_returns_zeroed_field(
-        self, function_entry: int, field: int
-    ) -> bool:
+    def _function_returns_zeroed_field(self, function_entry: int, field: int) -> bool:
         cache_key = (
             function_entry,
             field,
@@ -15569,21 +16986,18 @@ class _DirectCfgRecovery:
                 continue
             candidates.append(address)
         result = any(
-            self._zeroed_field_root_returns(
-                function_entry, root_call, field
-            )
+            self._zeroed_field_root_returns(function_entry, root_call, field)
             for root_call in candidates
         )
         self.zeroed_field_return_cache[cache_key] = result
         return result
 
-    def _runtime_global_pointer_field_is_zero(
-        self, slot: int, field: int
-    ) -> bool:
+    def _runtime_global_pointer_field_is_zero(self, slot: int, field: int) -> bool:
         try:
-            if int.from_bytes(
-                _read_loader_initialized(self.image, slot, 4), "little"
-            ) != 0:
+            if (
+                int.from_bytes(_read_loader_initialized(self.image, slot, 4), "little")
+                != 0
+            ):
                 return False
         except ValueError:
             return False
@@ -15597,9 +17011,7 @@ class _DirectCfgRecovery:
             return False
         write = writes[0]
         decoded = self._owned_decoded(write.instruction_address)
-        writer_entry = self._registrar_function_entry(
-            write.instruction_address
-        )
+        writer_entry = self._registrar_function_entry(write.instruction_address)
         if (
             writer_entry is None
             or decoded.id != X86_INS_MOV
@@ -15615,9 +17027,7 @@ class _DirectCfgRecovery:
             return False
         for definition_address in definitions:
             definition = self._owned_decoded(definition_address)
-            target = self.direct_call_targets_by_source.get(
-                definition_address
-            )
+            target = self.direct_call_targets_by_source.get(definition_address)
             if (
                 family != "eax"
                 or not definition.group(CS_GRP_CALL)
@@ -15711,9 +17121,7 @@ class _DirectCfgRecovery:
                 and decoded.operands[1].mem.base != X86_REG_INVALID
                 and decoded.operands[1].mem.index == X86_REG_INVALID
             ):
-                family = self._register_family(
-                    decoded.operands[1].mem.base
-                )
+                family = self._register_family(decoded.operands[1].mem.base)
                 offset += decoded.operands[1].mem.disp
             elif any(
                 self._register_family(register) == family
@@ -15765,15 +17173,12 @@ class _DirectCfgRecovery:
             copy_info = self._copied_descriptor_source_domains(frozenset())
             if copy_info is None or copy_info[0] != copy_function:
                 return False
-            source_bases = frozenset(
-                value for value in copy_info[1][0] if value
-            )
+            source_bases = frozenset(value for value in copy_info[1][0] if value)
             overlapping_writes = []
             for displacement, rows in self.dynamic_field_writes.items():
                 for row in rows:
                     if not (
-                        displacement < field + 4
-                        and field < displacement + row.width
+                        displacement < field + 4 and field < displacement + row.width
                     ):
                         continue
                     writer_entry = self._registrar_function_entry(
@@ -15788,9 +17193,7 @@ class _DirectCfgRecovery:
                         writer_entry,
                     ):
                         continue
-                    overlapping_writes.append(
-                        (row, decoded, writer_entry)
-                    )
+                    overlapping_writes.append((row, decoded, writer_entry))
             for row, decoded, writer_entry in overlapping_writes:
                 if not (
                     row.width == 4
@@ -15798,28 +17201,20 @@ class _DirectCfgRecovery:
                     and len(decoded.operands) == 2
                     and decoded.operands[0].type == X86_OP_MEM
                     and decoded.operands[0].size == 4
-                    and decoded.operands[0].mem.segment
-                    == X86_REG_INVALID
-                    and decoded.operands[0].mem.base
-                    != X86_REG_INVALID
-                    and decoded.operands[0].mem.index
-                    == X86_REG_INVALID
+                    and decoded.operands[0].mem.segment == X86_REG_INVALID
+                    and decoded.operands[0].mem.base != X86_REG_INVALID
+                    and decoded.operands[0].mem.index == X86_REG_INVALID
                     and decoded.operands[0].mem.disp == field
                     and self._register_global_pointer_field_identity(
                         row.instruction_address,
-                        self._register_family(
-                            decoded.operands[0].mem.base
-                        ),
+                        self._register_family(decoded.operands[0].mem.base),
                         writer_entry,
                     )
                     == (slot, 0)
                 ):
                     return False
                 source = decoded.operands[1]
-                if (
-                    source.type == X86_OP_IMM
-                    and source.imm & 0xFFFF_FFFF == 0
-                ):
+                if source.type == X86_OP_IMM and source.imm & 0xFFFF_FFFF == 0:
                     continue
                 if self._operand_has_copy_constructor_origin(
                     row.instruction_address,
@@ -15835,11 +17230,7 @@ class _DirectCfgRecovery:
                     writer_entry,
                     frozenset(),
                 )
-                if (
-                    finite is not None
-                    and finite[0]
-                    and finite[0] <= source_bases
-                ):
+                if finite is not None and finite[0] and finite[0] <= source_bases:
                     continue
                 return False
         finally:
@@ -15847,9 +17238,7 @@ class _DirectCfgRecovery:
         self.runtime_global_copy_field_cache[cache_key] = True
         return True
 
-    def _intrusive_list_return_argument(
-        self, function_entry: int
-    ) -> int | None:
+    def _intrusive_list_return_argument(self, function_entry: int) -> int | None:
         """Return the argument whose null-terminated link chain is returned."""
         cache_key = (
             function_entry,
@@ -15900,9 +17289,7 @@ class _DirectCfgRecovery:
                     and len(decoded.operands) == 2
                     and decoded.operands[0].type == X86_OP_REG
                 ):
-                    destination = self._register_family(
-                        decoded.operands[0].reg
-                    )
+                    destination = self._register_family(decoded.operands[0].reg)
                     source = decoded.operands[1]
                     source_argument = self._stack_argument_index_at(
                         current, source, function_entry
@@ -15910,12 +17297,8 @@ class _DirectCfgRecovery:
                     if source_argument is not None:
                         value = 1 if source_argument == argument_index else 8
                     elif source.type == X86_OP_REG:
-                        value = state.get(
-                            self._register_family(source.reg), 8
-                        )
-                    elif source.type == X86_OP_IMM and (
-                        source.imm & 0xFFFF_FFFF == 0
-                    ):
+                        value = state.get(self._register_family(source.reg), 8)
+                    elif source.type == X86_OP_IMM and (source.imm & 0xFFFF_FFFF == 0):
                         value = 4
                     elif (
                         source.type == X86_OP_MEM
@@ -15924,9 +17307,7 @@ class _DirectCfgRecovery:
                         and source.mem.index == X86_REG_INVALID
                         and source.mem.disp == 0
                     ):
-                        base = state.get(
-                            self._register_family(source.mem.base), 8
-                        )
+                        base = state.get(self._register_family(source.mem.base), 8)
                         if base & 8 or not base & 3:
                             value = 8
                         else:
@@ -15944,9 +17325,7 @@ class _DirectCfgRecovery:
                             operand_row.type == X86_OP_REG
                             and operand_row.access & CS_AC_WRITE
                         ):
-                            state[
-                                self._register_family(operand_row.reg)
-                            ] = 8
+                            state[self._register_family(operand_row.reg)] = 8
                 for successor in self._summary_successors(
                     current, function_entry, following_entry
                 ):
@@ -15955,8 +17334,7 @@ class _DirectCfgRecovery:
                         dict(state)
                         if prior is None
                         else {
-                            family: prior.get(family, 8)
-                            | state.get(family, 8)
+                            family: prior.get(family, 8) | state.get(family, 8)
                             for family in _REGISTER_FAMILIES
                         }
                     )
@@ -15982,9 +17360,7 @@ class _DirectCfgRecovery:
     def _operand_argument_index(
         self, address: int, operand, function_entry: int
     ) -> int | None:
-        stack_argument = self._stack_argument_index_at(
-            address, operand, function_entry
-        )
+        stack_argument = self._stack_argument_index_at(address, operand, function_entry)
         if stack_argument is not None:
             return stack_argument
         if operand.type != X86_OP_REG:
@@ -16042,15 +17418,11 @@ class _DirectCfgRecovery:
                     elif (
                         decoded.id == X86_INS_XOR
                         and len(decoded.operands) == 2
-                        and all(
-                            row.type == X86_OP_REG for row in decoded.operands
-                        )
+                        and all(row.type == X86_OP_REG for row in decoded.operands)
                         and self._register_family(decoded.operands[0].reg)
                         == self._register_family(decoded.operands[1].reg)
                     ):
-                        state[
-                            self._register_family(decoded.operands[0].reg)
-                        ] = 4
+                        state[self._register_family(decoded.operands[0].reg)] = 4
                     elif decoded.id == X86_INS_MOV and len(decoded.operands) == 2:
                         destination, source = decoded.operands
 
@@ -16074,18 +17446,13 @@ class _DirectCfgRecovery:
                                 return 4
                             if (
                                 value_operand.type == X86_OP_MEM
-                                and value_operand.mem.segment
-                                == X86_REG_INVALID
-                                and value_operand.mem.base
-                                != X86_REG_INVALID
-                                and value_operand.mem.index
-                                == X86_REG_INVALID
+                                and value_operand.mem.segment == X86_REG_INVALID
+                                and value_operand.mem.base != X86_REG_INVALID
+                                and value_operand.mem.index == X86_REG_INVALID
                                 and value_operand.mem.disp == 0
                             ):
                                 base = state.get(
-                                    self._register_family(
-                                        value_operand.mem.base
-                                    ),
+                                    self._register_family(value_operand.mem.base),
                                     8,
                                 )
                                 return 4 if base & 5 and not base & 8 else 8
@@ -16093,9 +17460,7 @@ class _DirectCfgRecovery:
 
                         source_value = value_of(source)
                         if destination.type == X86_OP_REG:
-                            state[
-                                self._register_family(destination.reg)
-                            ] = source_value
+                            state[self._register_family(destination.reg)] = source_value
                         elif (
                             destination.type == X86_OP_MEM
                             and destination.mem.segment == X86_REG_INVALID
@@ -16120,17 +17485,12 @@ class _DirectCfgRecovery:
                         and len(decoded.operands) == 2
                         and decoded.operands[0].type == X86_OP_REG
                         and decoded.operands[1].type == X86_OP_MEM
-                        and decoded.operands[1].mem.segment
-                        == X86_REG_INVALID
-                        and decoded.operands[1].mem.base
-                        != X86_REG_INVALID
-                        and decoded.operands[1].mem.index
-                        == X86_REG_INVALID
+                        and decoded.operands[1].mem.segment == X86_REG_INVALID
+                        and decoded.operands[1].mem.base != X86_REG_INVALID
+                        and decoded.operands[1].mem.index == X86_REG_INVALID
                         and decoded.operands[1].mem.disp == 0
                         and self._register_family(decoded.operands[0].reg)
-                        == self._register_family(
-                            decoded.operands[1].mem.base
-                        )
+                        == self._register_family(decoded.operands[1].mem.base)
                     ):
                         pass
                     else:
@@ -16141,9 +17501,7 @@ class _DirectCfgRecovery:
                                 operand_row.type == X86_OP_REG
                                 and operand_row.access & CS_AC_WRITE
                             ):
-                                state[
-                                    self._register_family(operand_row.reg)
-                                ] = 8
+                                state[self._register_family(operand_row.reg)] = 8
                     for successor in self._summary_successors(
                         current, function_entry, following_entry
                     ):
@@ -16152,8 +17510,7 @@ class _DirectCfgRecovery:
                             dict(state)
                             if prior is None
                             else {
-                                family: prior.get(family, 8)
-                                | state.get(family, 8)
+                                family: prior.get(family, 8) | state.get(family, 8)
                                 for family in _REGISTER_FAMILIES
                             }
                         )
@@ -16167,11 +17524,7 @@ class _DirectCfgRecovery:
                     self.limits.check("max_summary_iterations", iterations)
                 if inserted and not invalid:
                     direct_candidates.append((list_argument, node_argument))
-        result = (
-            direct_candidates[0]
-            if len(set(direct_candidates)) == 1
-            else None
-        )
+        result = direct_candidates[0] if len(set(direct_candidates)) == 1 else None
         if result is None:
             wrapper_candidates = []
             for call_address, target in sorted(
@@ -16179,16 +17532,12 @@ class _DirectCfgRecovery:
             ):
                 if not function_entry <= call_address < following_entry:
                     continue
-                nested = self._intrusive_list_insert_arguments(
-                    target, next_active
-                )
+                nested = self._intrusive_list_insert_arguments(target, next_active)
                 if nested is None:
                     continue
                 mapped = []
                 for nested_argument in nested:
-                    pushed = self._pushed_call_argument(
-                        call_address, nested_argument
-                    )
+                    pushed = self._pushed_call_argument(call_address, nested_argument)
                     if pushed is None:
                         mapped = []
                         break
@@ -16323,16 +17672,11 @@ class _DirectCfgRecovery:
         if initial_pointer:
             field_address = (initial_pointer + list_field) & 0xFFFF_FFFF
             try:
-                initially_zero = (
-                    int.from_bytes(
-                        _read_loader_initialized(self.image, field_address, 4),
-                        "little",
-                    )
-                    == 0
-                    and any(
-                        row.type == 3 and row.va == slot
-                        for row in self.image.relocations
-                    )
+                initially_zero = int.from_bytes(
+                    _read_loader_initialized(self.image, field_address, 4),
+                    "little",
+                ) == 0 and any(
+                    row.type == 3 and row.va == slot for row in self.image.relocations
                 )
             except ValueError:
                 initially_zero = False
@@ -16349,9 +17693,7 @@ class _DirectCfgRecovery:
                 return False
             matched_arguments = []
             for argument_index in range(8):
-                pushed = self._pushed_call_argument(
-                    call.address, argument_index
-                )
+                pushed = self._pushed_call_argument(call.address, argument_index)
                 if pushed is None:
                     break
                 if (
@@ -16365,12 +17707,8 @@ class _DirectCfgRecovery:
                     matched_arguments.append(argument_index)
             if not matched_arguments:
                 continue
-            accessor_argument = self._intrusive_list_return_argument(
-                call.target
-            )
-            insert_arguments = self._intrusive_list_insert_arguments(
-                call.target
-            )
+            accessor_argument = self._intrusive_list_return_argument(call.target)
+            insert_arguments = self._intrusive_list_insert_arguments(call.target)
             for argument_index in matched_arguments:
                 if accessor_argument == argument_index:
                     saw_accessor = True
@@ -16395,9 +17733,7 @@ class _DirectCfgRecovery:
                         return False
                     saw_insert = True
                     continue
-                if self._function_argument_is_read_only(
-                    call.target, argument_index
-                ):
+                if self._function_argument_is_read_only(call.target, argument_index):
                     continue
                 return False
         return saw_accessor and saw_insert
@@ -16471,8 +17807,7 @@ class _DirectCfgRecovery:
                 and decoded.operands[0].mem.segment == X86_REG_INVALID
                 and decoded.operands[0].mem.index == X86_REG_INVALID
                 and decoded.operands[0].mem.base != X86_REG_INVALID
-                and self._register_family(decoded.operands[0].mem.base)
-                == base_family
+                and self._register_family(decoded.operands[0].mem.base) == base_family
                 and self._reachable_within_function(
                     function_entry,
                     write_address,
@@ -16488,10 +17823,7 @@ class _DirectCfgRecovery:
             ):
                 continue
             source = decoded.operands[1]
-            is_null = (
-                source.type == X86_OP_IMM
-                and source.imm & 0xFFFF_FFFF == 0
-            )
+            is_null = source.type == X86_OP_IMM and source.imm & 0xFFFF_FFFF == 0
             has_origin = not is_null and (
                 self._operand_has_copy_constructor_origin(
                     write_address,
@@ -16538,16 +17870,13 @@ class _DirectCfgRecovery:
                 ):
                     continue
                 for argument_index in range(8):
-                    pushed = self._pushed_call_argument(
-                        call.address, argument_index
-                    )
+                    pushed = self._pushed_call_argument(call.address, argument_index)
                     if pushed is None:
                         break
                     pushed_operand = pushed[1]
                     if (
                         pushed_operand.type == X86_OP_REG
-                        and self._register_family(pushed_operand.reg)
-                        == base_family
+                        and self._register_family(pushed_operand.reg) == base_family
                     ):
                         return False
             return True
@@ -16560,9 +17889,7 @@ class _DirectCfgRecovery:
             if not callers:
                 return False
             for call in callers:
-                pushed = self._pushed_call_argument(
-                    call.address, argument_index
-                )
+                pushed = self._pushed_call_argument(call.address, argument_index)
                 if pushed is None or not (
                     self._pointer_field_has_copy_constructor_origin(
                         pushed[0].address,
@@ -16584,9 +17911,7 @@ class _DirectCfgRecovery:
         for definition_address in sorted(definitions):
             definition = self._owned_decoded(definition_address)
             if definition.group(CS_GRP_CALL) and base_family == "eax":
-                target = self.direct_call_targets_by_source.get(
-                    definition_address
-                )
+                target = self.direct_call_targets_by_source.get(definition_address)
                 if target is None or not (
                     self._call_returns_object_with_copy_field(
                         definition_address,
@@ -16690,22 +18015,13 @@ class _DirectCfgRecovery:
                 for row in decoded.operands
             )
             if writes_cursor:
-                destination = (
-                    decoded.operands[0]
-                    if decoded.operands
-                    else None
-                )
-                source = (
-                    decoded.operands[1]
-                    if len(decoded.operands) == 2
-                    else None
-                )
+                destination = decoded.operands[0] if decoded.operands else None
+                source = decoded.operands[1] if len(decoded.operands) == 2 else None
                 if (
                     decoded.id == X86_INS_MOV
                     and destination is not None
                     and destination.type == X86_OP_REG
-                    and self._register_family(destination.reg)
-                    == cursor_family
+                    and self._register_family(destination.reg) == cursor_family
                     and source is not None
                     and source.type == X86_OP_IMM
                 ):
@@ -16715,15 +18031,13 @@ class _DirectCfgRecovery:
                     decoded.id == X86_INS_MOV
                     and destination is not None
                     and destination.type == X86_OP_REG
-                    and self._register_family(destination.reg)
-                    == cursor_family
+                    and self._register_family(destination.reg) == cursor_family
                     and source is not None
                     and source.type == X86_OP_MEM
                     and source.mem.segment == X86_REG_INVALID
                     and source.mem.index == X86_REG_INVALID
                     and source.mem.base != X86_REG_INVALID
-                    and self._register_family(source.mem.base)
-                    == cursor_family
+                    and self._register_family(source.mem.base) == cursor_family
                     and source.mem.disp == 0
                     and not state & 4
                     and state & ~(1 | 2) == 0
@@ -16734,8 +18048,7 @@ class _DirectCfgRecovery:
                     decoded.mnemonic == "add"
                     and destination is not None
                     and destination.type == X86_OP_REG
-                    and self._register_family(destination.reg)
-                    == cursor_family
+                    and self._register_family(destination.reg) == cursor_family
                     and source is not None
                     and source.type == X86_OP_IMM
                     and source.imm > 0
@@ -16843,9 +18156,7 @@ class _DirectCfgRecovery:
                 and self._direct_call_domain_is_closed(registrar)
             ):
                 continue
-            cursor_family = self._register_family(
-                decoded.operands[0].mem.base
-            )
+            cursor_family = self._register_family(decoded.operands[0].mem.base)
             cursor_domain = self._closed_registry_cursor_domain(
                 registrar, address, cursor_family
             )
@@ -16899,14 +18210,10 @@ class _DirectCfgRecovery:
                 continue
             if any(
                 relocation.type == 3
-                and not _is_executable_span(
-                    self.image, relocation.va, 1
-                )
+                and not _is_executable_span(self.image, relocation.va, 1)
                 and _is_mapped_span(self.image, relocation.va, 4)
                 and int.from_bytes(
-                    _read_loader_initialized(
-                        self.image, relocation.va, 4
-                    ),
+                    _read_loader_initialized(self.image, relocation.va, 4),
                     "little",
                 )
                 == head
@@ -16959,9 +18266,7 @@ class _DirectCfgRecovery:
         saw_registry_load = False
         iterations = 0
 
-        def operand_domain(
-            current: int, operand, state: dict[str, int]
-        ) -> int:
+        def operand_domain(current: int, operand, state: dict[str, int]) -> int:
             nonlocal saw_registry_load
             if operand.type == X86_OP_REG:
                 return state.get(self._register_family(operand.reg), 4)
@@ -17104,9 +18409,7 @@ class _DirectCfgRecovery:
         self.copy_return_cache[cache_key] = False
         if (
             function_entry not in self.function_addresses
-            or not self._function_directly_calls_target(
-                function_entry, copy_function
-            )
+            or not self._function_directly_calls_target(function_entry, copy_function)
         ):
             return False
         following_entry = min(
@@ -17133,10 +18436,7 @@ class _DirectCfgRecovery:
             if decoded.group(CS_GRP_CALL):
                 target = self.direct_call_targets_by_source.get(address)
                 state["eax"] = (
-                    3
-                    if target is not None
-                    and target == copy_function
-                    else 4
+                    3 if target is not None and target == copy_function else 4
                 )
                 state["ecx"] = 4
                 state["edx"] = 4
@@ -17157,10 +18457,7 @@ class _DirectCfgRecovery:
                 source = decoded.operands[1]
                 if source.type == X86_OP_REG:
                     value = state.get(self._register_family(source.reg), 4)
-                elif (
-                    source.type == X86_OP_IMM
-                    and source.imm & 0xFFFF_FFFF == 0
-                ):
+                elif source.type == X86_OP_IMM and source.imm & 0xFFFF_FFFF == 0:
                     value = 1
                 else:
                     value = 4
@@ -17169,10 +18466,7 @@ class _DirectCfgRecovery:
                 for register in decoded.regs_write:
                     state[self._register_family(register)] = 4
                 for operand in decoded.operands:
-                    if (
-                        operand.type == X86_OP_REG
-                        and operand.access & CS_AC_WRITE
-                    ):
+                    if operand.type == X86_OP_REG and operand.access & CS_AC_WRITE:
                         state[self._register_family(operand.reg)] = 4
             for successor in self._summary_successors(
                 address, function_entry, following_entry
@@ -17203,9 +18497,7 @@ class _DirectCfgRecovery:
         self.copy_return_cache[cache_key] = result
         return result
 
-    def _function_directly_calls_target(
-        self, function_entry: int, target: int
-    ) -> bool:
+    def _function_directly_calls_target(self, function_entry: int, target: int) -> bool:
         following_entry = min(
             (row for row in self.function_addresses if row > function_entry),
             default=0x1_0000_0000,
@@ -17311,16 +18603,13 @@ class _DirectCfgRecovery:
             state = dict(states[current])
             if decoded.group(CS_GRP_CALL):
                 call_target = self.direct_call_targets_by_source.get(current)
-                call_returns_origin = (
-                    call_target is not None
-                    and (
-                        call_target == copy_function
-                        or self._function_returns_copy_constructor_origin(
-                            call_target, copy_function
-                        )
-                        or self._function_returns_registered_copy_origin(
-                            call_target, copy_function
-                        )
+                call_returns_origin = call_target is not None and (
+                    call_target == copy_function
+                    or self._function_returns_copy_constructor_origin(
+                        call_target, copy_function
+                    )
+                    or self._function_returns_registered_copy_origin(
+                        call_target, copy_function
                     )
                 )
                 if not call_returns_origin and call_target is not None:
@@ -17338,9 +18627,7 @@ class _DirectCfgRecovery:
                                 frozenset({0}),
                             )
                         )
-                state["eax"] = (
-                    3 if call_returns_origin else 4
-                )
+                state["eax"] = 3 if call_returns_origin else 4
                 state["ecx"] = 4
                 state["edx"] = 4
             elif (
@@ -17355,9 +18642,7 @@ class _DirectCfgRecovery:
                 destination, source = decoded.operands
                 value = operand_domain(current, source, state)
                 if destination.type == X86_OP_REG:
-                    state[
-                        self._register_family(destination.reg)
-                    ] = value
+                    state[self._register_family(destination.reg)] = value
                 elif destination.type == X86_OP_MEM:
                     logical_offset = self._stack_operand_logical_offset(
                         current, destination, function_entry
@@ -17368,10 +18653,7 @@ class _DirectCfgRecovery:
                 for register in decoded.regs_write:
                     state[self._register_family(register)] = 4
                 for operand in decoded.operands:
-                    if (
-                        operand.type == X86_OP_REG
-                        and operand.access & CS_AC_WRITE
-                    ):
+                    if operand.type == X86_OP_REG and operand.access & CS_AC_WRITE:
                         state[self._register_family(operand.reg)] = 4
             for successor in self._summary_successors(
                 current, function_entry, following_entry
@@ -17581,11 +18863,8 @@ class _DirectCfgRecovery:
                 predecessor = self._previous_instruction(previous.address)
                 if (
                     predecessor is None
-                    or predecessor.address + predecessor.size
-                    != previous.address
-                    or not self._owned_decoded(predecessor.address).group(
-                        CS_GRP_CALL
-                    )
+                    or predecessor.address + predecessor.size != previous.address
+                    or not self._owned_decoded(predecessor.address).group(CS_GRP_CALL)
                 ):
                     if definitions_have_copy_origin():
                         return True
@@ -17615,9 +18894,7 @@ class _DirectCfgRecovery:
             function_entry = self._registrar_function_entry(address)
             if function_entry is None:
                 continue
-            target_family = self._register_family(
-                decoded.operands[0].reg
-            )
+            target_family = self._register_family(decoded.operands[0].reg)
             target_definitions = self._register_definitions_across_blocks(
                 address, target_family, function_entry
             )
@@ -17635,20 +18912,15 @@ class _DirectCfgRecovery:
                     != target_family
                     or definition.operands[1].type != X86_OP_MEM
                     or definition.operands[1].size != 4
-                    or definition.operands[1].mem.segment
-                    != X86_REG_INVALID
-                    or definition.operands[1].mem.index
-                    != X86_REG_INVALID
-                    or definition.operands[1].mem.base
-                    == X86_REG_INVALID
+                    or definition.operands[1].mem.segment != X86_REG_INVALID
+                    or definition.operands[1].mem.index != X86_REG_INVALID
+                    or definition.operands[1].mem.base == X86_REG_INVALID
                     or definition.operands[1].mem.disp != 0
                 ):
                     valid_target_loads = False
                     break
                 descriptor_families.add(
-                    self._register_family(
-                        definition.operands[1].mem.base
-                    )
+                    self._register_family(definition.operands[1].mem.base)
                 )
             if not valid_target_loads or len(descriptor_families) != 1:
                 continue
@@ -17678,21 +18950,16 @@ class _DirectCfgRecovery:
                     != descriptor_family
                     or definition.operands[1].type != X86_OP_MEM
                     or definition.operands[1].size != 4
-                    or definition.operands[1].mem.segment
-                    != X86_REG_INVALID
-                    or definition.operands[1].mem.index
-                    != X86_REG_INVALID
-                    or definition.operands[1].mem.base
-                    == X86_REG_INVALID
+                    or definition.operands[1].mem.segment != X86_REG_INVALID
+                    or definition.operands[1].mem.index != X86_REG_INVALID
+                    or definition.operands[1].mem.base == X86_REG_INVALID
                     or definition.operands[1].mem.disp != 0
                 ):
                     valid_descriptor_loads = False
                     break
                 argument_index = self._register_argument_index_across_blocks(
                     definition_address,
-                    self._register_family(
-                        definition.operands[1].mem.base
-                    ),
+                    self._register_family(definition.operands[1].mem.base),
                     function_entry,
                 )
                 if argument_index is None:
@@ -17731,9 +18998,7 @@ class _DirectCfgRecovery:
 
         relocation_rows: dict[int, list[int]] = {}
         for relocation in self.image.relocations:
-            relocation_rows.setdefault(relocation.va, []).append(
-                relocation.type
-            )
+            relocation_rows.setdefault(relocation.va, []).append(relocation.type)
         records = []
         evidence = []
         target_source_bases: dict[int, set[int]] = {}
@@ -17762,17 +19027,13 @@ class _DirectCfgRecovery:
                 ):
                     return
                 if self.global_slot_writes.get(slot) or any(
-                    write_address < slot + 4
-                    and slot < write_address + width
-                    for write_address, writers in (
-                        self.absolute_memory_writes.items()
-                    )
+                    write_address < slot + 4 and slot < write_address + width
+                    for write_address, writers in (self.absolute_memory_writes.items())
                     for writer in writers
                     for width in {
                         operand.size
                         for operand in self._owned_decoded(writer).operands
-                        if self._absolute_memory_operand(operand)
-                        == write_address
+                        if self._absolute_memory_operand(operand) == write_address
                         and operand.access & CS_AC_WRITE
                     }
                 ):
@@ -17780,8 +19041,7 @@ class _DirectCfgRecovery:
                 slots.append((slot, raw, target))
                 if target:
                     relocation_detail.append(
-                        f"relocation={slot:#x};type=3;"
-                        f"bytes={raw.hex()}"
+                        f"relocation={slot:#x};type=3;bytes={raw.hex()}"
                     )
             detail = (
                 "proof=finite-all-raw-callers+fixed-nine-dword-copy+"
@@ -17796,11 +19056,7 @@ class _DirectCfgRecovery:
                     start=table_base,
                     end=table_base + 9 * 4,
                     provenance=detail
-                    + (
-                        "|" + "|".join(relocation_detail)
-                        if relocation_detail
-                        else ""
-                    ),
+                    + ("|" + "|".join(relocation_detail) if relocation_detail else ""),
                 )
             )
             slot, raw, target = slots[0]
@@ -17850,9 +19106,7 @@ class _DirectCfgRecovery:
             for record in records
         ):
             return
-        self.validated_copied_descriptor_callback_hypotheses.add(
-            hypothesis
-        )
+        self.validated_copied_descriptor_callback_hypotheses.add(hypothesis)
         self.data_evidence.update(evidence)
         for address, _function, _argument, guard in consumers:
             for target, target_bases in hypothesis.target_source_bases:
@@ -17880,8 +19134,7 @@ class _DirectCfgRecovery:
         ]
         decoded_rows = [self._owned_decoded(row) for row in addresses]
         index_by_address = {
-            decoded.address: index
-            for index, decoded in enumerate(decoded_rows)
+            decoded.address: index for index, decoded in enumerate(decoded_rows)
         }
 
         allocation_fields: dict[int, tuple[int, int, str, int]] = {}
@@ -17940,8 +19193,7 @@ class _DirectCfgRecovery:
         if set(allocation_fields) != {0, 4, 8}:
             return False
         if {
-            displacement: row[0]
-            for displacement, row in allocation_fields.items()
+            displacement: row[0] for displacement, row in allocation_fields.items()
         } != {0: 0x24, 4: 0x18, 8: 8}:
             return False
         if len({row[1] for row in allocation_fields.values()}) != 1:
@@ -18020,9 +19272,7 @@ class _DirectCfgRecovery:
             for destination_load in range(window_start, copy_index):
                 if not mov_eax_from_object(destination_load, displacement):
                     continue
-                for destination_lea in range(
-                    destination_load + 1, copy_index
-                ):
+                for destination_lea in range(destination_load + 1, copy_index):
                     if not lea_from_eax(destination_lea, "edi") or not no_clobber(
                         "eax", destination_load, destination_lea
                     ):
@@ -18056,8 +19306,7 @@ class _DirectCfgRecovery:
             if decoded_rows[index].mnemonic == "mov"
             and len(decoded_rows[index].operands) == 2
             and decoded_rows[index].operands[0].type == X86_OP_REG
-            and self._register_family(decoded_rows[index].operands[0].reg)
-            == "ecx"
+            and self._register_family(decoded_rows[index].operands[0].reg) == "ecx"
             and decoded_rows[index].operands[1].type == X86_OP_IMM
             and decoded_rows[index].operands[1].imm == 9
             and no_clobber("ecx", index, rep_index)
@@ -18107,8 +19356,7 @@ class _DirectCfgRecovery:
                 and decoded.operands[1].type == X86_OP_MEM
                 and decoded.operands[1].mem.base != X86_REG_INVALID
                 and decoded.operands[1].mem.index == X86_REG_INVALID
-                and self._register_family(decoded.operands[1].mem.base)
-                == object_family
+                and self._register_family(decoded.operands[1].mem.base) == object_family
                 and decoded.operands[1].mem.disp == 8
             ]
             for destination_load in destination_loads:
@@ -18127,8 +19375,7 @@ class _DirectCfgRecovery:
                         and source.type == X86_OP_MEM
                         and source.mem.base != X86_REG_INVALID
                         and source.mem.index == X86_REG_INVALID
-                        and self._register_family(source.mem.base)
-                        == source_family
+                        and self._register_family(source.mem.base) == source_family
                         and source.mem.disp in {0, 4}
                     ):
                         component_reads.setdefault(source.mem.disp, []).append(
@@ -18146,9 +19393,7 @@ class _DirectCfgRecovery:
                         and destination.mem.disp in {0, 4}
                         and source.type == X86_OP_REG
                     ):
-                        component_writes.setdefault(
-                            destination.mem.disp, []
-                        ).append(
+                        component_writes.setdefault(destination.mem.disp, []).append(
                             (index, self._register_family(source.reg))
                         )
                 if set(component_reads) != {0, 4} or set(component_writes) != {
@@ -18178,12 +19423,8 @@ class _DirectCfgRecovery:
                 last_write = max(row[0] for row in singular_writes.values())
                 if (
                     destination_family != source_family
-                    and no_clobber(
-                        source_family, argument_load, first_read
-                    )
-                    and no_clobber(
-                        destination_family, destination_load, last_write
-                    )
+                    and no_clobber(source_family, argument_load, first_read)
+                    and no_clobber(destination_family, destination_load, last_write)
                     and not any(
                         decoded_rows[index].group(CS_GRP_CALL)
                         for index in range(first_read, last_write + 1)
@@ -18214,8 +19455,7 @@ class _DirectCfgRecovery:
                     and destination.mem.segment == X86_REG_INVALID
                     and destination.mem.index == X86_REG_INVALID
                     and destination.mem.base != X86_REG_INVALID
-                    and self._register_family(destination.mem.base)
-                    == base_family
+                    and self._register_family(destination.mem.base) == base_family
                     and destination.mem.disp == memory.disp
                 ):
                     result = self._finite_operand_values_before(
@@ -18258,11 +19498,7 @@ class _DirectCfgRecovery:
         if call_row is None:
             return None
         call = next(
-            (
-                row
-                for row in self.direct_calls
-                if row.address == call_row.address
-            ),
+            (row for row in self.direct_calls if row.address == call_row.address),
             None,
         )
         if call is None:
@@ -18275,9 +19511,7 @@ class _DirectCfgRecovery:
             arguments.append(pushed[1])
         if not any(
             operand.type == X86_OP_IMM
-            and minimum_size
-            <= operand.imm & 0xFFFF_FFFF
-            <= 0x1000_0000
+            and minimum_size <= operand.imm & 0xFFFF_FFFF <= 0x1000_0000
             for operand in arguments
         ):
             return None
@@ -18296,16 +19530,14 @@ class _DirectCfgRecovery:
                 and len(candidate.operands) == 2
                 and all(
                     operand.type == X86_OP_REG
-                    and self._register_family(operand.reg)
-                    == receiver_family
+                    and self._register_family(operand.reg) == receiver_family
                     for operand in candidate.operands
                 )
             ) or (
                 candidate.mnemonic == "cmp"
                 and len(candidate.operands) == 2
                 and candidate.operands[0].type == X86_OP_REG
-                and self._register_family(candidate.operands[0].reg)
-                == receiver_family
+                and self._register_family(candidate.operands[0].reg) == receiver_family
                 and candidate.operands[1].type == X86_OP_IMM
                 and candidate.operands[1].imm & 0xFFFF_FFFF == 0
             )
@@ -18387,8 +19619,7 @@ class _DirectCfgRecovery:
                     definition.id == X86_INS_MOV
                     and len(definition.operands) == 2
                     and definition.operands[0].type == X86_OP_REG
-                    and self._register_family(definition.operands[0].reg)
-                    == "eax"
+                    and self._register_family(definition.operands[0].reg) == "eax"
                     and definition.operands[1].type == X86_OP_IMM
                     and definition.operands[1].imm & 0xFFFF_FFFF == 0
                 ):
@@ -18397,16 +19628,12 @@ class _DirectCfgRecovery:
                     definition.id == X86_INS_MOV
                     and len(definition.operands) == 2
                     and definition.operands[0].type == X86_OP_REG
-                    and self._register_family(definition.operands[0].reg)
-                    == "eax"
+                    and self._register_family(definition.operands[0].reg) == "eax"
                     and definition.operands[1].type == X86_OP_MEM
                     and definition.operands[1].size == 4
-                    and definition.operands[1].mem.segment
-                    == X86_REG_INVALID
-                    and definition.operands[1].mem.base
-                    != X86_REG_INVALID
-                    and definition.operands[1].mem.index
-                    == X86_REG_INVALID
+                    and definition.operands[1].mem.segment == X86_REG_INVALID
+                    and definition.operands[1].mem.base != X86_REG_INVALID
+                    and definition.operands[1].mem.index == X86_REG_INVALID
                     and definition.operands[1].mem.disp != 0
                 ):
                     saw_field_load = True
@@ -18484,10 +19711,7 @@ class _DirectCfgRecovery:
         identities = set()
         for definition_address in definitions:
             definition = self._owned_decoded(definition_address)
-            if (
-                definition.group(CS_GRP_CALL)
-                and register_family == "eax"
-            ):
+            if definition.group(CS_GRP_CALL) and register_family == "eax":
                 target = self._direct_target(definition)
                 if target is None:
                     return None
@@ -18507,9 +19731,7 @@ class _DirectCfgRecovery:
                 definition.address, source, function_entry
             )
             if argument_index is not None:
-                identities.add(
-                    _AbstractObjectIdentity("argument", argument_index)
-                )
+                identities.add(_AbstractObjectIdentity("argument", argument_index))
                 continue
             if source.type != X86_OP_REG or source.size != 4:
                 return None
@@ -18582,13 +19804,9 @@ class _DirectCfgRecovery:
             return cached.result
         if cache_key in self.dynamic_field_write_receiver_active:
             return None
-        function_entry = self._registrar_function_entry(
-            write.instruction_address
-        )
+        function_entry = self._registrar_function_entry(write.instruction_address)
         dependencies = (
-            set()
-            if function_entry is None
-            else {("function", function_entry)}
+            set() if function_entry is None else {("function", function_entry)}
         )
         for collector in self.producer_dependency_collectors:
             collector.update(dependencies)
@@ -18619,39 +19837,28 @@ class _DirectCfgRecovery:
                     )
                     for memory in memories
                 }
-                result = (
-                    next(iter(identities)) if len(identities) == 1 else None
-                )
+                result = next(iter(identities)) if len(identities) == 1 else None
         finally:
             popped = self.producer_dependency_collectors.pop()
             self.dynamic_field_write_receiver_active.remove(cache_key)
             if popped is not dependencies:
                 raise CfgRecoveryError(
-                    "dynamic-field receiver dependency collector stack "
-                    "is corrupted"
+                    "dynamic-field receiver dependency collector stack is corrupted"
                 )
         dynamic_memo_entries = (
             len(self.dynamic_field_write_receiver_cache)
             + len(self.dynamic_field_writer_source_cache)
             + int(cache_key not in self.dynamic_field_write_receiver_cache)
         )
-        self._check_count(
-            "max_producer_domain_cache_entries", dynamic_memo_entries
-        )
-        self.dynamic_field_write_receiver_cache[cache_key] = (
-            _DependencyMemoEntry(
-                image_sha256=self.image.sha256,
-                dependencies=self._producer_dependency_snapshot(
-                    dependencies
-                ),
-                result=result,
-            )
+        self._check_count("max_producer_domain_cache_entries", dynamic_memo_entries)
+        self.dynamic_field_write_receiver_cache[cache_key] = _DependencyMemoEntry(
+            image_sha256=self.image.sha256,
+            dependencies=self._producer_dependency_snapshot(dependencies),
+            result=result,
         )
         return result
 
-    def _dynamic_field_writer_key(
-        self, write: _DynamicFieldWrite
-    ) -> tuple[Any, ...]:
+    def _dynamic_field_writer_key(self, write: _DynamicFieldWrite) -> tuple[Any, ...]:
         return (
             write.instruction_address,
             write.displacement,
@@ -18678,13 +19885,9 @@ class _DirectCfgRecovery:
             return cached.result
         if cache_key in self.dynamic_field_writer_source_active:
             return None
-        function_entry = self._registrar_function_entry(
-            write.instruction_address
-        )
+        function_entry = self._registrar_function_entry(write.instruction_address)
         dependencies = (
-            set()
-            if function_entry is None
-            else {("function", function_entry)}
+            set() if function_entry is None else {("function", function_entry)}
         )
         for collector in self.producer_dependency_collectors:
             collector.update(dependencies)
@@ -18715,25 +19918,18 @@ class _DirectCfgRecovery:
             self.dynamic_field_writer_source_active.remove(cache_key)
             if popped is not dependencies:
                 raise CfgRecoveryError(
-                    "dynamic-field writer dependency collector stack "
-                    "is corrupted"
+                    "dynamic-field writer dependency collector stack is corrupted"
                 )
         dynamic_memo_entries = (
             len(self.dynamic_field_write_receiver_cache)
             + len(self.dynamic_field_writer_source_cache)
             + int(cache_key not in self.dynamic_field_writer_source_cache)
         )
-        self._check_count(
-            "max_producer_domain_cache_entries", dynamic_memo_entries
-        )
-        self.dynamic_field_writer_source_cache[cache_key] = (
-            _ProducerDomainMemoEntry(
-                image_sha256=self.image.sha256,
-                dependencies=self._producer_dependency_snapshot(
-                    dependencies
-                ),
-                result=result,
-            )
+        self._check_count("max_producer_domain_cache_entries", dynamic_memo_entries)
+        self.dynamic_field_writer_source_cache[cache_key] = _ProducerDomainMemoEntry(
+            image_sha256=self.image.sha256,
+            dependencies=self._producer_dependency_snapshot(dependencies),
+            result=result,
         )
         return result
 
@@ -18770,9 +19966,7 @@ class _DirectCfgRecovery:
             sorted(
                 (
                     write
-                    for write_displacement, rows in (
-                        self.dynamic_field_writes.items()
-                    )
+                    for write_displacement, rows in (self.dynamic_field_writes.items())
                     for write in rows
                     if write_displacement < displacement + 4
                     and displacement < write_displacement + write.width
@@ -18784,9 +19978,7 @@ class _DirectCfgRecovery:
         stack_writes = []
         disjoint_writes = []
         for write in all_writes:
-            function_entry = self._registrar_function_entry(
-                write.instruction_address
-            )
+            function_entry = self._registrar_function_entry(write.instruction_address)
             decoded = self._owned_decoded(write.instruction_address)
             if (
                 function_entry is not None
@@ -18857,9 +20049,7 @@ class _DirectCfgRecovery:
                 result[0],
                 result[1]
                 + ";receiver-disjoint="
-                + ",".join(
-                    f"{address:#x}" for address in disjoint_writes
-                ),
+                + ",".join(f"{address:#x}" for address in disjoint_writes),
             )
         self.dynamic_field_cache[cache_key] = result
         return result
@@ -18879,22 +20069,17 @@ class _DirectCfgRecovery:
             )
         elif decoded.group(CS_GRP_JUMP):
             successors = tuple(
-                sorted(
-                    self.non_call_successors.get(decoded.address, ())
-                )
+                sorted(self.non_call_successors.get(decoded.address, ()))
             )
         else:
             successors = (next_address,)
         return tuple(
             row
             for row in successors
-            if function_entry <= row < following_entry
-            and row in self.instructions
+            if function_entry <= row < following_entry and row in self.instructions
         )
 
-    def _call_is_proven_no_return(
-        self, decoded, visited: frozenset[int]
-    ) -> bool:
+    def _call_is_proven_no_return(self, decoded, visited: frozenset[int]) -> bool:
         if len(decoded.operands) != 1:
             return False
         operand = decoded.operands[0]
@@ -18953,16 +20138,12 @@ class _DirectCfgRecovery:
                 self.no_return_cache[cache_key] = False
                 return False
             if decoded.group(CS_GRP_CALL):
-                if self._call_is_proven_no_return(
-                    decoded, visited | {function_entry}
-                ):
+                if self._call_is_proven_no_return(decoded, visited | {function_entry}):
                     continue
                 successors = (decoded.address + decoded.size,)
             elif decoded.group(CS_GRP_JUMP):
                 successors = tuple(
-                    sorted(
-                        self.non_call_successors.get(decoded.address, ())
-                    )
+                    sorted(self.non_call_successors.get(decoded.address, ()))
                 )
                 if not successors:
                     self.no_return_cache[cache_key] = False
@@ -19022,9 +20203,8 @@ class _DirectCfgRecovery:
         if guard_operand.type != transfer_operand.type:
             return False
         if guard_operand.type == X86_OP_REG:
-            return (
-                self._register_family(guard_operand.reg)
-                == self._register_family(transfer_operand.reg)
+            return self._register_family(guard_operand.reg) == self._register_family(
+                transfer_operand.reg
             )
         if guard_operand.type != X86_OP_MEM:
             return False
@@ -19048,14 +20228,18 @@ class _DirectCfgRecovery:
                 if not guard_address < address < transfer_address:
                     continue
                 decoded = self._owned_decoded(address)
-                if decoded.group(CS_GRP_CALL) or any(
-                    self._register_family(register) == "ebp"
-                    for register in decoded.regs_write
-                ) or any(
-                    operand.type == X86_OP_REG
-                    and operand.access & CS_AC_WRITE
-                    and self._register_family(operand.reg) == "ebp"
-                    for operand in decoded.operands
+                if (
+                    decoded.group(CS_GRP_CALL)
+                    or any(
+                        self._register_family(register) == "ebp"
+                        for register in decoded.regs_write
+                    )
+                    or any(
+                        operand.type == X86_OP_REG
+                        and operand.access & CS_AC_WRITE
+                        and self._register_family(operand.reg) == "ebp"
+                        for operand in decoded.operands
+                    )
                 ):
                     return False
             return True
@@ -19221,8 +20405,7 @@ class _DirectCfgRecovery:
                 compared.mnemonic != "cmp"
                 or len(compared.operands) != 2
                 or compared.operands[0].type != X86_OP_REG
-                or self._register_family(compared.operands[0].reg)
-                != register_family
+                or self._register_family(compared.operands[0].reg) != register_family
                 or compared.operands[1].type != X86_OP_IMM
             ):
                 continue
@@ -19307,9 +20490,7 @@ class _DirectCfgRecovery:
                 or transfer.operands[0].mem.index == X86_REG_INVALID
             ):
                 continue
-            index_family = self._register_family(
-                transfer.operands[0].mem.index
-            )
+            index_family = self._register_family(transfer.operands[0].mem.index)
             compare = self.instructions.get(table.guard_address)
             if compare is None:
                 continue
@@ -19334,8 +20515,7 @@ class _DirectCfgRecovery:
                 and mask_decoded.mnemonic == "and"
                 and len(mask_decoded.operands) == 2
                 and mask_decoded.operands[0].type == X86_OP_REG
-                and self._register_family(mask_decoded.operands[0].reg)
-                == index_family
+                and self._register_family(mask_decoded.operands[0].reg) == index_family
                 and mask_decoded.operands[1].type == X86_OP_IMM
                 and mask_decoded.operands[1].imm & 0xFFFF_FFFF == 0xFF
             ):
@@ -19351,14 +20531,11 @@ class _DirectCfgRecovery:
                     decoded.mnemonic == "movzx"
                     and len(decoded.operands) == 2
                     and decoded.operands[0].type == X86_OP_REG
-                    and self._register_family(decoded.operands[0].reg)
-                    == index_family
+                    and self._register_family(decoded.operands[0].reg) == index_family
                     and decoded.operands[1].type == X86_OP_REG
                     and decoded.operands[1].size == 2
                 ):
-                    source_family = self._register_family(
-                        decoded.operands[1].reg
-                    )
+                    source_family = self._register_family(decoded.operands[1].reg)
                     cursor = previous.address
                     break
                 if any(
@@ -19377,8 +20554,7 @@ class _DirectCfgRecovery:
                 tag_decoded.id == X86_INS_MOV
                 and len(tag_decoded.operands) == 2
                 and tag_decoded.operands[0].type == X86_OP_REG
-                and self._register_family(tag_decoded.operands[0].reg)
-                == source_family
+                and self._register_family(tag_decoded.operands[0].reg) == source_family
                 and tag_decoded.operands[0].size == 2
                 and tag_decoded.operands[1].type == X86_OP_MEM
                 and tag_decoded.operands[1].size == 2
@@ -19412,9 +20588,7 @@ class _DirectCfgRecovery:
         callback_kinds = {1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12}
         helper_kinds: dict[int, set[int]] = {}
         handler_calls: set[int] = set()
-        direct_call_by_address = {
-            row.address: row for row in self.direct_calls
-        }
+        direct_call_by_address = {row.address: row for row in self.direct_calls}
         for kind in sorted(callback_kinds - active_kinds):
             handler = table.raw_entries[kind - 1]
             cursor = handler
@@ -19443,9 +20617,7 @@ class _DirectCfgRecovery:
         self.cw_inactive_helpers_cache[signature] = result
         return result
 
-    def _recover_cw_inactive_action_helper(
-        self, instruction: Instruction
-    ) -> bool:
+    def _recover_cw_inactive_action_helper(self, instruction: Instruction) -> bool:
         function_entry = self._registrar_function_entry(instruction.address)
         if function_entry is None:
             return False
@@ -19453,9 +20625,7 @@ class _DirectCfgRecovery:
         kinds = helper_kinds.get(function_entry)
         if not kinds:
             return False
-        callers = set(
-            self.direct_call_sources_by_target.get(function_entry, ())
-        )
+        callers = set(self.direct_call_sources_by_target.get(function_entry, ()))
         if not callers or not callers <= handler_calls:
             return False
         self.diagnostics.add(
@@ -19467,8 +20637,7 @@ class _DirectCfgRecovery:
                     + ",".join(str(row) for row in sorted(kinds))
                     + ";registered-kinds="
                     + ",".join(
-                        str(row)
-                        for row in self.cw_exception_metadata.action_kinds
+                        str(row) for row in self.cw_exception_metadata.action_kinds
                     )
                     + f";helper={function_entry:#x}"
                 ),
@@ -19500,8 +20669,7 @@ class _DirectCfgRecovery:
             ) or (
                 bool(candidate.operands)
                 and candidate.operands[0].type == X86_OP_REG
-                and self._register_family(candidate.operands[0].reg)
-                == target_family
+                and self._register_family(candidate.operands[0].reg) == target_family
                 and bool(candidate.operands[0].access & CS_AC_WRITE)
             )
             if writes_target:
@@ -19513,8 +20681,7 @@ class _DirectCfgRecovery:
                     == target_family
                     and candidate.operands[1].type == X86_OP_MEM
                     and candidate.operands[1].size == 4
-                    and candidate.operands[1].mem.segment
-                    == X86_REG_INVALID
+                    and candidate.operands[1].mem.segment == X86_REG_INVALID
                     and candidate.operands[1].mem.index == X86_REG_INVALID
                     and candidate.operands[1].mem.base != X86_REG_INVALID
                     and candidate.operands[1].mem.disp in {4, 6}
@@ -19556,9 +20723,7 @@ class _DirectCfgRecovery:
                 and candidate.operands[1].mem.base != X86_REG_INVALID
                 and candidate.operands[1].mem.disp in {0, 4, 8, 12}
             ):
-                base_family = self._register_family(
-                    candidate.operands[1].mem.base
-                )
+                base_family = self._register_family(candidate.operands[1].mem.base)
                 context_loads_by_base.setdefault(base_family, {})[
                     candidate.operands[1].mem.disp
                 ] = self._register_family(candidate.operands[0].reg)
@@ -19572,17 +20737,13 @@ class _DirectCfgRecovery:
             return False
         targets = tuple(
             target
-            for target_kind, target in (
-                self.cw_exception_metadata.continuation_targets
-            )
+            for target_kind, target in (self.cw_exception_metadata.continuation_targets)
             if target_kind == kind
         )
         if not targets:
             return False
         edge_kind = "indirect-jump-cw-exception-continuation"
-        self._require_retained_pre_finite_targets_sound(
-            instruction, edge_kind, targets
-        )
+        self._require_retained_pre_finite_targets_sound(instruction, edge_kind, targets)
         provenance = (
             f"cw-packed-continuation-kind={kind};"
             f"field={displacement:+#x};"
@@ -19626,17 +20787,14 @@ class _DirectCfgRecovery:
                 resolved = (address + 5 + displacement) & 0xFFFF_FFFF
                 sites_by_target.setdefault(resolved, set()).add(address)
         self.raw_direct_call_sites_cache = {
-            resolved: frozenset(sites)
-            for resolved, sites in sites_by_target.items()
+            resolved: frozenset(sites) for resolved, sites in sites_by_target.items()
         }
         return self.raw_direct_call_sites_cache.get(target, frozenset())
 
     def _direct_calls_to(self, target: int) -> tuple[DirectCall, ...]:
         return tuple(
             DirectCall(address, target)
-            for address in sorted(
-                self.direct_call_sources_by_target.get(target, ())
-            )
+            for address in sorted(self.direct_call_sources_by_target.get(target, ()))
         )
 
     def _cw_k17_builder_domain(
@@ -19701,16 +20859,11 @@ class _DirectCfgRecovery:
             return None
 
         raw_callers = self._raw_direct_call_sites(wrapper)
-        decoded_callers = set(
-            self.direct_call_sources_by_target.get(wrapper, ())
-        )
-        exc_section = next(
-            row for row in self.image.sections if row.name == ".exc"
-        )
+        decoded_callers = set(self.direct_call_sources_by_target.get(wrapper, ()))
+        exc_section = next(row for row in self.image.sections if row.name == ".exc")
         assert self.cw_exception_metadata is not None
         exception_range_functions = {
-            function
-            for function, _metadata in self.cw_exception_metadata.range_table
+            function for function, _metadata in self.cw_exception_metadata.range_table
         }
         address_taken = any(
             row.type == 3
@@ -19735,10 +20888,7 @@ class _DirectCfgRecovery:
         callbacks = frozenset(value for value in values if value)
         if (
             not callbacks
-            or any(
-                not _is_executable_span(self.image, value, 1)
-                for value in callbacks
-            )
+            or any(not _is_executable_span(self.image, value, 1) for value in callbacks)
             or values - callbacks not in {frozenset(), frozenset({0})}
         ):
             return None
@@ -19761,14 +20911,9 @@ class _DirectCfgRecovery:
         )
         if signature in self.cw_k17_domain_cache:
             return self.cw_k17_domain_cache[signature]
-        if (
-            self.cw_exception_metadata is None
-            or not any(
-                kind == 17
-                for _function, _action, kind in (
-                    self.cw_exception_metadata.action_contexts
-                )
-            )
+        if self.cw_exception_metadata is None or not any(
+            kind == 17
+            for _function, _action, kind in (self.cw_exception_metadata.action_contexts)
         ):
             self.cw_k17_domain_cache[signature] = None
             return None
@@ -19852,18 +20997,13 @@ class _DirectCfgRecovery:
         handler_function = self._registrar_function_entry(handler)
         if (
             handler_function is None
-            or self._registrar_function_entry(instruction.address)
-            != handler_function
+            or self._registrar_function_entry(instruction.address) != handler_function
         ):
             return False
         pending = [handler]
         seen = set()
         following_entry = min(
-            (
-                row
-                for row in self.function_addresses
-                if row > handler_function
-            ),
+            (row for row in self.function_addresses if row > handler_function),
             default=0x1_0000_0000,
         )
         handler_contains_call = False
@@ -19876,15 +21016,12 @@ class _DirectCfgRecovery:
                 handler_contains_call = True
                 break
             for successor in sorted(
-                self._summary_successors(
-                    cursor, handler_function, following_entry
-                )
+                self._summary_successors(cursor, handler_function, following_entry)
             ):
                 if (
                     successor not in seen
                     and successor in self.instructions
-                    and self._registrar_function_entry(successor)
-                    == handler_function
+                    and self._registrar_function_entry(successor) == handler_function
                 ):
                     heapq.heappush(pending, successor)
         if not handler_contains_call:
@@ -19909,9 +21046,7 @@ class _DirectCfgRecovery:
                 and compared.operands[1].type == X86_OP_IMM
                 and compared.operands[1].imm & 0xFFFF_FFFF == 0
             ):
-                aliases = {
-                    self._register_family(compared.operands[0].mem.base)
-                }
+                aliases = {self._register_family(compared.operands[0].mem.base)}
                 branch = None
                 branch_cursor = cursor + compared.size
                 for _ in range(4):
@@ -19929,9 +21064,7 @@ class _DirectCfgRecovery:
                         and candidate.operands[1].type == X86_OP_REG
                     ):
                         break
-                    destination = self._register_family(
-                        candidate.operands[0].reg
-                    )
+                    destination = self._register_family(candidate.operands[0].reg)
                     source = self._register_family(candidate.operands[1].reg)
                     if source in aliases:
                         aliases.add(destination)
@@ -19951,13 +21084,10 @@ class _DirectCfgRecovery:
                         and len(row.operands) == 2
                         and row.operands[0].type == X86_OP_REG
                     ):
-                        destination = self._register_family(
-                            row.operands[0].reg
-                        )
+                        destination = self._register_family(row.operands[0].reg)
                         source_is_alias = (
                             row.operands[1].type == X86_OP_REG
-                            and self._register_family(row.operands[1].reg)
-                            in aliases
+                            and self._register_family(row.operands[1].reg) in aliases
                         )
                         if source_is_alias:
                             aliases.add(destination)
@@ -19974,12 +21104,9 @@ class _DirectCfgRecovery:
             return False
         values, detail = result
         edge_kind = "indirect-call-cw-exception-k17"
-        self._require_retained_pre_finite_targets_sound(
-            instruction, edge_kind, values
-        )
+        self._require_retained_pre_finite_targets_sound(instruction, edge_kind, values)
         provenance = (
-            f"transfer={instruction.address:#x};cw-packed-action-kind=17;"
-            + detail
+            f"transfer={instruction.address:#x};cw-packed-action-kind=17;" + detail
         )
         for target in sorted(values):
             self.seed_records.add(
@@ -20033,8 +21160,7 @@ class _DirectCfgRecovery:
                 or decoded.group(CS_GRP_JUMP)
                 or decoded.group(CS_GRP_RET)
                 or any(
-                    self._register_family(row) == "esp"
-                    for row in decoded.regs_write
+                    self._register_family(row) == "esp" for row in decoded.regs_write
                 )
             ):
                 return None
@@ -20076,9 +21202,7 @@ class _DirectCfgRecovery:
         )
         narrowed_calls = []
         for call in constructor_calls:
-            local = self._finite_direct_call_argument(
-                call, 2, frozenset()
-            )
+            local = self._finite_direct_call_argument(call, 2, frozenset())
             if local is None:
                 return False
             local_values, local_detail = local
@@ -20092,9 +21216,7 @@ class _DirectCfgRecovery:
             return False
         constructor_call, values, local_detail = narrowed_calls[0]
         edge_kind = "indirect-call-cw-registered-destructor"
-        self._require_retained_pre_finite_targets_sound(
-            instruction, edge_kind, values
-        )
+        self._require_retained_pre_finite_targets_sound(instruction, edge_kind, values)
         guard = self._dominating_nonzero_guard(
             instruction.address,
             decoded.operands[0],
@@ -20164,16 +21286,12 @@ class _DirectCfgRecovery:
                 rendered_values = (
                     "blocked"
                     if candidate_values is None
-                    else ",".join(
-                        f"{value:#x}" for value in sorted(candidate_values)
-                    )
+                    else ",".join(f"{value:#x}" for value in sorted(candidate_values))
                 )
                 raise CfgRecoveryError(
                     "retained finite-control edge became unsound: "
                     f"transfer={instruction.address:#x};retained="
-                    + ",".join(
-                        f"{target:#x}" for target in sorted(retained_targets)
-                    )
+                    + ",".join(f"{target:#x}" for target in sorted(retained_targets))
                     + f";recomputed={rendered_values}"
                 )
 
@@ -20240,9 +21358,7 @@ class _DirectCfgRecovery:
                             "zero context contradicts nonzero guard: "
                             f"condition={condition:#x};branch={branch:#x};"
                             "retained-nonzero-domain="
-                            + ",".join(
-                                f"{value:#x}" for value in sorted(values)
-                            )
+                            + ",".join(f"{value:#x}" for value in sorted(values))
                             + f";{stable_detail}"
                         ),
                     )
@@ -20280,9 +21396,7 @@ class _DirectCfgRecovery:
         self._record_fixpoint_update()
         return True
 
-    def _strict_identity_validator(
-        self, function_entry: int
-    ) -> tuple[int, int] | None:
+    def _strict_identity_validator(self, function_entry: int) -> tuple[int, int] | None:
         """Return ``(tag offset, tag)`` for an identity-or-zero validator."""
         following_entry = min(
             (row for row in self.function_addresses if row > function_entry),
@@ -20315,10 +21429,7 @@ class _DirectCfgRecovery:
             != 0
             or len(tested.operands) != 2
             or any(row.type != X86_OP_REG for row in tested.operands)
-            or any(
-                self._register_family(row.reg) != "eax"
-                for row in tested.operands
-            )
+            or any(self._register_family(row.reg) != "eax" for row in tested.operands)
             or len(compared.operands) != 2
             or compared.operands[0].type != X86_OP_MEM
             or compared.operands[0].size != 4
@@ -20331,10 +21442,7 @@ class _DirectCfgRecovery:
             or self._direct_target(mismatch_branch) != zeroed.address
             or len(zeroed.operands) != 2
             or any(row.type != X86_OP_REG for row in zeroed.operands)
-            or any(
-                self._register_family(row.reg) != "eax"
-                for row in zeroed.operands
-            )
+            or any(self._register_family(row.reg) != "eax" for row in zeroed.operands)
         ):
             return None
         return (
@@ -20351,7 +21459,7 @@ class _DirectCfgRecovery:
         self._note_producer_dependency(caller_entry)
         remaining = argument_index
         cursor = call_address
-        for _ in range(32):
+        for _ in range(64):
             previous = self._previous_instruction(cursor)
             if previous is None:
                 return None
@@ -20365,8 +21473,7 @@ class _DirectCfgRecovery:
                 or decoded.group(CS_GRP_JUMP)
                 or decoded.group(CS_GRP_RET)
                 or any(
-                    self._register_family(row) == "esp"
-                    for row in decoded.regs_write
+                    self._register_family(row) == "esp" for row in decoded.regs_write
                 )
             ):
                 return None
@@ -20403,9 +21510,7 @@ class _DirectCfgRecovery:
                     and self._register_family(decoded.operands[0].reg) == "ecx"
                 ):
                     receiver_family = "ecx"
-                    object_family = self._register_family(
-                        decoded.operands[1].reg
-                    )
+                    object_family = self._register_family(decoded.operands[1].reg)
                 else:
                     return None
             elif (
@@ -20428,8 +21533,7 @@ class _DirectCfgRecovery:
                 decoded.id == X86_INS_MOV
                 and len(decoded.operands) == 2
                 and decoded.operands[0].type == X86_OP_REG
-                and self._register_family(decoded.operands[0].reg)
-                == object_family
+                and self._register_family(decoded.operands[0].reg) == object_family
                 and decoded.operands[1].type == X86_OP_REG
                 and self._register_family(decoded.operands[1].reg) == "eax"
             ):
@@ -20459,8 +21563,7 @@ class _DirectCfgRecovery:
         if (
             allocation_argument is None
             or allocation_argument[1].type != X86_OP_IMM
-            or allocation_argument[1].imm & 0xFFFF_FFFF
-            < descriptor_field + 4
+            or allocation_argument[1].imm & 0xFFFF_FFFF < descriptor_field + 4
         ):
             return None
         return object_family, allocation_call
@@ -20489,16 +21592,10 @@ class _DirectCfgRecovery:
     def _incoming_call_sites(self, function_entry: int) -> tuple[int, ...]:
         return tuple(
             sorted(
-                set(
-                    self.direct_call_sources_by_target.get(
-                        function_entry, ()
-                    )
-                )
+                set(self.direct_call_sources_by_target.get(function_entry, ()))
                 | {
                     source
-                    for source, kind in self.incoming_edges.get(
-                        function_entry, ()
-                    )
+                    for source, kind in self.incoming_edges.get(function_entry, ())
                     if kind.startswith("indirect-call")
                 }
             )
@@ -20508,9 +21605,7 @@ class _DirectCfgRecovery:
         cache_key = (function_entry, self._summary_fact_signature())
         if cache_key in self.direct_call_domain_cache:
             return self.direct_call_domain_cache[cache_key]
-        decoded = set(
-            self.direct_call_sources_by_target.get(function_entry, ())
-        )
+        decoded = set(self.direct_call_sources_by_target.get(function_entry, ()))
         result = bool(decoded) and (
             self._raw_direct_call_sites(function_entry) == decoded
             and not any(row.va == function_entry for row in self.image.exports)
@@ -20538,12 +21633,9 @@ class _DirectCfgRecovery:
         if cache_key in self.incoming_call_domain_cache:
             return self.incoming_call_domain_cache[cache_key]
 
-        decoded = set(
-            self.direct_call_sources_by_target.get(function_entry, ())
-        )
-        if (
-            self._raw_direct_call_sites(function_entry) != decoded
-            or any(row.va == function_entry for row in self.image.exports)
+        decoded = set(self.direct_call_sources_by_target.get(function_entry, ()))
+        if self._raw_direct_call_sites(function_entry) != decoded or any(
+            row.va == function_entry for row in self.image.exports
         ):
             self.incoming_call_domain_cache[cache_key] = False
             return False
@@ -20551,18 +21643,18 @@ class _DirectCfgRecovery:
         relocation_types: dict[int, list[int]] = {}
         relocation_references: set[int] = set()
         for relocation in self.image.relocations:
-            relocation_types.setdefault(relocation.va, []).append(
-                relocation.type
-            )
+            relocation_types.setdefault(relocation.va, []).append(relocation.type)
             if not (
-                relocation.type == 3
-                and _is_mapped_span(self.image, relocation.va, 4)
+                relocation.type == 3 and _is_mapped_span(self.image, relocation.va, 4)
             ):
                 continue
-            if int.from_bytes(
-                _read_loader_initialized(self.image, relocation.va, 4),
-                "little",
-            ) == function_entry:
+            if (
+                int.from_bytes(
+                    _read_loader_initialized(self.image, relocation.va, 4),
+                    "little",
+                )
+                == function_entry
+            ):
                 relocation_references.add(relocation.va)
 
         accepted_references = {
@@ -20614,9 +21706,7 @@ class _DirectCfgRecovery:
         sources = []
         relocation_types: dict[int, list[int]] = {}
         for relocation in self.image.relocations:
-            relocation_types.setdefault(relocation.va, []).append(
-                relocation.type
-            )
+            relocation_types.setdefault(relocation.va, []).append(relocation.type)
         for base in sorted(value for value in domains[0] if value):
             if base not in records or relocation_types.get(base) != [3]:
                 continue
@@ -20660,15 +21750,11 @@ class _DirectCfgRecovery:
         base_family = self._register_family(memory.base)
         if base_family not in {"esp", "ebp"}:
             return None
-        self._note_stack_call_dependencies_before(
-            definition.address, function_entry
-        )
+        self._note_stack_call_dependencies_before(definition.address, function_entry)
         states = self._function_stack_states(function_entry)
         state = None if states is None else states.get(definition.address)
         if state is None:
-            state = self._linear_stack_state_before(
-                definition.address, function_entry
-            )
+            state = self._linear_stack_state_before(definition.address, function_entry)
         if state is None:
             return None
         sp_delta, bp_delta = state
@@ -20702,9 +21788,7 @@ class _DirectCfgRecovery:
     def _stack_value_logical_offset(
         self, address: int, operand, function_entry: int
     ) -> int | None:
-        direct = self._stack_operand_logical_offset(
-            address, operand, function_entry
-        )
+        direct = self._stack_operand_logical_offset(address, operand, function_entry)
         if direct is not None or operand.type != X86_OP_REG:
             return direct
         definitions = self._register_definitions_across_blocks(
@@ -20740,17 +21824,12 @@ class _DirectCfgRecovery:
                     self._register_family(operand.reg),
                     function_entry,
                 )
-            return self._stack_argument_index_at(
-                address, operand, function_entry
-            )
+            return self._stack_argument_index_at(address, operand, function_entry)
 
         left_argument = argument_index(left_address, left_operand)
         right_argument = argument_index(right_address, right_operand)
         if left_argument is not None or right_argument is not None:
-            return (
-                left_argument is not None
-                and left_argument == right_argument
-            )
+            return left_argument is not None and left_argument == right_argument
         if left_operand.type != X86_OP_REG or right_operand.type != X86_OP_REG:
             return False
         left_family = self._register_family(left_operand.reg)
@@ -20856,15 +21935,14 @@ class _DirectCfgRecovery:
         if record[1].type == X86_OP_REG:
             if self._register_family(record[1].reg) != record_family:
                 return None
-        elif self._stack_argument_index_at(
-            record[0].address, record[1], wrapper_entry
-        ) != record_parameter:
+        elif (
+            self._stack_argument_index_at(record[0].address, record[1], wrapper_entry)
+            != record_parameter
+        ):
             return None
         return wrapper_entry, record_parameter, load.operands[1].mem.disp
 
-    def _relocated_immediate_in_function(
-        self, function_entry: int, value: int
-    ) -> bool:
+    def _relocated_immediate_in_function(self, function_entry: int, value: int) -> bool:
         following_entry = min(
             (row for row in self.function_addresses if row > function_entry),
             default=0x1_0000_0000,
@@ -20884,8 +21962,7 @@ class _DirectCfgRecovery:
                 continue
             occurrences.append(address)
             if any(
-                row.type == 3
-                and row.va == decoded.address + decoded.imm_offset
+                row.type == 3 and row.va == decoded.address + decoded.imm_offset
                 for row in self.image.relocations
             ):
                 relocated.append(address)
@@ -20960,7 +22037,8 @@ class _DirectCfgRecovery:
             self._direct_target(rows[8]) != rows[20].address
             or self._direct_target(rows[11]) != rows[14].address
             or self._direct_target(rows[19]) != rows[22].address
-            or [row.op_str for row in (rows[6], rows[9], rows[10])] != [
+            or [row.op_str for row in (rows[6], rows[9], rows[10])]
+            != [
                 "ecx, ecx",
                 "ecx, edi",
                 "ecx, 3",
@@ -21035,9 +22113,7 @@ class _DirectCfgRecovery:
                 or target_load.operands[1].mem.base == X86_REG_INVALID
             ):
                 continue
-            table_family = self._register_family(
-                target_load.operands[1].mem.base
-            )
+            table_family = self._register_family(target_load.operands[1].mem.base)
             table_definitions = self._register_definitions_across_blocks(
                 target_load.address, table_family, resolver_entry
             )
@@ -21097,11 +22173,7 @@ class _DirectCfgRecovery:
             if not _is_executable_span(self.image, provider, 1):
                 return None
             provider_end = min(
-                (
-                    row
-                    for row in self.function_addresses
-                    if row > provider
-                ),
+                (row for row in self.function_addresses if row > provider),
                 default=0x1_0000_0000,
             )
             provider_returns = [
@@ -21140,9 +22212,7 @@ class _DirectCfgRecovery:
             ):
                 return None
             tag = int.from_bytes(
-                _read_loader_initialized(
-                    self.image, pointer + tag_offset, 4
-                ),
+                _read_loader_initialized(self.image, pointer + tag_offset, 4),
                 "little",
             )
             tags.add(tag)
@@ -21263,11 +22333,8 @@ class _DirectCfgRecovery:
                             )
                         ):
                             copy_calls.append(call.address)
-                    if (
-                        len(copy_calls) == 1
-                        and self._relocated_immediate_in_function(
-                            resolver_entry, destination
-                        )
+                    if len(copy_calls) == 1 and self._relocated_immediate_in_function(
+                        resolver_entry, destination
                     ):
                         success_kinds.add("fixed-memcpy")
                         continue
@@ -21412,9 +22479,12 @@ class _DirectCfgRecovery:
         if source_bases is None:
             return None
         relations = []
-        for call_address, consumer_entry, record_argument, _guard in (
-            self._guarded_slot_zero_descriptor_consumers()
-        ):
+        for (
+            call_address,
+            consumer_entry,
+            record_argument,
+            _guard,
+        ) in self._guarded_slot_zero_descriptor_consumers():
             pushed = self._pushed_call_argument(call_address, 0)
             if pushed is None or pushed[1].type != X86_OP_REG:
                 return None
@@ -21428,9 +22498,7 @@ class _DirectCfgRecovery:
             if not self._direct_call_domain_is_closed(consumer_entry):
                 return None
             consumer_calls = sorted(
-                row.address
-                for row in self.direct_calls
-                if row.target == consumer_entry
+                row.address for row in self.direct_calls if row.target == consumer_entry
             )
             for consumer_call in consumer_calls:
                 relation = self._copied_record_object_relation(
@@ -21452,11 +22520,7 @@ class _DirectCfgRecovery:
                 default=0x1_0000_0000,
             )
             for wrapper_call in sorted(
-                (
-                    row
-                    for row in self.direct_calls
-                    if row.target == wrapper_entry
-                ),
+                (row for row in self.direct_calls if row.target == wrapper_entry),
                 key=_call_key,
             ):
                 wrapper_record = self._pushed_call_argument(
@@ -21470,9 +22534,7 @@ class _DirectCfgRecovery:
                         wrapper_record[2] <= candidate.address < wrapper_call.address
                     ):
                         continue
-                    candidate_record = self._pushed_call_argument(
-                        candidate.address, 0
-                    )
+                    candidate_record = self._pushed_call_argument(candidate.address, 0)
                     if (
                         candidate_record is None
                         or candidate_record[2] != wrapper_record[2]
@@ -21623,8 +22685,7 @@ class _DirectCfgRecovery:
             origins = []
             if initial:
                 if not any(
-                    row.type == 3 and row.va == slot
-                    for row in self.image.relocations
+                    row.type == 3 and row.va == slot for row in self.image.relocations
                 ):
                     return None
                 origin = self._closed_global_object_origin(
@@ -21641,26 +22702,16 @@ class _DirectCfgRecovery:
                 self.global_slot_writes.get(slot, ()),
                 key=lambda row: row.instruction_address,
             ):
-                write_decoded = self._owned_decoded(
-                    write.instruction_address
-                )
-                if (
-                    write_decoded.id != X86_INS_MOV
-                    or len(write_decoded.operands) != 2
-                ):
+                write_decoded = self._owned_decoded(write.instruction_address)
+                if write_decoded.id != X86_INS_MOV or len(write_decoded.operands) != 2:
                     return None
                 if write.value is not None:
                     if write.value == 0:
                         continue
-                    if (
-                        write_decoded.operands[1].type != X86_OP_IMM
-                        or not any(
-                            row.type == 3
-                            and row.va
-                            == write_decoded.address
-                            + write_decoded.imm_offset
-                            for row in self.image.relocations
-                        )
+                    if write_decoded.operands[1].type != X86_OP_IMM or not any(
+                        row.type == 3
+                        and row.va == write_decoded.address + write_decoded.imm_offset
+                        for row in self.image.relocations
                     ):
                         return None
                     origin = self._closed_global_object_origin(
@@ -21693,15 +22744,11 @@ class _DirectCfgRecovery:
                 return None
             return _ClosedObjectOrigin(
                 any(row.has_target_constructor for row in origins),
-                frozenset().union(
-                    *(row.rejected_tags for row in origins)
-                ),
+                frozenset().union(*(row.rejected_tags for row in origins)),
                 f"global-slot={slot:#x};pointer-field={field:+#x};"
                 + "|".join(row.detail for row in origins),
             )
-        argument_index = self._stack_argument_index_at(
-            address, operand, function_entry
-        )
+        argument_index = self._stack_argument_index_at(address, operand, function_entry)
         if argument_index is None:
             return None
         key = (
@@ -21766,9 +22813,7 @@ class _DirectCfgRecovery:
             self.dynamic_field_writes.get(field, ()),
             key=lambda item: item.instruction_address,
         ):
-            if not (
-                function_entry <= row.instruction_address < following_entry
-            ):
+            if not (function_entry <= row.instruction_address < following_entry):
                 continue
             decoded = self._owned_decoded(row.instruction_address)
             if (
@@ -21777,8 +22822,7 @@ class _DirectCfgRecovery:
                 or decoded.operands[0].type != X86_OP_MEM
                 or decoded.operands[0].mem.base == X86_REG_INVALID
                 or decoded.operands[0].mem.index != X86_REG_INVALID
-                or self._register_family(decoded.operands[0].mem.base)
-                != base_family
+                or self._register_family(decoded.operands[0].mem.base) != base_family
                 or not self._reachable_within_function(
                     function_entry,
                     row.instruction_address,
@@ -21839,9 +22883,7 @@ class _DirectCfgRecovery:
                 return None
             origins = []
             for call_address in callers:
-                pushed = self._pushed_call_argument(
-                    call_address, argument_index
-                )
+                pushed = self._pushed_call_argument(call_address, argument_index)
                 if pushed is None:
                     return None
                 origin = self._closed_pointer_field_origin(
@@ -21859,9 +22901,7 @@ class _DirectCfgRecovery:
                 origins.append(origin)
             incoming = _ClosedObjectOrigin(
                 any(row.has_target_constructor for row in origins),
-                frozenset().union(
-                    *(row.rejected_tags for row in origins)
-                ),
+                frozenset().union(*(row.rejected_tags for row in origins)),
                 "|".join(row.detail for row in origins),
             )
         if incoming is None:
@@ -21893,28 +22933,18 @@ class _DirectCfgRecovery:
                     return None
                 definition_origins.append(origin)
             incoming = _ClosedObjectOrigin(
-                any(
-                    row.has_target_constructor
-                    for row in definition_origins
-                ),
-                frozenset().union(
-                    *(row.rejected_tags for row in definition_origins)
-                ),
+                any(row.has_target_constructor for row in definition_origins),
+                frozenset().union(*(row.rejected_tags for row in definition_origins)),
                 "|".join(row.detail for row in definition_origins),
             )
         if (
-            any(
-                not origin.has_target_constructor
-                for _, origin in writes
-            )
+            any(not origin.has_target_constructor for _, origin in writes)
             and incoming is None
         ):
             return None
         return incoming
 
-    def _fixed_constructor_tag(
-        self, function_entry: int, tag_field: int
-    ) -> int | None:
+    def _fixed_constructor_tag(self, function_entry: int, tag_field: int) -> int | None:
         """Return one immediate tag that dominates every constructor return."""
         self._note_producer_dependency(function_entry)
         self._note_producer_dynamic_field_dependency(tag_field)
@@ -21928,9 +22958,7 @@ class _DirectCfgRecovery:
                 if not (
                     displacement < tag_field + 4
                     and tag_field < displacement + row.width
-                    and function_entry
-                    <= row.instruction_address
-                    < following_entry
+                    and function_entry <= row.instruction_address < following_entry
                 ):
                     continue
                 decoded = self._owned_decoded(row.instruction_address)
@@ -22011,9 +23039,7 @@ class _DirectCfgRecovery:
                 if not (
                     displacement < tag_field + 4
                     and tag_field < displacement + row.width
-                    and function_entry
-                    <= row.instruction_address
-                    < following_entry
+                    and function_entry <= row.instruction_address < following_entry
                 ):
                     continue
                 decoded = self._owned_decoded(row.instruction_address)
@@ -22046,9 +23072,7 @@ class _DirectCfgRecovery:
             )
         ):
             return None
-        receiver_family = self._register_family(
-            decoded.operands[0].mem.base
-        )
+        receiver_family = self._register_family(decoded.operands[0].mem.base)
         if receiver_family != "ecx":
             definitions = self._register_definitions_across_blocks(
                 writer.instruction_address,
@@ -22057,24 +23081,14 @@ class _DirectCfgRecovery:
             )
             if not definitions or len(definitions) != 1:
                 return None
-            receiver_definition = self._owned_decoded(
-                next(iter(definitions))
-            )
+            receiver_definition = self._owned_decoded(next(iter(definitions)))
             if (
                 receiver_definition.id != X86_INS_MOV
                 or len(receiver_definition.operands) != 2
-                or any(
-                    row.type != X86_OP_REG
-                    for row in receiver_definition.operands
-                )
-                or self._register_family(
-                    receiver_definition.operands[0].reg
-                )
+                or any(row.type != X86_OP_REG for row in receiver_definition.operands)
+                or self._register_family(receiver_definition.operands[0].reg)
                 != receiver_family
-                or self._register_family(
-                    receiver_definition.operands[1].reg
-                )
-                != "ecx"
+                or self._register_family(receiver_definition.operands[1].reg) != "ecx"
             ):
                 return None
         returns = [
@@ -22119,9 +23133,7 @@ class _DirectCfgRecovery:
         visited: frozenset[tuple[int, str]],
     ) -> tuple[frozenset[int], str] | None:
         """Prove the exact tag domain assigned by one fresh constructor call."""
-        caller_entry = self._registrar_function_entry(
-            constructor_call.address
-        )
+        caller_entry = self._registrar_function_entry(constructor_call.address)
         if caller_entry is None:
             return None
         self._note_producer_dependency(caller_entry)
@@ -22132,9 +23144,7 @@ class _DirectCfgRecovery:
         )
         if key in visited:
             return None
-        fixed = self._fixed_constructor_tag(
-            constructor_call.target, tag_field
-        )
+        fixed = self._fixed_constructor_tag(constructor_call.target, tag_field)
         if fixed is not None:
             return (
                 frozenset({fixed}),
@@ -22145,9 +23155,7 @@ class _DirectCfgRecovery:
             constructor_call.target, tag_field
         )
         if tag_argument is not None:
-            pushed = self._pushed_call_argument(
-                constructor_call.address, tag_argument
-            )
+            pushed = self._pushed_call_argument(constructor_call.address, tag_argument)
             if pushed is None:
                 return None
             result = self._finite_operand_values_before(
@@ -22162,11 +23170,7 @@ class _DirectCfgRecovery:
             return values, f"tag-argument={tag_argument};{detail}"
 
         following_entry = min(
-            (
-                row
-                for row in self.function_addresses
-                if row > constructor_call.target
-            ),
+            (row for row in self.function_addresses if row > constructor_call.target),
             default=0x1_0000_0000,
         )
         returns = [
@@ -22183,11 +23187,7 @@ class _DirectCfgRecovery:
         ]
         candidates = []
         for inner_call in sorted(self.direct_calls, key=lambda row: row.address):
-            if not (
-                constructor_call.target
-                <= inner_call.address
-                < following_entry
-            ):
+            if not (constructor_call.target <= inner_call.address < following_entry):
                 continue
             inner_argument = self._constructor_tag_argument(
                 inner_call.target, tag_field
@@ -22221,14 +23221,10 @@ class _DirectCfgRecovery:
                     )
                 )
                 for address in sorted(self.instructions)
-                if constructor_call.target
-                <= address
-                < inner_call.address
+                if constructor_call.target <= address < inner_call.address
             ):
                 continue
-            pushed = self._pushed_call_argument(
-                inner_call.address, inner_argument
-            )
+            pushed = self._pushed_call_argument(inner_call.address, inner_argument)
             if pushed is None:
                 continue
             result = self._finite_operand_values_before(
@@ -22265,9 +23261,7 @@ class _DirectCfgRecovery:
             return None
         if operand.type == X86_OP_IMM:
             if operand.imm & 0xFFFF_FFFF == 0:
-                return _ClosedObjectOrigin(
-                    False, frozenset(), "nullable-zero"
-                )
+                return _ClosedObjectOrigin(False, frozenset(), "nullable-zero")
             return None
         if operand.type == X86_OP_REG:
             family = self._register_family(operand.reg)
@@ -22276,11 +23270,7 @@ class _DirectCfgRecovery:
                 for row in self.direct_calls
                 if row.target == constructor_entry
                 and function_entry <= row.address < address
-                and (
-                    fresh := self._fresh_constructor_receiver(
-                        row, descriptor_field
-                    )
-                )
+                and (fresh := self._fresh_constructor_receiver(row, descriptor_field))
                 is not None
                 and fresh[0] == family
             ]
@@ -22313,9 +23303,7 @@ class _DirectCfgRecovery:
                     or not function_entry <= row.address < address
                 ):
                     continue
-                fresh = self._fresh_constructor_receiver(
-                    row, validator[0]
-                )
+                fresh = self._fresh_constructor_receiver(row, validator[0])
                 if fresh is None or fresh[0] != family:
                     continue
                 if any(
@@ -22359,9 +23347,7 @@ class _DirectCfgRecovery:
                         frozenset(alternate_tags),
                         "|".join(alternate_details)
                         + ";rejected-tag="
-                        + ",".join(
-                            f"{tag:#x}" for tag in sorted(alternate_tags)
-                        ),
+                        + ",".join(f"{tag:#x}" for tag in sorted(alternate_tags)),
                     )
             argument_index = self._register_argument_index_across_blocks(
                 address, family, function_entry
@@ -22403,18 +23389,13 @@ class _DirectCfgRecovery:
                 origins.append(origin)
             return _ClosedObjectOrigin(
                 any(row.has_target_constructor for row in origins),
-                frozenset().union(
-                    *(row.rejected_tags for row in origins)
-                ),
+                frozenset().union(*(row.rejected_tags for row in origins)),
                 "|".join(row.detail for row in origins),
             )
         if operand.type != X86_OP_MEM:
             return None
         memory = operand.mem
-        if (
-            memory.segment != X86_REG_INVALID
-            or memory.index != X86_REG_INVALID
-        ):
+        if memory.segment != X86_REG_INVALID or memory.index != X86_REG_INVALID:
             return None
         if memory.base == X86_REG_INVALID:
             slot = memory.disp & 0xFFFF_FFFF
@@ -22425,9 +23406,7 @@ class _DirectCfgRecovery:
                 validator,
                 visited | {key},
             )
-        argument_index = self._stack_argument_index_at(
-            address, operand, function_entry
-        )
+        argument_index = self._stack_argument_index_at(address, operand, function_entry)
         if argument_index is not None:
             return self._closed_object_origin_argument(
                 function_entry,
@@ -22478,14 +23457,9 @@ class _DirectCfgRecovery:
         origins = []
         for write in writes:
             write_decoded = self._owned_decoded(write.instruction_address)
-            if (
-                write_decoded.id != X86_INS_MOV
-                or len(write_decoded.operands) != 2
-            ):
+            if write_decoded.id != X86_INS_MOV or len(write_decoded.operands) != 2:
                 return None
-            writer_entry = self._registrar_function_entry(
-                write.instruction_address
-            )
+            writer_entry = self._registrar_function_entry(write.instruction_address)
             if writer_entry is None:
                 return None
             origin = self._closed_object_origin_operand(
@@ -22503,17 +23477,13 @@ class _DirectCfgRecovery:
         return _ClosedObjectOrigin(
             any(row.has_target_constructor for row in origins),
             frozenset().union(*(row.rejected_tags for row in origins)),
-            f"global-slot={slot:#x};"
-            + "|".join(row.detail for row in origins),
+            f"global-slot={slot:#x};" + "|".join(row.detail for row in origins),
         )
 
     def _is_stack_backed_memory(
         self, address: int, operand, function_entry: int
     ) -> bool:
-        if (
-            operand.type != X86_OP_MEM
-            or operand.mem.base == X86_REG_INVALID
-        ):
+        if operand.type != X86_OP_MEM or operand.mem.base == X86_REG_INVALID:
             return False
         family = self._register_family(operand.mem.base)
         if family not in {"esp", "ebp"}:
@@ -22570,12 +23540,8 @@ class _DirectCfgRecovery:
         )
         if not handler_types:
             return False
-        dispatcher_entry = self._registrar_function_entry(
-            dispatch_table.address
-        )
-        pushed_receiver = self._pushed_call_argument(
-            dispatch_table.address, 0
-        )
+        dispatcher_entry = self._registrar_function_entry(dispatch_table.address)
+        pushed_receiver = self._pushed_call_argument(dispatch_table.address, 0)
         if (
             dispatcher_entry is None
             or pushed_receiver is None
@@ -22595,9 +23561,7 @@ class _DirectCfgRecovery:
         edge_kind = "indirect-call-registered-static-command"
 
         def block(reason: str) -> bool:
-            self._require_retained_pre_finite_targets_sound(
-                instruction, edge_kind, ()
-            )
+            self._require_retained_pre_finite_targets_sound(instruction, edge_kind, ())
             self._computed_flow_blocker(
                 instruction,
                 "registered static command provenance is open: " + reason,
@@ -22632,18 +23596,14 @@ class _DirectCfgRecovery:
                     return block("recursive child receiver is not argument-derived")
                 recursive_fields.add(memory.disp)
                 continue
-            if (
-                operand.type != X86_OP_REG
-            ):
+            if operand.type != X86_OP_REG:
                 return block("root walker receiver is not register-held")
             walker_calls.append(call)
         if len(walker_calls) != 1:
             return block("guarded dispatcher does not have one root walker")
         walker_call = walker_calls[0]
         walker_entry = self._registrar_function_entry(walker_call.address)
-        if walker_entry is None or not self._direct_call_domain_is_closed(
-            walker_entry
-        ):
+        if walker_entry is None or not self._direct_call_domain_is_closed(walker_entry):
             return block("root walker caller domain is incomplete")
         self._note_producer_dependency(walker_entry)
         walker_family = self._register_family(
@@ -22658,8 +23618,7 @@ class _DirectCfgRecovery:
                 row.id == X86_INS_MOV
                 and len(row.operands) == 2
                 and row.operands[0].type == X86_OP_REG
-                and self._register_family(row.operands[0].reg)
-                == walker_family
+                and self._register_family(row.operands[0].reg) == walker_family
                 and self._stack_argument_index_at(
                     row.address, row.operands[1], walker_entry
                 )
@@ -22676,8 +23635,7 @@ class _DirectCfgRecovery:
                 and row.operands[1].mem.segment == X86_REG_INVALID
                 and row.operands[1].mem.base != X86_REG_INVALID
                 and row.operands[1].mem.index == X86_REG_INVALID
-                and self._register_family(row.operands[1].mem.base)
-                == walker_family
+                and self._register_family(row.operands[1].mem.base) == walker_family
                 and row.operands[1].mem.disp > 0
             ):
                 next_fields.add(row.operands[1].mem.disp)
@@ -22768,8 +23726,7 @@ class _DirectCfgRecovery:
         if not consumer_incoming:
             return block("descriptor consumer has no callers")
         producer_entries = {
-            self._registrar_function_entry(row.address)
-            for row in consumer_incoming
+            self._registrar_function_entry(row.address) for row in consumer_incoming
         }
         if None in producer_entries or len(producer_entries) != 1:
             return block("descriptor consumer callers do not share one producer")
@@ -22841,8 +23798,7 @@ class _DirectCfgRecovery:
                 and row.operands[0].type == X86_OP_MEM
                 and row.operands[0].mem.base != X86_REG_INVALID
                 and row.operands[0].mem.index == X86_REG_INVALID
-                and self._register_family(row.operands[0].mem.base)
-                == cursor_family
+                and self._register_family(row.operands[0].mem.base) == cursor_family
                 and row.operands[0].mem.disp == 0
                 for row in lookup_rows
             )
@@ -22854,8 +23810,7 @@ class _DirectCfgRecovery:
                 and row.operands[1].type == X86_OP_MEM
                 and row.operands[1].mem.base != X86_REG_INVALID
                 and row.operands[1].mem.index == X86_REG_INVALID
-                and self._register_family(row.operands[1].mem.base)
-                == cursor_family
+                and self._register_family(row.operands[1].mem.base) == cursor_family
                 and row.operands[1].mem.disp == 0
                 for row in lookup_rows
             )
@@ -22870,22 +23825,19 @@ class _DirectCfgRecovery:
             return block("descriptor lookup is used outside its producer")
         for call in helper_calls:
             pushed = self._pushed_call_argument(call.address, 0)
-            if (
-                pushed is None
-                or (
-                    self._stack_argument_index_at(
-                        pushed[0].address, pushed[1], producer_entry
+            if pushed is None or (
+                self._stack_argument_index_at(
+                    pushed[0].address, pushed[1], producer_entry
+                )
+                != 0
+                and (
+                    pushed[1].type != X86_OP_REG
+                    or self._register_argument_index_across_blocks(
+                        pushed[0].address,
+                        self._register_family(pushed[1].reg),
+                        producer_entry,
                     )
                     != 0
-                    and (
-                        pushed[1].type != X86_OP_REG
-                        or self._register_argument_index_across_blocks(
-                            pushed[0].address,
-                            self._register_family(pushed[1].reg),
-                            producer_entry,
-                        )
-                        != 0
-                    )
                 )
             ):
                 return block("descriptor lookup registry is not producer arg0")
@@ -22894,8 +23846,7 @@ class _DirectCfgRecovery:
             return block("descriptor producer caller domain is incomplete")
         producer_callers = self._direct_calls_to(producer_entry)
         wrapper_entries = {
-            self._registrar_function_entry(row.address)
-            for row in producer_callers
+            self._registrar_function_entry(row.address) for row in producer_callers
         }
         if None in wrapper_entries or len(wrapper_entries) != 1:
             return block("descriptor producer does not have one wrapper")
@@ -22974,9 +23925,7 @@ class _DirectCfgRecovery:
         self._note_producer_global_slot_dependency(registry_array_slot)
         try:
             initial_registry_array = int.from_bytes(
-                _read_loader_initialized(
-                    self.image, registry_array_slot, 4
-                ),
+                _read_loader_initialized(self.image, registry_array_slot, 4),
                 "little",
             )
         except ValueError:
@@ -23005,15 +23954,12 @@ class _DirectCfgRecovery:
                     == 0
                 ):
                     continue
-                base_family = self._register_family(
-                    row.operands[0].mem.base
-                )
+                base_family = self._register_family(row.operands[0].mem.base)
                 if any(
                     candidate.id == X86_INS_MOV
                     and len(candidate.operands) == 2
                     and candidate.operands[0].type == X86_OP_REG
-                    and self._register_family(candidate.operands[0].reg)
-                    == base_family
+                    and self._register_family(candidate.operands[0].reg) == base_family
                     and self._absolute_memory_operand(candidate.operands[1])
                     == registry_array_slot
                     for candidate in (
@@ -23033,8 +23979,7 @@ class _DirectCfgRecovery:
             return block("descriptor registry append caller domain is incomplete")
         append_callers = self._direct_calls_to(append_entry)
         group_registrars = {
-            self._registrar_function_entry(row.address)
-            for row in append_callers
+            self._registrar_function_entry(row.address) for row in append_callers
         }
         if None in group_registrars or len(group_registrars) != 1:
             return block("descriptor append does not have one group registrar")
@@ -23069,8 +24014,7 @@ class _DirectCfgRecovery:
                 row.mnemonic == "add"
                 and len(row.operands) == 2
                 and row.operands[0].type == X86_OP_REG
-                and self._register_family(row.operands[0].reg)
-                == group_cursor_family
+                and self._register_family(row.operands[0].reg) == group_cursor_family
                 and row.operands[1].type == X86_OP_IMM
                 and row.operands[1].imm == 4
                 for row in group_rows
@@ -23108,9 +24052,7 @@ class _DirectCfgRecovery:
             or group_argument[1].mem.scale != 4
         ):
             return block("initializer group selection is not indexed")
-        group_base_family = self._register_family(
-            group_argument[1].mem.base
-        )
+        group_base_family = self._register_family(group_argument[1].mem.base)
         group_array_fields = set()
         compiler_slots = set()
         initializer_rows = tuple(
@@ -23122,13 +24064,11 @@ class _DirectCfgRecovery:
                 row.id == X86_INS_MOV
                 and len(row.operands) == 2
                 and row.operands[0].type == X86_OP_REG
-                and self._register_family(row.operands[0].reg)
-                == group_base_family
+                and self._register_family(row.operands[0].reg) == group_base_family
                 and row.operands[1].type == X86_OP_MEM
                 and row.operands[1].mem.base != X86_REG_INVALID
                 and row.operands[1].mem.index == X86_REG_INVALID
-                and self._register_family(row.operands[1].mem.base)
-                == group_base_family
+                and self._register_family(row.operands[1].mem.base) == group_base_family
                 and row.operands[1].mem.disp > 0
             ):
                 continue
@@ -23138,10 +24078,8 @@ class _DirectCfgRecovery:
                 if prior.id == X86_INS_MOV
                 and len(prior.operands) == 2
                 and prior.operands[0].type == X86_OP_REG
-                and self._register_family(prior.operands[0].reg)
-                == group_base_family
-                and self._absolute_memory_operand(prior.operands[1])
-                is not None
+                and self._register_family(prior.operands[0].reg) == group_base_family
+                and self._absolute_memory_operand(prior.operands[1]) is not None
             }
             if len(prior_slots) == 1:
                 group_array_fields.add(row.operands[1].mem.disp)
@@ -23166,8 +24104,7 @@ class _DirectCfgRecovery:
                 and prior.operands[0].type == X86_OP_REG
                 and self._register_family(prior.operands[0].reg)
                 == self._register_family(operand.mem.base)
-                and self._absolute_memory_operand(prior.operands[1])
-                == compiler_slot
+                and self._absolute_memory_operand(prior.operands[1]) == compiler_slot
                 for prior in initializer_rows
                 if prior.address < row.address
             )
@@ -23193,9 +24130,7 @@ class _DirectCfgRecovery:
         )
         if setter_entry is not None:
             self._note_producer_dependency(setter_entry)
-        setter_decoded = self._owned_decoded(
-            compiler_write.instruction_address
-        )
+        setter_decoded = self._owned_decoded(compiler_write.instruction_address)
         if (
             setter_entry is None
             or setter_decoded.id != X86_INS_MOV
@@ -23222,9 +24157,7 @@ class _DirectCfgRecovery:
 
         relocation_types: dict[int, list[int]] = {}
         for relocation in self.image.relocations:
-            relocation_types.setdefault(relocation.va, []).append(
-                relocation.type
-            )
+            relocation_types.setdefault(relocation.va, []).append(relocation.type)
 
         def relocated_pointer(address: int, *, zero: bool = True) -> int:
             try:
@@ -23259,10 +24192,13 @@ class _DirectCfgRecovery:
             raise CfgRecoveryError("unterminated registered-command array")
 
         try:
-            if int.from_bytes(
-                _read_loader_initialized(self.image, compiler_descriptor, 4),
-                "little",
-            ) != 0x436F6D70:
+            if (
+                int.from_bytes(
+                    _read_loader_initialized(self.image, compiler_descriptor, 4),
+                    "little",
+                )
+                != 0x436F6D70
+            ):
                 return block("compiler descriptor does not carry the Comp tag")
             group_count = int.from_bytes(
                 _read_loader_initialized(
@@ -23295,14 +24231,10 @@ class _DirectCfgRecovery:
                     if descriptor in descriptors:
                         continue
                     descriptors.add(descriptor)
-                    command_root = relocated_pointer(
-                        descriptor + command_root_field
-                    )
+                    command_root = relocated_pointer(descriptor + command_root_field)
                     if command_root == 0:
                         for nested_field in nested_container_fields:
-                            nested = relocated_pointer(
-                                descriptor + nested_field
-                            )
+                            nested = relocated_pointer(descriptor + nested_field)
                             if nested:
                                 containers.append(nested)
             command_nodes = set()
@@ -23355,14 +24287,10 @@ class _DirectCfgRecovery:
         if not targets:
             return block("registered command graph has no matching callbacks")
         protected_addresses = (
-            {compiler_descriptor}
-            | seen_containers
-            | descriptors
-            | command_nodes
+            {compiler_descriptor} | seen_containers | descriptors | command_nodes
         )
         if any(
-            address in self.absolute_memory_writes
-            for address in protected_addresses
+            address in self.absolute_memory_writes for address in protected_addresses
         ):
             return block("registered command graph has a direct runtime write")
 
@@ -23378,9 +24306,7 @@ class _DirectCfgRecovery:
             f"groups={group_count};containers={len(seen_containers)};"
             f"descriptors={len(descriptors)};nodes={len(command_nodes)}"
         )
-        self._require_retained_pre_finite_targets_sound(
-            instruction, edge_kind, targets
-        )
+        self._require_retained_pre_finite_targets_sound(instruction, edge_kind, targets)
         slots_by_target = {
             target: min(slot for slot, value in target_slots if value == target)
             for target in targets
@@ -23423,9 +24349,7 @@ class _DirectCfgRecovery:
             or decoded.operands[0].mem.base == X86_REG_INVALID
         ):
             return False
-        descriptor_family = self._register_family(
-            decoded.operands[0].mem.base
-        )
+        descriptor_family = self._register_family(decoded.operands[0].mem.base)
         function_entry = self._registrar_function_entry(instruction.address)
         if function_entry is None:
             return False
@@ -23447,9 +24371,7 @@ class _DirectCfgRecovery:
             or definition.operands[1].mem.base == X86_REG_INVALID
         ):
             return False
-        object_family = self._register_family(
-            definition.operands[1].mem.base
-        )
+        object_family = self._register_family(definition.operands[1].mem.base)
         descriptor_field = definition.operands[1].mem.disp
         following_entry = min(
             (row for row in self.function_addresses if row > function_entry),
@@ -23460,36 +24382,29 @@ class _DirectCfgRecovery:
             for call in sorted(self.direct_calls, key=lambda row: row.address):
                 if not (
                     function_entry <= call.address < definition.address
-                    and self._strict_identity_validator(call.target)
-                    is not None
+                    and self._strict_identity_validator(call.target) is not None
                 ):
                     continue
                 call_instruction = self.instructions[call.address]
                 fallthrough = call.address + call_instruction.size
-                if (
-                    not self._reachable_within_function(
-                        fallthrough,
-                        definition.address,
-                        function_entry,
-                        following_entry,
-                    )
-                    or self._reachable_within_function(
-                        function_entry,
-                        definition.address,
-                        function_entry,
-                        following_entry,
-                        excluded=call.address,
-                    )
+                if not self._reachable_within_function(
+                    fallthrough,
+                    definition.address,
+                    function_entry,
+                    following_entry,
+                ) or self._reachable_within_function(
+                    function_entry,
+                    definition.address,
+                    function_entry,
+                    following_entry,
+                    excluded=call.address,
                 ):
                     continue
                 clobbered = False
                 for candidate_address in sorted(self.instructions):
                     if not (
-                        function_entry
-                        <= candidate_address
-                        < following_entry
-                        and candidate_address
-                        not in {call.address, definition.address}
+                        function_entry <= candidate_address < following_entry
+                        and candidate_address not in {call.address, definition.address}
                     ):
                         continue
                     candidate = self._owned_decoded(candidate_address)
@@ -23502,8 +24417,7 @@ class _DirectCfgRecovery:
                         or any(
                             row.type == X86_OP_REG
                             and row.access & CS_AC_WRITE
-                            and self._register_family(row.reg)
-                            == object_family
+                            and self._register_family(row.reg) == object_family
                             for row in candidate.operands
                         )
                     )
@@ -23535,9 +24449,7 @@ class _DirectCfgRecovery:
         edge_kind = "indirect-call-constructor-descriptor"
 
         def block(detail: str) -> bool:
-            self._require_retained_pre_finite_targets_sound(
-                instruction, edge_kind, ()
-            )
+            self._require_retained_pre_finite_targets_sound(instruction, edge_kind, ())
             self._computed_flow_blocker(
                 instruction, "constructor descriptor provenance is open: " + detail
             )
@@ -23551,14 +24463,10 @@ class _DirectCfgRecovery:
                     and descriptor_field < displacement + row.width
                 ):
                     continue
-                writer_entry = self._registrar_function_entry(
-                    row.instruction_address
-                )
+                writer_entry = self._registrar_function_entry(row.instruction_address)
                 if writer_entry is None:
                     continue
-                writer_decoded = self._owned_decoded(
-                    row.instruction_address
-                )
+                writer_decoded = self._owned_decoded(row.instruction_address)
                 if self._is_stack_backed_memory(
                     row.instruction_address,
                     writer_decoded.operands[0],
@@ -23584,24 +24492,17 @@ class _DirectCfgRecovery:
             or writer_decoded.imm_size != 4
             or not any(
                 row.type == 3
-                and row.va
-                == writer_decoded.address + writer_decoded.imm_offset
+                and row.va == writer_decoded.address + writer_decoded.imm_offset
                 for row in self.image.relocations
             )
         ):
             return block("descriptor writer is not one relocated immediate")
-        constructor_entry = self._registrar_function_entry(
-            writer.instruction_address
-        )
+        constructor_entry = self._registrar_function_entry(writer.instruction_address)
         if constructor_entry is None:
             return block("descriptor writer has no constructor function")
         constructor_calls = tuple(
             sorted(
-                (
-                    row
-                    for row in self.direct_calls
-                    if row.target == constructor_entry
-                ),
+                (row for row in self.direct_calls if row.target == constructor_entry),
                 key=lambda row: row.address,
             )
         )
@@ -23610,9 +24511,7 @@ class _DirectCfgRecovery:
             for row in constructor_calls
         ):
             return block("constructor caller domain is incomplete")
-        validator_argument = self._pushed_call_argument(
-            validator_call.address, 0
-        )
+        validator_argument = self._pushed_call_argument(validator_call.address, 0)
         object_origin = (
             None
             if validator_argument is None
@@ -23629,9 +24528,7 @@ class _DirectCfgRecovery:
         if object_origin is None:
             return block("consumer object-producer domain is incomplete")
         if not object_origin.has_target_constructor:
-            self._require_retained_pre_finite_targets_sound(
-                instruction, edge_kind, ()
-            )
+            self._require_retained_pre_finite_targets_sound(instruction, edge_kind, ())
             self.diagnostics.add(
                 OwnershipDiagnostic(
                     kind="proven-unreachable-control",
@@ -23646,24 +24543,16 @@ class _DirectCfgRecovery:
                 )
             )
             return True
-        target_slot = (
-            writer.value + decoded.operands[0].mem.disp
-        ) & 0xFFFF_FFFF
+        target_slot = (writer.value + decoded.operands[0].mem.disp) & 0xFFFF_FFFF
         try:
             raw_target = _read_loader_initialized(self.image, target_slot, 4)
         except ValueError:
             return block("descriptor callback slot is not loader initialized")
         target = int.from_bytes(raw_target, "little")
-        if (
-            not _is_executable_span(self.image, target, 1)
-            or not any(
-                row.type == 3 and row.va == target_slot
-                for row in self.image.relocations
-            )
+        if not _is_executable_span(self.image, target, 1) or not any(
+            row.type == 3 and row.va == target_slot for row in self.image.relocations
         ):
-            return block(
-                "descriptor callback slot is not relocated executable control"
-            )
+            return block("descriptor callback slot is not relocated executable control")
         provenance = (
             f"identity-validator={validator_call.target:#x};"
             f"tag-field={validator[0]:+#x};tag={validator[1]:#x};"
@@ -23729,15 +24618,11 @@ class _DirectCfgRecovery:
         function_entry = self._registrar_function_entry(instruction.address)
         if function_entry is None:
             return False
-        receiver_family = self._register_family(
-            decoded.operands[0].mem.base
-        )
+        receiver_family = self._register_family(decoded.operands[0].mem.base)
         edge_kind = "indirect-call-registered-linked-callback"
 
         def block(reason: str) -> bool:
-            self._require_retained_pre_finite_targets_sound(
-                instruction, edge_kind, ()
-            )
+            self._require_retained_pre_finite_targets_sound(instruction, edge_kind, ())
             self._computed_flow_blocker(
                 instruction,
                 "registered linked callback provenance is open: " + reason,
@@ -23768,10 +24653,7 @@ class _DirectCfgRecovery:
                     definition.id == X86_INS_MOV
                     and len(definition.operands) == 2
                     and definition.operands[0].type == X86_OP_REG
-                    and self._register_family(
-                        definition.operands[0].reg
-                    )
-                    == family
+                    and self._register_family(definition.operands[0].reg) == family
                 ):
                     return False
                 receiver_definitions.add(definition_address)
@@ -23859,23 +24741,19 @@ class _DirectCfgRecovery:
         count_candidates = set()
         initializer_rows = tuple(
             self._owned_decoded(address)
-            for address in self._function_instruction_addresses(
-                initializer_entry
-            )
+            for address in self._function_instruction_addresses(initializer_entry)
         )
         zero_index_families = {
             family
             for row, family in zero_base_rows
-            if self._registrar_function_entry(row.address)
-            == initializer_entry
+            if self._registrar_function_entry(row.address) == initializer_entry
         }
         for row in initializer_rows:
             if not (
                 row.mnemonic == "cmp"
                 and len(row.operands) == 2
                 and row.operands[0].type == X86_OP_REG
-                and self._register_family(row.operands[0].reg)
-                in zero_index_families
+                and self._register_family(row.operands[0].reg) in zero_index_families
                 and row.operands[1].type == X86_OP_IMM
             ):
                 continue
@@ -23931,18 +24809,13 @@ class _DirectCfgRecovery:
                     definition.id == x86_const.X86_INS_MOVSX
                     and len(definition.operands) == 2
                     and definition.operands[0].type == X86_OP_REG
-                    and self._register_family(
-                        definition.operands[0].reg
-                    )
+                    and self._register_family(definition.operands[0].reg)
                     == self._register_family(memory.index)
                     and definition.operands[1].type == X86_OP_MEM
                     and definition.operands[1].size == 2
-                    and definition.operands[1].mem.segment
-                    == X86_REG_INVALID
-                    and definition.operands[1].mem.base
-                    != X86_REG_INVALID
-                    and definition.operands[1].mem.index
-                    == X86_REG_INVALID
+                    and definition.operands[1].mem.segment == X86_REG_INVALID
+                    and definition.operands[1].mem.base != X86_REG_INVALID
+                    and definition.operands[1].mem.index == X86_REG_INVALID
                 ):
                     return block("head index is not an exact signed-word load")
                 index_definition_addresses.add(definition_address)
@@ -23972,8 +24845,7 @@ class _DirectCfgRecovery:
                     for high_byte in high[0]
                 }
                 signed = {
-                    value if value < 0x8000 else value - 0x1_0000
-                    for value in combined
+                    value if value < 0x8000 else value - 0x1_0000 for value in combined
                 }
                 if not signed or min(signed) < 0 or max(signed) >= head_count:
                     return block(
@@ -23996,15 +24868,12 @@ class _DirectCfgRecovery:
                 (
                     row
                     for row in self.direct_calls
-                    if self._registrar_function_entry(row.address)
-                    == initializer_entry
+                    if self._registrar_function_entry(row.address) == initializer_entry
                 ),
                 key=lambda row: row.address,
             )
         )
-        if not initializer_calls or len(
-            {row.target for row in initializer_calls}
-        ) != 1:
+        if not initializer_calls or len({row.target for row in initializer_calls}) != 1:
             return block("node allocations do not share one allocator")
         allocator_entry = initializer_calls[0].target
         self._note_producer_dependency(allocator_entry)
@@ -24030,8 +24899,7 @@ class _DirectCfgRecovery:
                     (
                         row.address
                         for row in initializer_rows
-                        if row.address > call.address
-                        and row.group(CS_GRP_RET)
+                        if row.address > call.address and row.group(CS_GRP_RET)
                     ),
                     default=0,
                 )
@@ -24061,8 +24929,7 @@ class _DirectCfgRecovery:
                     and destination.mem.disp == 4
                     and source.type == X86_OP_IMM
                     and row.imm_size == 4
-                    and row.address + row.imm_offset
-                    in self.highlow_relocation_vas
+                    and row.address + row.imm_offset in self.highlow_relocation_vas
                 ):
                     target = source.imm & 0xFFFF_FFFF
                     if not _is_executable_span(self.image, target, 1):
@@ -24090,9 +24957,7 @@ class _DirectCfgRecovery:
                 ):
                     next_writes.append(row)
                     continue
-                absolute_destination = self._absolute_memory_operand(
-                    destination
-                )
+                absolute_destination = self._absolute_memory_operand(destination)
                 if (
                     absolute_destination is not None
                     and head_base <= absolute_destination < head_end
@@ -24116,11 +24981,7 @@ class _DirectCfgRecovery:
                 read_slot != write_slot
                 or self._register_family(head_read.operands[0].reg)
                 != self._register_family(next_write.operands[1].reg)
-                or not (
-                    callback_row.address
-                    < next_write.address
-                    < head_write.address
-                )
+                or not (callback_row.address < next_write.address < head_write.address)
                 or head_read.address >= next_write.address
             ):
                 return block("node link does not preserve and publish one head")
@@ -24145,9 +25006,7 @@ class _DirectCfgRecovery:
                 callback_row.address + callback_row.imm_offset,
                 bytes(callback_row.bytes),
             )
-            allowed_head_references.update(
-                {head_read.address, head_write.address}
-            )
+            allowed_head_references.update({head_read.address, head_write.address})
             expected_head_writes.add(head_write.address)
 
         # The mutable heads are the only way published nodes can be recovered.
@@ -24160,26 +25019,17 @@ class _DirectCfgRecovery:
                     continue
                 memory = operand.mem
                 references_heads = False
-                if (
-                    memory.segment == X86_REG_INVALID
-                    and memory.base == X86_REG_INVALID
-                ):
+                if memory.segment == X86_REG_INVALID and memory.base == X86_REG_INVALID:
                     if memory.index == X86_REG_INVALID:
                         absolute = memory.disp & 0xFFFF_FFFF
                         references_heads = head_base <= absolute < head_end
                     elif memory.scale == 4:
                         displacement = memory.disp & 0xFFFF_FFFF
-                        references_heads = (
-                            head_base <= displacement < head_end
-                        )
+                        references_heads = head_base <= displacement < head_end
                 if references_heads and address not in allowed_head_references:
-                    return block(
-                        f"unclosed head-array reference at {address:#x}"
-                    )
+                    return block(f"unclosed head-array reference at {address:#x}")
         for slot in range(head_base, head_end, 4):
-            if self.absolute_memory_writes.get(slot, set()) - (
-                expected_head_writes
-            ):
+            if self.absolute_memory_writes.get(slot, set()) - (expected_head_writes):
                 return block(f"head slot {slot:#x} has an alternate writer")
         for relocation in self.image.relocations:
             if relocation.type != 3 or not _is_mapped_span(
@@ -24195,21 +25045,17 @@ class _DirectCfgRecovery:
             owner = self.byte_owners.get(relocation.va)
             if owner not in allowed_head_references:
                 return block(
-                    f"head array has an unclosed relocated alias at "
-                    f"{relocation.va:#x}"
+                    f"head array has an unclosed relocated alias at {relocation.va:#x}"
                 )
 
         # Inside the consumer, the node cursor may only be tested, dereferenced
         # at +0/+4, or replaced by a proved head/next definition.  It is never
         # passed to the callback or stored elsewhere.
         scope_start = min(head_loads)
-        function_addresses = self._function_instruction_addresses(
-            function_entry
-        )
+        function_addresses = self._function_instruction_addresses(function_entry)
         final_function_address = max(function_addresses)
         default_scope_end = (
-            final_function_address
-            + self.instructions[final_function_address].size
+            final_function_address + self.instructions[final_function_address].size
         )
         scope_end = min(
             (
@@ -24306,11 +25152,7 @@ class _DirectCfgRecovery:
         if function_entry is None:
             return False
         following_entry = min(
-            (
-                row
-                for row in self.function_addresses
-                if row > function_entry
-            ),
+            (row for row in self.function_addresses if row > function_entry),
             default=0x1_0000_0000,
         )
         loads = []
@@ -24322,8 +25164,7 @@ class _DirectCfgRecovery:
                 candidate.id == X86_INS_MOV
                 and len(candidate.operands) == 2
                 and candidate.operands[0].type == X86_OP_REG
-                and self._register_family(candidate.operands[0].reg)
-                == target_family
+                and self._register_family(candidate.operands[0].reg) == target_family
                 and candidate.operands[1].type == X86_OP_MEM
                 and candidate.operands[1].size == 4
                 and candidate.operands[1].mem.segment == X86_REG_INVALID
@@ -24346,8 +25187,7 @@ class _DirectCfgRecovery:
                 candidate.id == X86_INS_MOV
                 and len(candidate.operands) == 2
                 and candidate.operands[0].type == X86_OP_REG
-                and self._register_family(candidate.operands[0].reg)
-                == base_family
+                and self._register_family(candidate.operands[0].reg) == base_family
                 and candidate.operands[1].type == X86_OP_IMM
             ):
                 initializers.append(candidate.operands[1].imm & 0xFFFF_FFFF)
@@ -24355,8 +25195,7 @@ class _DirectCfgRecovery:
                 candidate.mnemonic == "add"
                 and len(candidate.operands) == 2
                 and candidate.operands[0].type == X86_OP_REG
-                and self._register_family(candidate.operands[0].reg)
-                == base_family
+                and self._register_family(candidate.operands[0].reg) == base_family
                 and candidate.operands[1].type == X86_OP_IMM
                 and candidate.operands[1].imm & 0xFFFF_FFFF == 4
             ):
@@ -24376,12 +25215,9 @@ class _DirectCfgRecovery:
             if target == 0:
                 sentinel = entry_address
                 break
-            if (
-                not _is_executable_span(self.image, target, 1)
-                or not any(
-                    row.type == 3 and row.va == entry_address
-                    for row in self.image.relocations
-                )
+            if not _is_executable_span(self.image, target, 1) or not any(
+                row.type == 3 and row.va == entry_address
+                for row in self.image.relocations
             ):
                 return False
             entries.append(target)
@@ -24430,10 +25266,7 @@ class _DirectCfgRecovery:
                 )
             )
             return True
-        if any(
-            row.type == 3 and row.va == sentinel
-            for row in self.image.relocations
-        ):
+        if any(row.type == 3 and row.va == sentinel for row in self.image.relocations):
             return False
         provenance = (
             f"sentinel-table={table_base:#x};sentinel={sentinel:#x};"
@@ -24513,10 +25346,7 @@ class _DirectCfgRecovery:
                 self._check_count("max_summary_iterations", iteration)
             elif iteration > 8:  # preserve the general resolver safety bound
                 break
-            candidate_addresses = (
-                set(self.indirect_candidates)
-                - excluded_addresses
-            )
+            candidate_addresses = set(self.indirect_candidates) - excluded_addresses
             if included_addresses is not None:
                 candidate_addresses &= included_addresses
             if not batch_edge_only_finite:
@@ -24725,18 +25555,14 @@ class _DirectCfgRecovery:
                         )
                 if recovered:
                     new_tables += 1
-                    if (
-                        stop_on_finite_growth
-                        and control_snapshot
-                        != (
-                            len(self.pending),
-                            len(self.block_starts),
-                            len(self.instructions),
-                            len(self.byte_owners),
-                            len(self.jump_tables),
-                            self.jump_table_entry_count,
-                            len(self.function_addresses),
-                        )
+                    if stop_on_finite_growth and control_snapshot != (
+                        len(self.pending),
+                        len(self.block_starts),
+                        len(self.instructions),
+                        len(self.byte_owners),
+                        len(self.jump_tables),
+                        self.jump_table_entry_count,
+                        len(self.function_addresses),
                     ):
                         return resolved_resolvers
                     continue
@@ -24746,8 +25572,7 @@ class _DirectCfgRecovery:
                     # post-finite resolvers must skip.
                     resolved_resolvers.pop(address, None)
                 if any(
-                    row.address == address
-                    and row.kind == "computed-flow-blocker"
+                    row.address == address and row.kind == "computed-flow-blocker"
                     for row in self.diagnostics
                 ):
                     continue
@@ -24801,11 +25626,7 @@ class _DirectCfgRecovery:
                 )
         return resolved_resolvers
 
-
-
-    def _zero_gap_self_lea(
-        self, gap_start: int, entry: int
-    ) -> tuple[str, int] | None:
+    def _zero_gap_self_lea(self, gap_start: int, entry: int) -> tuple[str, int] | None:
         if gap_start >= entry:
             return None
         section_start = next(
@@ -24840,9 +25661,7 @@ class _DirectCfgRecovery:
                     continue
                 if predecessor.address + predecessor.size == decoded.address:
                     predecessors.append(predecessor)
-            predecessor = max(
-                predecessors, key=lambda row: row.address, default=None
-            )
+            predecessor = max(predecessors, key=lambda row: row.address, default=None)
             is_terminal = predecessor is not None and (
                 predecessor.group(CS_GRP_RET)
                 or predecessor.group(CS_GRP_IRET)
@@ -24856,8 +25675,6 @@ class _DirectCfgRecovery:
                 decoded.address,
             )
         return None
-
-
 
     def _decode_from(self, start: int) -> None:
         self._validate_target(start)
@@ -24875,9 +25692,7 @@ class _DirectCfgRecovery:
         while True:
             if address != start and address in self.block_starts:
                 if previous is not None:
-                    self._add_edge(
-                        previous.address, address, "fallthrough"
-                    )
+                    self._add_edge(previous.address, address, "fallthrough")
                 return
 
             owner = self.byte_owners.get(address)
@@ -24902,9 +25717,7 @@ class _DirectCfgRecovery:
                     self._record_direct_target(
                         instruction, target, "direct-call-target"
                     )
-                    self.direct_calls.add(
-                        DirectCall(address=address, target=target)
-                    )
+                    self.direct_calls.add(DirectCall(address=address, target=target))
                     self._add_edge(address, target, "direct-call")
                     self._record_finite_target(target)
                     self._enqueue(target, is_function=True)
@@ -24987,19 +25800,14 @@ class _DirectCfgRecovery:
             decoded.size != instruction.size
             or bytes(decoded.bytes).hex() != instruction.bytes_hex
         ):
-            raise CfgRecoveryError(
-                f"owned instruction bytes changed at {address:#x}"
-            )
+            raise CfgRecoveryError(f"owned instruction bytes changed at {address:#x}")
         return decoded
 
     def _cache_decoded_instruction(self, decoded) -> None:
         address = decoded.address
         self.decoded_instruction_cache[address] = decoded
         self.decoded_instruction_cache.move_to_end(address)
-        while (
-            len(self.decoded_instruction_cache)
-            > _DECODED_INSTRUCTION_CACHE_LIMIT
-        ):
+        while len(self.decoded_instruction_cache) > _DECODED_INSTRUCTION_CACHE_LIMIT:
             self.decoded_instruction_cache.popitem(last=False)
 
     def _register_family(self, register: int) -> str:
@@ -25089,8 +25897,7 @@ class _DirectCfgRecovery:
             width = natural_width if width_bits is None else width_bits
             if width <= 0 or offset + width > 64:
                 raise CfgRecoveryError(
-                    f"invalid register slice width: register={name};"
-                    f"width={width}"
+                    f"invalid register slice width: register={name};width={width}"
                 )
             return _RegisterSlice(
                 family=family,
@@ -25108,8 +25915,7 @@ class _DirectCfgRecovery:
             width = natural_width if width_bits is None else width_bits
             if width <= 0 or width > natural_width:
                 raise CfgRecoveryError(
-                    f"invalid vector slice width: register={name};"
-                    f"width={width}"
+                    f"invalid vector slice width: register={name};width={width}"
                 )
             return _RegisterSlice(
                 family=f"vector:{match.group(1)}",
@@ -25158,9 +25964,7 @@ class _DirectCfgRecovery:
         if name in fixed_widths:
             family, natural_width = fixed_widths[name]
             width = natural_width if width_bits is None else width_bits
-            return _RegisterSlice(
-                family=family, mask=(1 << width) - 1, name=name
-            )
+            return _RegisterSlice(family=family, mask=(1 << width) - 1, name=name)
 
         match = re.fullmatch(r"(?:cr|dr|bnd|tmm)(\d+)", name)
         if match:
@@ -25221,9 +26025,7 @@ class _DirectCfgRecovery:
     ) -> _ValueDependency:
         operand = decoded.operands[index]
         if operand.type != X86_OP_REG:
-            raise self._flow_error(
-                decoded, f"operand {index} is not a register slice"
-            )
+            raise self._flow_error(decoded, f"operand {index} is not a register slice")
         whole = self._register_slice(operand.reg, operand.size * 8)
         mask = ((1 << width_bits) - 1) << offset_bits
         if mask & ~whole.mask:
@@ -25265,13 +26067,9 @@ class _DirectCfgRecovery:
             taint_mask=natural.mask,
         )
 
-    def _implicit_dependency_slices(
-        self, decoded
-    ) -> tuple[_ValueDependency, ...]:
+    def _implicit_dependency_slices(self, decoded) -> tuple[_ValueDependency, ...]:
         explicit_registers = {
-            operand.reg
-            for operand in decoded.operands
-            if operand.type == X86_OP_REG
+            operand.reg for operand in decoded.operands if operand.type == X86_OP_REG
         }
         for operand in decoded.operands:
             if operand.type != X86_OP_MEM:
@@ -25291,9 +26089,7 @@ class _DirectCfgRecovery:
             if register not in explicit_registers
         )
 
-    def _address_dependencies(
-        self, decoded, memory
-    ) -> tuple[_ValueDependency, ...]:
+    def _address_dependencies(self, decoded, memory) -> tuple[_ValueDependency, ...]:
         dependencies = []
         for register in (memory.base, memory.index):
             if register == X86_REG_INVALID:
@@ -25334,11 +26130,7 @@ class _DirectCfgRecovery:
                         register=_RegisterSlice(
                             family=f"vector:{index}",
                             mask=(1 << vector_width) - 1,
-                            name=(
-                                f"xmm{index}"
-                                if kind == "fxsave"
-                                else f"zmm{index}"
-                            ),
+                            name=(f"xmm{index}" if kind == "fxsave" else f"zmm{index}"),
                         ),
                     )
                 )
@@ -25367,9 +26159,7 @@ class _DirectCfgRecovery:
         )
 
     def _x87_stack_dependency(self, index: int) -> _ValueDependency:
-        return _ValueDependency(
-            "register", register=self._x87_stack_slice(index)
-        )
+        return _ValueDependency("register", register=self._x87_stack_slice(index))
 
     def _x87_stack_dependencies(self) -> tuple[_ValueDependency, ...]:
         return tuple(self._x87_stack_dependency(index) for index in range(8))
@@ -25380,9 +26170,7 @@ class _DirectCfgRecovery:
         name = self.decoder.reg_name(operand.reg)
         match = re.fullmatch(r"st\((\d+)\)", name)
         if match is None or int(match.group(1)) >= 8:
-            raise self._flow_error(
-                decoded, f"unsupported x87 register operand: {name}"
-            )
+            raise self._flow_error(decoded, f"unsupported x87 register operand: {name}")
         return int(match.group(1))
 
     @staticmethod
@@ -25401,9 +26189,7 @@ class _DirectCfgRecovery:
 
     def _x87_value_flow(self, decoded) -> _InstructionValueFlow | None:
         if decoded.mnemonic in {"emms", "femms"}:
-            return _InstructionValueFlow(
-                x87_effect=_X87Effect("empty-tags")
-            )
+            return _InstructionValueFlow(x87_effect=_X87Effect("empty-tags"))
         if decoded.id == 210:  # FXRSTOR
             return _InstructionValueFlow(
                 register_effects=tuple(
@@ -25443,9 +26229,7 @@ class _DirectCfgRecovery:
             )
 
         if decoded.id in _X87_CONSTANT_LOADS:
-            return _InstructionValueFlow(
-                x87_effect=_X87Effect("push")
-            )
+            return _InstructionValueFlow(x87_effect=_X87Effect("push"))
         if decoded.id in _X87_MEMORY_LOADS:
             if len(operands) != 1 or operands[0].type != X86_OP_MEM:
                 raise self._flow_error(decoded, "unexpected x87 load form")
@@ -25462,9 +26246,7 @@ class _DirectCfgRecovery:
             if not register_operands:
                 raise self._flow_error(decoded, "unexpected FXCH form")
             target = self._x87_register_index(decoded, register_operands[-1])
-            return _InstructionValueFlow(
-                x87_effect=_X87Effect("swap", target=target)
-            )
+            return _InstructionValueFlow(x87_effect=_X87Effect("swap", target=target))
 
         if decoded.id in _X87_VALUE_WRITERS:
             if len(operands) != 1:
@@ -25495,9 +26277,7 @@ class _DirectCfgRecovery:
                 if decoded.id in _X87_POP_VALUE_WRITERS
                 else None
             )
-            return _InstructionValueFlow(
-                memory_writes=writes, x87_effect=effect
-            )
+            return _InstructionValueFlow(memory_writes=writes, x87_effect=effect)
 
         if mnemonic in _X87_BINARY_ARITHMETIC_MNEMONICS:
             is_pop = mnemonic.endswith("p")
@@ -25535,9 +26315,7 @@ class _DirectCfgRecovery:
                 else (
                     0
                     if is_pop
-                    else self._x87_register_index(
-                        decoded, register_operands[0]
-                    )
+                    else self._x87_register_index(decoded, register_operands[0])
                 )
             )
             return _InstructionValueFlow(
@@ -25562,35 +26340,23 @@ class _DirectCfgRecovery:
 
         if mnemonic == "ffree" and len(operands) == 1:
             target = self._x87_register_index(decoded, operands[0])
-            return _InstructionValueFlow(
-                x87_effect=_X87Effect("free", target=target)
-            )
+            return _InstructionValueFlow(x87_effect=_X87Effect("free", target=target))
         if mnemonic == "ffreep" and len(operands) == 1:
             target = self._x87_register_index(decoded, operands[0])
             return _InstructionValueFlow(
-                x87_effect=_X87Effect(
-                    "free", target=target, pop_count=1
-                )
+                x87_effect=_X87Effect("free", target=target, pop_count=1)
             )
 
         if mnemonic in {"fninit", "finit"}:
             return _InstructionValueFlow(x87_effect=_X87Effect("init"))
         if mnemonic == "fdecstp":
-            return _InstructionValueFlow(
-                x87_effect=_X87Effect("rotate-top", target=-1)
-            )
+            return _InstructionValueFlow(x87_effect=_X87Effect("rotate-top", target=-1))
         if mnemonic == "fincstp":
-            return _InstructionValueFlow(
-                x87_effect=_X87Effect("rotate-top", target=1)
-            )
+            return _InstructionValueFlow(x87_effect=_X87Effect("rotate-top", target=1))
         if mnemonic == "fldenv":
-            return _InstructionValueFlow(
-                x87_effect=_X87Effect("load-environment")
-            )
+            return _InstructionValueFlow(x87_effect=_X87Effect("load-environment"))
         if mnemonic == "frstor":
-            return _InstructionValueFlow(
-                x87_effect=_X87Effect("restore")
-            )
+            return _InstructionValueFlow(x87_effect=_X87Effect("restore"))
         if decoded.id in _FNSAVE_WRITERS:
             return _InstructionValueFlow(
                 memory_writes=(
@@ -25601,8 +26367,7 @@ class _DirectCfgRecovery:
                 x87_effect=_X87Effect("init"),
             )
         if mnemonic in _X87_NON_STACK_MNEMONICS or decoded.id in (
-            set(_X87_CONTROL_WRITERS)
-            | _NO_TRACKED_PAYLOAD_MEMORY_WRITERS
+            set(_X87_CONTROL_WRITERS) | _NO_TRACKED_PAYLOAD_MEMORY_WRITERS
         ):
             return None
 
@@ -25633,12 +26398,8 @@ class _DirectCfgRecovery:
         sources = operands[-2:]
         if any(operand.type != X86_OP_REG for operand in sources):
             return None
-        left = self._register_slice(
-            sources[0].reg, sources[0].size * 8
-        )
-        right = self._register_slice(
-            sources[1].reg, sources[1].size * 8
-        )
+        left = self._register_slice(sources[0].reg, sources[0].size * 8)
+        right = self._register_slice(sources[1].reg, sources[1].size * 8)
         if left.family != right.family or left.mask != right.mask:
             return None
         destination = operands[0]
@@ -25662,8 +26423,10 @@ class _DirectCfgRecovery:
                 ),
                 x87_effect=_X87Effect("load-environment"),
             )
-        if decoded.group(CS_GRP_JUMP) or decoded.group(CS_GRP_RET) or decoded.group(
-            CS_GRP_IRET
+        if (
+            decoded.group(CS_GRP_JUMP)
+            or decoded.group(CS_GRP_RET)
+            or decoded.group(CS_GRP_IRET)
         ):
             return _InstructionValueFlow()
 
@@ -25685,9 +26448,7 @@ class _DirectCfgRecovery:
             return _InstructionValueFlow(
                 register_effects=(
                     _RegisterEffect(
-                        self._register_slice(
-                            operands[0].reg, operands[0].size * 8
-                        ),
+                        self._register_slice(operands[0].reg, operands[0].size * 8),
                         self._address_dependencies(decoded, operands[1].mem),
                     ),
                 )
@@ -25696,18 +26457,14 @@ class _DirectCfgRecovery:
         if decoded.id in _CMOV_INSTRUCTIONS:
             if len(operands) != 2 or operands[0].type != X86_OP_REG:
                 raise self._flow_error(decoded, "unexpected CMOV form")
-            destination = self._register_slice(
-                operands[0].reg, operands[0].size * 8
-            )
+            destination = self._register_slice(operands[0].reg, operands[0].size * 8)
             dependencies = (
                 _ValueDependency("register", register=destination),
                 self._operand_dependency(decoded, 1),
                 *self._implicit_dependency_slices(decoded),
             )
             return _InstructionValueFlow(
-                register_effects=(
-                    _RegisterEffect(destination, tuple(dependencies)),
-                )
+                register_effects=(_RegisterEffect(destination, tuple(dependencies)),)
             )
 
         if decoded.id in _XCHG_INSTRUCTIONS:
@@ -25774,11 +26531,7 @@ class _DirectCfgRecovery:
             if operands[0].type == X86_OP_MEM:
                 return _InstructionValueFlow(
                     (source_effect, *flag_effects),
-                    (
-                        MemoryWriteSpec(
-                            "xadd-memory", (destination_dep, source_dep)
-                        ),
-                    ),
+                    (MemoryWriteSpec("xadd-memory", (destination_dep, source_dep)),),
                     join_overlapping_register_effects=True,
                 )
             if operands[0].type != X86_OP_REG:
@@ -25786,9 +26539,7 @@ class _DirectCfgRecovery:
             return _InstructionValueFlow(
                 (
                     _RegisterEffect(
-                        self._register_slice(
-                            operands[0].reg, operands[0].size * 8
-                        ),
+                        self._register_slice(operands[0].reg, operands[0].size * 8),
                         (destination_dep, source_dep),
                     ),
                     source_effect,
@@ -25800,12 +26551,14 @@ class _DirectCfgRecovery:
         if decoded.id in _CMPXCHG_INSTRUCTIONS:
             if decoded.id in {113, 115}:
                 if len(operands) != 1 or operands[0].type != X86_OP_MEM:
-                    raise self._flow_error(
-                        decoded, "unexpected CMPXCHG8B/16B form"
+                    raise self._flow_error(decoded, "unexpected CMPXCHG8B/16B form")
+                payload_names = (
+                    ("ebx", "ecx")
+                    if decoded.id == 115
+                    else (
+                        "rbx",
+                        "rcx",
                     )
-                payload_names = ("ebx", "ecx") if decoded.id == 115 else (
-                    "rbx",
-                    "rcx",
                 )
                 accumulator_names = (
                     ("eax", "edx") if decoded.id == 115 else ("rax", "rdx")
@@ -25819,9 +26572,7 @@ class _DirectCfgRecovery:
                                 (
                                     _ValueDependency(
                                         "register",
-                                        register=self._named_register_slice(
-                                            name
-                                        ),
+                                        register=self._named_register_slice(name),
                                     ),
                                     memory_dep,
                                 ),
@@ -25857,41 +26608,28 @@ class _DirectCfgRecovery:
                 raise self._flow_error(decoded, "unexpected CMPXCHG form")
             destination, source = operands
             width = destination.size * 8
-            accumulator_name = {8: "al", 16: "ax", 32: "eax", 64: "rax"}.get(
-                width
-            )
+            accumulator_name = {8: "al", 16: "ax", 32: "eax", 64: "rax"}.get(width)
             if accumulator_name is None or source.type != X86_OP_REG:
                 raise self._flow_error(decoded, "unsupported CMPXCHG width/form")
             accumulator = self._named_register_slice(accumulator_name)
             destination_dep = self._operand_dependency(decoded, 0)
             source_dep = self._operand_dependency(decoded, 1)
             accumulator_dep = _ValueDependency("register", register=accumulator)
-            effects = [
-                _RegisterEffect(
-                    accumulator, (accumulator_dep, destination_dep)
-                )
-            ]
+            effects = [_RegisterEffect(accumulator, (accumulator_dep, destination_dep))]
             writes: tuple[MemoryWriteSpec, ...] = ()
             if destination.type == X86_OP_MEM:
-                writes = (
-                    MemoryWriteSpec("cmpxchg-memory", (source_dep,)),
-                )
+                writes = (MemoryWriteSpec("cmpxchg-memory", (source_dep,)),)
             elif destination.type == X86_OP_REG:
-                destination_slice = self._register_slice(
-                    destination.reg, width
-                )
+                destination_slice = self._register_slice(destination.reg, width)
                 if destination_slice.family == accumulator.family and (
                     destination_slice.mask & accumulator.mask
                 ):
                     if destination_slice.mask != accumulator.mask:
                         raise self._flow_error(
                             decoded,
-                            "partially overlapping CMPXCHG accumulator "
-                            "destination",
+                            "partially overlapping CMPXCHG accumulator destination",
                         )
-                    effects = [
-                        _RegisterEffect(accumulator, (source_dep,))
-                    ]
+                    effects = [_RegisterEffect(accumulator, (source_dep,))]
                 else:
                     effects.append(
                         _RegisterEffect(
@@ -25913,9 +26651,8 @@ class _DirectCfgRecovery:
             )
 
         if decoded.id in _MASKMOV_IMPLICIT_WRITERS:
-            if (
-                len(operands) != 2
-                or any(operand.type != X86_OP_REG for operand in operands)
+            if len(operands) != 2 or any(
+                operand.type != X86_OP_REG for operand in operands
             ):
                 raise self._flow_error(decoded, "unexpected MASKMOV form")
             return _InstructionValueFlow(
@@ -25936,9 +26673,7 @@ class _DirectCfgRecovery:
             esp = self._named_register_slice("esp")
             return _InstructionValueFlow(
                 register_effects=(
-                    _RegisterEffect(
-                        ebp, (_ValueDependency("register", register=esp),)
-                    ),
+                    _RegisterEffect(ebp, (_ValueDependency("register", register=esp),)),
                 ),
                 memory_writes=(
                     MemoryWriteSpec(
@@ -25953,9 +26688,7 @@ class _DirectCfgRecovery:
                 raise self._flow_error(decoded, "unexpected PUSH form")
             return _InstructionValueFlow(
                 memory_writes=(
-                    MemoryWriteSpec(
-                        "push", (self._operand_dependency(decoded, 0),)
-                    ),
+                    MemoryWriteSpec("push", (self._operand_dependency(decoded, 0),)),
                 )
             )
         if decoded.id in _PUSHA_INSTRUCTIONS:
@@ -26009,9 +26742,7 @@ class _DirectCfgRecovery:
                 return _InstructionValueFlow(
                     register_effects=(
                         _RegisterEffect(
-                            self._register_slice(
-                                operands[0].reg, operands[0].size * 8
-                            ),
+                            self._register_slice(operands[0].reg, operands[0].size * 8),
                             (self._memory_dependency(0),),
                         ),
                     )
@@ -26019,9 +26750,7 @@ class _DirectCfgRecovery:
             if operands[0].type == X86_OP_MEM:
                 return _InstructionValueFlow(
                     memory_writes=(
-                        MemoryWriteSpec(
-                            "pop-memory", (self._memory_dependency(0),)
-                        ),
+                        MemoryWriteSpec("pop-memory", (self._memory_dependency(0),)),
                     )
                 )
             raise self._flow_error(decoded, "invalid POP destination")
@@ -26060,9 +26789,7 @@ class _DirectCfgRecovery:
                 raise self._flow_error(decoded, "unexpected STOS form")
             return _InstructionValueFlow(
                 memory_writes=(
-                    MemoryWriteSpec(
-                        "stos", (self._operand_dependency(decoded, 1),)
-                    ),
+                    MemoryWriteSpec("stos", (self._operand_dependency(decoded, 1),)),
                 )
             )
         if decoded.id in _MOVS_INSTRUCTIONS:
@@ -26073,9 +26800,7 @@ class _DirectCfgRecovery:
             ):
                 raise self._flow_error(decoded, "unexpected MOVS form")
             return _InstructionValueFlow(
-                memory_writes=(
-                    MemoryWriteSpec("movs", (self._memory_dependency(1),)),
-                )
+                memory_writes=(MemoryWriteSpec("movs", (self._memory_dependency(1),)),)
             )
         if decoded.id in _LODS_INSTRUCTIONS:
             if (
@@ -26087,9 +26812,7 @@ class _DirectCfgRecovery:
             return _InstructionValueFlow(
                 register_effects=(
                     _RegisterEffect(
-                        self._register_slice(
-                            operands[0].reg, operands[0].size * 8
-                        ),
+                        self._register_slice(operands[0].reg, operands[0].size * 8),
                         (self._memory_dependency(1),),
                     ),
                 )
@@ -26111,9 +26834,7 @@ class _DirectCfgRecovery:
             )
         if decoded.id in _X87_VALUE_WRITERS:
             if len(operands) != 1 or operands[0].type != X86_OP_MEM:
-                raise self._flow_error(
-                    decoded, "unexpected x87 memory-store form"
-                )
+                raise self._flow_error(decoded, "unexpected x87 memory-store form")
             return _InstructionValueFlow(
                 memory_writes=(
                     MemoryWriteSpec(
@@ -26131,8 +26852,10 @@ class _DirectCfgRecovery:
                     ),
                 )
             )
-        if decoded.id in _X87_CONTROL_WRITERS and operands and (
-            operands[0].type == X86_OP_MEM
+        if (
+            decoded.id in _X87_CONTROL_WRITERS
+            and operands
+            and (operands[0].type == X86_OP_MEM)
         ):
             register_name = _X87_CONTROL_WRITERS[decoded.id]
             return _InstructionValueFlow(
@@ -26142,9 +26865,7 @@ class _DirectCfgRecovery:
                         (
                             _ValueDependency(
                                 "register",
-                                register=self._named_register_slice(
-                                    register_name
-                                ),
+                                register=self._named_register_slice(register_name),
                             ),
                         ),
                     ),
@@ -26208,9 +26929,7 @@ class _DirectCfgRecovery:
 
         if decoded.id in _NO_TRACKED_PAYLOAD_MEMORY_WRITERS:
             return _InstructionValueFlow(
-                memory_writes=(
-                    MemoryWriteSpec("audited-non-pointer-payload", ()),
-                )
+                memory_writes=(MemoryWriteSpec("audited-non-pointer-payload", ()),)
             )
         if decoded.id in _NON_WRITER_EXCLUSIONS:
             return _InstructionValueFlow()
@@ -26221,9 +26940,7 @@ class _DirectCfgRecovery:
         for index, operand in enumerate(operands):
             if operand.type == X86_OP_REG:
                 if operand.access & CS_AC_READ:
-                    explicit_inputs.append(
-                        self._operand_dependency(decoded, index)
-                    )
+                    explicit_inputs.append(self._operand_dependency(decoded, index))
                 if operand.access & CS_AC_WRITE:
                     explicit_effects.append(
                         self._explicit_register_effect(decoded, operand, ())
@@ -26244,13 +26961,9 @@ class _DirectCfgRecovery:
                         decoded, f"memory operand {index} has access=0"
                     )
             elif operand.type == X86_OP_IMM:
-                explicit_inputs.append(
-                    self._immediate_dependency(operand.imm, index)
-                )
+                explicit_inputs.append(self._immediate_dependency(operand.imm, index))
             else:
-                raise self._flow_error(
-                    decoded, f"operand {index} has unsupported type"
-                )
+                raise self._flow_error(decoded, f"operand {index} has unsupported type")
 
         if (
             decoded.id in _MEMORY_DESTINATION_ACCESS_OVERRIDES
@@ -26263,9 +26976,7 @@ class _DirectCfgRecovery:
         implicit_inputs = self._implicit_dependency_slices(decoded)
         dependencies = tuple((*explicit_inputs, *implicit_inputs))
         effects = [
-            _RegisterEffect(
-                effect.destination, dependencies, effect.taint_mask
-            )
+            _RegisterEffect(effect.destination, dependencies, effect.taint_mask)
             for effect in explicit_effects
         ]
         for register in decoded.regs_write:
@@ -26294,12 +27005,8 @@ class _DirectCfgRecovery:
             destination_width = operands[destination_index].size * 8
             if decoded.id in _MASKED_EXPLICIT_WRITERS:
                 if len(operands) != 3 or operands[2].type != X86_OP_REG:
-                    raise self._flow_error(
-                        decoded, "unexpected masked-store form"
-                    )
-                payload_dependencies = (
-                    self._operand_dependency(decoded, 2),
-                )
+                    raise self._flow_error(decoded, "unexpected masked-store form")
+                payload_dependencies = (self._operand_dependency(decoded, 2),)
             elif decoded.id in _SCALAR_EXTRACT_WIDTHS:
                 if (
                     len(operands) != 3
@@ -26313,9 +27020,7 @@ class _DirectCfgRecovery:
                 lane_count = max(1, (operands[1].size * 8) // width)
                 lane = operands[2].imm % lane_count
                 payload_dependencies = (
-                    self._register_subslice_dependency(
-                        decoded, 1, lane * width, width
-                    ),
+                    self._register_subslice_dependency(decoded, 1, lane * width, width),
                 )
             elif decoded.id in _VECTOR_EXTRACT_WIDTHS:
                 if (
@@ -26330,9 +27035,7 @@ class _DirectCfgRecovery:
                 lane_count = max(1, (operands[1].size * 8) // width)
                 lane = operands[2].imm % lane_count
                 payload_dependencies = (
-                    self._register_subslice_dependency(
-                        decoded, 1, lane * width, width
-                    ),
+                    self._register_subslice_dependency(decoded, 1, lane * width, width),
                 )
             elif decoded.id in _HIGH_HALF_WRITERS:
                 source_indices = [
@@ -26341,9 +27044,7 @@ class _DirectCfgRecovery:
                     if index != destination_index and operand.type == X86_OP_REG
                 ]
                 if len(source_indices) != 1:
-                    raise self._flow_error(
-                        decoded, "unexpected high-half store form"
-                    )
+                    raise self._flow_error(decoded, "unexpected high-half store form")
                 payload_dependencies = (
                     self._register_subslice_dependency(
                         decoded, source_indices[0], 64, 64
@@ -26356,9 +27057,7 @@ class _DirectCfgRecovery:
                     if index != destination_index and operand.type == X86_OP_REG
                 ]
                 if len(source_indices) != 1:
-                    raise self._flow_error(
-                        decoded, "unexpected low-lane store form"
-                    )
+                    raise self._flow_error(decoded, "unexpected low-lane store form")
                 payload_dependencies = (
                     self._register_subslice_dependency(
                         decoded,
@@ -26373,8 +27072,7 @@ class _DirectCfgRecovery:
                     for index, operand in enumerate(operands)
                     if index != destination_index
                     and (
-                        operand.type == X86_OP_IMM
-                        or bool(operand.access & CS_AC_READ)
+                        operand.type == X86_OP_IMM or bool(operand.access & CS_AC_READ)
                     )
                 )
                 payload_dependencies = (
@@ -26413,20 +27111,14 @@ class _DirectCfgRecovery:
             top_mask |= state.top_mask
             valid_must &= state.valid_must
             valid_may |= state.valid_may
-        return _X87State(
-            tuple(physical), top_mask, valid_must, valid_may
-        )
+        return _X87State(tuple(physical), top_mask, valid_must, valid_may)
 
     @classmethod
-    def _join_taint_states(
-        cls, left: _TaintState, right: _TaintState
-    ) -> _TaintState:
+    def _join_taint_states(cls, left: _TaintState, right: _TaintState) -> _TaintState:
         registers = dict(left.registers)
         for family, mask in right.registers.items():
             registers[family] = registers.get(family, 0) | mask
-        return _TaintState(
-            registers, cls._join_x87_states((left.x87, right.x87))
-        )
+        return _TaintState(registers, cls._join_x87_states((left.x87, right.x87)))
 
     @staticmethod
     def _x87_pop(
@@ -26453,17 +27145,12 @@ class _DirectCfgRecovery:
         if dependency.kind in {"register", "address-register"}:
             if dependency.register is None:
                 raise CfgRecoveryError("register dependency has no slice")
-            physical_slot = self._x87_slot(
-                dependency.register.family, "x87-physical:"
-            )
+            physical_slot = self._x87_slot(dependency.register.family, "x87-physical:")
             if physical_slot is not None:
                 return bool(
-                    state.x87.phys_taint[physical_slot]
-                    & dependency.register.mask
+                    state.x87.phys_taint[physical_slot] & dependency.register.mask
                 )
-            logical_index = self._x87_slot(
-                dependency.register.family, "x87-logical:"
-            )
+            logical_index = self._x87_slot(dependency.register.family, "x87-logical:")
             if logical_index is not None:
                 tops = (
                     (exact_top,)
@@ -26474,10 +27161,7 @@ class _DirectCfgRecovery:
                     physical_slot = (top + logical_index) & 7
                     if not state.x87.valid_may & (1 << physical_slot):
                         continue
-                    if (
-                        state.x87.phys_taint[physical_slot]
-                        & dependency.register.mask
-                    ):
+                    if state.x87.phys_taint[physical_slot] & dependency.register.mask:
                         return True
                 return False
             return bool(
@@ -26496,9 +27180,7 @@ class _DirectCfgRecovery:
 
     def _instruction_uses_mmx(self, decoded) -> bool:
         registers = {
-            operand.reg
-            for operand in decoded.operands
-            if operand.type == X86_OP_REG
+            operand.reg for operand in decoded.operands if operand.type == X86_OP_REG
         }
         registers.update(decoded.regs_read)
         registers.update(decoded.regs_write)
@@ -26526,9 +27208,7 @@ class _DirectCfgRecovery:
             rotated = 0
             for top in self._possible_tops(old.top_mask):
                 rotated |= 1 << ((top + effect.target) & 7)
-            return _X87State(
-                old.phys_taint, rotated, old.valid_must, old.valid_may
-            )
+            return _X87State(old.phys_taint, rotated, old.valid_must, old.valid_may)
 
         tops = self._possible_tops(old.top_mask)
         if len(tops) > 1 and any(old.phys_taint):
@@ -26552,9 +27232,7 @@ class _DirectCfgRecovery:
                 physical[next_top] = (
                     (1 << 80) - 1
                     if any(
-                        self._dependency_is_tainted(
-                            dependency, state, exact_top=top
-                        )
+                        self._dependency_is_tainted(dependency, state, exact_top=top)
                         for dependency in effect.dependencies
                     )
                     else 0
@@ -26586,9 +27264,7 @@ class _DirectCfgRecovery:
                 physical[destination] = (
                     (1 << 80) - 1
                     if any(
-                        self._dependency_is_tainted(
-                            dependency, state, exact_top=top
-                        )
+                        self._dependency_is_tainted(dependency, state, exact_top=top)
                         for dependency in effect.dependencies
                     )
                     else 0
@@ -26635,9 +27311,7 @@ class _DirectCfgRecovery:
             )
         return self._join_x87_states(tuple(branches))
 
-    def _apply_instruction_value_flow(
-        self, decoded, state: _TaintState
-    ) -> _TaintState:
+    def _apply_instruction_value_flow(self, decoded, state: _TaintState) -> _TaintState:
         flow = self._instruction_value_flow(decoded)
         if flow.taint_blocker_reason is not None and any(
             self._dependency_is_tainted(dependency, state)
@@ -26688,9 +27362,7 @@ class _DirectCfgRecovery:
         physical = list(next_x87.phys_taint)
         wrote_physical = False
         for effect in flow.register_effects:
-            physical_slot = self._x87_slot(
-                effect.destination.family, "x87-physical:"
-            )
+            physical_slot = self._x87_slot(effect.destination.family, "x87-physical:")
             if physical_slot is None:
                 continue
             taint_mask = (
@@ -26727,12 +27399,8 @@ class _DirectCfgRecovery:
                 self._dependency_is_tainted(dependency, old_state)
                 for dependency in effect.dependencies
             )
-            physical_slot = self._x87_slot(
-                effect.destination.family, "x87-physical:"
-            )
-            logical_slot = self._x87_slot(
-                effect.destination.family, "x87-logical:"
-            )
+            physical_slot = self._x87_slot(effect.destination.family, "x87-physical:")
+            logical_slot = self._x87_slot(effect.destination.family, "x87-logical:")
             if logical_slot is not None:
                 raise self._flow_error(
                     decoded,
@@ -26744,8 +27412,7 @@ class _DirectCfgRecovery:
                     physical[physical_slot] |= taint_mask
             elif is_tainted:
                 next_registers[effect.destination.family] = (
-                    next_registers.get(effect.destination.family, 0)
-                    | taint_mask
+                    next_registers.get(effect.destination.family, 0) | taint_mask
                 )
         if wrote_physical or self._instruction_uses_mmx(decoded):
             # Every MMX instruction transitions the shared register file into
@@ -26759,12 +27426,8 @@ class _DirectCfgRecovery:
             )
         next_state = _TaintState(next_registers, next_x87)
         if flow.x87_effect is not None:
-            next_state.x87 = self._apply_x87_effect(
-                decoded, flow.x87_effect, old_state
-            )
-        self._check_count(
-            "max_states_per_block", next_state.x87.top_mask.bit_count()
-        )
+            next_state.x87 = self._apply_x87_effect(decoded, flow.x87_effect, old_state)
+        self._check_count("max_states_per_block", next_state.x87.top_mask.bit_count())
         return next_state
 
     @staticmethod
@@ -26774,10 +27437,7 @@ class _DirectCfgRecovery:
     def _exact_memory_address(
         self, memory, state: dict[str, _ExactValue]
     ) -> int | None:
-        if (
-            memory.segment != X86_REG_INVALID
-            or memory.index != X86_REG_INVALID
-        ):
+        if memory.segment != X86_REG_INVALID or memory.index != X86_REG_INVALID:
             return None
         if memory.base == X86_REG_INVALID:
             return memory.disp & 0xFFFF_FFFF
@@ -26786,23 +27446,16 @@ class _DirectCfgRecovery:
             return None
         return (base.value + memory.disp) & 0xFFFF_FFFF
 
-    def _record_data_operands(
-        self, decoded, state: dict[str, _ExactValue]
-    ) -> None:
+    def _record_data_operands(self, decoded, state: dict[str, _ExactValue]) -> None:
         instruction = self.instructions[decoded.address]
         for index, operand in enumerate(decoded.operands):
-            if (
-                operand.type != X86_OP_MEM
-                or operand.size <= 0
-            ):
+            if operand.type != X86_OP_MEM or operand.size <= 0:
                 continue
             address = self._exact_memory_address(operand.mem, state)
             if address is None:
                 continue
             mapped = any(
-                section.va
-                <= address
-                < section.va + section.virt_size
+                section.va <= address < section.va + section.virt_size
                 for section in self.image.sections
             )
             if not mapped:
@@ -26863,15 +27516,10 @@ class _DirectCfgRecovery:
         """
         relocation_rows: dict[int, list[int]] = {}
         for relocation in self.image.relocations:
-            relocation_rows.setdefault(relocation.va, []).append(
-                relocation.type
-            )
+            relocation_rows.setdefault(relocation.va, []).append(relocation.type)
 
         def overlaps_owned_write(start: int, end: int) -> bool:
-            if any(
-                start <= address < end
-                for address in self.global_slot_writes
-            ):
+            if any(start <= address < end for address in self.global_slot_writes):
                 return True
             for address, writers in self.absolute_memory_writes.items():
                 for writer in writers:
@@ -26900,10 +27548,7 @@ class _DirectCfgRecovery:
                 and f"transfer={transfer_address:#x};" in record.detail
                 for record in replayed_records
             )
-            if (
-                transfer_address in self.jump_tables
-                and not replaying_transfer
-            ):
+            if transfer_address in self.jump_tables and not replaying_transfer:
                 # A normal proof that did not consume a tentative slot needs
                 # no bootstrap identity, trial recovery, or durable seed.
                 continue
@@ -26921,9 +27566,7 @@ class _DirectCfgRecovery:
                 or memory.scale != 4
             ):
                 continue
-            guard = self._movzx_guard_for_index(
-                transfer_address, memory.index
-            )
+            guard = self._movzx_guard_for_index(transfer_address, memory.index)
             if guard is None or guard[1] != "movzx":
                 continue
             compare, _operator, _bound, index_min, index_max = guard
@@ -26955,9 +27598,7 @@ class _DirectCfgRecovery:
             rows: list[_RelocatedDispatchSlotHypothesis] = []
             decoded_target_spans: dict[int, tuple[int, int]] = {}
             terminated = False
-            candidate_count = min(
-                index_max + 1, self.limits.max_jump_table_entries - 1
-            )
+            candidate_count = min(index_max + 1, self.limits.max_jump_table_entries - 1)
             for index in range(candidate_count + 1):
                 slot = table_base + index * 4
                 if slot + 4 > section.va + section.raw_size:
@@ -26973,9 +27614,7 @@ class _DirectCfgRecovery:
                     break
                 target = int.from_bytes(raw, "little")
                 if target < self.image.image_base:
-                    target = (
-                        target + self.image.image_base
-                    ) & 0xFFFF_FFFF
+                    target = (target + self.image.image_base) & 0xFFFF_FFFF
                 owner = self.byte_owners.get(target)
                 if (
                     not _is_executable_span(self.image, target, 1)
@@ -26992,12 +27631,9 @@ class _DirectCfgRecovery:
                 target_end = target + decoded_target.size
                 if (
                     decoded_target.address != target
-                    or not _is_executable_span(
-                        self.image, target, decoded_target.size
-                    )
+                    or not _is_executable_span(self.image, target, decoded_target.size)
                     or any(
-                        (byte_owner := self.byte_owners.get(address))
-                        is not None
+                        (byte_owner := self.byte_owners.get(address)) is not None
                         and byte_owner != target
                         for address in range(target, target_end)
                     )
@@ -27025,9 +27661,7 @@ class _DirectCfgRecovery:
                     # This slot is probed only to prove that the bounded run
                     # has a nonrelocated or invalid terminator.
                     break
-                decoded_target_spans.setdefault(
-                    target, (target, target_end)
-                )
+                decoded_target_spans.setdefault(target, (target, target_end))
                 detail = (
                     "proof=tentative-owned-movzx-scale4-transfer+"
                     "contiguous-type3-executable-slot-run;"
@@ -27056,12 +27690,8 @@ class _DirectCfgRecovery:
                 )
             if not rows or not terminated:
                 continue
-            updated_hypotheses = (
-                self.relocated_dispatch_slot_hypotheses | set(rows)
-            )
-            self._check_count(
-                "max_jump_table_entries", len(updated_hypotheses)
-            )
+            updated_hypotheses = self.relocated_dispatch_slot_hypotheses | set(rows)
+            self._check_count("max_jump_table_entries", len(updated_hypotheses))
             self.relocated_dispatch_slot_hypotheses = updated_hypotheses
 
             table = self.jump_tables.get(transfer_address)
@@ -27088,17 +27718,13 @@ class _DirectCfgRecovery:
                     )
                 ):
                     continue
-                self.validated_relocated_dispatch_slot_hypotheses.add(
-                    hypothesis
-                )
+                self.validated_relocated_dispatch_slot_hypotheses.add(hypothesis)
 
     def _record_object_callback_tables(self) -> None:
         """Seed finite callback tables proved by stores and owned dispatches."""
         relocation_rows: dict[int, list[int]] = {}
         for relocation in self.image.relocations:
-            relocation_rows.setdefault(relocation.va, []).append(
-                relocation.type
-            )
+            relocation_rows.setdefault(relocation.va, []).append(relocation.type)
 
         def relocated_executable_pointer(address: int) -> tuple[bytes, int] | None:
             if relocation_rows.get(address) != [3]:
@@ -27122,7 +27748,9 @@ class _DirectCfgRecovery:
                         if self._absolute_memory_operand(operand) == address
                         and operand.access & CS_AC_WRITE
                     }
-                    if any(address < end and start < address + width for width in widths):
+                    if any(
+                        address < end and start < address + width for width in widths
+                    ):
                         return True
             return False
 
@@ -27147,10 +27775,7 @@ class _DirectCfgRecovery:
                     continue
                 table_base = decoded.operands[1].imm & 0xFFFF_FFFF
                 store_relocation = decoded.address + decoded.imm_offset
-                if (
-                    table_base % 4
-                    or relocation_rows.get(store_relocation) != [3]
-                ):
+                if table_base % 4 or relocation_rows.get(store_relocation) != [3]:
                     continue
                 candidates.append(
                     (
@@ -27188,9 +27813,10 @@ class _DirectCfgRecovery:
                     ),
                     None,
                 )
-                if section is None or relocated_executable_pointer(
-                    table_base - 4
-                ) is not None:
+                if (
+                    section is None
+                    or relocated_executable_pointer(table_base - 4) is not None
+                ):
                     continue
 
                 entries: list[tuple[int, bytes, int]] = []
@@ -27205,9 +27831,7 @@ class _DirectCfgRecovery:
                         entries = []
                         break
                     entries.append((cursor, *row))
-                    self._check_count(
-                        "max_jump_table_entries", len(entries)
-                    )
+                    self._check_count("max_jump_table_entries", len(entries))
                     cursor += 4
                 if (
                     len(entries) < 2
@@ -27216,8 +27840,7 @@ class _DirectCfgRecovery:
                     or any(
                         relocation.va < cursor + 4
                         and cursor
-                        < relocation.va
-                        + _I386_RELOCATION_WIDTHS[relocation.type]
+                        < relocation.va + _I386_RELOCATION_WIDTHS[relocation.type]
                         for relocation in self.image.relocations
                     )
                 ):
@@ -27230,8 +27853,7 @@ class _DirectCfgRecovery:
                     continue
 
                 entries_by_offset = {
-                    slot - table_base: target
-                    for slot, _raw, target in entries
+                    slot - table_base: target for slot, _raw, target in entries
                 }
                 consumers = []
                 for edge in sorted(self.edges, key=_edge_key):
@@ -27252,9 +27874,7 @@ class _DirectCfgRecovery:
                         or entries_by_offset[memory.disp] != edge.target
                     ):
                         continue
-                    function_entry = self._registrar_function_entry(
-                        transfer.address
-                    )
+                    function_entry = self._registrar_function_entry(transfer.address)
                     if function_entry is None:
                         continue
                     family = self._register_family(memory.base)
@@ -27270,16 +27890,12 @@ class _DirectCfgRecovery:
                             load.id == X86_INS_MOV
                             and len(load.operands) == 2
                             and load.operands[0].type == X86_OP_REG
-                            and self._register_family(load.operands[0].reg)
-                            == family
+                            and self._register_family(load.operands[0].reg) == family
                             and load.operands[1].type == X86_OP_MEM
                             and load.operands[1].size == 4
-                            and load.operands[1].mem.segment
-                            == X86_REG_INVALID
-                            and load.operands[1].mem.base
-                            != X86_REG_INVALID
-                            and load.operands[1].mem.index
-                            == X86_REG_INVALID
+                            and load.operands[1].mem.segment == X86_REG_INVALID
+                            and load.operands[1].mem.base != X86_REG_INVALID
+                            and load.operands[1].mem.index == X86_REG_INVALID
                             and load.operands[1].mem.disp == displacement
                         ):
                             field_loads = []
@@ -27287,9 +27903,7 @@ class _DirectCfgRecovery:
                         field_loads.append(definition)
                     if not field_loads:
                         continue
-                    consumers.append(
-                        (transfer.address, memory.disp, edge.target)
-                    )
+                    consumers.append((transfer.address, memory.disp, edge.target))
                 if not consumers:
                     continue
 
@@ -27364,12 +27978,9 @@ class _DirectCfgRecovery:
         ):
             target = decoded.operands[0].imm & 0xFFFF_FFFF
             relocation_address = decoded.address + decoded.imm_offset
-            if (
-                _is_executable_span(self.image, target, 1)
-                and self._initializer_has_highlow_relocation(
-                    relocation_address
-                )
-            ):
+            if _is_executable_span(
+                self.image, target, 1
+            ) and self._initializer_has_highlow_relocation(relocation_address):
                 instruction = self.instructions[decoded.address]
                 record = SeedRecord(
                     address=target,
@@ -27391,9 +28002,7 @@ class _DirectCfgRecovery:
                     self.produced_initializers.add(initializer_key)
                     self._record_fixpoint_update()
                 self.seed_records.add(record)
-                self.accepted_initializer_instructions.add(
-                    instruction.address
-                )
+                self.accepted_initializer_instructions.add(instruction.address)
                 self._record_finite_target(target)
                 self._enqueue(target, is_function=True)
             return
@@ -27410,9 +28019,7 @@ class _DirectCfgRecovery:
                     continue
                 instruction = self.instructions[decoded.address]
                 displacement = operand.mem.disp
-                rows = self.dynamic_field_writes.setdefault(
-                    displacement, set()
-                )
+                rows = self.dynamic_field_writes.setdefault(displacement, set())
                 before = len(rows)
                 rows.add(
                     _DynamicFieldWrite(
@@ -27434,9 +28041,7 @@ class _DirectCfgRecovery:
         destination, source = decoded.operands
         if destination.type != X86_OP_MEM:
             return
-        destination_address = self._exact_memory_address(
-            destination.mem, state
-        )
+        destination_address = self._exact_memory_address(destination.mem, state)
         exact_value = self._initializer_value(source, state)
         if (
             destination.size == 4
@@ -27453,9 +28058,7 @@ class _DirectCfgRecovery:
                     instruction_address=decoded.address,
                     displacement=displacement,
                     width=destination.size,
-                    value=(
-                        exact_value.value if exact_value is not None else None
-                    ),
+                    value=(exact_value.value if exact_value is not None else None),
                     receiver_identity=None,
                     provenance=(
                         f"instruction={decoded.address:#x};"
@@ -27473,9 +28076,7 @@ class _DirectCfgRecovery:
             and not _is_executable_span(self.image, destination_address, 4)
         ):
             instruction = self.instructions[decoded.address]
-            rows = self.global_slot_writes.setdefault(
-                destination_address, set()
-            )
+            rows = self.global_slot_writes.setdefault(destination_address, set())
             before = len(rows)
             rows.add(
                 _GlobalSlotWrite(
@@ -27493,11 +28094,8 @@ class _DirectCfgRecovery:
             self.image, exact_value.value, 1
         ):
             return
-        destination_is_valid = (
-            destination_address is not None
-            and _is_mapped_span(
-                self.image, destination_address, destination.size
-            )
+        destination_is_valid = destination_address is not None and _is_mapped_span(
+            self.image, destination_address, destination.size
         )
         relocation_proven_dynamic_field = (
             not destination_is_valid
@@ -27555,9 +28153,7 @@ class _DirectCfgRecovery:
         self.initializer_relocation_lookup_count += 1
         return address in self.highlow_relocation_vas
 
-    def _update_exact_state(
-        self, decoded, state: dict[str, _ExactValue]
-    ) -> None:
+    def _update_exact_state(self, decoded, state: dict[str, _ExactValue]) -> None:
         instruction = self.instructions[decoded.address]
         step = self._chain_step(instruction)
         if decoded.group(CS_GRP_CALL):
@@ -27588,9 +28184,7 @@ class _DirectCfgRecovery:
                     and source.type == X86_OP_REG
                     and source.size == 4
                 ):
-                    source_value = state.get(
-                        self._register_family(source.reg)
-                    )
+                    source_value = state.get(self._register_family(source.reg))
                     if source_value is None:
                         state.pop(family, None)
                     else:
@@ -27638,9 +28232,7 @@ class _DirectCfgRecovery:
         for register in written:
             state.pop(self._register_family(register), None)
 
-    def _scan_owned_blocks(
-        self, blocks: tuple[BasicBlock, ...]
-    ) -> None:
+    def _scan_owned_blocks(self, blocks: tuple[BasicBlock, ...]) -> None:
         scan_lookup_start = self.initializer_relocation_lookup_count
         initializer_seconds = 0.0
         instructions_scanned = 0
@@ -27700,9 +28292,7 @@ class _DirectCfgRecovery:
                 if report_progress:
                     initializer_started_at = time.perf_counter()
                     self._record_initializer(decoded, state)
-                    initializer_seconds += (
-                        time.perf_counter() - initializer_started_at
-                    )
+                    initializer_seconds += time.perf_counter() - initializer_started_at
                 else:
                     self._record_initializer(decoded, state)
                 self._update_exact_state(decoded, state)
@@ -27729,17 +28319,13 @@ class _DirectCfgRecovery:
                 "propagation crosses an owned basic-block boundary"
             )
 
-    def _reject_unsafe_initializer_taint(
-        self, blocks: tuple[BasicBlock, ...]
-    ) -> None:
+    def _reject_unsafe_initializer_taint(self, blocks: tuple[BasicBlock, ...]) -> None:
         block_by_instruction = {
             address: block.start
             for block in blocks
             for address in block.instruction_addresses
         }
-        successors: dict[int, set[int]] = {
-            block.start: set() for block in blocks
-        }
+        successors: dict[int, set[int]] = {block.start: set() for block in blocks}
         for edge in self.edges:
             if edge.kind in {"direct-call", "indirect-call-table"}:
                 continue
@@ -27749,17 +28335,13 @@ class _DirectCfgRecovery:
 
         entries: dict[int, _TaintState | None] = {
             block.start: (
-                _TaintState.empty()
-                if block.start in self.function_addresses
-                else None
+                _TaintState.empty() if block.start in self.function_addresses else None
             )
             for block in blocks
         }
         outputs: dict[int, _TaintState] = {}
         pending = [
-            block_start
-            for block_start, entry in entries.items()
-            if entry is not None
+            block_start for block_start, entry in entries.items() if entry is not None
         ]
         heapq.heapify(pending)
         queued = set(pending)
@@ -27776,9 +28358,7 @@ class _DirectCfgRecovery:
             tainted = _TaintState(dict(entry.registers), entry.x87)
             for address in block.instruction_addresses:
                 decoded = self._owned_decoded(address)
-                tainted = self._apply_instruction_value_flow(
-                    decoded, tainted
-                )
+                tainted = self._apply_instruction_value_flow(decoded, tainted)
 
             output = tainted
             if outputs.get(block_start) == output:
@@ -27881,9 +28461,7 @@ class _DirectCfgRecovery:
                         f"operand boundary: relocation={start:#x}-{end:#x}"
                     )
                 instruction_address = next(iter(owners))
-                self._instruction_relocation_field(
-                    instruction_address, start, end
-                )
+                self._instruction_relocation_field(instruction_address, start, end)
                 continue
 
             containing_data = [
@@ -27892,8 +28470,7 @@ class _DirectCfgRecovery:
                 if evidence.start <= start and end <= evidence.end
             ]
             data_boundaries = {
-                (evidence.start, evidence.end)
-                for evidence in containing_data
+                (evidence.start, evidence.end) for evidence in containing_data
             }
             if not data_boundaries:
                 continue
@@ -27940,8 +28517,7 @@ class _DirectCfgRecovery:
             for index, target in enumerate(table.raw_entries):
                 semantic_slots.add(
                     (
-                        table.base
-                        + (table.index_min + index) * table.entry_width,
+                        table.base + (table.index_min + index) * table.entry_width,
                         target,
                     )
                 )
@@ -27954,9 +28530,7 @@ class _DirectCfgRecovery:
                 continue
             start = relocation.va
             end = start + 4
-            raw = _read_provenance(
-                self.image, start, 4, "final relocation disposition"
-            )
+            raw = _read_provenance(self.image, start, 4, "final relocation disposition")
             target = struct.unpack("<I", raw)[0]
             owned_bytes = [
                 self.byte_owners.get(address) for address in range(start, end)
@@ -27964,18 +28538,13 @@ class _DirectCfgRecovery:
             present_owners = {row for row in owned_bytes if row is not None}
             source_owner = None
             if present_owners:
-                if (
-                    len(present_owners) != 1
-                    or any(row is None for row in owned_bytes)
-                ):
+                if len(present_owners) != 1 or any(row is None for row in owned_bytes):
                     raise CfgRecoveryError(
                         "final relocation source straddles instruction "
                         f"ownership: relocation={start:#x}-{end:#x}"
                     )
                 source_owner = next(iter(present_owners))
-                self._instruction_relocation_field(
-                    source_owner, start, end
-                )
+                self._instruction_relocation_field(source_owner, start, end)
                 source_class = "instruction"
                 provenance = f"instruction={source_owner:#x}"
             else:
@@ -27984,9 +28553,7 @@ class _DirectCfgRecovery:
                     for evidence in non_relocation_data
                     if evidence.start <= start and end <= evidence.end
                 ]
-                boundaries = {
-                    (evidence.start, evidence.end) for evidence in containing
-                }
+                boundaries = {(evidence.start, evidence.end) for evidence in containing}
                 if len(boundaries) > 1:
                     raise CfgRecoveryError(
                         "final relocation typed-data boundary is ambiguous: "
@@ -27996,9 +28563,7 @@ class _DirectCfgRecovery:
                 if boundaries:
                     source_class = "unique-typed-data-boundary"
                     boundary = next(iter(boundaries))
-                    provenance = (
-                        f"typed-data={boundary[0]:#x}-{boundary[1]:#x}"
-                    )
+                    provenance = f"typed-data={boundary[0]:#x}-{boundary[1]:#x}"
                 else:
                     source_class = "residue"
                     provenance = "no-final-owner-or-typed-data-boundary"
@@ -28026,8 +28591,7 @@ class _DirectCfgRecovery:
             elif source_class == "unique-typed-data-boundary":
                 status = (
                     "owned-typed-data"
-                    if not target_executable
-                    or (start, target) in semantic_slots
+                    if not target_executable or (start, target) in semantic_slots
                     else "unresolved-exec-pointer"
                 )
             else:
@@ -28101,7 +28665,6 @@ class _DirectCfgRecovery:
             )
         return tuple(merged)
 
-
     @staticmethod
     def _is_canonical_padding(blob: bytes) -> bool:
         if blob and not blob.strip(b"\0"):
@@ -28143,10 +28706,7 @@ class _DirectCfgRecovery:
                     continue
                 partitioned = []
                 for part_start, part_end in uncovered:
-                    if (
-                        data_region.end <= part_start
-                        or part_end <= data_region.start
-                    ):
+                    if data_region.end <= part_start or part_end <= data_region.start:
                         partitioned.append((part_start, part_end))
                         continue
                     if part_start < data_region.start:
@@ -28209,13 +28769,8 @@ class _DirectCfgRecovery:
         )
 
     @staticmethod
-    def _region_contains(
-        regions: tuple[ByteRegion, ...], start: int, end: int
-    ) -> bool:
-        return any(
-            region.start <= start and end <= region.end
-            for region in regions
-        )
+    def _region_contains(regions: tuple[ByteRegion, ...], start: int, end: int) -> bool:
+        return any(region.start <= start and end <= region.end for region in regions)
 
     def _require_disjoint_ownership(
         self,
@@ -28231,9 +28786,7 @@ class _DirectCfgRecovery:
                 }
             )
             if overlapping_owners:
-                rendered = ",".join(
-                    f"{address:#x}" for address in overlapping_owners
-                )
+                rendered = ",".join(f"{address:#x}" for address in overlapping_owners)
                 raise CfgRecoveryError(
                     "instruction/data ownership overlap: "
                     f"data={region.start:#x}-{region.end:#x};"
@@ -28255,16 +28808,12 @@ class _DirectCfgRecovery:
             overlapping_owners = sorted(
                 {
                     self.byte_owners[address]
-                    for address in range(
-                        padding_region.start, padding_region.end
-                    )
+                    for address in range(padding_region.start, padding_region.end)
                     if address in self.byte_owners
                 }
             )
             if overlapping_owners:
-                rendered = ",".join(
-                    f"{address:#x}" for address in overlapping_owners
-                )
+                rendered = ",".join(f"{address:#x}" for address in overlapping_owners)
                 raise CfgRecoveryError(
                     "instruction/padding ownership overlap: "
                     f"padding={padding_region.start:#x}-"
@@ -28307,35 +28856,27 @@ class _DirectCfgRecovery:
                     )
                 ):
                     classification = "owned-call"
-                elif (
-                    self.byte_owners.get(address) not in {None, address}
-                    and all(
-                        byte_address in self.byte_owners
-                        for byte_address in range(address, address + 5)
-                    )
+                elif self.byte_owners.get(address) not in {None, address} and all(
+                    byte_address in self.byte_owners
+                    for byte_address in range(address, address + 5)
                 ):
                     classification = "owned-instruction-bytes"
-                elif (
-                    self.byte_owners.get(address) not in {None, address}
-                    and all(
-                        byte_address in self.byte_owners
-                        or self._region_contains(
-                            data_regions,
-                            byte_address,
-                            byte_address + 1,
-                        )
-                        or self._region_contains(
-                            padding_regions,
-                            byte_address,
-                            byte_address + 1,
-                        )
-                        for byte_address in range(address, address + 5)
+                elif self.byte_owners.get(address) not in {None, address} and all(
+                    byte_address in self.byte_owners
+                    or self._region_contains(
+                        data_regions,
+                        byte_address,
+                        byte_address + 1,
                     )
+                    or self._region_contains(
+                        padding_regions,
+                        byte_address,
+                        byte_address + 1,
+                    )
+                    for byte_address in range(address, address + 5)
                 ):
                     classification = "owned-instruction-and-data"
-                elif self._region_contains(
-                    data_regions, address, address + 5
-                ):
+                elif self._region_contains(data_regions, address, address + 5):
                     classification = "owned-data"
                 elif residue.contains(address, 5):
                     classification = "unreachable-executable-residue"
@@ -28392,19 +28933,22 @@ class _DirectCfgRecovery:
                 )
 
         reachable_rows = [
-            *(f"i:{row.address:x}:{row.size}:{row.bytes_hex}" for row in sorted(self.instructions.values(), key=_instruction_key)),
+            *(
+                f"i:{row.address:x}:{row.size}:{row.bytes_hex}"
+                for row in sorted(self.instructions.values(), key=_instruction_key)
+            ),
             *(f"d:{row.start:x}:{row.end:x}:{row.provenance}" for row in data_regions),
-            *(f"p:{row.start:x}:{row.end:x}:{row.provenance}" for row in padding_regions),
+            *(
+                f"p:{row.start:x}:{row.end:x}:{row.provenance}"
+                for row in padding_regions
+            ),
         ]
         reachable_digest = hashlib.sha256(
             ("\n".join(reachable_rows) + "\n").encode("utf-8")
         ).hexdigest()
         partition_rows = [
             *reachable_rows,
-            *(
-                f"u:{row.start:x}:{row.end:x}:{row.bytes_sha256}"
-                for row in intervals
-            ),
+            *(f"u:{row.start:x}:{row.end:x}:{row.bytes_sha256}" for row in intervals),
         ]
         partition_digest = hashlib.sha256(
             ("\n".join(sorted(partition_rows)) + "\n").encode("utf-8")
@@ -28437,14 +28981,8 @@ class _DirectCfgRecovery:
             if gap_start is not None:
                 unexplained.append((gap_start, end))
         if unexplained:
-            rendered = ",".join(
-                f"{start:#x}-{end:#x}" for start, end in unexplained
-            )
-            raise CfgRecoveryError(
-                f"unexplained executable bytes: {rendered}"
-            )
-
-
+            rendered = ",".join(f"{start:#x}-{end:#x}" for start, end in unexplained)
+            raise CfgRecoveryError(f"unexplained executable bytes: {rendered}")
 
     def _bind_seed_instruction_provenance(self) -> None:
         rebound: set[SeedRecord] = set()
@@ -28643,8 +29181,7 @@ class _DirectCfgRecovery:
             copied_block_starts = frozenset(self.block_starts)
             copied_edge_count = len(self.edges)
             self._producer_progress_message(
-                "ordinary closure copied-callback-start: "
-                f"pass={ordinary_pass}"
+                f"ordinary closure copied-callback-start: pass={ordinary_pass}"
             )
             self._record_copied_descriptor_callback_tables()
             self._producer_progress_message(
@@ -28828,8 +29365,7 @@ class _DirectCfgRecovery:
         )
         self._reject_unsafe_initializer_taint(blocks)
         self._producer_progress_message(
-            "ordinary closure taint-validation-complete: "
-            f"blocks={len(blocks)}"
+            f"ordinary closure taint-validation-complete: blocks={len(blocks)}"
         )
         self._classify_relocations()
         self._producer_progress_message(
@@ -28846,11 +29382,8 @@ class _DirectCfgRecovery:
         relocation_dispositions = self._final_relocation_dispositions()
         semantic_references = set(self.semantic_data_references)
         for disposition in relocation_dispositions:
-            if (
-                disposition.source_owner is not None
-                and _is_executable_span(
-                    self.image, disposition.target_address, 1
-                )
+            if disposition.source_owner is not None and _is_executable_span(
+                self.image, disposition.target_address, 1
             ):
                 semantic_references.add(
                     SemanticReference(
@@ -28925,12 +29458,8 @@ class _DirectCfgRecovery:
             ),
             blocks=blocks,
             edges=tuple(sorted(self.edges, key=_edge_key)),
-            direct_calls=tuple(
-                sorted(self.direct_calls, key=_call_key)
-            ),
-            jump_tables=tuple(
-                sorted(self.jump_tables.values(), key=_jump_table_key)
-            ),
+            direct_calls=tuple(sorted(self.direct_calls, key=_call_key)),
+            jump_tables=tuple(sorted(self.jump_tables.values(), key=_jump_table_key)),
             cw_exception_metadata=self.cw_exception_metadata,
             raw_e8_candidates=raw_e8_candidates,
             data_regions=data_regions,
@@ -28938,9 +29467,7 @@ class _DirectCfgRecovery:
             provisional_unreachable_residue=provisional_residue,
             function_entries=function_entries,
             control_targets=control_targets,
-            ownership_diagnostics=tuple(
-                sorted(self.diagnostics, key=_diagnostic_key)
-            ),
+            ownership_diagnostics=tuple(sorted(self.diagnostics, key=_diagnostic_key)),
             relocation_dispositions=relocation_dispositions,
             semantic_references=tuple(
                 sorted(
@@ -28970,9 +29497,7 @@ def recover_cfg(
     """Recover direct x86 CFG and exact ownership (decoder slice)."""
     if producer_checkpoint_dir is None:
         if producer_query_budget is not None:
-            raise ValueError(
-                "producer_query_budget requires producer_checkpoint_dir"
-            )
+            raise ValueError("producer_query_budget requires producer_checkpoint_dir")
         if producer_progress_callback is not None:
             raise ValueError(
                 "producer_progress_callback requires producer_checkpoint_dir"
@@ -28986,9 +29511,7 @@ def recover_cfg(
             or not isinstance(producer_query_budget, int)
             or producer_query_budget < 0
         ):
-            raise ValueError(
-                "producer_query_budget must be a non-negative int"
-            )
+            raise ValueError("producer_query_budget must be a non-negative int")
         producer_certificate_session = _ProducerCertificateSession(
             image_sha256=image.sha256,
             limits=limits,
@@ -29041,12 +29564,8 @@ def recover_cfg(
     accepted: dict[tuple, Any] = {}
     rejected_identities: set[tuple] = set()
     rejected_object_bases: set[int] = set()
-    producer_domain_memo: dict[
-        tuple[Any, ...], _ProducerDomainMemoEntry
-    ] = {}
-    finite_control_memo: dict[
-        tuple[Any, ...], _ProducerDomainMemoEntry
-    ] = {}
+    producer_domain_memo: dict[tuple[Any, ...], _ProducerDomainMemoEntry] = {}
+    finite_control_memo: dict[tuple[Any, ...], _ProducerDomainMemoEntry] = {}
     reusable_trial: tuple[_DirectCfgRecovery, RawCfg] | None = None
     while True:
         if reusable_trial is None:
@@ -29064,9 +29583,7 @@ def recover_cfg(
                 image,
                 current_inventory,
                 limits,
-                rejected_object_callback_tables=frozenset(
-                    rejected_object_bases
-                ),
+                rejected_object_callback_tables=frozenset(rejected_object_bases),
                 producer_domain_memo=producer_domain_memo,
                 producer_certificate_session=producer_certificate_session,
                 finite_control_memo=finite_control_memo,
@@ -29092,32 +29609,34 @@ def recover_cfg(
             for hypothesis_identity, hypothesis in invalidated.items():
                 del accepted[hypothesis_identity]
                 rejected_identities.add(hypothesis_identity)
-                if isinstance(
-                    hypothesis, _ObjectCallbackTableHypothesis
-                ):
+                if isinstance(hypothesis, _ObjectCallbackTableHypothesis):
                     rejected_object_bases.add(hypothesis.table_base)
             continue
 
-        candidates = tuple(
-            sorted(
-                current_recovery.object_callback_table_hypotheses,
-                key=lambda row: (row.table_base, row.store_address),
+        candidates = (
+            tuple(
+                sorted(
+                    current_recovery.object_callback_table_hypotheses,
+                    key=lambda row: (row.table_base, row.store_address),
+                )
             )
-        ) + tuple(
-            sorted(
-                current_recovery.copied_descriptor_callback_hypotheses,
-                key=lambda row: row.source_bases,
+            + tuple(
+                sorted(
+                    current_recovery.copied_descriptor_callback_hypotheses,
+                    key=lambda row: row.source_bases,
+                )
             )
-        ) + tuple(
-            sorted(
-                current_recovery.relocated_dispatch_slot_hypotheses,
-                key=lambda row: (
-                    row.transfer_address,
-                    row.table_base,
-                    row.index,
-                    row.slot_address,
-                    row.target,
-                ),
+            + tuple(
+                sorted(
+                    current_recovery.relocated_dispatch_slot_hypotheses,
+                    key=lambda row: (
+                        row.transfer_address,
+                        row.table_base,
+                        row.index,
+                        row.slot_address,
+                        row.target,
+                    ),
+                )
             )
         )
         new_candidates = {
@@ -29150,9 +29669,7 @@ def recover_cfg(
             image,
             trial_inventory,
             limits,
-            rejected_object_callback_tables=frozenset(
-                rejected_object_bases
-            ),
+            rejected_object_callback_tables=frozenset(rejected_object_bases),
             producer_domain_memo=producer_domain_memo,
             producer_certificate_session=producer_certificate_session,
             finite_control_memo=finite_control_memo,
@@ -29303,9 +29820,7 @@ def canonical_jsonl_bytes(cfg: RawCfg) -> bytes:
         }
     )
     for diagnostic in cfg.ownership_diagnostics:
-        rows.append(
-            {"record_kind": "ownership-diagnostic", **asdict(diagnostic)}
-        )
+        rows.append({"record_kind": "ownership-diagnostic", **asdict(diagnostic)})
     for disposition in cfg.relocation_dispositions:
         rows.append(
             {
@@ -29359,7 +29874,6 @@ def canonical_jsonl_bytes(cfg: RawCfg) -> bytes:
         + b"\n"
         for row in rows
     )
-
 
 
 def write_jsonl_atomic(path: Path, cfg: RawCfg) -> None:
