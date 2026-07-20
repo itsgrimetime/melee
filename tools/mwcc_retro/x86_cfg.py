@@ -148,7 +148,7 @@ class AnalysisLimits:
 
 
 _PRODUCER_CERTIFICATE_SCHEMA = "mwcc-retro-x86-producer-certificate-v1"
-_MOVZX_PRODUCER_ANALYSIS_SEMANTICS = "movzx-producer-analysis-v15"
+_MOVZX_PRODUCER_ANALYSIS_SEMANTICS = "movzx-producer-analysis-v16"
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -972,6 +972,7 @@ class _ObjectByteGuard:
     values: frozenset[int]
     guard_address: int
     provenance: str
+    discriminator_path: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2295,13 +2296,57 @@ class _DirectCfgRecovery:
     def _producer_object_guard_context(
         self, field_path: tuple[int, ...]
     ) -> _ObjectByteGuard | None:
-        for guard in reversed(self.producer_object_guard_contexts):
-            if guard.field_path == field_path:
-                return guard
-        return None
+        candidates = [
+            (index, guard)
+            for index, guard in enumerate(self.producer_object_guard_contexts)
+            if guard.field_path == field_path
+        ]
+        if not candidates:
+            return None
+        # Pointer-origin shifts can make a downstream guard and a shallower
+        # local guard describe the same target path.  Prefer the discriminator
+        # closest to that target object; use stack order only as a tiebreaker.
+        return max(
+            candidates,
+            key=lambda row: (
+                len(self._object_guard_discriminator_path(row[1])),
+                row[0],
+            ),
+        )[1]
 
     def _producer_object_guard_context_signature(self) -> tuple[_ObjectByteGuard, ...]:
         return tuple(self.producer_object_guard_contexts)
+
+    @staticmethod
+    def _object_guard_discriminator_path(
+        guard: _ObjectByteGuard,
+    ) -> tuple[int, ...]:
+        return guard.discriminator_path or (guard.discriminator_field,)
+
+    def _producer_object_guard_for_discriminator(
+        self, field_path: tuple[int, ...]
+    ) -> _ObjectByteGuard | None:
+        for guard in reversed(self.producer_object_guard_contexts):
+            if self._object_guard_discriminator_path(guard) == field_path:
+                return guard
+        return None
+
+    def _exact_producer_object_discriminator_guard(
+        self,
+        address: int,
+        register_family: str,
+        function_entry: int,
+        field_path: tuple[int, ...],
+    ) -> _ObjectByteGuard | None:
+        for guard in reversed(self.producer_object_guard_contexts):
+            if (
+                guard.observation_address == address
+                and guard.register_family == register_family
+                and guard.function_entry == function_entry
+                and self._object_guard_discriminator_path(guard) == field_path
+            ):
+                return guard
+        return None
 
     def _producer_allocator_lifetime_context(self) -> frozenset[int]:
         return (
@@ -3407,6 +3452,7 @@ class _DirectCfgRecovery:
         if index < len(tokens) and tokens[index] == "exact-origins":
             index += 1
         summary_flags = {
+            "guard-disjoint",
             "optional-preserve",
             "optional-empty-association",
             "preserved",
@@ -3426,6 +3472,9 @@ class _DirectCfgRecovery:
                 return _DirectCfgRecovery._callee_effect_has_flag(nested, flag)
         if detail.startswith("callee="):
             return _DirectCfgRecovery._callee_effect_has_flag(detail, flag)
+        if detail.startswith("call="):
+            tokens = detail.split(";")
+            return len(tokens) >= 3 and tokens[2] == flag
         return flag in detail
 
     def _callee_argument_byte_effect_via_exact_origins(
@@ -3446,10 +3495,16 @@ class _DirectCfgRecovery:
         if not observations:
             return None
         writers: set[int] = set()
+        guard_filtered_writers: set[int] = set()
         empty_writers: set[int] = set()
         definite_nonempty_writers: set[int] = set()
         values: set[int] = set()
         details: list[str] = []
+        object_guard = (
+            self._producer_object_guard_context(field_path[1:])
+            if len(field_path) > 1
+            else None
+        )
 
         def reaches_observation(address: int) -> bool:
             return any(
@@ -3558,6 +3613,39 @@ class _DirectCfgRecovery:
                             next_visited,
                         )
                     )
+                if result is None and object_guard is not None:
+                    discriminator = self._finite_object_byte_operand_values_before(
+                        address,
+                        source,
+                        function_entry,
+                        self._object_guard_discriminator_path(object_guard),
+                        next_visited,
+                    )
+                    if (
+                        discriminator is not None
+                        and discriminator[0]
+                        and discriminator[0].isdisjoint(object_guard.values)
+                    ):
+                        writers.add(address)
+                        guard_filtered_writers.add(address)
+                        details.append(
+                            f"writer={address:#x};exact-origin;guard-filtered;"
+                            f"guard={object_guard.guard_address:#x};"
+                            f"{object_guard.provenance};"
+                            f"discriminator={discriminator[1]}"
+                        )
+                        continue
+                if (
+                    result is not None
+                    and not result[0]
+                    and self._object_result_has_flag(result[1], "guard-disjoint")
+                ):
+                    writers.add(address)
+                    guard_filtered_writers.add(address)
+                    details.append(
+                        f"writer={address:#x};exact-origin;guard-filtered;{result[1]}"
+                    )
+                    continue
                 if result is None or (
                     not result[0]
                     and not self._object_result_has_flag(
@@ -3647,7 +3735,49 @@ class _DirectCfgRecovery:
                 if popped != context:
                     raise AssertionError("producer call context stack corrupted")
             if effect is None:
-                return None
+                if object_guard is None:
+                    return None
+                self.producer_exact_call_contexts.append(context)
+                try:
+                    discriminator_effect = self._callee_argument_byte_effect(
+                        target,
+                        aliases[0],
+                        (
+                            field_path[0],
+                            *self._object_guard_discriminator_path(object_guard),
+                        ),
+                        next_visited,
+                        require_nonzero_return=locally_guarded or forwarded_nonzero,
+                    )
+                finally:
+                    popped = self.producer_exact_call_contexts.pop()
+                    if popped != context:
+                        raise AssertionError("producer call context stack corrupted")
+                if (
+                    discriminator_effect is None
+                    or not discriminator_effect[0]
+                    or not discriminator_effect[0].isdisjoint(object_guard.values)
+                ):
+                    return None
+                writers.add(address)
+                guard_filtered_writers.add(address)
+                details.append(
+                    f"callee={target:#x};call={address:#x};guard-filtered;"
+                    f"guard={object_guard.guard_address:#x};"
+                    f"{object_guard.provenance};"
+                    f"discriminator={discriminator_effect[1]}"
+                )
+                continue
+            if not effect[0] and self._callee_effect_has_flag(
+                effect[1], "guard-disjoint"
+            ):
+                writers.add(address)
+                guard_filtered_writers.add(address)
+                details.append(
+                    f"callee={target:#x};call={address:#x};"
+                    f"guard-filtered;{effect[1]}"
+                )
+                continue
             optional_preserve = self._callee_effect_has_flag(
                 effect[1], "optional-preserve"
             )
@@ -3699,6 +3829,16 @@ class _DirectCfgRecovery:
         return (
             frozenset(values),
             f"callee={function_entry:#x};argument={argument_index};exact-origins;"
+            + (
+                "guard-disjoint;"
+                if (
+                    not values
+                    and writers
+                    and writers == guard_filtered_writers
+                    and not may_preserve
+                )
+                else ""
+            )
             + ("optional-preserve;" if may_preserve else "")
             + (
                 "optional-empty-association;" if may_be_empty else ""
@@ -3789,6 +3929,25 @@ class _DirectCfgRecovery:
         details: list[str] = []
         saw_return = False
         next_visited = visited | {key}
+        object_guard = self._producer_object_guard_context(field_path)
+
+        def guard_disjoint_at(candidate_address: int):
+            if object_guard is None:
+                return None
+            discriminator = self._finite_argument_object_byte_values_before(
+                candidate_address,
+                function_entry,
+                argument_index,
+                self._object_guard_discriminator_path(object_guard),
+                next_visited,
+            )
+            if (
+                discriminator is None
+                or not discriminator[0]
+                or not discriminator[0].isdisjoint(object_guard.values)
+            ):
+                return None
+            return discriminator
 
         for candidate_address in self._function_instruction_addresses(function_entry):
             state = states.get(candidate_address)
@@ -3923,6 +4082,15 @@ class _DirectCfgRecovery:
                     and target_field < write_offset + destination.size
                 )
                 if not overlaps_target:
+                    continue
+                if (discriminator := guard_disjoint_at(candidate_address)) is not None:
+                    writers.add(candidate_address)
+                    details.append(
+                        f"writer={candidate_address:#x};guard-filtered;"
+                        f"guard={object_guard.guard_address:#x};"
+                        f"{object_guard.provenance};"
+                        f"discriminator={discriminator[1]}"
+                    )
                     continue
                 if len(field_path) != 1:
                     if (
@@ -6438,10 +6606,15 @@ class _DirectCfgRecovery:
         append_loads: set[int] = set()
         next_visited = visited | {key}
         object_guard = self._producer_object_guard_context(field_path)
+        guard_discriminator_path = (
+            ()
+            if object_guard is None
+            else self._object_guard_discriminator_path(object_guard)
+        )
         discriminator = (
             None
-            if object_guard is None
-            else (object_guard.discriminator_field, object_guard.values)
+            if object_guard is None or len(guard_discriminator_path) != 1
+            else (guard_discriminator_path[0], object_guard.values)
         )
         lifetime_closures: dict[int, frozenset[int]] = {}
         lifetime_scope: frozenset[int] | None = None
@@ -7839,6 +8012,10 @@ class _DirectCfgRecovery:
                 )
                 if matched:
                     if call_result is None:
+                        if is_postdominated_by_exact_slot_writer(
+                            candidate_address
+                        ):
+                            continue
                         return None
                     writers.add(candidate_address)
                     values.update(call_result[0])
@@ -7878,13 +8055,59 @@ class _DirectCfgRecovery:
                     or write_offset != slot_offset
                 ):
                     return None
-                result = self._finite_object_byte_operand_values_before(
-                    candidate_address,
-                    candidate.operands[1],
-                    function_entry,
-                    field_path,
-                    visited | {key},
+                source = candidate.operands[1]
+                allocation_origins = (
+                    self._fresh_allocation_origin_calls_before(
+                        candidate_address,
+                        self._register_family(source.reg),
+                        function_entry,
+                    )
+                    if source.type == X86_OP_REG
+                    else None
                 )
+                if allocation_origins:
+                    allocation_values: set[int] = set()
+                    allocation_details = []
+                    publication_guard = (
+                        self._producer_object_guard_context(field_path)
+                        or self._producer_object_guard_for_discriminator(
+                            field_path
+                        )
+                    )
+                    for allocation_call in sorted(allocation_origins):
+                        allocation_result = (
+                            self._finite_fresh_allocation_object_byte_values_before(
+                                allocation_call,
+                                address,
+                                function_entry,
+                                field_path,
+                                visited | {key},
+                                allowed_stack_publication=(
+                                    candidate_address,
+                                    slot_offset,
+                                ),
+                                object_guard=publication_guard,
+                            )
+                        )
+                        if allocation_result is None:
+                            result = None
+                            break
+                        allocation_values.update(allocation_result[0])
+                        allocation_details.append(allocation_result[1])
+                    else:
+                        result = (
+                            frozenset(allocation_values),
+                            "late-initialized-fresh-pointer;"
+                            + "|".join(allocation_details),
+                        )
+                else:
+                    result = self._finite_object_byte_operand_values_before(
+                        candidate_address,
+                        source,
+                        function_entry,
+                        field_path,
+                        visited | {key},
+                    )
                 if result is None:
                     if is_postdominated_by_exact_slot_writer(candidate_address):
                         continue
@@ -8208,6 +8431,255 @@ class _DirectCfgRecovery:
         if not observation_definitions:
             return None
 
+        def affine_byte_equality(condition_address: int):
+            """Trace a zero-tested ADD/SUB chain back to one byte load.
+
+            Retail sometimes normalizes a tag through several immediate
+            adjustments with early conditional exits between them.  Keep the
+            proof deliberately local: every adjustment and the MOVZX must
+            dominate the final condition, and an intervening branch's taken
+            arm must not be able to re-enter the chain.
+            """
+            condition = self._owned_decoded(condition_address)
+            if not (
+                condition.mnemonic in {"add", "sub"}
+                and len(condition.operands) == 2
+                and condition.operands[0].type == X86_OP_REG
+                and condition.operands[0].size == 4
+                and condition.operands[1].type == X86_OP_IMM
+            ):
+                return None
+            index_family = self._register_family(condition.operands[0].reg)
+            adjustment = 0
+            required_addresses = []
+            cursor = condition.address + condition.size
+            for _ in range(32):
+                previous = self._previous_instruction(cursor)
+                if (
+                    previous is None
+                    or previous.address < function_entry
+                    or previous.address + previous.size != cursor
+                ):
+                    return None
+                decoded = self._owned_decoded(previous.address)
+                if (
+                    decoded.mnemonic in {"add", "sub"}
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_REG
+                    and decoded.operands[0].size == 4
+                    and self._register_family(decoded.operands[0].reg)
+                    == index_family
+                    and decoded.operands[1].type == X86_OP_IMM
+                ):
+                    immediate = decoded.operands[1].imm & 0xFFFF_FFFF
+                    if decoded.mnemonic == "add":
+                        adjustment = (adjustment + immediate) & 0xFFFF_FFFF
+                    else:
+                        adjustment = (adjustment - immediate) & 0xFFFF_FFFF
+                    required_addresses.append(decoded.address)
+                    cursor = decoded.address
+                    continue
+                if (
+                    decoded.id == x86_const.X86_INS_MOVZX
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_REG
+                    and self._register_family(decoded.operands[0].reg)
+                    == index_family
+                    and decoded.operands[1].type == X86_OP_MEM
+                    and decoded.operands[1].size == 1
+                ):
+                    guarded_value = (-adjustment) & 0xFFFF_FFFF
+                    if guarded_value > 0xFF:
+                        return None
+                    required_addresses.append(decoded.address)
+                    if any(
+                        self._reachable_within_function(
+                            function_entry,
+                            condition_address,
+                            function_entry,
+                            following_entry,
+                            excluded=required_address,
+                        )
+                        for required_address in required_addresses
+                    ):
+                        return None
+                    return (
+                        decoded.operands[1].mem,
+                        guarded_value,
+                        f"dominating-affine-byte-equality={condition_address:#x};"
+                        f"load={decoded.address:#x};value={guarded_value:#x}",
+                    )
+                if decoded.group(CS_GRP_CALL) or decoded.group(CS_GRP_RET):
+                    return None
+                if decoded.group(CS_GRP_JUMP):
+                    target = self._direct_target(decoded)
+                    if (
+                        target is None
+                        or decoded.address + decoded.size != cursor
+                        or self._reachable_within_function(
+                            target,
+                            condition_address,
+                            function_entry,
+                            following_entry,
+                            excluded=decoded.address,
+                        )
+                    ):
+                        return None
+                    cursor = decoded.address
+                    continue
+                if any(
+                    self._register_family(written) == index_family
+                    for written in decoded.regs_write
+                ) or any(
+                    operand.type == X86_OP_REG
+                    and operand.access & CS_AC_WRITE
+                    and self._register_family(operand.reg) == index_family
+                    for operand in decoded.operands
+                ):
+                    return None
+                cursor = decoded.address
+            return None
+
+        def affine_byte_branch_domain(branch_address: int):
+            """Enumerate one unsigned branch fed by an affine byte chain."""
+            branch = self._owned_decoded(branch_address)
+            supported_branches = {
+                "ja",
+                "jae",
+                "jb",
+                "jbe",
+                "jc",
+                "je",
+                "jna",
+                "jnae",
+                "jnb",
+                "jnbe",
+                "jnc",
+                "jne",
+                "jnz",
+                "jz",
+            }
+            if branch.mnemonic not in supported_branches:
+                return None
+            condition_instruction = self._previous_instruction(branch_address)
+            if (
+                condition_instruction is None
+                or condition_instruction.address + condition_instruction.size
+                != branch_address
+            ):
+                return None
+            condition = self._owned_decoded(condition_instruction.address)
+            if (
+                condition.id == x86_const.X86_INS_CMP
+                and len(condition.operands) == 2
+                and condition.operands[0].type == X86_OP_REG
+                and condition.operands[0].size == 4
+                and condition.operands[1].type == X86_OP_IMM
+            ):
+                index_family = self._register_family(condition.operands[0].reg)
+                comparison = condition.operands[1].imm & 0xFFFF_FFFF
+                cursor = condition.address
+            elif (
+                branch.mnemonic in {"je", "jne", "jnz", "jz"}
+                and condition.mnemonic in {"add", "sub"}
+                and len(condition.operands) == 2
+                and condition.operands[0].type == X86_OP_REG
+                and condition.operands[0].size == 4
+                and condition.operands[1].type == X86_OP_IMM
+            ):
+                index_family = self._register_family(condition.operands[0].reg)
+                comparison = 0
+                cursor = condition.address + condition.size
+            else:
+                return None
+            adjustment = 0
+            for _ in range(32):
+                previous = self._previous_instruction(cursor)
+                if (
+                    previous is None
+                    or previous.address < function_entry
+                    or previous.address + previous.size != cursor
+                ):
+                    return None
+                decoded = self._owned_decoded(previous.address)
+                if (
+                    decoded.mnemonic in {"add", "sub"}
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_REG
+                    and decoded.operands[0].size == 4
+                    and self._register_family(decoded.operands[0].reg)
+                    == index_family
+                    and decoded.operands[1].type == X86_OP_IMM
+                ):
+                    immediate = decoded.operands[1].imm & 0xFFFF_FFFF
+                    adjustment = (
+                        adjustment + immediate
+                        if decoded.mnemonic == "add"
+                        else adjustment - immediate
+                    ) & 0xFFFF_FFFF
+                    cursor = decoded.address
+                    continue
+                if (
+                    decoded.id == x86_const.X86_INS_MOVZX
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_REG
+                    and self._register_family(decoded.operands[0].reg)
+                    == index_family
+                    and decoded.operands[1].type == X86_OP_MEM
+                    and decoded.operands[1].size == 1
+                ):
+                    def branch_is_taken(value: int) -> bool:
+                        affine = (value + adjustment) & 0xFFFF_FFFF
+                        if branch.mnemonic in {"je", "jz"}:
+                            return affine == comparison
+                        if branch.mnemonic in {"jne", "jnz"}:
+                            return affine != comparison
+                        if branch.mnemonic in {"jbe", "jna"}:
+                            return affine <= comparison
+                        if branch.mnemonic in {"ja", "jnbe"}:
+                            return affine > comparison
+                        if branch.mnemonic in {"jb", "jc", "jnae"}:
+                            return affine < comparison
+                        return affine >= comparison
+
+                    return (
+                        decoded.address,
+                        decoded.operands[1].mem,
+                        frozenset(
+                            value for value in range(0x100) if branch_is_taken(value)
+                        ),
+                    )
+                if decoded.group(CS_GRP_CALL) or decoded.group(CS_GRP_RET):
+                    return None
+                if decoded.group(CS_GRP_JUMP):
+                    target = self._direct_target(decoded)
+                    if (
+                        target is None
+                        or decoded.address + decoded.size != cursor
+                        or self._reachable_within_function(
+                            target,
+                            condition.address,
+                            function_entry,
+                            following_entry,
+                            excluded=decoded.address,
+                        )
+                    ):
+                        return None
+                    cursor = decoded.address
+                    continue
+                if any(
+                    self._register_family(written) == index_family
+                    for written in decoded.regs_write
+                ) or any(
+                    operand.type == X86_OP_REG
+                    and operand.access & CS_AC_WRITE
+                    and self._register_family(operand.reg) == index_family
+                    for operand in decoded.operands
+                ):
+                    return None
+                cursor = decoded.address
+            return None
+
         case_start = address
         while case_start not in self.block_starts:
             previous = self._previous_instruction(case_start)
@@ -8228,34 +8700,320 @@ class _DirectCfgRecovery:
                     and edge_kind != "fallthrough"
                     and self._direct_target(branch) == case_start
                 )
+                guarded_memory = None
+                guarded_value = None
+                guard_provenance = None
                 if (
-                    equality_arm
-                    and compare.id == x86_const.X86_INS_CMP
+                    compare.id == x86_const.X86_INS_CMP
                     and len(compare.operands) == 2
                     and compare.operands[0].type == X86_OP_MEM
                     and compare.operands[0].size == 1
-                    and compare.operands[0].mem.segment == X86_REG_INVALID
-                    and compare.operands[0].mem.base != X86_REG_INVALID
-                    and compare.operands[0].mem.index == X86_REG_INVALID
-                    and self._register_family(compare.operands[0].mem.base)
-                    == register_family
                     and compare.operands[1].type == X86_OP_IMM
+                ):
+                    guarded_memory = compare.operands[0].mem
+                    guarded_value = compare.operands[1].imm & 0xFF
+                    guard_provenance = (
+                        f"byte-equality={compare.address:#x};"
+                        f"value={guarded_value:#x}"
+                    )
+                elif (
+                    compare.id == x86_const.X86_INS_SUB
+                    and len(compare.operands) == 2
+                    and compare.operands[0].type == X86_OP_REG
+                    and compare.operands[0].size == 4
+                    and compare.operands[1].type == X86_OP_IMM
+                ):
+                    load_instruction = self._previous_instruction(compare.address)
+                    load = (
+                        None
+                        if load_instruction is None
+                        else self._owned_decoded(load_instruction.address)
+                    )
+                    if (
+                        load is not None
+                        and load.id == x86_const.X86_INS_MOVZX
+                        and len(load.operands) == 2
+                        and load.operands[0].type == X86_OP_REG
+                        and self._register_family(load.operands[0].reg)
+                        == self._register_family(compare.operands[0].reg)
+                        and load.operands[1].type == X86_OP_MEM
+                        and load.operands[1].size == 1
+                    ):
+                        guarded_memory = load.operands[1].mem
+                        guarded_value = compare.operands[1].imm & 0xFF
+                        guard_provenance = (
+                            f"byte-sub-equality={compare.address:#x};"
+                            f"load={load.address:#x};value={guarded_value:#x}"
+                        )
+                if (
+                    equality_arm
+                    and guarded_memory is not None
+                    and guarded_value is not None
+                    and guard_provenance is not None
+                    and guarded_memory.segment == X86_REG_INVALID
+                    and guarded_memory.base != X86_REG_INVALID
+                    and guarded_memory.index == X86_REG_INVALID
+                    and self._register_family(guarded_memory.base) == register_family
                     and self._register_definitions_across_blocks(
                         compare.address, register_family, function_entry
                     )
                     == observation_definitions
                 ):
-                    value = compare.operands[1].imm & 0xFF
                     return _ObjectByteGuard(
                         function_entry,
                         address,
                         register_family,
                         field_path,
-                        compare.operands[0].mem.disp,
-                        frozenset({value}),
+                        guarded_memory.disp,
+                        frozenset({guarded_value}),
                         compare.address,
-                        f"byte-equality={compare.address:#x};value={value:#x}",
+                        guard_provenance,
                     )
+
+        # The equality arm may contain further branches before the selected
+        # field is loaded.  Search earlier conditional branches and require
+        # the equality successor to dominate this exact observation while
+        # the unequal successor cannot reach it.  This recognizes retail's
+        # ``movzx; sub imm; jne`` tag tests without treating a merely nearby
+        # comparison as a proof.
+        branch_candidates = self._function_instruction_addresses_between(
+            function_entry, function_entry, address
+        )[-2048:]
+        for branch_address in reversed(branch_candidates):
+            branch = self._owned_decoded(branch_address)
+            if branch.mnemonic not in {"je", "jne", "jz", "jnz"}:
+                continue
+            condition_instruction = None
+            cursor = branch_address
+            for _ in range(16):
+                previous = self._previous_instruction(cursor)
+                if previous is None or previous.address + previous.size != cursor:
+                    break
+                previous_decoded = self._owned_decoded(previous.address)
+                if x86_const.X86_REG_EFLAGS in previous_decoded.regs_write:
+                    condition_instruction = previous
+                    break
+                if (
+                    previous_decoded.group(CS_GRP_CALL)
+                    or previous_decoded.group(CS_GRP_JUMP)
+                    or previous_decoded.group(CS_GRP_RET)
+                    or previous.address in self.block_starts
+                ):
+                    break
+                cursor = previous.address
+            if condition_instruction is None:
+                continue
+            condition = self._owned_decoded(condition_instruction.address)
+            guarded_memory = None
+            guarded_value = None
+            guard_provenance = None
+            if (
+                condition.id == x86_const.X86_INS_CMP
+                and len(condition.operands) == 2
+                and condition.operands[0].type == X86_OP_MEM
+                and condition.operands[0].size == 1
+                and condition.operands[1].type == X86_OP_IMM
+            ):
+                guarded_memory = condition.operands[0].mem
+                guarded_value = condition.operands[1].imm & 0xFF
+                guard_provenance = (
+                    f"dominating-byte-equality={condition.address:#x};"
+                    f"value={guarded_value:#x}"
+                )
+            elif condition.id in {
+                x86_const.X86_INS_ADD,
+                x86_const.X86_INS_SUB,
+            }:
+                affine_guard = affine_byte_equality(condition.address)
+                if affine_guard is not None:
+                    guarded_memory, guarded_value, guard_provenance = affine_guard
+            if (
+                guarded_memory is None
+                or guarded_value is None
+                or guard_provenance is None
+                or guarded_memory.segment != X86_REG_INVALID
+                or guarded_memory.base == X86_REG_INVALID
+                or guarded_memory.index != X86_REG_INVALID
+                or self._register_family(guarded_memory.base) != register_family
+                or self._register_definitions_across_blocks(
+                    condition.address, register_family, function_entry
+                )
+                != observation_definitions
+            ):
+                continue
+            branch_target = self._direct_target(branch)
+            if branch_target is None:
+                continue
+            fallthrough = branch.address + branch.size
+            if branch.mnemonic in {"je", "jz"}:
+                equal_successor, unequal_successor = branch_target, fallthrough
+            else:
+                equal_successor, unequal_successor = fallthrough, branch_target
+            if self._reachable_within_function(
+                function_entry,
+                address,
+                function_entry,
+                following_entry,
+                excluded=branch.address,
+            ):
+                continue
+            if self._reachable_within_function(
+                unequal_successor,
+                address,
+                function_entry,
+                following_entry,
+                excluded=branch.address,
+            ):
+                continue
+            if not self._reachable_within_function(
+                equal_successor,
+                address,
+                function_entry,
+                following_entry,
+            ):
+                continue
+            return _ObjectByteGuard(
+                function_entry,
+                address,
+                register_family,
+                field_path,
+                guarded_memory.disp,
+                frozenset({guarded_value}),
+                condition.address,
+                guard_provenance,
+            )
+
+        # Some retail tag dispatches merge multiple affine range arms before
+        # returning the original object.  Enumerate the loaded byte through
+        # every recognized branch, then retain values whose deterministic
+        # affine edges can still reach this observation.  Unrecognized
+        # control remains nondeterministic, so the result is an overestimate.
+        affine_models_by_load: dict[
+            tuple[int, int, int],
+            dict[int, tuple[frozenset[int], int, int]],
+        ] = {}
+        affine_memories = {}
+        for branch_address in branch_candidates:
+            model = affine_byte_branch_domain(branch_address)
+            if model is None:
+                continue
+            load_address, memory, taken_values = model
+            if (
+                memory.segment != X86_REG_INVALID
+                or memory.base == X86_REG_INVALID
+                or memory.index != X86_REG_INVALID
+                or self._register_family(memory.base) != register_family
+                or self._register_definitions_across_blocks(
+                    load_address, register_family, function_entry
+                )
+                != observation_definitions
+            ):
+                continue
+            branch = self._owned_decoded(branch_address)
+            target = self._direct_target(branch)
+            if target is None:
+                continue
+            load_key = (load_address, memory.base, memory.disp)
+            affine_memories[load_key] = memory
+            affine_models_by_load.setdefault(load_key, {})[branch_address] = (
+                taken_values,
+                target,
+                branch.address + branch.size,
+            )
+        for load_key, branch_models in affine_models_by_load.items():
+            load_address, _, _ = load_key
+            memory = affine_memories[load_key]
+            if self._reachable_within_function(
+                function_entry,
+                address,
+                function_entry,
+                following_entry,
+                excluded=load_address,
+            ):
+                continue
+            byte_overwritten = False
+            for candidate_address in self._function_instruction_addresses_between(
+                function_entry,
+                load_address + self.instructions[load_address].size,
+                address,
+            ):
+                if not (
+                    self._reachable_within_function(
+                        load_address,
+                        candidate_address,
+                        function_entry,
+                        following_entry,
+                    )
+                    and self._reachable_within_function(
+                        candidate_address,
+                        address,
+                        function_entry,
+                        following_entry,
+                    )
+                ):
+                    continue
+                candidate = self._owned_decoded(candidate_address)
+                if any(
+                    operand.type == X86_OP_MEM
+                    and operand.access & CS_AC_WRITE
+                    and operand.size > 0
+                    and operand.mem.base != X86_REG_INVALID
+                    and operand.mem.index == X86_REG_INVALID
+                    and self._register_family(operand.mem.base) == register_family
+                    and operand.mem.disp < memory.disp + 1
+                    and memory.disp < operand.mem.disp + operand.size
+                    and self._register_definitions_across_blocks(
+                        candidate_address, register_family, function_entry
+                    )
+                    == observation_definitions
+                    for operand in candidate.operands
+                ):
+                    byte_overwritten = True
+                    break
+            if byte_overwritten:
+                continue
+            possible_values = set()
+            for value in range(0x100):
+                pending = [function_entry]
+                seen = set()
+                while pending:
+                    current = heapq.heappop(pending)
+                    if current in seen:
+                        continue
+                    if current == address:
+                        possible_values.add(value)
+                        break
+                    seen.add(current)
+                    self.limits.check("max_summary_iterations", len(seen))
+                    model = branch_models.get(current)
+                    if model is None:
+                        successors = self._summary_successors(
+                            current, function_entry, following_entry
+                        )
+                    else:
+                        taken_values, taken_target, fallthrough = model
+                        successors = (
+                            (taken_target,)
+                            if value in taken_values
+                            else (fallthrough,)
+                        )
+                    for successor in successors:
+                        if successor not in seen:
+                            heapq.heappush(pending, successor)
+            if not possible_values or len(possible_values) == 0x100:
+                continue
+            values = frozenset(possible_values)
+            return _ObjectByteGuard(
+                function_entry,
+                address,
+                register_family,
+                field_path,
+                memory.disp,
+                values,
+                min(branch_models),
+                f"affine-byte-branch-domain;load={load_address:#x};"
+                f"branches={len(branch_models)};values={len(values)}",
+            )
 
         candidates: list[_ObjectByteGuard] = []
         for table in self.jump_tables.values():
@@ -8369,12 +9127,33 @@ class _DirectCfgRecovery:
         field_path: tuple[int, ...],
         visited: frozenset[tuple[int, str]],
     ) -> tuple[frozenset[int], str] | None:
+        exact_guard = self._exact_producer_object_discriminator_guard(
+            address,
+            register_family,
+            function_entry,
+            field_path,
+        )
+        if exact_guard is not None:
+            return (
+                exact_guard.values,
+                f"exact-object-byte-guard={exact_guard.guard_address:#x};"
+                f"{exact_guard.provenance}",
+            )
         guard = self._object_byte_case_guard_before(
             address,
             register_family,
             function_entry,
             field_path,
         )
+        if (
+            guard is not None
+            and field_path == self._object_guard_discriminator_path(guard)
+        ):
+            return (
+                guard.values,
+                f"local-object-byte-guard={guard.guard_address:#x};"
+                f"{guard.provenance}",
+            )
         if guard is not None:
             self.producer_object_guard_contexts.append(guard)
         try:
@@ -8427,6 +9206,7 @@ class _DirectCfgRecovery:
             "call-return-object-byte:"
             f"{call_target:#x}:{','.join(map(str, field_path))}",
         )
+
         if key in visited or not field_path:
             return None
         self._note_producer_dependency(call_target)
@@ -8453,6 +9233,8 @@ class _DirectCfgRecovery:
         values: set[int] = set()
         details = []
         next_visited = visited | {key}
+        object_guard = self._producer_object_guard_context(field_path)
+        guard_disjoint_returns = 0
         for return_address in returns:
             context = (call_target, call_address, caller_entry)
             self.producer_exact_call_contexts.append(context)
@@ -8468,11 +9250,66 @@ class _DirectCfgRecovery:
                 popped = self.producer_exact_call_contexts.pop()
                 if popped != context:
                     raise AssertionError("producer call context stack corrupted")
-            if result is None:
-                return None
+            needs_guard_discriminator = bool(
+                object_guard is not None
+                and (
+                    result is None
+                    or (
+                        not result[0]
+                        and self._object_result_has_flag(
+                            result[1], "optional-empty-association"
+                        )
+                    )
+                )
+            )
+            if result is None or needs_guard_discriminator:
+                if object_guard is None:
+                    return None
+                self.producer_exact_call_contexts.append(context)
+                try:
+                    discriminator = (
+                        self._finite_object_byte_register_values_before(
+                            return_address,
+                            "eax",
+                            call_target,
+                            self._object_guard_discriminator_path(object_guard),
+                            next_visited,
+                        )
+                    )
+                finally:
+                    popped = self.producer_exact_call_contexts.pop()
+                    if popped != context:
+                        raise AssertionError("producer call context stack corrupted")
+                if discriminator is not None and discriminator[0] and (
+                    discriminator[0].isdisjoint(object_guard.values)
+                ):
+                    guard_disjoint_returns += 1
+                    details.append(
+                        f"return={return_address:#x};guard-disjoint;"
+                        f"guard={object_guard.guard_address:#x};"
+                        f"{object_guard.provenance};discriminator-values="
+                        + ",".join(
+                            f"{value:#x}" for value in sorted(discriminator[0])
+                        )
+                    )
+                    continue
+                if result is None:
+                    return None
+            if not result[0] and self._object_result_has_flag(
+                result[1], "guard-disjoint"
+            ):
+                guard_disjoint_returns += 1
+                details.append(f"return={return_address:#x};{result[1]}")
+                continue
             values.update(result[0])
             details.append(f"return={return_address:#x};{result[1]}")
         if not values:
+            if guard_disjoint_returns == len(returns):
+                return (
+                    frozenset(),
+                    f"call={call_address:#x};target={call_target:#x};"
+                    "guard-disjoint;" + "|".join(details),
+                )
             return None
         self._check_count("max_finite_values", len(values))
         return (
@@ -8632,6 +9469,9 @@ class _DirectCfgRecovery:
         function_entry: int,
         field_path: tuple[int, ...],
         visited: frozenset[tuple[int, str]],
+        *,
+        allowed_stack_publication: tuple[int, int] | None = None,
+        object_guard: _ObjectByteGuard | None = None,
     ) -> tuple[frozenset[int], str] | None:
         """Prove a nested byte initialized in one fresh allocation."""
         key = (
@@ -8685,6 +9525,7 @@ class _DirectCfgRecovery:
             root_call=allocation_call,
             propagate_call_returns=False,
             stop_address=observation_address,
+            root_stack_alias=allowed_stack_publication,
         )
         if states is None or observation_address not in states:
             return None
@@ -8703,6 +9544,321 @@ class _DirectCfgRecovery:
         values: set[int] = set()
         details: list[str] = []
         next_visited = visited | {key}
+
+        def copied_source_result(
+            address: int,
+            source_family: str,
+            source_path: tuple[int, ...],
+            stack_source: int | None,
+        ):
+            query_address = address
+            query_family = source_family
+            if stack_source is None:
+                source_definitions = self._register_definitions_across_blocks(
+                    address,
+                    source_family,
+                    function_entry,
+                )
+                if source_definitions and len(source_definitions) == 1:
+                    source_definition = self._owned_decoded(
+                        next(iter(source_definitions))
+                    )
+                    if (
+                        source_definition.id == X86_INS_LEA
+                        and len(source_definition.operands) == 2
+                        and source_definition.operands[1].type == X86_OP_MEM
+                        and source_definition.operands[1].mem.segment
+                        == X86_REG_INVALID
+                        and source_definition.operands[1].mem.base
+                        != X86_REG_INVALID
+                        and source_definition.operands[1].mem.index
+                        == X86_REG_INVALID
+                        and source_definition.operands[1].mem.disp == 0
+                    ):
+                        query_address = source_definition.address
+                        query_family = self._register_family(
+                            source_definition.operands[1].mem.base
+                        )
+            source_guard = (
+                None
+                if object_guard is None
+                else _ObjectByteGuard(
+                    function_entry,
+                    query_address,
+                    query_family,
+                    object_guard.field_path,
+                    object_guard.discriminator_field,
+                    object_guard.values,
+                    object_guard.guard_address,
+                    f"{object_guard.provenance};bulk-copy-origin={address:#x}",
+                    self._object_guard_discriminator_path(object_guard),
+                )
+            )
+            if source_guard is not None:
+                self.producer_object_guard_contexts.append(source_guard)
+            try:
+                return (
+                    self._finite_stack_object_byte_values_before(
+                        address,
+                        stack_source,
+                        function_entry,
+                        source_path,
+                        next_visited,
+                    )
+                    if stack_source is not None
+                    else self._finite_object_byte_register_values_before(
+                        query_address,
+                        query_family,
+                        function_entry,
+                        source_path,
+                        next_visited,
+                    )
+                )
+            finally:
+                if source_guard is not None:
+                    popped = self.producer_object_guard_contexts.pop()
+                    if popped != source_guard:
+                        raise AssertionError(
+                            "producer object guard stack corrupted"
+                        )
+
+        function_addresses = self._function_instruction_addresses(function_entry)
+        function_address_index = {
+            candidate: index for index, candidate in enumerate(function_addresses)
+        }
+        bulk_copy_continuations: set[int] = set()
+
+        def bulk_copy_source_result(
+            address: int,
+        ) -> tuple[frozenset[int], str] | None:
+            row = self._owned_decoded(address)
+            memory_operands = [
+                operand
+                for operand in row.operands
+                if operand.type == X86_OP_MEM
+            ]
+            if len(memory_operands) != 2:
+                return None
+            destination = next(
+                (
+                    operand
+                    for operand in memory_operands
+                    if operand.access & CS_AC_WRITE
+                ),
+                None,
+            )
+            source = next(
+                (
+                    operand
+                    for operand in memory_operands
+                    if operand.access & CS_AC_READ
+                ),
+                None,
+            )
+            if (
+                destination is None
+                or source is None
+                or destination.mem.base == X86_REG_INVALID
+                or source.mem.base == X86_REG_INVALID
+                or destination.mem.index != X86_REG_INVALID
+                or source.mem.index != X86_REG_INVALID
+            ):
+                return None
+            destination_family = self._register_family(destination.mem.base)
+            source_family = self._register_family(source.mem.base)
+            current_index = function_address_index[address]
+            first_copy_index = current_index
+            for candidate_index in range(current_index - 1, -1, -1):
+                candidate_address = function_addresses[candidate_index]
+                candidate = self._owned_decoded(candidate_address)
+                next_address = function_addresses[candidate_index + 1]
+                if candidate.address + candidate.size != next_address:
+                    break
+                candidate_memory = [
+                    operand
+                    for operand in candidate.operands
+                    if operand.type == X86_OP_MEM
+                ]
+                same_copy = bool(
+                    candidate.mnemonic in {"movsb", "movsw", "movsd"}
+                    and len(candidate_memory) == 2
+                    and any(
+                        operand.access & CS_AC_WRITE
+                        and operand.mem.base != X86_REG_INVALID
+                        and self._register_family(operand.mem.base)
+                        == destination_family
+                        for operand in candidate_memory
+                    )
+                    and any(
+                        operand.access & CS_AC_READ
+                        and operand.mem.base != X86_REG_INVALID
+                        and self._register_family(operand.mem.base)
+                        == source_family
+                        for operand in candidate_memory
+                    )
+                )
+                if same_copy:
+                    first_copy_index = candidate_index
+                    continue
+                if (
+                    candidate.group(CS_GRP_CALL)
+                    or candidate.group(CS_GRP_JUMP)
+                    or candidate.group(CS_GRP_RET)
+                    or any(
+                        self._register_family(register)
+                        in {destination_family, source_family}
+                        for register in candidate.regs_write
+                    )
+                    or any(
+                        operand.type == X86_OP_REG
+                        and operand.access & CS_AC_WRITE
+                        and self._register_family(operand.reg)
+                        in {destination_family, source_family}
+                        for operand in candidate.operands
+                    )
+                ):
+                    break
+            copy_rows = []
+            expected_offset = 0
+            for candidate_index in range(first_copy_index, len(function_addresses)):
+                candidate_address = function_addresses[candidate_index]
+                candidate = self._owned_decoded(candidate_address)
+                if candidate_index > first_copy_index:
+                    previous = self._owned_decoded(
+                        function_addresses[candidate_index - 1]
+                    )
+                    if previous.address + previous.size != candidate_address:
+                        break
+                candidate_memory = [
+                    operand
+                    for operand in candidate.operands
+                    if operand.type == X86_OP_MEM
+                ]
+                same_copy = bool(
+                    candidate.mnemonic in {"movsb", "movsw", "movsd"}
+                    and len(candidate_memory) == 2
+                    and any(
+                        operand.access & CS_AC_WRITE
+                        and operand.mem.base != X86_REG_INVALID
+                        and self._register_family(operand.mem.base)
+                        == destination_family
+                        for operand in candidate_memory
+                    )
+                    and any(
+                        operand.access & CS_AC_READ
+                        and operand.mem.base != X86_REG_INVALID
+                        and self._register_family(operand.mem.base)
+                        == source_family
+                        for operand in candidate_memory
+                    )
+                )
+                if same_copy:
+                    candidate_state = states.get(candidate_address)
+                    candidate_destination = next(
+                        operand
+                        for operand in candidate_memory
+                        if operand.access & CS_AC_WRITE
+                    )
+                    destination_offsets = offsets(
+                        candidate_state,
+                        candidate_destination.mem.base,
+                    )
+                    if (
+                        len(destination_offsets) != 1
+                        or next(iter(destination_offsets))
+                        + candidate_destination.mem.disp
+                        != expected_offset
+                    ):
+                        return None
+                    copy_rows.append(
+                        (
+                            candidate_address,
+                            expected_offset,
+                            candidate_destination.size,
+                        )
+                    )
+                    expected_offset += candidate_destination.size
+                    if expected_offset >= target_field + 4:
+                        break
+                    continue
+                if (
+                    candidate.group(CS_GRP_CALL)
+                    or candidate.group(CS_GRP_JUMP)
+                    or candidate.group(CS_GRP_RET)
+                    or any(
+                        self._register_family(register)
+                        in {destination_family, source_family}
+                        for register in candidate.regs_write
+                    )
+                    or any(
+                        operand.type == X86_OP_REG
+                        and operand.access & CS_AC_WRITE
+                        and self._register_family(operand.reg)
+                        in {destination_family, source_family}
+                        for operand in candidate.operands
+                    )
+                ):
+                    break
+            if (
+                not copy_rows
+                or copy_rows[0][1] != 0
+                or expected_offset < target_field + 4
+            ):
+                return None
+            overlapping = [
+                candidate_address
+                for candidate_address, write_offset, width in copy_rows
+                if write_offset < target_field + 4
+                and target_field < write_offset + width
+            ]
+            if not overlapping or address != overlapping[0]:
+                return None
+            last_copy = copy_rows[-1][0]
+            if self._reachable_within_function(
+                function_entry,
+                last_copy,
+                function_entry,
+                following_entry,
+                excluded=copy_rows[0][0],
+            ):
+                return None
+            bulk_copy_continuations.update(overlapping[1:])
+            first_copy = self._owned_decoded(copy_rows[0][0])
+            first_source = next(
+                operand
+                for operand in first_copy.operands
+                if operand.type == X86_OP_MEM and operand.access & CS_AC_READ
+            )
+            source_definitions = self._register_definitions_across_blocks(
+                first_copy.address,
+                source_family,
+                function_entry,
+            )
+            stack_source = None
+            if source_definitions and len(source_definitions) == 1:
+                source_definition = self._owned_decoded(
+                    next(iter(source_definitions))
+                )
+                if (
+                    source_definition.id == X86_INS_LEA
+                    and len(source_definition.operands) == 2
+                    and source_definition.operands[1].type == X86_OP_MEM
+                ):
+                    stack_source = self._stack_memory_logical_offset(
+                        source_definition.address,
+                        source_definition.operands[1].mem,
+                        function_entry,
+                    )
+            return copied_source_result(
+                first_copy.address,
+                source_family,
+                (
+                    first_source.mem.disp + field_path[0],
+                    *field_path[1:],
+                ),
+                stack_source,
+            )
+
         for address in self._function_instruction_addresses(function_entry):
             if not start_address <= address < observation_address:
                 continue
@@ -8723,6 +9879,8 @@ class _DirectCfgRecovery:
             ):
                 continue
             row = self._owned_decoded(address)
+            if address in bulk_copy_continuations:
+                continue
             for operand_index, destination in enumerate(row.operands):
                 if (
                     destination.type != X86_OP_MEM
@@ -8751,12 +9909,75 @@ class _DirectCfgRecovery:
                 ):
                     continue
                 if len(field_path) == 1:
-                    result = self._finite_byte_store_values(
-                        row,
-                        target_field - write_offset,
-                        function_entry,
-                        next_visited,
-                    )
+                    if row.mnemonic in {"movsb", "movsw", "movsd"}:
+                        if any(
+                            prior < address
+                            and self._owned_decoded(prior).mnemonic == "std"
+                            for prior in self._function_instruction_addresses(
+                                function_entry
+                            )
+                        ):
+                            return None
+                        source_operand = next(
+                            (
+                                operand
+                                for operand in row.operands
+                                if operand.type == X86_OP_MEM
+                                and operand.access & CS_AC_READ
+                                and operand.mem.base != X86_REG_INVALID
+                            ),
+                            None,
+                        )
+                        if (
+                            source_operand is None
+                            or source_operand.mem.segment != X86_REG_INVALID
+                            or source_operand.mem.index != X86_REG_INVALID
+                        ):
+                            return None
+                        source_family = self._register_family(
+                            source_operand.mem.base
+                        )
+                        source_path = (
+                            source_operand.mem.disp
+                            + target_field
+                            - write_offset,
+                        )
+                        source_definitions = (
+                            self._register_definitions_across_blocks(
+                                address,
+                                source_family,
+                                function_entry,
+                            )
+                        )
+                        stack_source = None
+                        if source_definitions and len(source_definitions) == 1:
+                            source_definition = self._owned_decoded(
+                                next(iter(source_definitions))
+                            )
+                            if (
+                                source_definition.id == X86_INS_LEA
+                                and len(source_definition.operands) == 2
+                                and source_definition.operands[1].type
+                                == X86_OP_MEM
+                            ):
+                                stack_source = self._stack_memory_logical_offset(
+                                    source_definition.address,
+                                    source_definition.operands[1].mem,
+                                    function_entry,
+                                )
+                        result = copied_source_result(
+                            address,
+                            source_family,
+                            source_path,
+                            stack_source,
+                        )
+                    else:
+                        result = self._finite_byte_store_values(
+                            row,
+                            target_field - write_offset,
+                            function_entry,
+                            next_visited,
+                        )
                 elif (
                     row.id == X86_INS_MOV
                     and len(row.operands) == 2
@@ -8776,6 +9997,8 @@ class _DirectCfgRecovery:
                         field_path[1:],
                         next_visited,
                     )
+                elif row.mnemonic in {"movsb", "movsw", "movsd"}:
+                    result = bulk_copy_source_result(address)
                 else:
                     return None
                 if result is None:
@@ -8871,7 +10094,16 @@ class _DirectCfgRecovery:
                     and destination.type == X86_OP_MEM
                     and not offsets(state, destination.mem.base)
                 ):
-                    return None
+                    publication = (
+                        address,
+                        self._stack_operand_logical_offset(
+                            address,
+                            destination,
+                            function_entry,
+                        ),
+                    )
+                    if publication != allowed_stack_publication:
+                        return None
 
         initializers = frozenset(writers | empty_writers)
         if not initializers or self._reachable_within_function(
@@ -8959,9 +10191,40 @@ class _DirectCfgRecovery:
             function_entry,
         )
         if allocation_origins:
+            object_guard = self._producer_object_guard_context(field_path)
             values: set[int] = set()
             details = []
+            guard_disjoint_origins = 0
             for allocation_call in sorted(allocation_origins):
+                discriminator = (
+                    None
+                    if object_guard is None
+                    else self._finite_fresh_allocation_object_byte_values_before(
+                        allocation_call,
+                        address,
+                        function_entry,
+                        self._object_guard_discriminator_path(object_guard),
+                        visited | {key},
+                    )
+                )
+                if (
+                    object_guard is not None
+                    and discriminator is not None
+                    and discriminator[0]
+                    and discriminator[0].isdisjoint(object_guard.values)
+                ):
+                    guard_disjoint_origins += 1
+                    details.append(
+                        f"fresh-allocation={allocation_call:#x};"
+                        f"guard={object_guard.guard_address:#x};"
+                        f"{object_guard.provenance};guard-disjoint;"
+                        "discriminator-values="
+                        + ",".join(
+                            f"{value:#x}" for value in sorted(discriminator[0])
+                        )
+                        + f";{discriminator[1]}"
+                    )
+                    continue
                 result = self._finite_fresh_allocation_object_byte_values_before(
                     allocation_call,
                     address,
@@ -8978,6 +10241,8 @@ class _DirectCfgRecovery:
                     "optional-empty-association" in detail for detail in details
                 ):
                     return frozenset(), "|".join(details)
+                if guard_disjoint_origins == len(allocation_origins):
+                    return frozenset(), "guard-disjoint;" + "|".join(details)
                 return None
             self._check_count("max_finite_values", len(values))
             return frozenset(values), "|".join(details)
@@ -9183,14 +10448,45 @@ class _DirectCfgRecovery:
                     )
                     continue
                 parent_path = (source.mem.disp, *field_path)
-                result = self._finite_object_byte_register_values_before(
-                    definition_address,
-                    self._register_family(source.mem.base),
-                    function_entry,
-                    parent_path,
-                    visited | {key},
-                )
                 parent_family = self._register_family(source.mem.base)
+                source_guard = self._producer_object_guard_context(field_path)
+                shifted_guard = (
+                    None
+                    if source_guard is None
+                    else _ObjectByteGuard(
+                        source_guard.function_entry,
+                        definition_address,
+                        parent_family,
+                        parent_path,
+                        source_guard.discriminator_field,
+                        source_guard.values,
+                        source_guard.guard_address,
+                        f"{source_guard.provenance};"
+                        f"pointer-origin-shift={definition_address:#x}:+"
+                        f"{source.mem.disp:#x}",
+                        (
+                            source.mem.disp,
+                            *self._object_guard_discriminator_path(source_guard),
+                        ),
+                    )
+                )
+                if shifted_guard is not None:
+                    self.producer_object_guard_contexts.append(shifted_guard)
+                try:
+                    result = self._finite_object_byte_register_values_before(
+                        definition_address,
+                        parent_family,
+                        function_entry,
+                        parent_path,
+                        visited | {key},
+                    )
+                finally:
+                    if shifted_guard is not None:
+                        popped = self.producer_object_guard_contexts.pop()
+                        if popped != shifted_guard:
+                            raise AssertionError(
+                                "producer object guard stack corrupted"
+                            )
                 parent_definitions = self._register_definitions_across_blocks(
                     definition_address,
                     parent_family,
@@ -15652,6 +16948,7 @@ class _DirectCfgRecovery:
         collapse_nonnegative_offsets: bool = False,
         stop_address: int | None = None,
         excluded_addresses: frozenset[int] = frozenset(),
+        root_stack_alias: tuple[int, int] | None = None,
     ) -> dict[int, tuple[tuple[frozenset[int], ...], int]] | None:
         """Track one pointer identity and constant interior offsets.
 
@@ -15678,6 +16975,7 @@ class _DirectCfgRecovery:
             collapse_nonnegative_offsets,
             stop_address,
             tuple(sorted(excluded_addresses)),
+            root_stack_alias,
             self._summary_fact_signature(),
             self.control_flow_revision,
         )
@@ -15746,6 +17044,64 @@ class _DirectCfgRecovery:
             ):
                 return frozenset({0})
             return result
+
+        def root_stack_alias_load(address: int, operand) -> bool:
+            if root_stack_alias is None or operand.type != X86_OP_MEM:
+                return False
+            publication_address, slot_offset = root_stack_alias
+            if (
+                operand.size != 4
+                or self._stack_operand_logical_offset(
+                    address, operand, function_entry
+                )
+                != slot_offset
+                or not publication_address < address
+                or self._reachable_within_function(
+                    function_entry,
+                    address,
+                    function_entry,
+                    following_entry,
+                    excluded=publication_address,
+                )
+            ):
+                return False
+            for candidate_address in self._function_instruction_addresses_between(
+                function_entry,
+                publication_address + 1,
+                address,
+            ):
+                candidate = self._owned_decoded(candidate_address)
+                for destination in candidate.operands:
+                    if (
+                        destination.type != X86_OP_MEM
+                        or not destination.access & CS_AC_WRITE
+                        or destination.size <= 0
+                    ):
+                        continue
+                    write_offset = self._stack_operand_logical_offset(
+                        candidate_address,
+                        destination,
+                        function_entry,
+                    )
+                    if (
+                        write_offset is not None
+                        and write_offset < slot_offset + 4
+                        and slot_offset < write_offset + destination.size
+                        and self._reachable_within_function(
+                            publication_address,
+                            candidate_address,
+                            function_entry,
+                            following_entry,
+                        )
+                        and self._reachable_within_function(
+                            candidate_address,
+                            address,
+                            function_entry,
+                            following_entry,
+                        )
+                    ):
+                        return False
+            return True
 
         while pending:
             current = heapq.heappop(pending)
@@ -15834,6 +17190,8 @@ class _DirectCfgRecovery:
                             argument_index is not None
                             and source_argument == argument_index
                         ):
+                            value = frozenset({0})
+                        elif root_stack_alias_load(current, source):
                             value = frozenset({0})
                         elif source.type == X86_OP_REG:
                             value = register_offsets(source.reg)
