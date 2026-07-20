@@ -5174,6 +5174,267 @@ def redefined_argument_pointer_image(
     return image, exact_call, join_address
 
 
+def redefined_argument_loop_image(*, redefine_before_backedge=True):
+    """Loop after an unknown write, optionally cutting the old pointer."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytearray(0x200)
+    text = memoryview(data)
+
+    text[0:0x0B] = bytes.fromhex("83 ec 08 c6 04 24 29 8d 04 24 50")
+    exact_call = text_va + 0x0B
+    text[0x0B] = 0xE8
+    text[0x0C:0x10] = (text_va + 0x40 - (text_va + 0x10)).to_bytes(4, "little", signed=True)
+    text[0x10:0x14] = bytes.fromhex("83 c4 0c c3")
+
+    cursor = 0x40
+
+    def emit(encoded):
+        nonlocal cursor
+        encoded = bytes.fromhex(encoded)
+        text[cursor : cursor + len(encoded)] = encoded
+        cursor += len(encoded)
+
+    emit("56 8b 74 24 08")
+    loop_address = cursor
+    emit("85 c9 74 00 88 16")
+    observation_branch = loop_address + 2
+    redefinition_address = None
+    if redefine_before_backedge:
+        redefinition_address = text_va + cursor
+        emit("31 f6")
+    backedge = cursor
+    emit("eb 00")
+    observation_address = text_va + cursor
+    emit("89 f0 5e c3")
+    text[observation_branch + 1] = cursor - 4 - (observation_branch + 2)
+    text[backedge + 1] = (loop_address - (backedge + 2)) & 0xFF
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(pe_mod.Section(".text", text_va, 0, 0x200, 0x200, 0x60000020),),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+    return image, exact_call, observation_address, redefinition_address
+
+
+def exact_immediate_object_argument_image(value):
+    """Return one exact immediate pointer argument unchanged."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytearray(0x100)
+    text = memoryview(data)
+    text[0:2] = bytes((0x6A, value))
+    exact_call = text_va + 2
+    text[2] = 0xE8
+    text[3:7] = (text_va + 0x40 - (text_va + 7)).to_bytes(4, "little", signed=True)
+    text[7:11] = bytes.fromhex("83 c4 04 c3")
+    text[0x40:0x45] = bytes.fromhex("8b 44 24 04 c3")
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(pe_mod.Section(".text", text_va, 0, 0x100, 0x100, 0x60000020),),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x100),),
+    )
+    return image, exact_call
+
+
+def conditional_nested_argument_pointer_image(*, mutation=None):
+    """Conditionally replace an argument's nested pointer before return."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {None, "partial", "unknown"}
+    text_va = 0x00401000
+    data = bytearray(0x200)
+    text = memoryview(data)
+
+    cursor = 0
+
+    def emit(encoded):
+        nonlocal cursor
+        encoded = bytes.fromhex(encoded)
+        text[cursor : cursor + len(encoded)] = encoded
+        cursor += len(encoded)
+
+    emit("83 ec 20 c6 04 24 29 c6 44 24 04 35")
+    emit("8d 04 24 89 44 24 12 8d 54 24 04 52 8d 44 24 0c 50")
+    exact_call = text_va + cursor
+    text[cursor] = 0xE8
+    text[cursor + 1 : cursor + 5] = (text_va + 0x80 - (text_va + cursor + 5)).to_bytes(
+        4, "little", signed=True
+    )
+    cursor += 5
+    emit("83 c4 08 83 c4 20 c3")
+
+    cursor = 0x80
+    emit("56 8b 74 24 08 85 c9 74 00")
+    preserve_branch = cursor - 2
+    if mutation == "unknown":
+        emit("89 d0 89 46 0a")
+    elif mutation == "partial":
+        emit("8b 44 24 0c 66 89 46 0a")
+    else:
+        emit("8b 44 24 0c 89 46 0a")
+    observation_address = text_va + cursor
+    emit("89 f0 5e c3")
+    text[preserve_branch + 1] = cursor - 4 - (preserve_branch + 2)
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(pe_mod.Section(".text", text_va, 0, 0x200, 0x200, 0x60000020),),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+    return image, exact_call, observation_address
+
+
+def successful_object_outparam_image(*, mutation=None):
+    """Write an object pointer only on a caller-guarded success return."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {None, "unknown", "no-guard", "nested-empty"}
+    text_va = 0x00401000
+    data = bytearray(0x200)
+    text = memoryview(data)
+
+    cursor = 0
+
+    def emit(encoded):
+        nonlocal cursor
+        encoded = bytes.fromhex(encoded)
+        text[cursor : cursor + len(encoded)] = encoded
+        cursor += len(encoded)
+
+    emit("83 ec 20 c6 44 24 08 29")
+    emit("8d 4c 24 08 8d 44 24 04 52 51 50")
+    exact_call = text_va + cursor
+    text[cursor] = 0xE8
+    text[cursor + 1 : cursor + 5] = (
+        text_va + 0x80 - (text_va + cursor + 5)
+    ).to_bytes(4, "little", signed=True)
+    cursor += 5
+    emit("83 c4 0c")
+    guard_branch = None
+    if mutation != "no-guard":
+        emit("84 c0 74 00")
+        guard_branch = cursor - 2
+    observation_address = text_va + cursor
+    emit("8b 44 24 04 83 c4 20 c3")
+    if mutation != "no-guard":
+        failure = cursor
+        emit("31 c0 83 c4 20 c3")
+        assert guard_branch is not None
+        text[guard_branch + 1] = failure - (guard_branch + 2)
+
+    cursor = 0x80
+    emit("8b 44 24 0c 85 c0 74 00")
+    failure_branch = cursor - 2
+    emit("8b 4c 24 04")
+    if mutation == "nested-empty":
+        emit("51")
+        text[cursor] = 0xE8
+        text[cursor + 1 : cursor + 5] = (
+            text_va + 0xC0 - (text_va + cursor + 5)
+        ).to_bytes(4, "little", signed=True)
+        cursor += 5
+        emit("83 c4 04 8b 4c 24 04")
+    if mutation == "unknown":
+        emit("89 01")
+    else:
+        emit("8b 54 24 08 89 11")
+    emit("b0 01 c3")
+    failure = cursor
+    emit("31 c0 c3")
+    text[failure_branch + 1] = failure - (failure_branch + 2)
+
+    if mutation == "nested-empty":
+        cursor = 0xC0
+        emit("8b 44 24 04 85 d2 74 06 c7 00 00 00 00 00 c3")
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(pe_mod.Section(".text", text_va, 0, 0x200, 0x200, 0x60000020),),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+    return image, exact_call, observation_address
+
+
+def return_byte_epilogue_image(*, branch_bypasses_zero=False):
+    """Return through a retail-style partial-AL zero epilogue."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = (
+        bytes.fromhex("85 c9 74 09 8b 44 24 04 30 c0 83 c4 10 5b c3")
+        if branch_bypasses_zero
+        else bytes.fromhex("8b 44 24 04 30 c0 83 c4 10 5b c3")
+    )
+    return pe_mod.Image(
+        data=data,
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+
+
 def test_object_value_ignores_argument_effect_on_redefined_pointer_arm():
     image, exact_call, join_address = redefined_argument_pointer_image()
     recovery = _DirectCfgRecovery(
@@ -5276,6 +5537,296 @@ def test_object_value_treats_null_pointer_definition_as_empty_arm():
     assert result is not None
     assert result[0] == frozenset({0x2A})
     assert "optional-empty-association" in result[1]
+
+
+def test_object_value_excludes_a_redefinition_before_a_loop_backedge(monkeypatch):
+    image, exact_call, observation, redefinition = redefined_argument_loop_image()
+    recovery = _DirectCfgRecovery(image, build_seed_inventory(image, ()), generous_limits(image))
+    recovery.recover()
+    callee = image.entrypoint + 0x40
+    context = (callee, exact_call, image.entrypoint)
+    original_preservation = recovery._function_argument_preserves_field_before
+
+    def require_redefinition_cut(*args, **kwargs):
+        assert kwargs.get("excluded_addresses") == frozenset({redefinition})
+        return original_preservation(*args, **kwargs)
+
+    monkeypatch.setattr(
+        recovery,
+        "_function_argument_preserves_field_before",
+        require_redefinition_cut,
+    )
+    recovery.producer_exact_call_contexts.append(context)
+    try:
+        result = recovery._finite_argument_object_byte_values_before(
+            observation,
+            callee,
+            0,
+            (0,),
+            frozenset(),
+            excluded_addresses=frozenset({redefinition}),
+        )
+    finally:
+        assert recovery.producer_exact_call_contexts.pop() == context
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+
+
+def test_object_value_rejects_unknown_loop_write_without_redefinition():
+    image, exact_call, observation, _redefinition = redefined_argument_loop_image(
+        redefine_before_backedge=False
+    )
+    recovery = _DirectCfgRecovery(image, build_seed_inventory(image, ()), generous_limits(image))
+    recovery.recover()
+    callee = image.entrypoint + 0x40
+    context = (callee, exact_call, image.entrypoint)
+    recovery.producer_exact_call_contexts.append(context)
+    try:
+        result = recovery._finite_argument_object_byte_values_before(
+            observation,
+            callee,
+            0,
+            (0,),
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_exact_call_contexts.pop() == context
+
+    assert result is None
+
+
+def test_object_value_treats_exact_null_argument_as_empty_association():
+    image, exact_call = exact_immediate_object_argument_image(0)
+    recovery = _DirectCfgRecovery(image, build_seed_inventory(image, ()), generous_limits(image))
+    recovery.recover()
+    callee = image.entrypoint + 0x40
+    context = (callee, exact_call, image.entrypoint)
+    recovery.producer_exact_call_contexts.append(context)
+    try:
+        result = recovery._finite_object_byte_register_values_before(
+            callee + 4,
+            "eax",
+            callee,
+            (0,),
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_exact_call_contexts.pop() == context
+
+    assert result is not None
+    assert result[0] == frozenset()
+    assert "optional-empty-association" in result[1]
+
+
+def test_callee_effect_flags_ignore_nested_provenance_flags():
+    detail = (
+        "callee=0x401080;argument=3;exact-origins;"
+        "optional-empty-association;"
+        "callee=0x401100;call=0x401040;"
+        "callee=0x401100;argument=0;optional-preserve;writer=0x401120"
+    )
+
+    assert not _DirectCfgRecovery._callee_effect_has_flag(
+        detail, "optional-preserve"
+    )
+    assert _DirectCfgRecovery._callee_effect_has_flag(
+        detail, "optional-empty-association"
+    )
+    assert _DirectCfgRecovery._callee_effect_has_flag(
+        detail.replace(
+            "exact-origins;", "exact-origins;optional-preserve;"
+        ),
+        "optional-preserve",
+    )
+    assert not _DirectCfgRecovery._object_result_has_flag(
+        f"callee-return=0x401060;{detail}",
+        "optional-preserve",
+    )
+
+
+def test_object_value_rejects_nonnull_immediate_object_argument():
+    image, exact_call = exact_immediate_object_argument_image(1)
+    recovery = _DirectCfgRecovery(image, build_seed_inventory(image, ()), generous_limits(image))
+    recovery.recover()
+    callee = image.entrypoint + 0x40
+    context = (callee, exact_call, image.entrypoint)
+    recovery.producer_exact_call_contexts.append(context)
+    try:
+        result = recovery._finite_object_byte_register_values_before(
+            callee + 4,
+            "eax",
+            callee,
+            (0,),
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_exact_call_contexts.pop() == context
+
+    assert result is None
+
+
+def test_argument_effect_combines_finite_nested_pointer_replacement():
+    image, exact_call, observation = conditional_nested_argument_pointer_image()
+    recovery = _DirectCfgRecovery(image, build_seed_inventory(image, ()), generous_limits(image))
+    recovery.recover()
+    callee = image.entrypoint + 0x80
+    context = (callee, exact_call, image.entrypoint)
+    recovery.producer_exact_call_contexts.append(context)
+    try:
+        result = recovery._finite_object_byte_register_values_before(
+            observation,
+            "esi",
+            callee,
+            (10, 0),
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_exact_call_contexts.pop() == context
+
+    assert result is not None
+    assert result[0] == frozenset({0x29, 0x35})
+
+
+@pytest.mark.parametrize("mutation", ["partial", "unknown"])
+def test_argument_effect_rejects_open_nested_pointer_replacement(mutation):
+    image, exact_call, observation = conditional_nested_argument_pointer_image(
+        mutation=mutation
+    )
+    recovery = _DirectCfgRecovery(image, build_seed_inventory(image, ()), generous_limits(image))
+    recovery.recover()
+    callee = image.entrypoint + 0x80
+    context = (callee, exact_call, image.entrypoint)
+    recovery.producer_exact_call_contexts.append(context)
+    try:
+        result = recovery._finite_object_byte_register_values_before(
+            observation,
+            "esi",
+            callee,
+            (10, 0),
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_exact_call_contexts.pop() == context
+
+    assert result is None
+
+
+def test_guarded_object_outparam_propagates_finite_pointee_byte():
+    image, _exact_call, observation = successful_object_outparam_image()
+    recovery = _DirectCfgRecovery(image, build_seed_inventory(image, ()), generous_limits(image))
+    recovery.recover()
+
+    result = recovery._finite_object_byte_register_values_before(
+        observation + 4,
+        "eax",
+        image.entrypoint,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+
+
+def test_guarded_object_outparam_uses_exact_origins_when_state_is_open(
+    monkeypatch,
+):
+    image, _exact_call, observation = successful_object_outparam_image()
+    recovery = _DirectCfgRecovery(image, build_seed_inventory(image, ()), generous_limits(image))
+    recovery.recover()
+    original = recovery._relative_pointer_states
+    callee = image.entrypoint + 0x80
+
+    def open_callee_state(function_entry, **kwargs):
+        if function_entry == callee and kwargs.get("argument_index") == 0:
+            return None
+        return original(function_entry, **kwargs)
+
+    monkeypatch.setattr(recovery, "_relative_pointer_states", open_callee_state)
+
+    result = recovery._finite_object_byte_register_values_before(
+        observation + 4,
+        "eax",
+        image.entrypoint,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+
+
+def test_guarded_object_outparam_ignores_overwritten_optional_empty():
+    image, _exact_call, observation = successful_object_outparam_image(
+        mutation="nested-empty"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_object_byte_register_values_before(
+        observation + 4,
+        "eax",
+        image.entrypoint,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+
+
+def test_return_byte_constant_reads_partial_al_zero_in_same_block():
+    image = return_byte_epilogue_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._return_byte_constant(
+        image.entrypoint + len(image.data) - 1,
+        image.entrypoint,
+    ) == 0
+
+
+def test_return_byte_constant_rejects_branch_bypassing_partial_al_zero():
+    image = return_byte_epilogue_image(branch_bypasses_zero=True)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._return_byte_constant(
+        image.entrypoint + len(image.data) - 1,
+        image.entrypoint,
+    ) is None
+
+
+@pytest.mark.parametrize("mutation", ["unknown", "no-guard"])
+def test_object_outparam_rejects_open_success_image(mutation):
+    image, _exact_call, observation = successful_object_outparam_image(
+        mutation=mutation
+    )
+    recovery = _DirectCfgRecovery(image, build_seed_inventory(image, ()), generous_limits(image))
+    recovery.recover()
+
+    result = recovery._finite_object_byte_register_values_before(
+        observation + 4,
+        "eax",
+        image.entrypoint,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is None
 
 
 def test_argument_object_lineage_allows_a_distinct_exact_invocation():
@@ -6540,7 +7091,7 @@ def test_byte_producer_checkpoint_requires_durable_resume(tmp_path):
     assert len(certificates) == 1
     certificate = json.loads(certificates[0].read_bytes())
     assert certificate["compiler_sha256"] == image.sha256
-    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == ("movzx-producer-analysis-v14")
+    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == ("movzx-producer-analysis-v15")
     assert certificate["query"]["analysis_semantics"] == (_MOVZX_PRODUCER_ANALYSIS_SEMANTICS)
     assert certificate["query"]["movzx_address"] == 0x00401044
     assert certificate["result"] == {
