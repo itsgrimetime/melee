@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -402,5 +405,98 @@ func TestMatchPatternBudgetGuard(t *testing.T) {
 	a := matchPattern(body, pat) // must return without hanging
 	if !a.aborted {
 		t.Fatal("expected the search budget to abort this pathological var-pattern")
+	}
+}
+
+func writeOpseqFixture(t *testing.T, root, rel, text string) string {
+	t.Helper()
+	path := filepath.Join(root, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func resultNames(results []opseqResult) []string {
+	names := make([]string, len(results))
+	for i, result := range results {
+		names[i] = result.fnName
+	}
+	return names
+}
+
+func TestOpseqCorpusIncludesSysdolphinForLikeAndGenericSearch(t *testing.T) {
+	root := t.TempDir()
+	asmRoot := filepath.Join(root, "build", "GALE01", "asm")
+	meleePath := writeOpseqFixture(t, root, "build/GALE01/asm/melee/demo.s", `.fn MeleeReference, global
+/* 80000000 00000000 */ mflr r0
+/* 80000004 00000004 */ lis r3, 0
+/* 80000008 00000008 */ stw r0, 4(r1)
+.endfn MeleeReference
+`)
+	sysPath := writeOpseqFixture(t, root, "build/GALE01/asm/sysdolphin/baselib/leak.s", `.fn HSD_SysReference, global
+/* 80387000 00384000 */ mflr r0
+/* 80387004 00384004 */ lis r3, 0
+/* 80387008 00384008 */ stw r0, 4(r1)
+.endfn HSD_SysReference
+.fn HSD_Leak_80387DF8, global
+/* 80387DF8 003849D8 */ mflr r0
+/* 80387DFC 003849DC */ lis r4, 0
+/* 80387E00 003849E0 */ stw r0, 4(r1)
+.endfn HSD_Leak_80387DF8
+`)
+	writeOpseqFixture(t, root, "build/GALE01/asm/auto_07_803CB828_data.s", `.obj generated_data, global
+    .4byte 0
+.endobj generated_data
+`)
+	writeOpseqFixture(t, root, "src/melee/demo.c", "int MeleeReference(void) { return 0; }\n")
+	sysSource := writeOpseqFixture(t, root, "src/sysdolphin/baselib/leak.c", "int HSD_Leak_80387DF8(int indent) { return indent; }\n")
+
+	all, modelFuncs, err := loadOpseqCorpus(asmRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 || len(modelFuncs) != 3 {
+		t.Fatalf("want 3 function bodies and no generated-data body, got all=%d model=%d", len(all), len(modelFuncs))
+	}
+	var target *locatedFunc
+	for i := range all {
+		if all[i].fn.name == "HSD_Leak_80387DF8" {
+			target = &all[i]
+		}
+	}
+	if target == nil || target.file != sysPath {
+		t.Fatalf("--like target was not discovered in sysdolphin: %+v", target)
+	}
+	if got := opcodeFrequencies(modelFuncs)["mflr"]; got != 3 {
+		t.Fatalf("full-corpus frequency must include Melee and sysdolphin bodies; got mflr=%d", got)
+	}
+
+	pat, err := parsePattern([]string{"mflr", "lis", "stw"}, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := &MatchReport{matches: map[string]MatchReportFunction{
+		"MeleeReference":    {Name: "MeleeReference", Size: 12, MatchPercent: 100},
+		"HSD_SysReference":  {Name: "HSD_SysReference", Size: 12, MatchPercent: 100},
+		"HSD_Leak_80387DF8": {Name: "HSD_Leak_80387DF8", Size: 12, MatchPercent: 98.36405},
+	}}
+	refs, aborted := searchOpseq(all, report, false, pat)
+	if aborted != 0 || !slices.Contains(resultNames(refs), "MeleeReference") || !slices.Contains(resultNames(refs), "HSD_SysReference") {
+		t.Fatalf("generic references must retain Melee and include matched sysdolphin: names=%v aborted=%d", resultNames(refs), aborted)
+	}
+	candidates, aborted := searchOpseq(all, report, true, pat)
+	if aborted != 0 || !slices.Equal(resultNames(candidates), []string{"HSD_Leak_80387DF8"}) {
+		t.Fatalf("candidate search must include the unmatched sysdolphin target: names=%v aborted=%d", resultNames(candidates), aborted)
+	}
+	sourceFiles := findFiles(filepath.Join(root, "src"), ".c")
+	if got := locateFuncDef(sourceFiles, "HSD_Leak_80387DF8"); got != sysSource+":1" {
+		t.Fatalf("sysdolphin result source mapping: got %q want %q", got, sysSource+":1")
+	}
+	if !strings.Contains(meleePath, "asm/melee/") {
+		t.Fatalf("fixture must retain an explicit Melee control path: %q", meleePath)
 	}
 }

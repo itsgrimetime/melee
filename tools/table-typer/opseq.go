@@ -23,6 +23,27 @@ type asmFunc struct {
 	instrs []asmInstr
 }
 
+type locatedFunc struct {
+	file string
+	fn   asmFunc
+}
+
+func loadOpseqCorpus(asmDir string) ([]locatedFunc, []asmFunc, error) {
+	var all []locatedFunc
+	var modelFuncs []asmFunc
+	for _, path := range findFiles(asmDir, ".s") {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil, nil, fmt.Errorf("read asm %s: %w", path, err)
+		}
+		for _, fn := range parseAsmFile(string(content)) {
+			all = append(all, locatedFunc{file: path, fn: fn})
+			modelFuncs = append(modelFuncs, fn)
+		}
+	}
+	return all, modelFuncs, nil
+}
+
 // parseAsmFile parses one .s file's content into function bodies.
 func parseAsmFile(content string) []asmFunc {
 	var funcs []asmFunc
@@ -52,10 +73,11 @@ func parseAsmFile(content string) []asmFunc {
 			if !inFn {
 				continue
 			}
-			_, after, found := strings.Cut(line, "*/\t")
+			_, after, found := strings.Cut(line, "*/")
 			if !found {
 				continue // label, directive, comment, or blank
 			}
+			after = strings.TrimSpace(after)
 			// Strip any trailing comment (inline data lines and annotated
 			// branches can carry "/* ... */" or "# ..." after the mnemonic).
 			if c := strings.Index(after, "/*"); c >= 0 {
@@ -365,6 +387,33 @@ func sortResults(rs []opseqResult) {
 		}
 		return rs[i].size < rs[j].size
 	})
+}
+
+func searchOpseq(all []locatedFunc, report *MatchReport, candidates bool, pat []patToken) ([]opseqResult, int) {
+	var results []opseqResult
+	aborted := 0
+	for _, lf := range all {
+		if candidates == report.isMatched(lf.fn.name) {
+			continue
+		}
+		a := matchPattern(lf.fn.instrs, pat)
+		if a.aborted {
+			aborted++
+		}
+		if !a.ok {
+			continue
+		}
+		results = append(results, opseqResult{
+			asmLoc:    fmt.Sprintf("%s:%d", lf.file, a.startSrcLine),
+			fnName:    lf.fn.name,
+			size:      report.size(lf.fn.name),
+			slack:     a.slackConsumed,
+			startLine: a.startSrcLine,
+			endLine:   a.endSrcLine,
+		})
+	}
+	sortResults(results)
+	return results, aborted
 }
 
 // broadLandmarkFreq: if the rarest landmark occurs more often than this in the
