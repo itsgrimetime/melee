@@ -10626,6 +10626,29 @@ def test_owned_instruction_reuses_audited_decode(tmp_path, monkeypatch):
     assert bytes(decoded.bytes).hex() == expected.bytes_hex
 
 
+def test_register_family_reuses_capstone_name_lookup(tmp_path, monkeypatch):
+    image = load_dispatch_image(tmp_path, mode="copied-descriptor-registered-object")
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.register_family_cache.clear()
+    register = capstone.x86_const.X86_REG_EAX
+    original = recovery.decoder.reg_name
+    calls = []
+
+    def record_name(value):
+        calls.append(value)
+        return original(value)
+
+    monkeypatch.setattr(recovery.decoder, "reg_name", record_name)
+
+    assert recovery._register_family(register) == "eax"
+    assert recovery._register_family(register) == "eax"
+    assert calls == [register]
+
+
 def test_registrar_lookup_reuses_sorted_function_entries(tmp_path):
     class NoIterationSet(set):
         def __iter__(self):

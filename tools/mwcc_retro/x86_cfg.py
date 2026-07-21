@@ -1996,6 +1996,7 @@ class _DirectCfgRecovery:
         self.seed_records = set(seed_inventory.records)
         self.instructions: dict[int, Instruction] = {}
         self.decoded_instruction_cache: OrderedDict[int, Any] = OrderedDict()
+        self.register_family_cache: dict[int, str] = {}
         self.instruction_by_end: dict[int, Instruction] = {}
         self.byte_owners: dict[int, int] = {}
         self.block_starts: set[int] = set()
@@ -27874,6 +27875,9 @@ class _DirectCfgRecovery:
             self.decoded_instruction_cache.popitem(last=False)
 
     def _register_family(self, register: int) -> str:
+        cached = self.register_family_cache.get(register)
+        if cached is not None:
+            return cached
         name = self.decoder.reg_name(register)
         families = {
             "al": "eax",
@@ -27903,7 +27907,9 @@ class _DirectCfgRecovery:
             "ip": "eip",
             "eip": "eip",
         }
-        return families.get(name, name)
+        family = families.get(name, name)
+        self.register_family_cache[register] = family
+        return family
 
     def _flow_error(self, decoded, reason: str) -> CfgRecoveryError:
         instruction = self.instructions[decoded.address]
