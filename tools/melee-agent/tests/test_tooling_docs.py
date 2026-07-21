@@ -22,6 +22,9 @@ def test_opseq_skill_uses_melee_agent_entrypoint() -> None:
     assert "melee-agent opseq" in text
     assert "go run . opseq" not in text
     assert "tools/table-typer/table-typer opseq" not in text
+    assert "build/GALE01/asm/` for all target modules" in text
+    assert "src/` when a definition is available" in text
+    assert "build/GALE01/asm/melee/` for asm files" not in text
 
 
 def test_checkdiff_documented_entrypoint_is_executable() -> None:

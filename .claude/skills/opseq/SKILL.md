@@ -122,5 +122,7 @@ the search budget will skip the largest bodies with a warning.
   not expand them: `melee-agent opseq 'lfs,*{0..3},fsubs'`.
 - `melee-agent opseq` runs `tools/table-typer` from the current checkout and
   falls back to `go run` when the helper binary is not built.
-- The tool searches `build/GALE01/asm/melee/` for asm files
+- The tool searches `build/GALE01/asm/` for all target modules (including
+  `melee`, `sysdolphin`, Dolphin SDK, MSL, MetroTRK, and Runtime); generated
+  data-only asm contributes no function body. Results look under `src/` when a definition is available.
 - Results include line numbers for quick navigation
