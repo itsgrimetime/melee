@@ -350,24 +350,15 @@ func main() {
 
 	case cmdOpSeq:
 		report := loadReport(rootDir)
-
-		// Build the normalized model once: located function bodies + frequency.
-		type locatedFunc struct {
-			file string
-			fn   asmFunc
+		opseqAsmDir := filepath.Join(rootDir, "build", "GALE01", "asm")
+		all, modelFuncs, err := loadOpseqCorpus(opseqAsmDir)
+		if err != nil {
+			log.Fatalln("Failed to load opseq asm corpus:", err)
 		}
-		var all []locatedFunc
-		var modelFuncs []asmFunc
-		for _, path := range asmFiles {
-			content, err := os.ReadFile(path)
-			if err != nil {
-				log.Fatalln("Failed to read file:", path, err)
-			}
-			for _, fn := range parseAsmFile(string(content)) {
-				all = append(all, locatedFunc{file: path, fn: fn})
-				modelFuncs = append(modelFuncs, fn)
-			}
+		if len(all) == 0 {
+			log.Fatalln("No function bodies found in", opseqAsmDir)
 		}
+		opseqCFiles := findFiles(filepath.Join(rootDir, "src"), ".c")
 
 		// Determine the pattern tokens: either derived (--like) or from the arg.
 		var tokens []string
@@ -431,34 +422,12 @@ func main() {
 			log.Fatalln("invalid pattern:", err)
 		}
 
-		var results []opseqResult
-		aborted := 0
-		for _, lf := range all {
-			if seqCandidates == report.isMatched(lf.fn.name) {
-				continue
-			}
-			a := matchPattern(lf.fn.instrs, pat)
-			if a.aborted {
-				aborted++
-			}
-			if !a.ok {
-				continue
-			}
-			results = append(results, opseqResult{
-				asmLoc:    fmt.Sprintf("%s:%d", lf.file, a.startSrcLine),
-				fnName:    lf.fn.name,
-				size:      report.size(lf.fn.name),
-				slack:     a.slackConsumed,
-				startLine: a.startSrcLine,
-				endLine:   a.endSrcLine,
-			})
-		}
-		sortResults(results)
+		results, aborted := searchOpseq(all, report, seqCandidates, pat)
 		for _, res := range results {
 			// Print the asm location + C definition, plus the matched span and gap
 			// slack so the user can judge how tight each match is.
 			fmt.Printf("%s %s [slack %d, lines %d-%d]\n",
-				res.asmLoc, locateFuncDef(cFiles, res.fnName), res.slack, res.startLine, res.endLine)
+				res.asmLoc, locateFuncDef(opseqCFiles, res.fnName), res.slack, res.startLine, res.endLine)
 		}
 		if aborted > 0 {
 			log.Printf("warning: %d function(s) exceeded the match-search budget and were skipped (this happens with consistency-variable patterns like --with-operands on large functions; narrow the target with a :start-end range)", aborted)

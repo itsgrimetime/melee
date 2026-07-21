@@ -493,6 +493,12 @@ func TestOpseqCorpusIncludesSysdolphinForLikeAndGenericSearch(t *testing.T) {
 		t.Fatalf("candidate search must include the unmatched sysdolphin target: names=%v aborted=%d", resultNames(candidates), aborted)
 	}
 	sourceFiles := findFiles(filepath.Join(root, "src"), ".c")
+	if !slices.Contains(sourceFiles, sysSource) {
+		t.Fatalf("opseq source-file discovery must include %q; got %v", sysSource, sourceFiles)
+	}
+	if got := locateFuncDef(sourceFiles, "MeleeReference"); !strings.Contains(got, filepath.Join("src", "melee", "demo.c")) {
+		t.Fatalf("full src discovery must retain Melee source mapping, got %q", got)
+	}
 	if got := locateFuncDef(sourceFiles, "HSD_Leak_80387DF8"); got != sysSource+":1" {
 		t.Fatalf("sysdolphin result source mapping: got %q want %q", got, sysSource+":1")
 	}
