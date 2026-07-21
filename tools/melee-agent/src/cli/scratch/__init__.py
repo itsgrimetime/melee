@@ -4,15 +4,16 @@ from ._helpers import *  # noqa: F403
 from ._helpers import _TOKENS_LOCK_FILE, _context_env
 
 
-def _get_context_file(source_file: str | None = None) -> Path:
-    """Get context file path.
+def _get_context_file(source_file: str | None = None, melee_root: Path | None = None) -> Path:
+    """Get a context file path, optionally rooted at ``melee_root``.
 
     Args:
         source_file: Optional source file path to find per-file .ctx context.
+        melee_root: Optional repository root for the default context path.
     """
     if _context_env:
         return Path(_context_env)
-    return get_context_file(source_file=source_file)
+    return get_context_file(source_file=source_file, melee_root=melee_root)
 
 
 scratch_app = typer.Typer(help="Manage decomp.me scratches")
@@ -118,7 +119,10 @@ def _build_stripped_context(function_name, func, melee_root, context_file):
     """
     import subprocess
 
-    ctx_path = context_file or _get_context_file(source_file=func.file_path)
+    ctx_path = context_file or _get_context_file(
+        source_file=func.file_path,
+        melee_root=melee_root,
+    )
 
     # Build the context file - need relative path from melee_root
     try:

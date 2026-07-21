@@ -117,7 +117,7 @@ class TestScratchContextPath:
         monkeypatch.setattr(
             scratch,
             "get_context_file",
-            lambda source_file=None: Path("build/GALE01/src/melee/mn/mndiagram.ctx"),
+            lambda source_file=None, melee_root=None: Path("build/GALE01/src/melee/mn/mndiagram.ctx"),
         )
 
         assert scratch._get_context_file("melee/mn/mndiagram.c") == Path(
@@ -494,6 +494,44 @@ class TestBuildStrippedContextMultiline:
 
         func = SimpleNamespace(file_path="src/melee/mn/mndiagram.c", name=func_name)
         return _build_stripped_context(func_name, func, tmp_path, ctx_path)
+
+    def test_default_context_and_ninja_cwd_follow_explicit_melee_root(self, tmp_path, monkeypatch):
+        import subprocess
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        import src.cli.storage as storage
+        from src.cli.scratch import _build_stripped_context
+
+        caller_root = tmp_path / "caller-worktree"
+        melee_root = tmp_path / "selected-upstream"
+        relative_ctx = Path("build/GALE01/src/melee/it/itfoo.ctx")
+        function_name = "it_802B75FC"
+        for root, sentinel in ((caller_root, "caller_only"), (melee_root, "selected_only")):
+            ctx_path = root / relative_ctx
+            ctx_path.parent.mkdir(parents=True, exist_ok=True)
+            ctx_path.write_text(
+                f"int {sentinel};\n"
+                f"void {function_name}(void) {{ int target_body; }}\n"
+            )
+
+        monkeypatch.setattr(storage, "DEFAULT_MELEE_ROOT", caller_root)
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            return SimpleNamespace(returncode=0, stdout="ninja: no work to do.\n", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        func = SimpleNamespace(file_path="melee/it/itfoo.c", name=function_name)
+
+        context = _build_stripped_context(function_name, func, melee_root, None)
+
+        assert "int selected_only;" in context
+        assert "int caller_only;" not in context
+        assert calls == [
+            (["ninja", str(relative_ctx)], {"cwd": melee_root, "capture_output": True, "text": True, "timeout": 120})
+        ]
 
     def test_strips_definition_but_preserves_decl_and_multiline_calls(self, tmp_path, monkeypatch):
         context = (
