@@ -329,6 +329,86 @@ def _fake_console_collector(monkeypatch):
 
 import httpx  # noqa: E402
 import respx  # noqa: E402
+import typer  # noqa: E402
+
+
+@respx.mock
+async def test_recorded_production_scratch_exists_for_http_200(monkeypatch):
+    import src.cli.scratch_production as sp
+
+    _fake_console_collector(monkeypatch)
+    route = respx.get("https://decomp.me/api/scratch/LIVE1").mock(
+        return_value=httpx.Response(200, json={"slug": "LIVE1"})
+    )
+
+    assert await sp._recorded_production_scratch_exists("LIVE1", {"cf_clearance": "x"}) is True
+    assert route.called
+
+
+@respx.mock
+async def test_recorded_production_scratch_returns_false_only_for_http_404(monkeypatch):
+    import src.cli.scratch_production as sp
+
+    printed = _fake_console_collector(monkeypatch)
+    respx.get("https://decomp.me/api/scratch/GONE9").mock(
+        return_value=httpx.Response(404, json={"detail": "Not found"})
+    )
+
+    assert await sp._recorded_production_scratch_exists("GONE9", {"cf_clearance": "x"}) is False
+    assert not printed
+
+
+@pytest.mark.parametrize("status", [401, 403])
+@respx.mock
+async def test_recorded_production_scratch_auth_failures_exit_closed(monkeypatch, status):
+    import src.cli.scratch_production as sp
+
+    printed = _fake_console_collector(monkeypatch)
+    respx.get("https://decomp.me/api/scratch/PRIVATE1").mock(
+        return_value=httpx.Response(status, json={"detail": "Unauthorized"})
+    )
+
+    with pytest.raises(typer.Exit) as exc_info:
+        await sp._recorded_production_scratch_exists("PRIVATE1", {"cf_clearance": "x"})
+
+    assert exc_info.value.exit_code == 1
+    assert "auth" in "\n".join(printed).lower()
+
+
+@respx.mock
+async def test_recorded_production_scratch_server_failure_exits_closed(monkeypatch):
+    import src.cli.scratch_production as sp
+
+    printed = _fake_console_collector(monkeypatch)
+    respx.get("https://decomp.me/api/scratch/UNSURE1").mock(
+        return_value=httpx.Response(503, json={"detail": "Unavailable"})
+    )
+
+    with pytest.raises(typer.Exit) as exc_info:
+        await sp._recorded_production_scratch_exists("UNSURE1", {"cf_clearance": "x"})
+
+    assert exc_info.value.exit_code == 1
+    blob = "\n".join(printed).lower()
+    assert "could not verify" in blob
+    assert "force" in blob
+
+
+@respx.mock
+async def test_recorded_production_scratch_network_failure_exits_closed(monkeypatch):
+    import src.cli.scratch_production as sp
+
+    printed = _fake_console_collector(monkeypatch)
+    respx.get("https://decomp.me/api/scratch/OFFLINE1").mock(
+        side_effect=httpx.ConnectError("offline")
+    )
+
+    with pytest.raises(typer.Exit) as exc_info:
+        await sp._recorded_production_scratch_exists("OFFLINE1", {"cf_clearance": "x"})
+
+    assert exc_info.value.exit_code == 1
+    blob = "\n".join(printed).lower()
+    assert "could not verify" in blob
+    assert "force" in blob
 
 
 @respx.mock

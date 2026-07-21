@@ -329,6 +329,39 @@ async def _create_claim_record(create_data: dict, func_name: str, cookies: dict)
         db_upsert_function(func_name, production_scratch_slug=slug, status="in_progress")
 
 
+async def _recorded_production_scratch_exists(slug: str, cookies: dict[str, str]) -> bool:
+    """Return live status; False only for a definitive production 404."""
+    async with _make_production_client(cookies) as client:
+        try:
+            resp = await rate_limited_request(client, "get", f"/api/scratch/{slug}")
+        except Exception as e:
+            console.print(f"[red]Could not verify recorded production scratch {slug}: {e}[/red]")
+            console.print(
+                "[dim]Refusing to create because the existing scratch may still exist. "
+                "Retry after production recovers; use --force only to intentionally risk a duplicate.[/dim]"
+            )
+            raise typer.Exit(1)
+
+    if resp.status_code == 200:
+        return True
+    if resp.status_code == 404:
+        return False
+    if resp.status_code in (401, 403):
+        console.print(
+            f"[red]Production auth failed while verifying recorded scratch {slug} "
+            f"(HTTP {resp.status_code}).[/red]"
+        )
+        console.print("[dim]Run 'melee-agent sync auth' to refresh, then retry.[/dim]")
+        raise typer.Exit(1)
+
+    console.print(f"[red]Could not verify recorded production scratch {slug}: HTTP {resp.status_code}[/red]")
+    console.print(
+        "[dim]Refusing to create because the existing scratch may still exist. "
+        "Retry after production recovers; use --force only to intentionally risk a duplicate.[/dim]"
+    )
+    raise typer.Exit(1)
+
+
 def run_production_create(
     function_name: str,
     melee_root: Path,
