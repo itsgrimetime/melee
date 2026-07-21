@@ -703,6 +703,136 @@ def test_exact_retail_marker_reconciles_stale_relocation_without_decode(tmp_path
     )
 
 
+def test_exact_retail_six_relocation_obligations_have_final_dispositions(
+    tmp_path,
+):
+    code_relocations = (
+        (0x00401D37, 0x00401A60),
+        (0x00401D97, 0x00401A70),
+        (0x00425B27, 0x00425B00),
+        (0x004E0AE7, 0x004E0B20),
+        (0x0050F5B3, 0x0050F5E0),
+    )
+    marker_start = 0x00506523
+    marker_source = 0x0050652F
+    marker = b"Hacked by Ninji 2023-07-15 $"
+    base_cfg = raw_cfg(tmp_path)
+    intervals = tuple(
+        ExecutableResidueInterval(
+            start=source - 1,
+            end=source + 4,
+            bytes_hex=(b"\x68" + target.to_bytes(4, "little")).hex(),
+            bytes_sha256=hashlib.sha256(
+                b"\x68" + target.to_bytes(4, "little")
+            ).hexdigest(),
+        )
+        for source, target in code_relocations
+    ) + (
+        ExecutableResidueInterval(
+            start=marker_start,
+            end=marker_start + len(marker),
+            bytes_hex=marker.hex(),
+            bytes_sha256=hashlib.sha256(marker).hexdigest(),
+        ),
+    )
+    obligations = (*code_relocations, (marker_source, 0x20696A6E))
+    cfg = replace(
+        base_cfg,
+        provisional_unreachable_residue=UnreachableExecutableResidue(
+            intervals=intervals,
+            reachable_ownership_sha256="1" * 64,
+            executable_partition_sha256="2" * 64,
+        ),
+        ownership_diagnostics=tuple(
+            OwnershipDiagnostic(
+                "unresolved-relocation-obligation",
+                source,
+                "exact retail relocation fixture",
+            )
+            for source, _ in obligations
+        ),
+        control_targets=replace(
+            base_cfg.control_targets,
+            unresolved=tuple(
+                UnresolvedControlTarget(
+                    source,
+                    "unresolved-relocation-obligation",
+                    "exact retail relocation fixture",
+                )
+                for source, _ in obligations
+            ),
+        ),
+        relocation_dispositions=tuple(
+            RelocationDisposition(
+                source,
+                (
+                    marker[source - marker_start : source - marker_start + 4]
+                    if source == marker_source
+                    else target.to_bytes(4, "little")
+                ).hex(),
+                "residue",
+                None,
+                target,
+                None if source == marker_source else ".text",
+                None,
+                (
+                    "unmapped-anomaly"
+                    if source == marker_source
+                    else "unresolved-exec-pointer"
+                ),
+                "no-final-owner-or-typed-data-boundary",
+            )
+            for source, target in obligations
+        ),
+    )
+    path = tmp_path / "inventory.jsonl"
+    write_inventory(
+        path,
+        cfg,
+        compiler_sha256=audit._RETAIL_SHA256,
+        extra_rows=tuple(
+            {
+                "record_kind": "instruction",
+                "address": source - 1,
+                "size": 5,
+                "bytes_hex": (b"\x68" + target.to_bytes(4, "little")).hex(),
+            }
+            for source, target in code_relocations
+        ),
+    )
+    inventory = load_ghidra_inventory(
+        path, expected_sha256=audit._RETAIL_SHA256
+    )
+
+    report = compare_ghidra_inventory(cfg, inventory)
+    report.require_publishable()
+    accepted = audit.accept_reconciled_residue(cfg, report)
+
+    assert {
+        row.address: row.classification
+        for row in report.residue_dispositions
+        if row.fact_kind == "relocation"
+    } == {
+        **{
+            source: "closed-unreachable-exact-decode"
+            for source, _ in code_relocations
+        },
+        marker_source: "exact-retail-noncode-marker",
+    }
+    assert {
+        row.source_address: row.status
+        for row in accepted.relocation_dispositions
+    } == {
+        **{
+            source: "reconciled-unreachable-residue-code"
+            for source, _ in code_relocations
+        },
+        marker_source: "reconciled-retail-noncode-marker",
+    }
+    assert not accepted.control_targets.unresolved
+    assert not accepted.ownership_diagnostics
+
+
 def test_mutated_retail_marker_does_not_reconcile_relocation(tmp_path):
     marker_start = 0x00506523
     marker = b"Hacked by Ninji 2023-07-15 !"
