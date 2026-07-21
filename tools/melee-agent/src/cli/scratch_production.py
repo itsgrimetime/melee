@@ -386,10 +386,19 @@ def run_production_create(
     if not force:
         existing = _existing_production_slug(function_name)
         if existing:
-            console.print(f"[yellow]{function_name} already has a production scratch:[/yellow]")
-            console.print(f"  {PRODUCTION_DECOMP_ME}/scratch/{existing}")
-            console.print("[dim]Use --update to update it, or --force to create another[/dim]")
-            raise typer.Exit(0)
+            if asyncio.run(_recorded_production_scratch_exists(existing, cookies)):
+                console.print(f"[yellow]{function_name} already has a production scratch:[/yellow]")
+                console.print(f"  {PRODUCTION_DECOMP_ME}/scratch/{existing}")
+                console.print("[dim]Use --update to update it, or --force to create another[/dim]")
+                raise typer.Exit(0)
+
+            console.print(f"[yellow]Recorded production scratch {existing} no longer exists.[/yellow]")
+            if dry_run:
+                console.print(
+                    "[dim]A real create would replace this recorded slug only after the new scratch is created.[/dim]"
+                )
+            else:
+                console.print("[dim]Creating a replacement scratch; the database is unchanged until creation succeeds.[/dim]")
 
     func = asyncio.run(extract_function(melee_root, function_name))
     if func is None:

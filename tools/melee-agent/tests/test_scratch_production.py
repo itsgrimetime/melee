@@ -411,6 +411,146 @@ async def test_recorded_production_scratch_network_failure_exits_closed(monkeypa
     assert "force" in blob
 
 
+def test_create_verified_live_production_slug_stays_idempotent(tmp_path, monkeypatch):
+    import src.cli.scratch_production as sp
+
+    printed = _fake_console_collector(monkeypatch)
+    db_calls = []
+    monkeypatch.setattr(sp, "db_upsert_scratch", lambda *a, **k: db_calls.append((a, k)))
+    monkeypatch.setattr(sp, "db_upsert_function", lambda *a, **k: db_calls.append((a, k)))
+    monkeypatch.setattr(sp, "load_production_cookies", lambda: {"cf_clearance": "x"})
+
+    async def _noop_preflight(_cookies):
+        return None
+
+    verifier_calls = []
+
+    async def _confirmed_live(slug, cookies):
+        verifier_calls.append((slug, cookies))
+        return True
+
+    monkeypatch.setattr(sp, "_preflight_auth", _noop_preflight)
+    monkeypatch.setattr(sp, "_existing_production_slug", lambda _name: "LIVE1")
+    monkeypatch.setattr(sp, "_recorded_production_scratch_exists", _confirmed_live)
+    monkeypatch.setattr(
+        "src.extractor.extract_function",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not extract a live scratch")),
+    )
+
+    with pytest.raises(typer.Exit) as exc_info:
+        sp.run_production_create("fn_1", tmp_path, dry_run=True)
+
+    assert exc_info.value.exit_code == 0
+    assert verifier_calls == [("LIVE1", {"cf_clearance": "x"})]
+    assert not db_calls
+    blob = "\n".join(printed)
+    assert "already has a production scratch" in blob
+    assert "LIVE1" in blob
+
+
+def test_create_dry_run_continues_after_confirmed_stale_production_slug(tmp_path, monkeypatch):
+    import src.cli.scratch_production as sp
+
+    printed = _fake_console_collector(monkeypatch)
+    db_calls = []
+    monkeypatch.setattr(sp, "db_upsert_scratch", lambda *a, **k: db_calls.append((a, k)))
+    monkeypatch.setattr(sp, "db_upsert_function", lambda *a, **k: db_calls.append((a, k)))
+    monkeypatch.setattr(sp, "load_production_cookies", lambda: {"cf_clearance": "x"})
+
+    async def _noop_preflight(_cookies):
+        return None
+
+    async def _confirmed_missing(_slug, _cookies):
+        return False
+
+    async def _fake_extract(_root, name):
+        return SimpleNamespace(name=name, file_path="melee/mn/mnfoo.c", asm="blr")
+
+    monkeypatch.setattr(sp, "_preflight_auth", _noop_preflight)
+    monkeypatch.setattr(sp, "_existing_production_slug", lambda _name: "lJdGW")
+    monkeypatch.setattr(sp, "_recorded_production_scratch_exists", _confirmed_missing)
+    monkeypatch.setattr("src.extractor.extract_function", _fake_extract)
+    monkeypatch.setattr("src.cli.scratch._build_stripped_context", lambda *a, **k: "struct X {};")
+    monkeypatch.setattr(sp, "_seed_source_from_repo", lambda *a, **k: "void fn_1(void) {}")
+    monkeypatch.setattr(sp, "get_compiler_for_source", lambda *a, **k: "mwcc_233_163n")
+
+    sp.run_production_create("fn_1", tmp_path, dry_run=True)
+
+    blob = "\n".join(printed)
+    assert "lJdGW" in blob
+    assert "no longer exists" in blob.lower()
+    assert "DRY RUN" in blob
+    assert "already has a production scratch" not in blob
+    assert not db_calls
+
+
+def test_create_uncertain_production_slug_exits_before_extract_or_mutation(tmp_path, monkeypatch):
+    import src.cli.scratch_production as sp
+
+    _fake_console_collector(monkeypatch)
+    db_calls = []
+    monkeypatch.setattr(sp, "db_upsert_scratch", lambda *a, **k: db_calls.append((a, k)))
+    monkeypatch.setattr(sp, "db_upsert_function", lambda *a, **k: db_calls.append((a, k)))
+    monkeypatch.setattr(sp, "load_production_cookies", lambda: {"cf_clearance": "x"})
+
+    async def _noop_preflight(_cookies):
+        return None
+
+    async def _uncertain(_slug, _cookies):
+        raise typer.Exit(1)
+
+    monkeypatch.setattr(sp, "_preflight_auth", _noop_preflight)
+    monkeypatch.setattr(sp, "_existing_production_slug", lambda _name: "UNSURE1")
+    monkeypatch.setattr(sp, "_recorded_production_scratch_exists", _uncertain)
+    monkeypatch.setattr(
+        "src.extractor.extract_function",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not extract uncertain scratch")),
+    )
+    monkeypatch.setattr(
+        sp,
+        "_create_claim_record",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not create uncertain scratch")),
+    )
+
+    with pytest.raises(typer.Exit) as exc_info:
+        sp.run_production_create("fn_1", tmp_path)
+
+    assert exc_info.value.exit_code == 1
+    assert not db_calls
+
+
+@respx.mock
+async def test_create_replacement_writes_new_slug_only_after_success(monkeypatch):
+    import src.cli.scratch_production as sp
+
+    _fake_console_collector(monkeypatch)
+    function_writes = []
+    monkeypatch.setattr(sp, "db_upsert_scratch", lambda *a, **k: None)
+    monkeypatch.setattr(sp, "db_upsert_function", lambda *a, **k: function_writes.append((a, k)))
+
+    async def _no_preset(_client):
+        return None
+
+    monkeypatch.setattr(sp, "_resolve_melee_preset_id", _no_preset)
+
+    respx.post("https://decomp.me/api/scratch").mock(
+        return_value=httpx.Response(201, json={"slug": "NEW99", "claim_token": "tok"})
+    )
+    respx.post("https://decomp.me/api/scratch/NEW99/claim").mock(
+        return_value=httpx.Response(200, json={"success": True})
+    )
+    respx.get("https://decomp.me/api/scratch/NEW99").mock(
+        return_value=httpx.Response(200, json={"slug": "NEW99", "owner": {"id": 2, "is_anonymous": False}})
+    )
+
+    await sp._create_claim_record({"name": "fn_1"}, "fn_1", {"cf_clearance": "x", "sessionid": "y"})
+
+    assert function_writes == [
+        (("fn_1",), {"production_scratch_slug": "NEW99", "status": "in_progress"})
+    ]
+    assert all(kwargs["production_scratch_slug"] is not None for _, kwargs in function_writes)
+
+
 @respx.mock
 async def test_create_claim_record_warns_on_anonymous_owner(monkeypatch):
     import src.cli.scratch_production as sp
