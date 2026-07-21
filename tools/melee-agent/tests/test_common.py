@@ -230,6 +230,27 @@ class TestContextFileResolution:
         assert "GALE01" in str(result)
         assert "lbcollision.ctx" in str(result)
 
+    def test_can_disable_default_root_fallback_for_missing_context(self, get_context_file, tmp_path, monkeypatch):
+        """An anchored caller can request its missing context path for Ninja to build."""
+        import src.cli.storage as storage
+
+        caller_root = tmp_path / "caller-worktree"
+        selected_root = tmp_path / "selected-upstream"
+        relative_ctx = Path("build/GALE01/src/melee/it/itfoo.ctx")
+        caller_ctx = caller_root / relative_ctx
+        caller_ctx.parent.mkdir(parents=True)
+        caller_ctx.write_text("/* caller context */")
+        selected_root.mkdir()
+        monkeypatch.setattr(storage, "DEFAULT_MELEE_ROOT", caller_root)
+
+        result = get_context_file(
+            "melee/it/itfoo.c",
+            selected_root,
+            allow_default_root_fallback=False,
+        )
+
+        assert result == selected_root / relative_ctx
+
 
 class TestCompilerDetection:
     """Tests for get_compiler_for_source - parses build.ninja for compiler.

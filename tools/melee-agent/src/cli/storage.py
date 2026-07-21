@@ -153,7 +153,12 @@ def load_all_tracking_data(melee_root: Path) -> dict:
     return data
 
 
-def get_context_file(source_file: str | None = None, melee_root: Path | None = None) -> Path:
+def get_context_file(
+    source_file: str | None = None,
+    melee_root: Path | None = None,
+    *,
+    allow_default_root_fallback: bool = True,
+) -> Path:
     """Get the context file path for a source file.
 
     The build system creates per-file .ctx files (e.g., build/GALE01/src/melee/ft/ftcoll.ctx).
@@ -163,6 +168,8 @@ def get_context_file(source_file: str | None = None, melee_root: Path | None = N
     Args:
         source_file: Optional source file path (e.g., "melee/ft/ftcoll.c") to find per-file context.
         melee_root: Optional melee root path (defaults to DEFAULT_MELEE_ROOT).
+        allow_default_root_fallback: Whether a missing explicit-root context may
+            fall back to an existing context under DEFAULT_MELEE_ROOT.
 
     Returns:
         Path to the context file.
@@ -182,7 +189,7 @@ def get_context_file(source_file: str | None = None, melee_root: Path | None = N
             return ctx_path
 
         # Fall back to main melee if using a worktree
-        if root != DEFAULT_MELEE_ROOT:
+        if allow_default_root_fallback and root != DEFAULT_MELEE_ROOT:
             main_ctx = DEFAULT_MELEE_ROOT / "build" / "GALE01" / ctx_relative
             if main_ctx.exists():
                 return main_ctx
@@ -196,7 +203,7 @@ def get_context_file(source_file: str | None = None, melee_root: Path | None = N
         return ctx_path
 
     # Try main melee legacy ctx.c if using a worktree
-    if root != DEFAULT_MELEE_ROOT:
+    if allow_default_root_fallback and root != DEFAULT_MELEE_ROOT:
         main_ctx = DEFAULT_MELEE_ROOT / "build" / "ctx.c"
         if main_ctx.exists():
             return main_ctx

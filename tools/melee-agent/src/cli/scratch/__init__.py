@@ -13,7 +13,11 @@ def _get_context_file(source_file: str | None = None, melee_root: Path | None = 
     """
     if _context_env:
         return Path(_context_env)
-    return get_context_file(source_file=source_file, melee_root=melee_root)
+    return get_context_file(
+        source_file=source_file,
+        melee_root=melee_root,
+        allow_default_root_fallback=melee_root is None,
+    )
 
 
 scratch_app = typer.Typer(help="Manage decomp.me scratches")

@@ -117,7 +117,9 @@ class TestScratchContextPath:
         monkeypatch.setattr(
             scratch,
             "get_context_file",
-            lambda source_file=None, melee_root=None: Path("build/GALE01/src/melee/mn/mndiagram.ctx"),
+            lambda source_file=None, melee_root=None, allow_default_root_fallback=True: Path(
+                "build/GALE01/src/melee/mn/mndiagram.ctx"
+            ),
         )
 
         assert scratch._get_context_file("melee/mn/mndiagram.c") == Path(
@@ -528,6 +530,43 @@ class TestBuildStrippedContextMultiline:
         context = _build_stripped_context(function_name, func, melee_root, None)
 
         assert "int selected_only;" in context
+        assert "int caller_only;" not in context
+        assert calls == [
+            (["ninja", str(relative_ctx)], {"cwd": melee_root, "capture_output": True, "text": True, "timeout": 120})
+        ]
+
+    def test_missing_selected_context_builds_under_explicit_melee_root(self, tmp_path, monkeypatch):
+        import subprocess
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        import src.cli.storage as storage
+        from src.cli.scratch import _build_stripped_context
+
+        caller_root = tmp_path / "caller-worktree"
+        melee_root = tmp_path / "selected-upstream"
+        relative_ctx = Path("build/GALE01/src/melee/it/itfoo.ctx")
+        caller_ctx = caller_root / relative_ctx
+        caller_ctx.parent.mkdir(parents=True)
+        caller_ctx.write_text("int caller_only;\nvoid it_802B75FC(void) {}\n")
+        melee_root.mkdir()
+        selected_ctx = melee_root / relative_ctx
+        monkeypatch.setattr(storage, "DEFAULT_MELEE_ROOT", caller_root)
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            if kwargs["cwd"] == melee_root:
+                selected_ctx.parent.mkdir(parents=True, exist_ok=True)
+                selected_ctx.write_text("int selected_built;\nvoid it_802B75FC(void) {}\n")
+            return SimpleNamespace(returncode=0, stdout="ninja: built context\n", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        func = SimpleNamespace(file_path="melee/it/itfoo.c", name="it_802B75FC")
+
+        context = _build_stripped_context("it_802B75FC", func, melee_root, None)
+
+        assert "int selected_built;" in context
         assert "int caller_only;" not in context
         assert calls == [
             (["ninja", str(relative_ctx)], {"cwd": melee_root, "capture_output": True, "text": True, "timeout": 120})
