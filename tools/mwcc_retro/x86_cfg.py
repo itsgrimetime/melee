@@ -6599,6 +6599,20 @@ class _DirectCfgRecovery:
             if object_guard is None
             else self._object_guard_discriminator_path(object_guard)
         )
+        if object_guard is None:
+            prefixed_field_path = (target_field, *field_path)
+            for candidate in reversed(self.producer_object_guard_contexts):
+                candidate_discriminator_path = self._object_guard_discriminator_path(
+                    candidate
+                )
+                if (
+                    candidate.field_path == prefixed_field_path
+                    and candidate_discriminator_path[:1] == (target_field,)
+                    and len(candidate_discriminator_path) > 1
+                ):
+                    object_guard = candidate
+                    guard_discriminator_path = candidate_discriminator_path[1:]
+                    break
         discriminator = (
             None
             if object_guard is None or len(guard_discriminator_path) != 1
@@ -8297,6 +8311,7 @@ class _DirectCfgRecovery:
                 and not self._object_result_has_flag(
                     result[1], "optional-empty-association"
                 )
+                and not self._object_result_has_flag(result[1], "guard-disjoint")
             ):
                 return None
             values = set(result[0])
@@ -9160,6 +9175,494 @@ class _DirectCfgRecovery:
                 if popped != guard:
                     raise AssertionError("producer object guard stack corrupted")
 
+    def _guarded_recursive_return_object_values(
+        self,
+        return_address: int,
+        function_entry: int,
+        field_path: tuple[int, ...],
+        visited: frozenset[tuple[int, str]],
+        object_guard: _ObjectByteGuard,
+    ) -> tuple[frozenset[int], str] | None:
+        """Peel one exact self-recursive object-selection step.
+
+        This is deliberately narrower than treating an active recursive
+        query as a finite value.  The current RET must forward one direct
+        self-call, every other RET must return the same argument under the
+        downstream discriminator, and the self-call must receive that
+        argument's guarded child.  The exact caller then has to prove that
+        child already satisfies the terminal discriminator and has a finite
+        queried byte.
+        """
+        if not field_path or field_path[0] < 0:
+            return None
+        definitions = self._register_definitions_across_blocks(
+            return_address,
+            "eax",
+            function_entry,
+        )
+        if len(definitions) != 1:
+            return None
+        recursive_call = next(iter(definitions))
+        recursive_instruction = self._owned_decoded(recursive_call)
+        if (
+            not recursive_instruction.group(CS_GRP_CALL)
+            or self.direct_call_targets_by_source.get(recursive_call) != function_entry
+        ):
+            return None
+
+        following_entry = min(
+            (row for row in self.function_addresses if row > function_entry),
+            default=0x1_0000_0000,
+        )
+        returns = tuple(
+            address
+            for address in self._function_instruction_addresses(function_entry)
+            if self._owned_decoded(address).group(CS_GRP_RET)
+            and self._reachable_within_function(
+                function_entry,
+                address,
+                function_entry,
+                following_entry,
+            )
+        )
+        terminal_returns = tuple(
+            address for address in returns if address != return_address
+        )
+        if not terminal_returns:
+            return None
+        discriminator_path = self._object_guard_discriminator_path(object_guard)
+        terminal_arguments = set()
+        terminal_guards = []
+        for terminal_return in terminal_returns:
+            argument_index = self._register_argument_origin_index(
+                terminal_return,
+                "eax",
+                function_entry,
+            )
+            terminal_guard = self._object_byte_case_guard_before(
+                terminal_return,
+                "eax",
+                function_entry,
+                discriminator_path,
+            )
+            if (
+                argument_index is None
+                or terminal_guard is None
+                or terminal_guard.values != object_guard.values
+            ):
+                return None
+            terminal_arguments.add(argument_index)
+            terminal_guards.append(terminal_guard)
+        if len(terminal_arguments) != 1:
+            return None
+        argument_index = next(iter(terminal_arguments))
+
+        pushed = self._pushed_call_argument(recursive_call, argument_index)
+        if (
+            pushed is None
+            or pushed[2] != function_entry
+            or pushed[1].type != X86_OP_REG
+        ):
+            return None
+        pushed_family = self._register_family(pushed[1].reg)
+        pushed_definitions = self._register_definitions_across_blocks(
+            pushed[0].address,
+            pushed_family,
+            function_entry,
+        )
+        if len(pushed_definitions) != 1:
+            return None
+        link_address = next(iter(pushed_definitions))
+        link = self._owned_decoded(link_address)
+        if (
+            link.id != X86_INS_MOV
+            or len(link.operands) != 2
+            or link.operands[0].type != X86_OP_REG
+            or self._register_family(link.operands[0].reg) != pushed_family
+            or link.operands[1].type != X86_OP_MEM
+        ):
+            return None
+        link_memory = link.operands[1].mem
+        if (
+            link_memory.segment != X86_REG_INVALID
+            or link_memory.base == X86_REG_INVALID
+            or link_memory.index != X86_REG_INVALID
+            or link_memory.disp != field_path[0]
+        ):
+            return None
+        parent_family = self._register_family(link_memory.base)
+        if (
+            self._register_argument_origin_index(
+                link_address,
+                parent_family,
+                function_entry,
+            )
+            != argument_index
+        ):
+            return None
+        recursive_guard = self._object_byte_case_guard_before(
+            link_address,
+            parent_family,
+            function_entry,
+            discriminator_path,
+        )
+        if (
+            recursive_guard is None
+            or not recursive_guard.values
+            or not recursive_guard.values.isdisjoint(object_guard.values)
+        ):
+            return None
+
+        child_discriminator = self._finite_object_byte_operand_values_before(
+            pushed[0].address,
+            pushed[1],
+            function_entry,
+            discriminator_path,
+            visited,
+        )
+        if (
+            child_discriminator is None
+            or not child_discriminator[0]
+            or not child_discriminator[0].issubset(object_guard.values)
+            or self._object_result_has_flag(
+                child_discriminator[1],
+                "optional-empty-association",
+            )
+        ):
+            return None
+        child_result = self._finite_object_byte_operand_values_before(
+            pushed[0].address,
+            pushed[1],
+            function_entry,
+            field_path,
+            visited,
+        )
+        if (
+            child_result is None
+            or not child_result[0]
+            or self._object_result_has_flag(
+                child_result[1],
+                "optional-empty-association",
+            )
+        ):
+            return None
+        return (
+            child_result[0],
+            f"recursive-object-domain;call={recursive_call:#x};"
+            f"link={link_address:#x};argument={argument_index};"
+            "recursive-guard="
+            + ",".join(f"{value:#x}" for value in sorted(recursive_guard.values))
+            + ";terminal-returns="
+            + ",".join(f"{address:#x}" for address in terminal_returns)
+            + f";terminal={child_discriminator[1]};{child_result[1]}",
+        )
+
+    def _exact_argument_discriminator_guard_disjoint(
+        self,
+        function_entry: int,
+        argument_index: int,
+        observation_address: int,
+        pointer_family: str,
+        values: frozenset[int],
+        guard_address: int,
+        provenance: str,
+        visited: frozenset[tuple[int, str]],
+    ) -> tuple[frozenset[int], str] | None:
+        exact_context = self._producer_exact_call_context(function_entry)
+        if exact_context is None or not values:
+            return None
+        call_address, caller_entry = exact_context
+        pushed = self._pushed_call_argument(call_address, argument_index)
+        if pushed is None or pushed[2] != caller_entry:
+            return None
+        probe = _ObjectByteGuard(
+            function_entry,
+            observation_address,
+            pointer_family,
+            (0,),
+            0,
+            values,
+            guard_address,
+            provenance,
+        )
+        self.producer_object_guard_contexts.append(probe)
+        try:
+            result = self._finite_object_byte_operand_values_before(
+                pushed[0].address,
+                pushed[1],
+                caller_entry,
+                (0,),
+                visited,
+            )
+        finally:
+            popped = self.producer_object_guard_contexts.pop()
+            if popped != probe:
+                raise AssertionError("producer object guard stack corrupted")
+        if (
+            result is None
+            or result[0]
+            or not self._object_result_has_flag(
+                result[1],
+                "guard-disjoint",
+            )
+        ):
+            return None
+        return result
+
+    def _guarded_exact_argument_definition_disjoint(
+        self,
+        definition_address: int,
+        function_entry: int,
+        visited: frozenset[tuple[int, str]],
+    ) -> str | None:
+        """Prove one guarded definition unreachable for the exact caller."""
+        key = (
+            definition_address,
+            f"guarded-exact-argument-definition:{function_entry:#x}",
+        )
+        if key in visited or self._producer_exact_call_context(function_entry) is None:
+            return None
+        for pointer_family in _REGISTER_FAMILIES:
+            if pointer_family == "esp":
+                continue
+            argument_index = self._register_argument_origin_index(
+                definition_address,
+                pointer_family,
+                function_entry,
+            )
+            if argument_index is None:
+                continue
+            guard = self._object_byte_case_guard_before(
+                definition_address,
+                pointer_family,
+                function_entry,
+                (0,),
+            )
+            if guard is None or not guard.values:
+                continue
+            disjoint = self._exact_argument_discriminator_guard_disjoint(
+                function_entry,
+                argument_index,
+                definition_address,
+                pointer_family,
+                guard.values,
+                guard.guard_address,
+                f"{guard.provenance};guarded-definition-probe",
+                visited | {key},
+            )
+            if disjoint is None:
+                continue
+            return (
+                "guard-disjoint;guarded-exact-argument-definition;"
+                f"definition={definition_address:#x};"
+                f"argument={argument_index};"
+                f"guard={guard.guard_address:#x};"
+                "guard-values="
+                + ",".join(f"{value:#x}" for value in sorted(guard.values))
+                + f";input={disjoint[1]}"
+            )
+        return None
+
+    def _guarded_argument_traversal_link_disjoint(
+        self,
+        observation_address: int,
+        pointer_family: str,
+        function_entry: int,
+        visited: frozenset[tuple[int, str]],
+    ) -> (
+        tuple[
+            int,
+            int,
+            int,
+            int,
+            _ObjectByteGuard,
+            tuple[frozenset[int], str],
+        ]
+        | None
+    ):
+        """Prove that an argument-rooted ``reg = reg->link`` cannot start."""
+        key = (
+            observation_address,
+            f"guarded-argument-traversal-link:{function_entry:#x}:{pointer_family}",
+        )
+        if key in visited or self._producer_exact_call_context(function_entry) is None:
+            return None
+        pointer_definitions = self._register_definitions_across_blocks(
+            observation_address,
+            pointer_family,
+            function_entry,
+        )
+        if len(pointer_definitions) != 2:
+            return None
+        argument_index = None
+        argument_definition = None
+        link_definition = None
+        link_displacement = None
+        for definition_address in pointer_definitions:
+            definition = self._owned_decoded(definition_address)
+            if (
+                definition.id != X86_INS_MOV
+                or len(definition.operands) != 2
+                or definition.operands[0].type != X86_OP_REG
+                or definition.operands[0].size != 4
+                or self._register_family(definition.operands[0].reg) != pointer_family
+            ):
+                return None
+            source = definition.operands[1]
+            candidate_argument = self._stack_argument_index_at(
+                definition_address,
+                source,
+                function_entry,
+            )
+            if candidate_argument is not None:
+                if argument_definition is not None:
+                    return None
+                argument_definition = definition_address
+                argument_index = candidate_argument
+                continue
+            if (
+                source.type != X86_OP_MEM
+                or source.size != 4
+                or source.mem.segment != X86_REG_INVALID
+                or source.mem.base == X86_REG_INVALID
+                or source.mem.index != X86_REG_INVALID
+                or self._register_family(source.mem.base) != pointer_family
+                or source.mem.disp < 0
+                or link_definition is not None
+            ):
+                return None
+            link_definition = definition_address
+            link_displacement = source.mem.disp
+        if (
+            argument_definition is None
+            or argument_index is None
+            or link_definition is None
+            or link_displacement is None
+            or not self._function_argument_preserves_field_before(
+                link_definition,
+                function_entry,
+                argument_index,
+                0,
+            )
+            or not self._function_argument_preserves_field_before(
+                observation_address,
+                function_entry,
+                argument_index,
+                0,
+            )
+        ):
+            return None
+        link_guard = self._object_byte_case_guard_before(
+            link_definition,
+            pointer_family,
+            function_entry,
+            (0,),
+        )
+        if link_guard is None or not link_guard.values:
+            return None
+        link_disjoint = self._exact_argument_discriminator_guard_disjoint(
+            function_entry,
+            argument_index,
+            observation_address,
+            pointer_family,
+            link_guard.values,
+            link_guard.guard_address,
+            f"{link_guard.provenance};argument-traversal-link-probe",
+            visited | {key},
+        )
+        if link_disjoint is None:
+            return None
+        return (
+            argument_index,
+            argument_definition,
+            link_definition,
+            link_displacement,
+            link_guard,
+            link_disjoint,
+        )
+
+    def _guarded_argument_traversal_return_disjoint(
+        self,
+        return_address: int,
+        function_entry: int,
+        field_path: tuple[int, ...],
+        visited: frozenset[tuple[int, str]],
+        object_guard: _ObjectByteGuard,
+    ) -> str | None:
+        """Reject a terminal arm whose guarded pointer traversal cannot start."""
+        key = (
+            return_address,
+            "guarded-argument-traversal-return:"
+            f"{function_entry:#x}:{','.join(map(str, field_path))}",
+        )
+        if key in visited:
+            return None
+        return_definitions = self._register_definitions_across_blocks(
+            return_address,
+            "eax",
+            function_entry,
+        )
+        if len(return_definitions) != 1:
+            return None
+        return_definition_address = next(iter(return_definitions))
+        return_definition = self._owned_decoded(return_definition_address)
+        if (
+            return_definition.id != X86_INS_MOV
+            or len(return_definition.operands) != 2
+            or return_definition.operands[0].type != X86_OP_REG
+            or self._register_family(return_definition.operands[0].reg) != "eax"
+            or return_definition.operands[1].type != X86_OP_REG
+        ):
+            return None
+        pointer_family = self._register_family(return_definition.operands[1].reg)
+        traversal = self._guarded_argument_traversal_link_disjoint(
+            return_definition_address,
+            pointer_family,
+            function_entry,
+            visited | {key},
+        )
+        return_guard = self._object_byte_case_guard_before(
+            return_definition_address,
+            pointer_family,
+            function_entry,
+            (0,),
+        )
+        if traversal is None or return_guard is None or not return_guard.values:
+            return None
+        (
+            argument_index,
+            argument_definition,
+            link_definition,
+            link_displacement,
+            link_guard,
+            link_disjoint,
+        ) = traversal
+        return_disjoint = self._exact_argument_discriminator_guard_disjoint(
+            function_entry,
+            argument_index,
+            return_address,
+            pointer_family,
+            return_guard.values,
+            return_guard.guard_address,
+            f"{return_guard.provenance};argument-traversal-return-probe",
+            visited | {key},
+        )
+        if return_disjoint is None:
+            return None
+        return (
+            "guard-disjoint;unstarted-argument-traversal;"
+            f"argument={argument_index};argument-definition={argument_definition:#x};"
+            f"link={link_definition:#x};link-offset={link_displacement:#x};"
+            f"link-guard={link_guard.guard_address:#x};"
+            "link-values="
+            + ",".join(f"{value:#x}" for value in sorted(link_guard.values))
+            + f";return-guard={return_guard.guard_address:#x};"
+            "return-values="
+            + ",".join(f"{value:#x}" for value in sorted(return_guard.values))
+            + f";link-input={link_disjoint[1]};"
+            f"return-input={return_disjoint[1]}"
+        )
+
     def _finite_object_byte_call_return_values_before(
         self,
         call_address: int,
@@ -9211,19 +9714,89 @@ class _DirectCfgRecovery:
         guard_disjoint_returns = 0
         for return_address in returns:
             context = (call_target, call_address, caller_entry)
+            local_disjoint = None
             self.producer_exact_call_contexts.append(context)
             try:
-                result = self._finite_object_byte_register_values_before(
+                return_argument = self._register_argument_origin_index(
                     return_address,
                     "eax",
                     call_target,
-                    field_path,
-                    next_visited,
                 )
+                return_guard = (
+                    None
+                    if object_guard is None or return_argument is None
+                    else self._object_byte_case_guard_before(
+                        return_address,
+                        "eax",
+                        call_target,
+                        self._object_guard_discriminator_path(object_guard),
+                    )
+                )
+                source_discriminator = (
+                    None
+                    if return_guard is None
+                    else self._finite_argument_object_byte_values_before(
+                        return_address,
+                        call_target,
+                        return_argument,
+                        self._object_guard_discriminator_path(object_guard),
+                        next_visited,
+                    )
+                )
+                if (
+                    return_guard is not None
+                    and source_discriminator is not None
+                    and source_discriminator[0]
+                    and source_discriminator[0].isdisjoint(return_guard.values)
+                ):
+                    local_disjoint = (
+                        f"return={return_address:#x};guard-disjoint;"
+                        f"local-guard={return_guard.guard_address:#x};"
+                        f"{return_guard.provenance};"
+                        f"source-discriminator={source_discriminator[1]}"
+                    )
+                    result = None
+                else:
+                    traversal_disjoint = (
+                        None
+                        if object_guard is None or return_argument is not None
+                        else self._guarded_argument_traversal_return_disjoint(
+                            return_address,
+                            call_target,
+                            field_path,
+                            next_visited,
+                            object_guard,
+                        )
+                    )
+                    if traversal_disjoint is not None:
+                        local_disjoint = (
+                            f"return={return_address:#x};{traversal_disjoint}"
+                        )
+                        result = None
+                    else:
+                        result = self._finite_object_byte_register_values_before(
+                            return_address,
+                            "eax",
+                            call_target,
+                            field_path,
+                            next_visited,
+                        )
+                        if result is None and object_guard is not None:
+                            result = self._guarded_recursive_return_object_values(
+                                return_address,
+                                call_target,
+                                field_path,
+                                next_visited,
+                                object_guard,
+                            )
             finally:
                 popped = self.producer_exact_call_contexts.pop()
                 if popped != context:
                     raise AssertionError("producer call context stack corrupted")
+            if local_disjoint is not None:
+                guard_disjoint_returns += 1
+                details.append(local_disjoint)
+                continue
             needs_guard_discriminator = bool(
                 object_guard is not None
                 and (
@@ -9444,12 +10017,15 @@ class _DirectCfgRecovery:
         *,
         allowed_stack_publication: tuple[int, int] | None = None,
         object_guard: _ObjectByteGuard | None = None,
+        excluded_addresses: frozenset[int] = frozenset(),
     ) -> tuple[frozenset[int], str] | None:
         """Prove a nested byte initialized in one fresh allocation."""
         key = (
             allocation_call,
             "fresh-allocation-object-byte:"
-            f"{observation_address:#x}:{','.join(map(str, field_path))}",
+            f"{observation_address:#x}:{','.join(map(str, field_path))}:"
+            "excluded="
+            + ",".join(f"{address:#x}" for address in sorted(excluded_addresses)),
         )
         if key in visited or not field_path or field_path[0] < 0:
             return None
@@ -9490,6 +10066,7 @@ class _DirectCfgRecovery:
             observation_address,
             function_entry,
             following_entry,
+            excluded=excluded_addresses,
         ):
             return None
         states = self._relative_pointer_states(
@@ -9497,6 +10074,7 @@ class _DirectCfgRecovery:
             root_call=allocation_call,
             propagate_call_returns=False,
             stop_address=observation_address,
+            excluded_addresses=excluded_addresses,
             root_stack_alias=allowed_stack_publication,
         )
         if states is None or observation_address not in states:
@@ -9778,7 +10356,7 @@ class _DirectCfgRecovery:
                 last_copy,
                 function_entry,
                 following_entry,
-                excluded=copy_rows[0][0],
+                excluded=excluded_addresses | {copy_rows[0][0]},
             ):
                 return None
             bulk_copy_continuations.update(overlapping[1:])
@@ -9826,12 +10404,14 @@ class _DirectCfgRecovery:
                     address,
                     function_entry,
                     following_entry,
+                    excluded=excluded_addresses,
                 )
                 and self._reachable_within_function(
                     address,
                     observation_address,
                     function_entry,
                     following_entry,
+                    excluded=excluded_addresses,
                 )
             ):
                 continue
@@ -10061,7 +10641,7 @@ class _DirectCfgRecovery:
             observation_address,
             function_entry,
             following_entry,
-            excluded=initializers,
+            excluded=initializers | excluded_addresses,
         ):
             return None
         may_be_empty = any(
@@ -10070,7 +10650,7 @@ class _DirectCfgRecovery:
                 observation_address,
                 function_entry,
                 following_entry,
-                excluded=frozenset(writers),
+                excluded=frozenset(writers) | excluded_addresses,
             )
             for empty_writer in empty_writers
         )
@@ -10202,7 +10782,36 @@ class _DirectCfgRecovery:
         values: set[int] = set()
         details = []
         saw_optional_empty = False
+        saw_guard_disjoint = False
+        traversal = self._guarded_argument_traversal_link_disjoint(
+            address,
+            register_family,
+            function_entry,
+            visited | {key},
+        )
+        unreachable_traversal_definition = None
+        if traversal is not None:
+            (
+                traversal_argument,
+                _traversal_argument_definition,
+                unreachable_traversal_definition,
+                traversal_displacement,
+                traversal_guard,
+                traversal_disjoint,
+            ) = traversal
+            details.append(
+                "unstarted-argument-traversal;"
+                f"argument={traversal_argument};"
+                f"link={unreachable_traversal_definition:#x};"
+                f"link-offset={traversal_displacement:#x};"
+                f"link-guard={traversal_guard.guard_address:#x};"
+                "link-values="
+                + ",".join(f"{value:#x}" for value in sorted(traversal_guard.values))
+                + f";link-input={traversal_disjoint[1]}"
+            )
         for definition_address in sorted(definitions):
+            if definition_address == unreachable_traversal_definition:
+                continue
             definition = self._owned_decoded(definition_address)
             if (
                 definition.id == X86_INS_XOR
@@ -10243,6 +10852,11 @@ class _DirectCfgRecovery:
                 )
                 if result is None:
                     return None
+                if not result[0] and self._object_result_has_flag(
+                    result[1],
+                    "guard-disjoint",
+                ):
+                    saw_guard_disjoint = True
                 values.update(result[0])
                 details.append(f"definition={definition_address:#x};{result[1]}")
                 continue
@@ -10264,6 +10878,33 @@ class _DirectCfgRecovery:
                 if source_allocations:
                     copied_values: set[int] = set()
                     copied_details = []
+                    following_entry = min(
+                        (
+                            candidate
+                            for candidate in self.function_addresses
+                            if candidate > function_entry
+                        ),
+                        default=0x1_0000_0000,
+                    )
+                    definition_end = definition.address + definition.size
+                    excluded_definitions = frozenset(
+                        other_definition
+                        for other_definition in definitions
+                        if other_definition != definition_address
+                        and self._reachable_within_function(
+                            definition_end,
+                            other_definition,
+                            function_entry,
+                            following_entry,
+                        )
+                        and self._reachable_within_function(
+                            other_definition,
+                            address,
+                            function_entry,
+                            following_entry,
+                        )
+                    )
+                    object_guard = self._producer_object_guard_context(field_path)
                     for allocation_call in sorted(source_allocations):
                         copied = (
                             self._finite_fresh_allocation_object_byte_values_before(
@@ -10272,8 +10913,37 @@ class _DirectCfgRecovery:
                                 function_entry,
                                 field_path,
                                 visited | {key},
+                                excluded_addresses=excluded_definitions,
                             )
                         )
+                        if copied is None and object_guard is not None:
+                            discriminator = (
+                                self._finite_fresh_allocation_object_byte_values_before(
+                                    allocation_call,
+                                    address,
+                                    function_entry,
+                                    self._object_guard_discriminator_path(object_guard),
+                                    visited | {key},
+                                    excluded_addresses=excluded_definitions,
+                                )
+                            )
+                            if (
+                                discriminator is not None
+                                and discriminator[0]
+                                and discriminator[0].isdisjoint(object_guard.values)
+                            ):
+                                copied = (
+                                    frozenset(),
+                                    f"guard={object_guard.guard_address:#x};"
+                                    f"{object_guard.provenance};guard-disjoint;"
+                                    "overwritten-register-origin;"
+                                    "discriminator-values="
+                                    + ",".join(
+                                        f"{value:#x}"
+                                        for value in sorted(discriminator[0])
+                                    )
+                                    + f";{discriminator[1]}",
+                                )
                         if copied is None:
                             return None
                         copied_values.update(copied[0])
@@ -10418,7 +11088,24 @@ class _DirectCfgRecovery:
                         ),
                     )
                 )
+                source_guard_index = None
                 if shifted_guard is not None:
+                    source_guard_index = next(
+                        (
+                            index
+                            for index in range(
+                                len(self.producer_object_guard_contexts) - 1,
+                                -1,
+                                -1,
+                            )
+                            if self.producer_object_guard_contexts[index]
+                            is source_guard
+                        ),
+                        None,
+                    )
+                    if source_guard_index is None:
+                        raise AssertionError("producer object guard stack corrupted")
+                    self.producer_object_guard_contexts.pop(source_guard_index)
                     self.producer_object_guard_contexts.append(shifted_guard)
                 try:
                     result = self._finite_object_byte_register_values_before(
@@ -10435,6 +11122,10 @@ class _DirectCfgRecovery:
                             raise AssertionError(
                                 "producer object guard stack corrupted"
                             )
+                        self.producer_object_guard_contexts.insert(
+                            source_guard_index,
+                            source_guard,
+                        )
                 parent_definitions = self._register_definitions_across_blocks(
                     definition_address,
                     parent_family,
@@ -10506,7 +11197,21 @@ class _DirectCfgRecovery:
                     visited | {key},
                 )
             if result is None:
-                return None
+                definition_disjoint = self._guarded_exact_argument_definition_disjoint(
+                    definition_address,
+                    function_entry,
+                    visited | {key},
+                )
+                if definition_disjoint is None:
+                    return None
+                saw_guard_disjoint = True
+                details.append(definition_disjoint)
+                continue
+            if not result[0] and self._object_result_has_flag(
+                result[1],
+                "guard-disjoint",
+            ):
+                saw_guard_disjoint = True
             values.update(result[0])
             details.append(f"definition={definition_address:#x};{result[1]}")
         if not values:
@@ -10514,6 +11219,12 @@ class _DirectCfgRecovery:
                 return (
                     frozenset(),
                     f"object-register={register_family};" + "|".join(details),
+                )
+            if saw_guard_disjoint:
+                return (
+                    frozenset(),
+                    f"guard-disjoint;object-register={register_family};"
+                    + "|".join(details),
                 )
             return None
         self._check_count("max_finite_values", len(values))
@@ -23501,9 +24212,32 @@ class _DirectCfgRecovery:
                 if remaining == 0:
                     return previous, decoded.operands[0], caller_entry
                 remaining -= 1
+            elif decoded.mnemonic == "pop" and len(decoded.operands) == 1:
+                remaining += 1
             elif (
-                decoded.group(CS_GRP_CALL)
-                or decoded.group(CS_GRP_JUMP)
+                decoded.mnemonic in {"add", "sub"}
+                and len(decoded.operands) == 2
+                and decoded.operands[0].type == X86_OP_REG
+                and self._register_family(decoded.operands[0].reg) == "esp"
+                and decoded.operands[1].type == X86_OP_IMM
+            ):
+                amount = decoded.operands[1].imm & 0xFFFF_FFFF
+                if amount % 4:
+                    return None
+                slots = amount // 4
+                if decoded.mnemonic == "add":
+                    remaining += slots
+                elif remaining < slots:
+                    return None
+                else:
+                    remaining -= slots
+            elif decoded.group(CS_GRP_CALL):
+                cleanup = self._closed_call_stack_cleanup(decoded.address)
+                if cleanup is None or cleanup % 4:
+                    return None
+                remaining += cleanup // 4
+            elif (
+                decoded.group(CS_GRP_JUMP)
                 or decoded.group(CS_GRP_RET)
                 or any(
                     self._register_family(row) == "esp" for row in decoded.regs_write

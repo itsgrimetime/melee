@@ -2279,6 +2279,86 @@ def guarded_call_return_object_origins_image(
     return image, factory_call, consumer_call, observation
 
 
+def guarded_recursive_call_return_object_image(
+    *,
+    terminal_tag=4,
+    child_tag=0x29,
+):
+    """Return a selected terminal object through a recursive child walk."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytearray(0x180)
+    text = memoryview(data)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (text_va + offset + 5)
+        text[offset + 1 : offset + 5] = displacement.to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    # entry(): wrapper(tag 0x30) -> terminal(tag 4) -> child(tag 0x29).
+    cursor = emit(0, "83 ec 40")
+    if child_tag is not None:
+        cursor = emit(cursor, f"c6 04 24 {child_tag:02x}")
+    cursor = emit(cursor, f"c6 44 24 10 {terminal_tag:02x}")
+    cursor = emit(cursor, "8d 04 24 89 44 24 1a")
+    cursor = emit(cursor, "c6 44 24 28 30 8d 44 24 10")
+    cursor = emit(cursor, "89 44 24 32 8d 44 24 28 50")
+    selector_call = text_va + cursor
+    cursor = emit_call(cursor, 0x80)
+    emit(cursor, "59 83 c4 40 c3")
+
+    # selector(arg0): return arg0 for tag 4, recurse through +0xa for tag
+    # 0x30, and loop forever for every other tag.  A terminating return
+    # therefore has the least equation result = terminal U result.
+    cursor = emit(0x80, "8b 44 24 04 80 38 04 74 00")
+    terminal_branch = cursor - 2
+    cursor = emit(cursor, "80 38 30 75 00")
+    reject_branch = cursor - 2
+    cursor = emit(cursor, "8b 40 0a 50")
+    recursive_call = text_va + cursor
+    cursor = emit_call(cursor, 0x80)
+    cursor = emit(cursor, "59 c3")
+    terminal_return = cursor
+    cursor = emit(cursor, "c3")
+    reject_loop = cursor
+    emit(cursor, "eb fe")
+    text[terminal_branch + 1] = terminal_return - (terminal_branch + 2)
+    text[reject_branch + 1] = reject_loop - (reject_branch + 2)
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+    return image, selector_call, recursive_call, text_va + terminal_return
+
+
 def affine_byte_range_merge_image(*, overwrite_after_load=False):
     """Route one loaded object tag through merged affine range arms."""
     from tools.mwcc_retro import pe as pe_mod
@@ -4160,6 +4240,68 @@ def test_pushed_call_argument_crosses_long_straight_line_gap():
     assert argument_one[1].imm & 0xFFFF_FFFF == 0x12345678
 
 
+def test_pushed_call_argument_crosses_balanced_helper_calls():
+    """An older argument can remain live below balanced helper arguments."""
+    text_va = 0x00401000
+    helper_offset = 0x80
+    target_offset = 0xA0
+    data = bytearray(b"\x90" * 0xC0)
+
+    def emit_call(offset, target):
+        data[offset] = 0xE8
+        displacement = target - (offset + 5)
+        data[offset + 1 : offset + 5] = displacement.to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = 0
+    data[cursor : cursor + 2] = bytes.fromhex("6a 30")
+    cursor += 2
+    data[cursor : cursor + 2] = bytes.fromhex("6a 11")
+    cursor = emit_call(cursor + 2, helper_offset)
+    data[cursor] = 0x59
+    cursor += 1
+    data[cursor : cursor + 2] = bytes.fromhex("6a 12")
+    cursor = emit_call(cursor + 2, helper_offset)
+    data[cursor : cursor + 3] = bytes.fromhex("83 c4 04")
+    cursor += 3
+    data[cursor] = 0x50
+    target_call = cursor + 1
+    cursor = emit_call(target_call, target_offset)
+    data[cursor : cursor + 4] = bytes.fromhex("83 c4 08 c3")
+    data[helper_offset] = 0xC3
+    data[target_offset] = 0xC3
+
+    image = pe.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(pe.Section(".text", text_va, 0, 0xC0, 0xC0, 0x60000020),),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0xC0),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    argument_zero = recovery._pushed_call_argument(text_va + target_call, 0)
+    argument_one = recovery._pushed_call_argument(text_va + target_call, 1)
+
+    assert argument_zero is not None
+    assert argument_zero[0].address == text_va + target_call - 1
+    assert argument_one is not None
+    assert argument_one[1].imm & 0xFFFF_FFFF == 0x30
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -4237,6 +4379,273 @@ def test_object_guard_answers_local_discriminator_before_recursive_origin():
     assert result is not None
     assert result[0] == frozenset({4})
     assert "dominating-affine-byte-equality" in result[1]
+
+
+def test_guarded_recursive_call_return_closes_from_terminal_base():
+    image, selector_call, _recursive_call, terminal_return = guarded_recursive_call_return_object_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    guard = _ObjectByteGuard(
+        image.entrypoint,
+        selector_call + 5,
+        "eax",
+        (10, 0),
+        0,
+        frozenset({4}),
+        terminal_return - 9,
+        "modeled-downstream-tag-four",
+    )
+    recovery.producer_object_guard_contexts.append(guard)
+    try:
+        result = recovery._finite_object_byte_call_return_values_before(
+            selector_call,
+            image.entrypoint + 0x80,
+            image.entrypoint,
+            (10, 0),
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_object_guard_contexts.pop() == guard
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+    assert "recursive-object-domain" in result[1]
+
+
+@pytest.mark.parametrize(
+    ("terminal_tag", "child_tag"),
+    [(5, 0x29), (4, None)],
+)
+def test_guarded_recursive_call_return_rejects_open_terminal(
+    terminal_tag,
+    child_tag,
+):
+    image, selector_call, _recursive_call, terminal_return = guarded_recursive_call_return_object_image(
+        terminal_tag=terminal_tag,
+        child_tag=child_tag,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    guard = _ObjectByteGuard(
+        image.entrypoint,
+        selector_call + 5,
+        "eax",
+        (10, 0),
+        0,
+        frozenset({4}),
+        terminal_return - 9,
+        "modeled-downstream-tag-four",
+    )
+    recovery.producer_object_guard_contexts.append(guard)
+    try:
+        result = recovery._finite_object_byte_call_return_values_before(
+            selector_call,
+            image.entrypoint + 0x80,
+            image.entrypoint,
+            (10, 0),
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_object_guard_contexts.pop() == guard
+
+    assert result is None
+
+
+def test_register_copy_preserves_guard_disjoint_call_result(monkeypatch):
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytearray(0x21)
+    data[0:6] = bytes.fromhex("e8 1b 00 00 00 c3")
+    data[0x20] = 0xC3
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    def modeled_call_return(*_args, **_kwargs):
+        return (
+            frozenset(),
+            "call=0x401000;target=0x401020;guard-disjoint;modeled",
+        )
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_call_return_values_before",
+        modeled_call_return,
+    )
+
+    result = recovery._finite_object_byte_register_values_before(
+        text_va + 5,
+        "eax",
+        text_va,
+        (10, 0),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset()
+    assert recovery._object_result_has_flag(result[1], "guard-disjoint")
+
+
+def test_overwritten_register_origin_excludes_later_normalizer_path(
+    monkeypatch,
+):
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytearray(0xA1)
+    data[0:23] = bytes.fromhex("e8 7b 00 00 00 89 c5 85 c9 75 09 50 e8 8f 00 00 00 59 89 c5 89 e8 c3")
+    data[0x80] = 0xC3
+    data[0xA0] = 0xC3
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    first_definition = text_va + 5
+    normalizer_call = text_va + 12
+    later_definition = text_va + 18
+    fresh_observation = text_va + 20
+    observation = text_va + 22
+    original_origins = recovery._fresh_allocation_origin_calls_before
+
+    def modeled_origins(address, register_family, function_entry, active=frozenset()):
+        if address == first_definition and register_family == "eax":
+            return frozenset({text_va})
+        return original_origins(address, register_family, function_entry, active)
+
+    def modeled_fresh(
+        allocation_call,
+        observation_address,
+        function_entry,
+        field_path,
+        visited,
+        *,
+        excluded_addresses=frozenset(),
+        **_kwargs,
+    ):
+        assert allocation_call == text_va
+        assert observation_address == fresh_observation
+        if field_path == (0,):
+            return frozenset({0x1E}), "modeled-disjoint-root"
+        if excluded_addresses == frozenset({later_definition}):
+            return frozenset(), "guard-disjoint;modeled-overwritten-origin"
+        return None
+
+    def modeled_call_return(
+        call_address,
+        _call_target,
+        _caller_entry,
+        field_path,
+        _visited,
+    ):
+        assert call_address == normalizer_call
+        return (
+            (frozenset({4}), "modeled-normalized-root")
+            if field_path == (0,)
+            else (frozenset({0x29}), "modeled-normalized-child")
+        )
+
+    monkeypatch.setattr(
+        recovery,
+        "_fresh_allocation_origin_calls_before",
+        modeled_origins,
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_finite_fresh_allocation_object_byte_values_before",
+        modeled_fresh,
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_call_return_values_before",
+        modeled_call_return,
+    )
+    guard = _ObjectByteGuard(
+        text_va,
+        observation,
+        "eax",
+        (10, 0),
+        0,
+        frozenset({4}),
+        text_va + 7,
+        "modeled-downstream-tag-four",
+    )
+    recovery.producer_object_guard_contexts.append(guard)
+    try:
+        result = recovery._finite_object_byte_register_values_before(
+            observation,
+            "eax",
+            text_va,
+            (10, 0),
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_object_guard_contexts.pop() == guard
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+    assert "modeled-overwritten-origin" in result[1]
 
 
 def test_object_guard_recovers_merged_affine_byte_ranges():
@@ -4436,6 +4845,336 @@ def test_argument_object_byte_cache_is_guard_context_sensitive(monkeypatch):
         frozenset({5}),
     ]
     assert len(evaluations) == 2
+
+
+def test_pointer_origin_shift_replaces_the_unshifted_guard(monkeypatch):
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytes.fromhex("8b 43 0a c3")
+    image = pe_mod.Image(
+        data=data,
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    original_guard = _ObjectByteGuard(
+        text_va,
+        text_va + 3,
+        "eax",
+        (0,),
+        0,
+        frozenset({4}),
+        text_va + 3,
+        "modeled-unshifted-guard",
+    )
+
+    def modeled_parent(address, register_family, function_entry, field_path, visited):
+        assert (address, register_family, function_entry, field_path) == (
+            text_va,
+            "ebx",
+            text_va,
+            (10, 0),
+        )
+        assert original_guard not in recovery.producer_object_guard_contexts
+        shifted = recovery.producer_object_guard_contexts[-1]
+        assert shifted.field_path == (10, 0)
+        assert shifted.discriminator_path == (10, 0)
+        return frozenset({0x29}), "modeled-shifted-parent"
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_register_values_before",
+        modeled_parent,
+    )
+    recovery.producer_object_guard_contexts.append(original_guard)
+    try:
+        result = recovery._finite_object_byte_register_values_before_uncached(
+            text_va + 3,
+            "eax",
+            text_va,
+            (0,),
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_object_guard_contexts.pop() == original_guard
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+
+
+def test_exact_caller_argument_preserves_guard_disjoint_result(monkeypatch):
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytearray(0x26)
+    data[0:8] = bytes.fromhex("50 e8 1a 00 00 00 59 c3")
+    data[0x20:0x26] = bytes.fromhex("8b 44 24 04 89 c0 c3")
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    def modeled_operand(*_args, **_kwargs):
+        return frozenset(), "guard-disjoint;modeled-exact-caller"
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_operand_values_before",
+        modeled_operand,
+    )
+    callee = text_va + 0x20
+    context = (callee, text_va + 1, text_va)
+    recovery.producer_exact_call_contexts.append(context)
+    try:
+        result = recovery._finite_argument_object_byte_values_before(
+            callee + 6,
+            callee,
+            0,
+            (0,),
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_exact_call_contexts.pop() == context
+
+    assert result is not None
+    assert result[0] == frozenset()
+    assert recovery._object_result_has_flag(result[1], "guard-disjoint")
+
+
+def test_guarded_definition_rejects_disjoint_exact_argument(monkeypatch):
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytearray(0x60)
+    data[0:8] = bytes.fromhex("50 e8 3a 00 00 00 59 c3")
+    data[0x40:0x50] = bytes.fromhex("53 8b 5c 24 08 80 3b 2a 75 04 8b 44 24 0c 5b c3")
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    def modeled_operand(*_args, **_kwargs):
+        probe = recovery._producer_object_guard_context((0,))
+        assert probe is not None
+        assert probe.values == frozenset({0x2A})
+        return frozenset(), "guard-disjoint;modeled-input-tag=0x43"
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_operand_values_before",
+        modeled_operand,
+    )
+    callee = text_va + 0x40
+    context = (callee, text_va + 1, text_va)
+    recovery.producer_exact_call_contexts.append(context)
+    try:
+        result = recovery._guarded_exact_argument_definition_disjoint(
+            callee + 0xA,
+            callee,
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_exact_call_contexts.pop() == context
+
+    assert result is not None
+    assert "argument=0" in result
+    assert "guard=0x401045" in result
+    assert "guard-disjoint" in result
+
+
+@pytest.mark.parametrize(
+    ("input_tag", "is_disjoint"),
+    (
+        (0x1E, True),
+        (4, False),
+        (0x30, False),
+    ),
+)
+def test_guarded_argument_traversal_requires_a_reachable_first_link(
+    monkeypatch,
+    input_tag,
+    is_disjoint,
+):
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytearray(0x60)
+    data[0:8] = bytes.fromhex("50 e8 3a 00 00 00 59 c3")
+    data[0x40:0x5E] = bytes.fromhex(
+        "55 8b 6c 24 08 80 7d 00 30 74 0e 80 7d 00 04 74 04 31 c0 5d c3 89 e8 5d c3 8b 6d 0a eb e7"
+    )
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    def modeled_operand(*_args, **_kwargs):
+        probe = recovery._producer_object_guard_context((0,))
+        assert probe is not None
+        if input_tag in probe.values:
+            return frozenset({input_tag}), "modeled-probe-hit"
+        return frozenset(), "guard-disjoint;modeled-probe-miss"
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_operand_values_before",
+        modeled_operand,
+    )
+    callee = text_va + 0x40
+    terminal_return = text_va + 0x58
+    context = (callee, text_va + 1, text_va)
+    guard = _ObjectByteGuard(
+        text_va,
+        text_va + 6,
+        "eax",
+        (0,),
+        0,
+        frozenset({4}),
+        text_va + 6,
+        "modeled-downstream-tag-four",
+    )
+    recovery.producer_exact_call_contexts.append(context)
+    recovery.producer_object_guard_contexts.append(guard)
+    traversal_result = None
+    try:
+        result = recovery._guarded_argument_traversal_return_disjoint(
+            terminal_return,
+            callee,
+            (0,),
+            frozenset(),
+            guard,
+        )
+        if input_tag in {0x1E, 0x30}:
+            monkeypatch.setattr(
+                recovery,
+                "_finite_argument_object_byte_values_before",
+                lambda *_args, **_kwargs: (
+                    frozenset({4}),
+                    "modeled-exact-caller-child",
+                ),
+            )
+            traversal_result = recovery._finite_object_byte_register_values_before(
+                text_va + 0x53,
+                "ebp",
+                callee,
+                (10, 0),
+                frozenset(),
+            )
+    finally:
+        assert recovery.producer_object_guard_contexts.pop() == guard
+        assert recovery.producer_exact_call_contexts.pop() == context
+
+    assert (result is not None) is is_disjoint
+    if result is not None:
+        assert "unstarted-argument-traversal" in result
+    if input_tag in {0x1E, 0x30}:
+        assert (traversal_result is not None) is (input_tag == 0x1E)
+    if traversal_result is not None:
+        assert traversal_result[0] == frozenset({4})
+        assert "unstarted-argument-traversal" in traversal_result[1]
 
 
 def test_object_guard_rejects_normal_effect_before_disjoint_tag_write():
