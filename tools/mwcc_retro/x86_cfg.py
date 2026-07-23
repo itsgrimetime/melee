@@ -148,7 +148,7 @@ class AnalysisLimits:
 
 
 _PRODUCER_CERTIFICATE_SCHEMA = "mwcc-retro-x86-producer-certificate-v1"
-_MOVZX_PRODUCER_ANALYSIS_SEMANTICS = "movzx-producer-analysis-v16"
+_MOVZX_PRODUCER_ANALYSIS_SEMANTICS = "movzx-producer-analysis-v17"
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -3381,8 +3381,7 @@ class _DirectCfgRecovery:
                 definition.id == X86_INS_XOR
                 and len(definition.operands) == 2
                 and all(
-                    operand.type == X86_OP_REG
-                    and operand.reg in low_byte_registers
+                    operand.type == X86_OP_REG and operand.reg in low_byte_registers
                     for operand in definition.operands
                 )
                 and definition.operands[0].reg == definition.operands[1].reg
@@ -3604,8 +3603,7 @@ class _DirectCfgRecovery:
                     source = candidate.operands[1]
                     result = (
                         (frozenset(), "optional-empty-association;null-pointer")
-                        if source.type == X86_OP_IMM
-                        and source.imm & 0xFFFF_FFFF == 0
+                        if source.type == X86_OP_IMM and source.imm & 0xFFFF_FFFF == 0
                         else self._finite_object_byte_operand_values_before(
                             address,
                             source,
@@ -3775,8 +3773,7 @@ class _DirectCfgRecovery:
                 writers.add(address)
                 guard_filtered_writers.add(address)
                 details.append(
-                    f"callee={target:#x};call={address:#x};"
-                    f"guard-filtered;{effect[1]}"
+                    f"callee={target:#x};call={address:#x};guard-filtered;{effect[1]}"
                 )
                 continue
             optional_preserve = self._callee_effect_has_flag(
@@ -3818,9 +3815,7 @@ class _DirectCfgRecovery:
                 observation,
                 function_entry,
                 following_entry,
-                excluded=(
-                    definite_nonempty_writers - {empty_writer}
-                )
+                excluded=(definite_nonempty_writers - {empty_writer})
                 | excluded_addresses,
             )
             for empty_writer in empty_writers
@@ -3841,9 +3836,7 @@ class _DirectCfgRecovery:
                 else ""
             )
             + ("optional-preserve;" if may_preserve else "")
-            + (
-                "optional-empty-association;" if may_be_empty else ""
-            )
+            + ("optional-empty-association;" if may_be_empty else "")
             + "|".join(details),
         )
 
@@ -3896,8 +3889,7 @@ class _DirectCfgRecovery:
             )
             and (
                 not require_nonzero_return
-                or self._return_byte_constant(address, function_entry)
-                != 0
+                or self._return_byte_constant(address, function_entry) != 0
             )
         )
         if end_address is None and not selected_returns:
@@ -4110,8 +4102,7 @@ class _DirectCfgRecovery:
                             frozenset(),
                             "optional-empty-association;null-pointer",
                         )
-                        if source.type == X86_OP_IMM
-                        and source.imm & 0xFFFF_FFFF == 0
+                        if source.type == X86_OP_IMM and source.imm & 0xFFFF_FFFF == 0
                         else self._finite_object_byte_operand_values_before(
                             candidate_address,
                             source,
@@ -4309,9 +4300,7 @@ class _DirectCfgRecovery:
                 return_address,
                 function_entry,
                 following_entry,
-                excluded=(
-                    definite_nonempty_writers - {empty_writer}
-                )
+                excluded=(definite_nonempty_writers - {empty_writer})
                 | excluded_addresses,
             )
             for empty_writer in empty_writers
@@ -4322,9 +4311,7 @@ class _DirectCfgRecovery:
             frozenset(values),
             f"callee={function_entry:#x};argument={argument_index};"
             + ("optional-preserve;" if may_preserve else "")
-            + (
-                "optional-empty-association;" if may_be_empty else ""
-            )
+            + ("optional-empty-association;" if may_be_empty else "")
             + "|".join(details),
         )
 
@@ -7882,13 +7869,14 @@ class _DirectCfgRecovery:
         excluded_addresses: frozenset[int] = frozenset(),
     ) -> tuple[frozenset[int], str] | None:
         query_key = (
-            "producer-argument-v6",
+            "producer-argument-v7",
             address,
             function_entry,
             argument_index,
             field_path,
             tuple(sorted(excluded_addresses)),
             self._producer_exact_call_context_signature(),
+            self._producer_object_guard_context_signature(),
             self._producer_allocator_lifetime_context_signature(),
         )
         return self._producer_domain_cached(
@@ -8013,9 +8001,7 @@ class _DirectCfgRecovery:
                 )
                 if matched:
                     if call_result is None:
-                        if is_postdominated_by_exact_slot_writer(
-                            candidate_address
-                        ):
+                        if is_postdominated_by_exact_slot_writer(candidate_address):
                             continue
                         return None
                     writers.add(candidate_address)
@@ -8069,12 +8055,9 @@ class _DirectCfgRecovery:
                 if allocation_origins:
                     allocation_values: set[int] = set()
                     allocation_details = []
-                    publication_guard = (
-                        self._producer_object_guard_context(field_path)
-                        or self._producer_object_guard_for_discriminator(
-                            field_path
-                        )
-                    )
+                    publication_guard = self._producer_object_guard_context(
+                        field_path
+                    ) or self._producer_object_guard_for_discriminator(field_path)
                     for allocation_call in sorted(allocation_origins):
                         allocation_result = (
                             self._finite_fresh_allocation_object_byte_values_before(
@@ -8300,8 +8283,7 @@ class _DirectCfgRecovery:
                 return None
             result = (
                 (frozenset(), "optional-empty-association;null-pointer")
-                if pushed[1].type == X86_OP_IMM
-                and pushed[1].imm & 0xFFFF_FFFF == 0
+                if pushed[1].type == X86_OP_IMM and pushed[1].imm & 0xFFFF_FFFF == 0
                 else self._finite_object_byte_operand_values_before(
                     pushed[0].address,
                     pushed[1],
@@ -8343,8 +8325,7 @@ class _DirectCfgRecovery:
                 return None
             result = (
                 (frozenset(), "optional-empty-association;null-pointer")
-                if pushed[1].type == X86_OP_IMM
-                and pushed[1].imm & 0xFFFF_FFFF == 0
+                if pushed[1].type == X86_OP_IMM and pushed[1].imm & 0xFFFF_FFFF == 0
                 else self._finite_object_byte_operand_values_before(
                     pushed[0].address,
                     pushed[1],
@@ -8468,8 +8449,7 @@ class _DirectCfgRecovery:
                     and len(decoded.operands) == 2
                     and decoded.operands[0].type == X86_OP_REG
                     and decoded.operands[0].size == 4
-                    and self._register_family(decoded.operands[0].reg)
-                    == index_family
+                    and self._register_family(decoded.operands[0].reg) == index_family
                     and decoded.operands[1].type == X86_OP_IMM
                 ):
                     immediate = decoded.operands[1].imm & 0xFFFF_FFFF
@@ -8484,8 +8464,7 @@ class _DirectCfgRecovery:
                     decoded.id == x86_const.X86_INS_MOVZX
                     and len(decoded.operands) == 2
                     and decoded.operands[0].type == X86_OP_REG
-                    and self._register_family(decoded.operands[0].reg)
-                    == index_family
+                    and self._register_family(decoded.operands[0].reg) == index_family
                     and decoded.operands[1].type == X86_OP_MEM
                     and decoded.operands[1].size == 1
                 ):
@@ -8608,8 +8587,7 @@ class _DirectCfgRecovery:
                     and len(decoded.operands) == 2
                     and decoded.operands[0].type == X86_OP_REG
                     and decoded.operands[0].size == 4
-                    and self._register_family(decoded.operands[0].reg)
-                    == index_family
+                    and self._register_family(decoded.operands[0].reg) == index_family
                     and decoded.operands[1].type == X86_OP_IMM
                 ):
                     immediate = decoded.operands[1].imm & 0xFFFF_FFFF
@@ -8624,11 +8602,11 @@ class _DirectCfgRecovery:
                     decoded.id == x86_const.X86_INS_MOVZX
                     and len(decoded.operands) == 2
                     and decoded.operands[0].type == X86_OP_REG
-                    and self._register_family(decoded.operands[0].reg)
-                    == index_family
+                    and self._register_family(decoded.operands[0].reg) == index_family
                     and decoded.operands[1].type == X86_OP_MEM
                     and decoded.operands[1].size == 1
                 ):
+
                     def branch_is_taken(value: int) -> bool:
                         affine = (value + adjustment) & 0xFFFF_FFFF
                         if branch.mnemonic in {"je", "jz"}:
@@ -8714,8 +8692,7 @@ class _DirectCfgRecovery:
                     guarded_memory = compare.operands[0].mem
                     guarded_value = compare.operands[1].imm & 0xFF
                     guard_provenance = (
-                        f"byte-equality={compare.address:#x};"
-                        f"value={guarded_value:#x}"
+                        f"byte-equality={compare.address:#x};value={guarded_value:#x}"
                     )
                 elif (
                     compare.id == x86_const.X86_INS_SUB
@@ -8994,9 +8971,7 @@ class _DirectCfgRecovery:
                     else:
                         taken_values, taken_target, fallthrough = model
                         successors = (
-                            (taken_target,)
-                            if value in taken_values
-                            else (fallthrough,)
+                            (taken_target,) if value in taken_values else (fallthrough,)
                         )
                     for successor in successors:
                         if successor not in seen:
@@ -9146,14 +9121,12 @@ class _DirectCfgRecovery:
             function_entry,
             field_path,
         )
-        if (
-            guard is not None
-            and field_path == self._object_guard_discriminator_path(guard)
+        if guard is not None and field_path == self._object_guard_discriminator_path(
+            guard
         ):
             return (
                 guard.values,
-                f"local-object-byte-guard={guard.guard_address:#x};"
-                f"{guard.provenance}",
+                f"local-object-byte-guard={guard.guard_address:#x};{guard.provenance}",
             )
         if guard is not None:
             self.producer_object_guard_contexts.append(guard)
@@ -9268,30 +9241,28 @@ class _DirectCfgRecovery:
                     return None
                 self.producer_exact_call_contexts.append(context)
                 try:
-                    discriminator = (
-                        self._finite_object_byte_register_values_before(
-                            return_address,
-                            "eax",
-                            call_target,
-                            self._object_guard_discriminator_path(object_guard),
-                            next_visited,
-                        )
+                    discriminator = self._finite_object_byte_register_values_before(
+                        return_address,
+                        "eax",
+                        call_target,
+                        self._object_guard_discriminator_path(object_guard),
+                        next_visited,
                     )
                 finally:
                     popped = self.producer_exact_call_contexts.pop()
                     if popped != context:
                         raise AssertionError("producer call context stack corrupted")
-                if discriminator is not None and discriminator[0] and (
-                    discriminator[0].isdisjoint(object_guard.values)
+                if (
+                    discriminator is not None
+                    and discriminator[0]
+                    and (discriminator[0].isdisjoint(object_guard.values))
                 ):
                     guard_disjoint_returns += 1
                     details.append(
                         f"return={return_address:#x};guard-disjoint;"
                         f"guard={object_guard.guard_address:#x};"
                         f"{object_guard.provenance};discriminator-values="
-                        + ",".join(
-                            f"{value:#x}" for value in sorted(discriminator[0])
-                        )
+                        + ",".join(f"{value:#x}" for value in sorted(discriminator[0]))
                     )
                     continue
                 if result is None:
@@ -9568,12 +9539,9 @@ class _DirectCfgRecovery:
                         source_definition.id == X86_INS_LEA
                         and len(source_definition.operands) == 2
                         and source_definition.operands[1].type == X86_OP_MEM
-                        and source_definition.operands[1].mem.segment
-                        == X86_REG_INVALID
-                        and source_definition.operands[1].mem.base
-                        != X86_REG_INVALID
-                        and source_definition.operands[1].mem.index
-                        == X86_REG_INVALID
+                        and source_definition.operands[1].mem.segment == X86_REG_INVALID
+                        and source_definition.operands[1].mem.base != X86_REG_INVALID
+                        and source_definition.operands[1].mem.index == X86_REG_INVALID
                         and source_definition.operands[1].mem.disp == 0
                     ):
                         query_address = source_definition.address
@@ -9619,9 +9587,7 @@ class _DirectCfgRecovery:
                 if source_guard is not None:
                     popped = self.producer_object_guard_contexts.pop()
                     if popped != source_guard:
-                        raise AssertionError(
-                            "producer object guard stack corrupted"
-                        )
+                        raise AssertionError("producer object guard stack corrupted")
 
         function_addresses = self._function_instruction_addresses(function_entry)
         function_address_index = {
@@ -9634,9 +9600,7 @@ class _DirectCfgRecovery:
         ) -> tuple[frozenset[int], str] | None:
             row = self._owned_decoded(address)
             memory_operands = [
-                operand
-                for operand in row.operands
-                if operand.type == X86_OP_MEM
+                operand for operand in row.operands if operand.type == X86_OP_MEM
             ]
             if len(memory_operands) != 2:
                 return None
@@ -9649,11 +9613,7 @@ class _DirectCfgRecovery:
                 None,
             )
             source = next(
-                (
-                    operand
-                    for operand in memory_operands
-                    if operand.access & CS_AC_READ
-                ),
+                (operand for operand in memory_operands if operand.access & CS_AC_READ),
                 None,
             )
             if (
@@ -9693,8 +9653,7 @@ class _DirectCfgRecovery:
                     and any(
                         operand.access & CS_AC_READ
                         and operand.mem.base != X86_REG_INVALID
-                        and self._register_family(operand.mem.base)
-                        == source_family
+                        and self._register_family(operand.mem.base) == source_family
                         for operand in candidate_memory
                     )
                 )
@@ -9748,8 +9707,7 @@ class _DirectCfgRecovery:
                     and any(
                         operand.access & CS_AC_READ
                         and operand.mem.base != X86_REG_INVALID
-                        and self._register_family(operand.mem.base)
-                        == source_family
+                        and self._register_family(operand.mem.base) == source_family
                         for operand in candidate_memory
                     )
                 )
@@ -9837,9 +9795,7 @@ class _DirectCfgRecovery:
             )
             stack_source = None
             if source_definitions and len(source_definitions) == 1:
-                source_definition = self._owned_decoded(
-                    next(iter(source_definitions))
-                )
+                source_definition = self._owned_decoded(next(iter(source_definitions)))
                 if (
                     source_definition.id == X86_INS_LEA
                     and len(source_definition.operands) == 2
@@ -9935,20 +9891,14 @@ class _DirectCfgRecovery:
                             or source_operand.mem.index != X86_REG_INVALID
                         ):
                             return None
-                        source_family = self._register_family(
-                            source_operand.mem.base
-                        )
+                        source_family = self._register_family(source_operand.mem.base)
                         source_path = (
-                            source_operand.mem.disp
-                            + target_field
-                            - write_offset,
+                            source_operand.mem.disp + target_field - write_offset,
                         )
-                        source_definitions = (
-                            self._register_definitions_across_blocks(
-                                address,
-                                source_family,
-                                function_entry,
-                            )
+                        source_definitions = self._register_definitions_across_blocks(
+                            address,
+                            source_family,
+                            function_entry,
                         )
                         stack_source = None
                         if source_definitions and len(source_definitions) == 1:
@@ -9958,8 +9908,7 @@ class _DirectCfgRecovery:
                             if (
                                 source_definition.id == X86_INS_LEA
                                 and len(source_definition.operands) == 2
-                                and source_definition.operands[1].type
-                                == X86_OP_MEM
+                                and source_definition.operands[1].type == X86_OP_MEM
                             ):
                                 stack_source = self._stack_memory_logical_offset(
                                     source_definition.address,
@@ -10220,9 +10169,7 @@ class _DirectCfgRecovery:
                         f"guard={object_guard.guard_address:#x};"
                         f"{object_guard.provenance};guard-disjoint;"
                         "discriminator-values="
-                        + ",".join(
-                            f"{value:#x}" for value in sorted(discriminator[0])
-                        )
+                        + ",".join(f"{value:#x}" for value in sorted(discriminator[0]))
                         + f";{discriminator[1]}"
                     )
                     continue
@@ -10507,12 +10454,41 @@ class _DirectCfgRecovery:
                         for parent_definition in parent_definitions
                     )
                 )
+                nested_parent_nonnull = False
+                if (
+                    result is not None
+                    and len(field_path) > 1
+                    and self._object_result_has_flag(
+                        result[1], "optional-empty-association"
+                    )
+                ):
+                    parent_root = self._finite_object_byte_register_values_before(
+                        definition_address,
+                        parent_family,
+                        function_entry,
+                        (source.mem.disp, 0),
+                        visited | {key},
+                    )
+                    nested_parent_nonnull = bool(
+                        parent_root is not None
+                        and parent_root[0]
+                        and not self._object_result_has_flag(
+                            parent_root[1], "optional-empty-association"
+                        )
+                    )
+                    if nested_parent_nonnull:
+                        result = (
+                            result[0],
+                            f"{result[1]};loaded-root-nonnull;"
+                            f"root-byte={parent_root[1]}",
+                        )
                 if (
                     result is not None
                     and self._object_result_has_flag(
                         result[1], "optional-empty-association"
                     )
                     and not closed_global_append_parent
+                    and not nested_parent_nonnull
                     and not self._pointer_definition_has_closed_nonnull_guard(
                         definition_address,
                         address,
@@ -15809,9 +15785,7 @@ class _DirectCfgRecovery:
         argument_index: int,
         published_base: int,
         field: int,
-        active: frozenset[
-            tuple[int, int, int, int, tuple[int, ...]]
-        ] = frozenset(),
+        active: frozenset[tuple[int, int, int, int, tuple[int, ...]]] = frozenset(),
     ) -> bool:
         """Allow one pointer argument to escape only by closed publication."""
         key = (function_entry, argument_index, published_base, field)
@@ -17052,9 +17026,7 @@ class _DirectCfgRecovery:
             publication_address, slot_offset = root_stack_alias
             if (
                 operand.size != 4
-                or self._stack_operand_logical_offset(
-                    address, operand, function_entry
-                )
+                or self._stack_operand_logical_offset(address, operand, function_entry)
                 != slot_offset
                 or not publication_address < address
                 or self._reachable_within_function(
@@ -17458,12 +17430,9 @@ class _DirectCfgRecovery:
             for successor in self._summary_successors(
                 current, function_entry, following_entry
             ):
-                if (
-                    successor in excluded_addresses
-                    or (
-                        observation_region is not None
-                        and successor not in observation_region
-                    )
+                if successor in excluded_addresses or (
+                    observation_region is not None
+                    and successor not in observation_region
                 ):
                     continue
                 prior = states.get(successor)

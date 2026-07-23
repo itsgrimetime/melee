@@ -2270,11 +2270,7 @@ def guarded_call_return_object_origins_image(
         size_of_headers=0,
         entrypoint=text_va,
         directories=(),
-        sections=(
-            pe_mod.Section(
-                ".text", text_va, 0, len(data), len(data), 0x60000020
-            ),
-        ),
+        sections=(pe_mod.Section(".text", text_va, 0, len(data), len(data), 0x60000020),),
         imports=(),
         exports=(),
         relocations=(),
@@ -2319,11 +2315,7 @@ def affine_byte_range_merge_image(*, overwrite_after_load=False):
         size_of_headers=0,
         entrypoint=text_va,
         directories=(),
-        sections=(
-            pe_mod.Section(
-                ".text", text_va, 0, len(data), len(data), 0x60000020
-            ),
-        ),
+        sections=(pe_mod.Section(".text", text_va, 0, len(data), len(data), 0x60000020),),
         imports=(),
         exports=(),
         relocations=(),
@@ -2332,9 +2324,7 @@ def affine_byte_range_merge_image(*, overwrite_after_load=False):
     return image, text_va + default_move + 2, text_va + merged_move + 2
 
 
-def guarded_outparam_object_origins_image(
-    *, guard_bypasses_load=False, unknown_matching_child=False
-):
+def guarded_outparam_object_origins_image(*, guard_bypasses_load=False, unknown_matching_child=False):
     """Select a nested field from one of two exact outparam object writes."""
     from tools.mwcc_retro import pe as pe_mod
 
@@ -2399,11 +2389,7 @@ def guarded_outparam_object_origins_image(
         size_of_headers=0,
         entrypoint=text_va,
         directories=(),
-        sections=(
-            pe_mod.Section(
-                ".text", text_va, 0, len(data), len(data), 0x60000020
-            ),
-        ),
+        sections=(pe_mod.Section(".text", text_va, 0, len(data), len(data), 0x60000020),),
         imports=(),
         exports=(),
         relocations=(),
@@ -2842,9 +2828,7 @@ def allocation_backed_stack_pointee_image(*, mutation=None):
     return image, text_va + movzx_offset, text_va + transfer_offset
 
 
-def late_initialized_stack_slot_allocation_image(
-    *, clobber_slot=False, bulk_copy=False, nested_bulk_copy=False
-):
+def late_initialized_stack_slot_allocation_image(*, clobber_slot=False, bulk_copy=False, nested_bulk_copy=False):
     """Publish a fresh pointer locally before initializing its tag byte."""
     from tools.mwcc_retro import pe as pe_mod
 
@@ -2863,18 +2847,12 @@ def late_initialized_stack_slot_allocation_image(
     def emit_call(offset, target_offset):
         text[offset] = 0xE8
         displacement = (text_va + target_offset) - (text_va + offset + 5)
-        text[offset + 1 : offset + 5] = displacement.to_bytes(
-            4, "little", signed=True
-        )
+        text[offset + 1 : offset + 5] = displacement.to_bytes(4, "little", signed=True)
         return offset + 5
 
     cursor = emit(
         0,
-        "83 ec 60"
-        if nested_bulk_copy
-        else "83 ec 40"
-        if bulk_copy
-        else "83 ec 10",
+        "83 ec 60" if nested_bulk_copy else "83 ec 40" if bulk_copy else "83 ec 10",
     )
     if nested_bulk_copy:
         cursor = emit(cursor, "c6 44 24 20 04 c6 44 24 40 29")
@@ -2937,9 +2915,7 @@ def late_initialized_stack_slot_allocation_image(
         ),
         imports=(),
         exports=(),
-        relocations=tuple(
-            pe_mod.Relocation(rdata_va + index * 4, 3) for index in range(75)
-        ),
+        relocations=tuple(pe_mod.Relocation(rdata_va + index * 4, 3) for index in range(75)),
         executable_ranges=((text_va, text_va + 0x300),),
     )
     return image, text_va + movzx_offset, text_va + transfer_offset
@@ -4236,9 +4212,7 @@ def test_recursive_nested_argument_producer_stops_at_bottom():
 
 
 def test_object_guard_answers_local_discriminator_before_recursive_origin():
-    image, _factory_call, consumer_call, observation = (
-        guarded_call_return_object_origins_image()
-    )
+    image, _factory_call, consumer_call, observation = guarded_call_return_object_origins_image()
     recovery = _DirectCfgRecovery(
         image,
         build_seed_inventory(image, ()),
@@ -4295,9 +4269,7 @@ def test_object_guard_recovers_merged_affine_byte_ranges():
 
 
 def test_object_guard_rejects_affine_domain_after_tag_overwrite():
-    image, _default_return, merged_return = affine_byte_range_merge_image(
-        overwrite_after_load=True
-    )
+    image, _default_return, merged_return = affine_byte_range_merge_image(overwrite_after_load=True)
     recovery = _DirectCfgRecovery(
         image,
         build_seed_inventory(image, ()),
@@ -4328,8 +4300,8 @@ def test_object_guard_rejects_affine_domain_after_tag_overwrite():
 
 
 def test_object_guard_filters_disjoint_call_return_origins():
-    image, _factory_call, consumer_call, observation = (
-        guarded_call_return_object_origins_image(disjoint_empty_child=True)
+    image, _factory_call, consumer_call, observation = guarded_call_return_object_origins_image(
+        disjoint_empty_child=True
     )
     recovery = _DirectCfgRecovery(
         image,
@@ -4354,15 +4326,11 @@ def test_object_guard_filters_disjoint_call_return_origins():
     assert result is not None
     assert result[0] == frozenset({0x29})
     assert "guard-disjoint" in result[1]
-    assert not recovery._object_result_has_flag(
-        result[1], "optional-empty-association"
-    )
+    assert not recovery._object_result_has_flag(result[1], "optional-empty-association")
 
 
 def test_object_guard_filters_disjoint_normal_callee_effect():
-    image, _factory_call, consumer_call, observation = (
-        guarded_call_return_object_origins_image(disjoint_mutator=True)
-    )
+    image, _factory_call, consumer_call, observation = guarded_call_return_object_origins_image(disjoint_mutator=True)
     recovery = _DirectCfgRecovery(
         image,
         build_seed_inventory(image, ()),
@@ -4372,9 +4340,7 @@ def test_object_guard_filters_disjoint_normal_callee_effect():
     consumer = image.entrypoint + 0xC0
     mutator = image.entrypoint + 0x100
     mutator_call = next(
-        address
-        for address, target in recovery.direct_call_targets_by_source.items()
-        if target == mutator
+        address for address, target in recovery.direct_call_targets_by_source.items() if target == mutator
     )
     contexts = (
         (consumer, consumer_call, image.entrypoint),
@@ -4410,12 +4376,72 @@ def test_object_guard_filters_disjoint_normal_callee_effect():
     assert "guard-filtered" in result[1]
 
 
-def test_object_guard_rejects_normal_effect_before_disjoint_tag_write():
-    image, _factory_call, consumer_call, observation = (
-        guarded_call_return_object_origins_image(
-            disjoint_mutator=True,
-            mutator_pointer_before_tag=True,
+def test_argument_object_byte_cache_is_guard_context_sensitive(monkeypatch):
+    image, _factory_call, _consumer_call, observation = guarded_call_return_object_origins_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    consumer = image.entrypoint + 0xC0
+    evaluations = []
+
+    def modeled_argument(
+        address,
+        function_entry,
+        argument_index,
+        field_path,
+        visited,
+        *,
+        excluded_addresses=frozenset(),
+    ):
+        guard = recovery.producer_object_guard_contexts[-1]
+        evaluations.append(guard)
+        return guard.values, guard.provenance
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_argument_object_byte_values_before_uncached",
+        modeled_argument,
+    )
+    results = []
+    for value in (4, 5):
+        guard = _ObjectByteGuard(
+            consumer,
+            observation,
+            "eax",
+            (10, 0),
+            0,
+            frozenset({value}),
+            observation,
+            f"modeled-tag-{value}-guard",
         )
+        recovery.producer_object_guard_contexts.append(guard)
+        try:
+            results.append(
+                recovery._finite_argument_object_byte_values_before(
+                    observation,
+                    consumer,
+                    0,
+                    (10, 0),
+                    frozenset(),
+                )
+            )
+        finally:
+            assert recovery.producer_object_guard_contexts.pop() == guard
+
+    assert [result[0] for result in results] == [
+        frozenset({4}),
+        frozenset({5}),
+    ]
+    assert len(evaluations) == 2
+
+
+def test_object_guard_rejects_normal_effect_before_disjoint_tag_write():
+    image, _factory_call, consumer_call, observation = guarded_call_return_object_origins_image(
+        disjoint_mutator=True,
+        mutator_pointer_before_tag=True,
     )
     recovery = _DirectCfgRecovery(
         image,
@@ -4426,9 +4452,7 @@ def test_object_guard_rejects_normal_effect_before_disjoint_tag_write():
     consumer = image.entrypoint + 0xC0
     mutator = image.entrypoint + 0x100
     mutator_call = next(
-        address
-        for address, target in recovery.direct_call_targets_by_source.items()
-        if target == mutator
+        address for address, target in recovery.direct_call_targets_by_source.items() if target == mutator
     )
     contexts = (
         (consumer, consumer_call, image.entrypoint),
@@ -4462,9 +4486,7 @@ def test_object_guard_rejects_normal_effect_before_disjoint_tag_write():
 
 
 def test_object_guard_filters_disjoint_optional_empty_return(monkeypatch):
-    image, factory_call, _consumer_call, _observation = (
-        guarded_call_return_object_origins_image()
-    )
+    image, factory_call, _consumer_call, _observation = guarded_call_return_object_origins_image()
     recovery = _DirectCfgRecovery(
         image,
         build_seed_inventory(image, ()),
@@ -4477,9 +4499,7 @@ def test_object_guard_filters_disjoint_optional_empty_return(monkeypatch):
 
     def modeled_returns(address, register_family, function_entry, field_path, visited):
         if function_entry != factory or register_family != "eax":
-            return original(
-                address, register_family, function_entry, field_path, visited
-            )
+            return original(address, register_family, function_entry, field_path, visited)
         assert address in returns
         if field_path == (10, 0):
             return (
@@ -4526,18 +4546,12 @@ def test_object_guard_filters_disjoint_optional_empty_return(monkeypatch):
     assert result is not None
     assert result[0] == frozenset({0x29})
     assert "guard-disjoint" in result[1]
-    assert not recovery._object_result_has_flag(
-        result[1], "optional-empty-association"
-    )
+    assert not recovery._object_result_has_flag(result[1], "optional-empty-association")
 
 
 @pytest.mark.parametrize("open_discriminator", [5, 4])
-def test_object_guard_filters_disjoint_fresh_allocation_origin(
-    monkeypatch, open_discriminator
-):
-    image, _factory_call, consumer_call, _observation = (
-        guarded_call_return_object_origins_image()
-    )
+def test_object_guard_filters_disjoint_fresh_allocation_origin(monkeypatch, open_discriminator):
+    image, _factory_call, consumer_call, _observation = guarded_call_return_object_origins_image()
     recovery = _DirectCfgRecovery(
         image,
         build_seed_inventory(image, ()),
@@ -4571,16 +4585,10 @@ def test_object_guard_filters_disjoint_fresh_allocation_origin(
                 **kwargs,
             )
         if field_path == (10, 0):
-            return (
-                (frozenset({0x29}), "modeled-fresh-child")
-                if allocation_call == 0x111
-                else None
-            )
+            return (frozenset({0x29}), "modeled-fresh-child") if allocation_call == 0x111 else None
         assert field_path == (0,)
         return (
-            frozenset(
-                {4 if allocation_call == 0x111 else open_discriminator}
-            ),
+            frozenset({4 if allocation_call == 0x111 else open_discriminator}),
             "modeled-fresh-discriminator",
         )
 
@@ -4629,12 +4637,10 @@ def test_object_guard_filters_disjoint_fresh_allocation_origin(
     ["missing-guard", "guard-bypass", "unknown-matching-child"],
 )
 def test_object_guard_rejects_open_matching_or_unguarded_origin(mutation):
-    image, _factory_call, consumer_call, observation = (
-        guarded_call_return_object_origins_image(
-            guard_root_tag=mutation != "missing-guard",
-            guard_bypasses_load=mutation == "guard-bypass",
-            unknown_matching_child=mutation == "unknown-matching-child",
-        )
+    image, _factory_call, consumer_call, observation = guarded_call_return_object_origins_image(
+        guard_root_tag=mutation != "missing-guard",
+        guard_bypasses_load=mutation == "guard-bypass",
+        unknown_matching_child=mutation == "unknown-matching-child",
     )
     recovery = _DirectCfgRecovery(
         image,
@@ -4660,9 +4666,7 @@ def test_object_guard_rejects_open_matching_or_unguarded_origin(mutation):
 
 
 def test_object_guard_filters_disjoint_exact_outparam_origins(monkeypatch):
-    image, _outparam_call, consumer_call, observation = (
-        guarded_outparam_object_origins_image()
-    )
+    image, _outparam_call, consumer_call, observation = guarded_outparam_object_origins_image()
     recovery = _DirectCfgRecovery(
         image,
         build_seed_inventory(image, ()),
@@ -4699,11 +4703,9 @@ def test_object_guard_filters_disjoint_exact_outparam_origins(monkeypatch):
 
 @pytest.mark.parametrize("mutation", ["guard-bypass", "unknown-matching-child"])
 def test_object_guard_rejects_open_exact_outparam_origin(monkeypatch, mutation):
-    image, _outparam_call, consumer_call, observation = (
-        guarded_outparam_object_origins_image(
-            guard_bypasses_load=mutation == "guard-bypass",
-            unknown_matching_child=mutation == "unknown-matching-child",
-        )
+    image, _outparam_call, consumer_call, observation = guarded_outparam_object_origins_image(
+        guard_bypasses_load=mutation == "guard-bypass",
+        unknown_matching_child=mutation == "unknown-matching-child",
     )
     recovery = _DirectCfgRecovery(
         image,
@@ -4807,9 +4809,7 @@ def test_allocation_backed_stack_pointee_bounds_nested_movzx_table():
 
 
 def test_stack_slot_fresh_pointer_observes_later_initialization():
-    image, movzx_address, transfer_address = (
-        late_initialized_stack_slot_allocation_image()
-    )
+    image, movzx_address, transfer_address = late_initialized_stack_slot_allocation_image()
     cfg = recover_cfg(
         image,
         build_seed_inventory(image, ()),
@@ -4822,9 +4822,7 @@ def test_stack_slot_fresh_pointer_observes_later_initialization():
 
 
 def test_stack_slot_fresh_pointer_observes_later_bulk_copy():
-    image, movzx_address, transfer_address = (
-        late_initialized_stack_slot_allocation_image(bulk_copy=True)
-    )
+    image, movzx_address, transfer_address = late_initialized_stack_slot_allocation_image(bulk_copy=True)
     cfg = recover_cfg(
         image,
         build_seed_inventory(image, ()),
@@ -4837,9 +4835,7 @@ def test_stack_slot_fresh_pointer_observes_later_bulk_copy():
 
 
 def test_stack_slot_fresh_pointer_observes_unaligned_nested_bulk_copy():
-    image, movzx_address, transfer_address = (
-        late_initialized_stack_slot_allocation_image(nested_bulk_copy=True)
-    )
+    image, movzx_address, transfer_address = late_initialized_stack_slot_allocation_image(nested_bulk_copy=True)
     cfg = recover_cfg(
         image,
         build_seed_inventory(image, ()),
@@ -4852,9 +4848,7 @@ def test_stack_slot_fresh_pointer_observes_unaligned_nested_bulk_copy():
 
 
 def test_stack_slot_fresh_pointer_rejects_alternate_clobber():
-    image, _movzx_address, transfer_address = (
-        late_initialized_stack_slot_allocation_image(clobber_slot=True)
-    )
+    image, _movzx_address, transfer_address = late_initialized_stack_slot_allocation_image(clobber_slot=True)
     cfg = recover_cfg(
         image,
         build_seed_inventory(image, ()),
@@ -6193,9 +6187,7 @@ def conditional_nested_argument_pointer_image(*, mutation=None):
     emit("8d 04 24 89 44 24 12 8d 54 24 04 52 8d 44 24 0c 50")
     exact_call = text_va + cursor
     text[cursor] = 0xE8
-    text[cursor + 1 : cursor + 5] = (text_va + 0x80 - (text_va + cursor + 5)).to_bytes(
-        4, "little", signed=True
-    )
+    text[cursor + 1 : cursor + 5] = (text_va + 0x80 - (text_va + cursor + 5)).to_bytes(4, "little", signed=True)
     cursor += 5
     emit("83 c4 08 83 c4 20 c3")
 
@@ -6230,11 +6222,17 @@ def conditional_nested_argument_pointer_image(*, mutation=None):
     return image, exact_call, observation_address
 
 
-def successful_object_outparam_image(*, mutation=None):
+def successful_object_outparam_image(
+    *,
+    mutation=None,
+    nested=False,
+    normalize_result=False,
+):
     """Write an object pointer only on a caller-guarded success return."""
     from tools.mwcc_retro import pe as pe_mod
 
     assert mutation in {None, "unknown", "no-guard", "nested-empty"}
+    assert not (nested or normalize_result) or mutation is None
     text_va = 0x00401000
     data = bytearray(0x200)
     text = memoryview(data)
@@ -6247,13 +6245,17 @@ def successful_object_outparam_image(*, mutation=None):
         text[cursor : cursor + len(encoded)] = encoded
         cursor += len(encoded)
 
-    emit("83 ec 20 c6 44 24 08 29")
-    emit("8d 4c 24 08 8d 44 24 04 52 51 50")
+    if nested:
+        emit("83 ec 30 c6 44 24 08 29")
+        emit("c6 44 24 10 44 8d 54 24 08 8d 4c 24 10")
+        emit("89 54 24 1a")
+        emit("8d 44 24 04 6a 01 51 50")
+    else:
+        emit("83 ec 20 c6 44 24 08 29")
+        emit("8d 4c 24 08 8d 44 24 04 52 51 50")
     exact_call = text_va + cursor
     text[cursor] = 0xE8
-    text[cursor + 1 : cursor + 5] = (
-        text_va + 0x80 - (text_va + cursor + 5)
-    ).to_bytes(4, "little", signed=True)
+    text[cursor + 1 : cursor + 5] = (text_va + 0x80 - (text_va + cursor + 5)).to_bytes(4, "little", signed=True)
     cursor += 5
     emit("83 c4 0c")
     guard_branch = None
@@ -6261,10 +6263,10 @@ def successful_object_outparam_image(*, mutation=None):
         emit("84 c0 74 00")
         guard_branch = cursor - 2
     observation_address = text_va + cursor
-    emit("8b 44 24 04 83 c4 20 c3")
+    emit(f"8b 44 24 04 83 c4 {0x30 if nested else 0x20:02x} c3")
     if mutation != "no-guard":
         failure = cursor
-        emit("31 c0 83 c4 20 c3")
+        emit(f"31 c0 83 c4 {0x30 if nested else 0x20:02x} c3")
         assert guard_branch is not None
         text[guard_branch + 1] = failure - (guard_branch + 2)
 
@@ -6275,15 +6277,19 @@ def successful_object_outparam_image(*, mutation=None):
     if mutation == "nested-empty":
         emit("51")
         text[cursor] = 0xE8
-        text[cursor + 1 : cursor + 5] = (
-            text_va + 0xC0 - (text_va + cursor + 5)
-        ).to_bytes(4, "little", signed=True)
+        text[cursor + 1 : cursor + 5] = (text_va + 0xC0 - (text_va + cursor + 5)).to_bytes(4, "little", signed=True)
         cursor += 5
         emit("83 c4 04 8b 4c 24 04")
     if mutation == "unknown":
         emit("89 01")
     else:
         emit("8b 54 24 08 89 11")
+    if normalize_result:
+        emit("8b 01 50")
+        text[cursor] = 0xE8
+        text[cursor + 1 : cursor + 5] = (text_va + 0xC0 - (text_va + cursor + 5)).to_bytes(4, "little", signed=True)
+        cursor += 5
+        emit("59 8b 4c 24 04 89 01")
     emit("b0 01 c3")
     failure = cursor
     emit("31 c0 c3")
@@ -6292,6 +6298,9 @@ def successful_object_outparam_image(*, mutation=None):
     if mutation == "nested-empty":
         cursor = 0xC0
         emit("8b 44 24 04 85 d2 74 06 c7 00 00 00 00 00 c3")
+    elif normalize_result:
+        cursor = 0xC0
+        emit("8b 44 24 04 c3")
 
     image = pe_mod.Image(
         data=bytes(data),
@@ -6364,9 +6373,7 @@ def superseded_outparam_stack_slot_image(*, branch_bypasses_writer=False):
 
     emit("83 ec 20 8d 44 24 04 50")
     text[cursor] = 0xE8
-    text[cursor + 1 : cursor + 5] = (
-        text_va + 0x80 - (text_va + cursor + 5)
-    ).to_bytes(4, "little", signed=True)
+    text[cursor + 1 : cursor + 5] = (text_va + 0x80 - (text_va + cursor + 5)).to_bytes(4, "little", signed=True)
     cursor += 5
     emit("83 c4 04 c6 44 24 08 29")
     branch = None
@@ -6550,9 +6557,7 @@ def test_object_value_excludes_a_redefinition_before_a_loop_backedge(monkeypatch
 
 
 def test_object_value_rejects_unknown_loop_write_without_redefinition():
-    image, exact_call, observation, _redefinition = redefined_argument_loop_image(
-        redefine_before_backedge=False
-    )
+    image, exact_call, observation, _redefinition = redefined_argument_loop_image(redefine_before_backedge=False)
     recovery = _DirectCfgRecovery(image, build_seed_inventory(image, ()), generous_limits(image))
     recovery.recover()
     callee = image.entrypoint + 0x40
@@ -6603,16 +6608,10 @@ def test_callee_effect_flags_ignore_nested_provenance_flags():
         "callee=0x401100;argument=0;optional-preserve;writer=0x401120"
     )
 
-    assert not _DirectCfgRecovery._callee_effect_has_flag(
-        detail, "optional-preserve"
-    )
+    assert not _DirectCfgRecovery._callee_effect_has_flag(detail, "optional-preserve")
+    assert _DirectCfgRecovery._callee_effect_has_flag(detail, "optional-empty-association")
     assert _DirectCfgRecovery._callee_effect_has_flag(
-        detail, "optional-empty-association"
-    )
-    assert _DirectCfgRecovery._callee_effect_has_flag(
-        detail.replace(
-            "exact-origins;", "exact-origins;optional-preserve;"
-        ),
+        detail.replace("exact-origins;", "exact-origins;optional-preserve;"),
         "optional-preserve",
     )
     assert not _DirectCfgRecovery._object_result_has_flag(
@@ -6666,9 +6665,7 @@ def test_argument_effect_combines_finite_nested_pointer_replacement():
 
 @pytest.mark.parametrize("mutation", ["partial", "unknown"])
 def test_argument_effect_rejects_open_nested_pointer_replacement(mutation):
-    image, exact_call, observation = conditional_nested_argument_pointer_image(
-        mutation=mutation
-    )
+    image, exact_call, observation = conditional_nested_argument_pointer_image(mutation=mutation)
     recovery = _DirectCfgRecovery(image, build_seed_inventory(image, ()), generous_limits(image))
     recovery.recover()
     callee = image.entrypoint + 0x80
@@ -6705,6 +6702,121 @@ def test_guarded_object_outparam_propagates_finite_pointee_byte():
     assert result[0] == frozenset({0x29})
 
 
+def test_guarded_object_outparam_propagates_nested_pointee_through_normalizer():
+    image, _exact_call, observation = successful_object_outparam_image(
+        nested=True,
+        normalize_result=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_object_byte_register_values_before(
+        observation + 4,
+        "eax",
+        image.entrypoint,
+        (10, 0),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+
+
+@pytest.mark.parametrize(
+    ("root_optional", "expected_values"),
+    [(False, frozenset({0x29})), (True, None)],
+)
+def test_nested_optional_empty_does_not_make_loaded_root_optional(
+    monkeypatch,
+    root_optional,
+    expected_values,
+):
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytes.fromhex("8b 03 c3")
+    image = pe_mod.Image(
+        data=data,
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    original = recovery._finite_object_byte_register_values_before
+
+    def model_parent_path(
+        address,
+        register_family,
+        function_entry,
+        field_path,
+        visited,
+    ):
+        if address == text_va and register_family == "ebx":
+            if field_path == (0, 10, 0):
+                return (
+                    frozenset({0x29}),
+                    "optional-empty-association;nested-child",
+                )
+            if field_path == (0, 0):
+                detail = "optional-empty-association;root-object" if root_optional else "finite-root-byte"
+                return frozenset({0x44}), detail
+        return original(
+            address,
+            register_family,
+            function_entry,
+            field_path,
+            visited,
+        )
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_register_values_before",
+        model_parent_path,
+    )
+
+    result = recovery._finite_object_byte_register_values_before_uncached(
+        text_va + 2,
+        "eax",
+        text_va,
+        (10, 0),
+        frozenset(),
+    )
+
+    if expected_values is None:
+        assert result is None
+    else:
+        assert result is not None
+        assert result[0] == expected_values
+        assert "loaded-root-nonnull" in result[1]
+
+
 def test_guarded_object_outparam_uses_exact_origins_when_state_is_open(
     monkeypatch,
 ):
@@ -6734,9 +6846,7 @@ def test_guarded_object_outparam_uses_exact_origins_when_state_is_open(
 
 
 def test_guarded_object_outparam_ignores_overwritten_optional_empty():
-    image, _exact_call, observation = successful_object_outparam_image(
-        mutation="nested-empty"
-    )
+    image, _exact_call, observation = successful_object_outparam_image(mutation="nested-empty")
     recovery = _DirectCfgRecovery(
         image,
         build_seed_inventory(image, ()),
@@ -6765,10 +6875,13 @@ def test_return_byte_constant_reads_partial_al_zero_in_same_block():
     )
     recovery.recover()
 
-    assert recovery._return_byte_constant(
-        image.entrypoint + len(image.data) - 1,
-        image.entrypoint,
-    ) == 0
+    assert (
+        recovery._return_byte_constant(
+            image.entrypoint + len(image.data) - 1,
+            image.entrypoint,
+        )
+        == 0
+    )
 
 
 def test_return_byte_constant_rejects_branch_bypassing_partial_al_zero():
@@ -6780,10 +6893,13 @@ def test_return_byte_constant_rejects_branch_bypassing_partial_al_zero():
     )
     recovery.recover()
 
-    assert recovery._return_byte_constant(
-        image.entrypoint + len(image.data) - 1,
-        image.entrypoint,
-    ) is None
+    assert (
+        recovery._return_byte_constant(
+            image.entrypoint + len(image.data) - 1,
+            image.entrypoint,
+        )
+        is None
+    )
 
 
 def test_stack_slot_pointer_ignores_superseded_unknown_outparam():
@@ -6808,9 +6924,7 @@ def test_stack_slot_pointer_ignores_superseded_unknown_outparam():
 
 
 def test_stack_slot_pointer_rejects_outparam_bypassing_exact_writer():
-    image, observation = superseded_outparam_stack_slot_image(
-        branch_bypasses_writer=True
-    )
+    image, observation = superseded_outparam_stack_slot_image(branch_bypasses_writer=True)
     recovery = _DirectCfgRecovery(
         image,
         build_seed_inventory(image, ()),
@@ -6818,20 +6932,21 @@ def test_stack_slot_pointer_rejects_outparam_bypassing_exact_writer():
     )
     recovery.recover()
 
-    assert recovery._finite_object_byte_register_values_before(
-        observation + 4,
-        "eax",
-        image.entrypoint,
-        (0,),
-        frozenset(),
-    ) is None
+    assert (
+        recovery._finite_object_byte_register_values_before(
+            observation + 4,
+            "eax",
+            image.entrypoint,
+            (0,),
+            frozenset(),
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize("mutation", ["unknown", "no-guard"])
 def test_object_outparam_rejects_open_success_image(mutation):
-    image, _exact_call, observation = successful_object_outparam_image(
-        mutation=mutation
-    )
+    image, _exact_call, observation = successful_object_outparam_image(mutation=mutation)
     recovery = _DirectCfgRecovery(image, build_seed_inventory(image, ()), generous_limits(image))
     recovery.recover()
 
@@ -8108,7 +8223,7 @@ def test_byte_producer_checkpoint_requires_durable_resume(tmp_path):
     assert len(certificates) == 1
     certificate = json.loads(certificates[0].read_bytes())
     assert certificate["compiler_sha256"] == image.sha256
-    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == ("movzx-producer-analysis-v16")
+    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == ("movzx-producer-analysis-v17")
     assert certificate["query"]["analysis_semantics"] == (_MOVZX_PRODUCER_ANALYSIS_SEMANTICS)
     assert certificate["query"]["movzx_address"] == 0x00401044
     assert certificate["result"] == {
