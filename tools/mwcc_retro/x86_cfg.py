@@ -2046,6 +2046,7 @@ class _DirectCfgRecovery:
         self.producer_exact_call_contexts: list[tuple[int, int, int]] = []
         self.producer_object_guard_contexts: list[_ObjectByteGuard] = []
         self.producer_allocator_lifetime_contexts: list[frozenset[int]] = []
+        self.exact_argument_discriminator_active: set[tuple[Any, ...]] = set()
         self.finite_control_memo = (
             {} if finite_control_memo is None else finite_control_memo
         )
@@ -3916,6 +3917,7 @@ class _DirectCfgRecovery:
             )
         target_field = field_path[0]
         writers: set[int] = set()
+        guard_filtered_writers: set[int] = set()
         empty_writers: set[int] = set()
         definite_nonempty_writers: set[int] = set()
         values: set[int] = set()
@@ -4076,8 +4078,22 @@ class _DirectCfgRecovery:
                 )
                 if not overlaps_target:
                     continue
+                definition_disjoint = self._guarded_exact_argument_definition_disjoint(
+                    candidate_address,
+                    function_entry,
+                    next_visited,
+                )
+                if definition_disjoint is not None:
+                    writers.add(candidate_address)
+                    guard_filtered_writers.add(candidate_address)
+                    details.append(
+                        f"writer={candidate_address:#x};"
+                        f"guard-filtered;{definition_disjoint}"
+                    )
+                    continue
                 if (discriminator := guard_disjoint_at(candidate_address)) is not None:
                     writers.add(candidate_address)
+                    guard_filtered_writers.add(candidate_address)
                     details.append(
                         f"writer={candidate_address:#x};guard-filtered;"
                         f"guard={object_guard.guard_address:#x};"
@@ -4111,6 +4127,18 @@ class _DirectCfgRecovery:
                             next_visited,
                         )
                     )
+                    if (
+                        result is not None
+                        and not result[0]
+                        and self._object_result_has_flag(result[1], "guard-disjoint")
+                    ):
+                        writers.add(candidate_address)
+                        guard_filtered_writers.add(candidate_address)
+                        details.append(
+                            f"writer={candidate_address:#x};"
+                            f"nested-pointer;guard-filtered;{result[1]}"
+                        )
+                        continue
                     if result is None or (
                         not result[0]
                         and not self._object_result_has_flag(
@@ -4310,6 +4338,16 @@ class _DirectCfgRecovery:
         return (
             frozenset(values),
             f"callee={function_entry:#x};argument={argument_index};"
+            + (
+                "guard-disjoint;"
+                if (
+                    not values
+                    and writers
+                    and writers == guard_filtered_writers
+                    and not may_preserve
+                )
+                else ""
+            )
             + ("optional-preserve;" if may_preserve else "")
             + ("optional-empty-association;" if may_be_empty else "")
             + "|".join(details),
@@ -9375,6 +9413,41 @@ class _DirectCfgRecovery:
         pushed = self._pushed_call_argument(call_address, argument_index)
         if pushed is None or pushed[2] != caller_entry:
             return None
+        direct_key = (
+            function_entry,
+            argument_index,
+            observation_address,
+            pointer_family,
+            values,
+            guard_address,
+        )
+        direct_result = None
+        if direct_key not in self.exact_argument_discriminator_active:
+            self.exact_argument_discriminator_active.add(direct_key)
+            try:
+                direct_result = self._finite_object_byte_operand_values_before(
+                    pushed[0].address,
+                    pushed[1],
+                    caller_entry,
+                    (0,),
+                    frozenset(),
+                )
+            finally:
+                self.exact_argument_discriminator_active.remove(direct_key)
+        if (
+            direct_result is not None
+            and direct_result[0]
+            and direct_result[0].isdisjoint(values)
+        ):
+            return (
+                frozenset(),
+                "guard-disjoint;finite-exact-caller-domain;"
+                "input-values="
+                + ",".join(f"{value:#x}" for value in sorted(direct_result[0]))
+                + ";guard-values="
+                + ",".join(f"{value:#x}" for value in sorted(values))
+                + f";{direct_result[1]}",
+            )
         probe = _ObjectByteGuard(
             function_entry,
             observation_address,
@@ -9398,14 +9471,21 @@ class _DirectCfgRecovery:
             popped = self.producer_object_guard_contexts.pop()
             if popped != probe:
                 raise AssertionError("producer object guard stack corrupted")
-        if (
-            result is None
-            or result[0]
-            or not self._object_result_has_flag(
-                result[1],
-                "guard-disjoint",
+        if result is None:
+            return None
+        if result[0]:
+            if not result[0].isdisjoint(values):
+                return None
+            return (
+                frozenset(),
+                "guard-disjoint;finite-exact-caller-domain;"
+                "input-values="
+                + ",".join(f"{value:#x}" for value in sorted(result[0]))
+                + ";guard-values="
+                + ",".join(f"{value:#x}" for value in sorted(values))
+                + f";{result[1]}",
             )
-        ):
+        if not self._object_result_has_flag(result[1], "guard-disjoint"):
             return None
         return result
 
@@ -9712,6 +9792,7 @@ class _DirectCfgRecovery:
         next_visited = visited | {key}
         object_guard = self._producer_object_guard_context(field_path)
         guard_disjoint_returns = 0
+        optional_empty_returns = 0
         for return_address in returns:
             context = (call_target, call_address, caller_entry)
             local_disjoint = None
@@ -9846,6 +9927,10 @@ class _DirectCfgRecovery:
                 guard_disjoint_returns += 1
                 details.append(f"return={return_address:#x};{result[1]}")
                 continue
+            if not result[0] and self._object_result_has_flag(
+                result[1], "optional-empty-association"
+            ):
+                optional_empty_returns += 1
             values.update(result[0])
             details.append(f"return={return_address:#x};{result[1]}")
         if not values:
@@ -9854,6 +9939,15 @@ class _DirectCfgRecovery:
                     frozenset(),
                     f"call={call_address:#x};target={call_target:#x};"
                     "guard-disjoint;" + "|".join(details),
+                )
+            if (
+                optional_empty_returns
+                and optional_empty_returns + guard_disjoint_returns == len(returns)
+            ):
+                return (
+                    frozenset(),
+                    f"call={call_address:#x};target={call_target:#x};"
+                    "optional-empty-association;" + "|".join(details),
                 )
             return None
         self._check_count("max_finite_values", len(values))
@@ -10857,6 +10951,11 @@ class _DirectCfgRecovery:
                     "guard-disjoint",
                 ):
                     saw_guard_disjoint = True
+                if not result[0] and self._object_result_has_flag(
+                    result[1],
+                    "optional-empty-association",
+                ):
+                    saw_optional_empty = True
                 values.update(result[0])
                 details.append(f"definition={definition_address:#x};{result[1]}")
                 continue

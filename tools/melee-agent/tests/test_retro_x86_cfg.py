@@ -4522,6 +4522,132 @@ def test_register_copy_preserves_guard_disjoint_call_result(monkeypatch):
     assert recovery._object_result_has_flag(result[1], "guard-disjoint")
 
 
+def test_register_copy_preserves_optional_empty_call_result(monkeypatch):
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytearray(0x21)
+    data[0:6] = bytes.fromhex("e8 1b 00 00 00 c3")
+    data[0x20] = 0xC3
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_call_return_values_before",
+        lambda *_args, **_kwargs: (
+            frozenset(),
+            "optional-empty-association;modeled",
+        ),
+    )
+
+    result = recovery._finite_object_byte_register_values_before(
+        text_va + 5,
+        "eax",
+        text_va,
+        (10, 0),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset()
+    assert recovery._object_result_has_flag(
+        result[1],
+        "optional-empty-association",
+    )
+
+
+def test_call_return_preserves_all_optional_empty_results(monkeypatch):
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytearray(0x21)
+    data[0:6] = bytes.fromhex("e8 1b 00 00 00 c3")
+    data[0x20] = 0xC3
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_register_values_before",
+        lambda *_args, **_kwargs: (
+            frozenset(),
+            "optional-empty-association;modeled",
+        ),
+    )
+
+    result = recovery._finite_object_byte_call_return_values_before(
+        text_va,
+        text_va + 0x20,
+        text_va,
+        (10, 0),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset()
+    assert recovery._object_result_has_flag(
+        result[1],
+        "optional-empty-association",
+    )
+
+
 def test_overwritten_register_origin_excludes_later_normalizer_path(
     monkeypatch,
 ):
@@ -5032,7 +5158,8 @@ def test_guarded_definition_rejects_disjoint_exact_argument(monkeypatch):
 
     def modeled_operand(*_args, **_kwargs):
         probe = recovery._producer_object_guard_context((0,))
-        assert probe is not None
+        if probe is None:
+            return None
         assert probe.values == frozenset({0x2A})
         return frozenset(), "guard-disjoint;modeled-input-tag=0x43"
 
@@ -5057,6 +5184,76 @@ def test_guarded_definition_rejects_disjoint_exact_argument(monkeypatch):
     assert "argument=0" in result
     assert "guard=0x401045" in result
     assert "guard-disjoint" in result
+
+
+def test_exact_argument_guard_accepts_finite_disjoint_domain(monkeypatch):
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytearray(0x21)
+    data[0:8] = bytes.fromhex("50 e8 1a 00 00 00 59 c3")
+    data[0x20] = 0xC3
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    def modeled_operand(*_args, **_kwargs):
+        assert recovery._producer_object_guard_context((0,)) is None
+        return frozenset({4}), "modeled-input-tag=0x4"
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_operand_values_before",
+        modeled_operand,
+    )
+    callee = text_va + 0x20
+    context = (callee, text_va + 1, text_va)
+    recovery.producer_exact_call_contexts.append(context)
+    try:
+        result = recovery._exact_argument_discriminator_guard_disjoint(
+            callee,
+            0,
+            callee,
+            "eax",
+            frozenset({0x30}),
+            callee,
+            "modeled-loop-tag=0x30",
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_exact_call_contexts.pop() == context
+
+    assert result is not None
+    assert result[0] == frozenset()
+    assert recovery._object_result_has_flag(result[1], "guard-disjoint")
+    assert "finite-exact-caller-domain" in result[1]
 
 
 @pytest.mark.parametrize(
@@ -6242,6 +6439,112 @@ def test_callee_argument_byte_effect_records_optional_preservation():
 
     assert result is not None
     assert result[0] == frozenset({0x30})
+    assert "optional-preserve" in result[1]
+
+
+def nested_guard_disjoint_pointer_write_image():
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytes.fromhex(
+        # mov eax, [esp+4]; test edx, edx; je ret
+        # mov [eax], ecx; ret
+        "8b 44 24 04 85 d2 74 02 89 08 c3"
+    )
+    return pe_mod.Image(
+        data=data,
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+
+
+def test_callee_argument_nested_pointer_filters_guard_disjoint_source(monkeypatch):
+    image = nested_guard_disjoint_pointer_write_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    original = recovery._finite_object_byte_operand_values_before
+
+    def modeled_source(address, operand, function_entry, field_path, visited):
+        if address == image.entrypoint + 8 and field_path == (0,):
+            return frozenset(), "guard-disjoint;modeled-unreachable-source"
+        return original(address, operand, function_entry, field_path, visited)
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_operand_values_before",
+        modeled_source,
+    )
+
+    result = recovery._callee_argument_byte_effect(
+        image.entrypoint,
+        0,
+        (0, 0),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset()
+    assert "guard-filtered" in result[1]
+    assert "optional-preserve" in result[1]
+
+
+def test_callee_argument_filters_guard_disjoint_exact_writer(monkeypatch):
+    image = nested_guard_disjoint_pointer_write_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    def modeled_disjoint_writer(
+        definition_address,
+        function_entry,
+        visited,
+    ):
+        if definition_address == image.entrypoint + 8:
+            return "guard-disjoint;modeled-exact-writer"
+        return None
+
+    monkeypatch.setattr(
+        recovery,
+        "_guarded_exact_argument_definition_disjoint",
+        modeled_disjoint_writer,
+    )
+
+    result = recovery._callee_argument_byte_effect(
+        image.entrypoint,
+        0,
+        (0, 0),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset()
+    assert "guard-filtered" in result[1]
     assert "optional-preserve" in result[1]
 
 
