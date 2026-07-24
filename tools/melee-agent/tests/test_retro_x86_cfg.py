@@ -11368,6 +11368,372 @@ def test_stack_forwarded_back_reference_rejects_intervening_clobber(tmp_path):
     )
 
 
+def intervening_descriptor_call_back_reference_image(*, hostile=False):
+    text_va = 0x00401000
+    data = bytearray(b"\xcc" * 0x200)
+    # caller(descriptor): initialize(descriptor); inspect(descriptor).
+    data[:0x18] = bytes.fromhex(
+        "ff 74 24 04"
+        "e8 f7 00 00 00"
+        "59"
+        "ff 74 24 04"
+        "e8 0d 01 00 00"
+        "59"
+        "90"
+        "c2 04 00"
+    )
+    # initialize: *(*(descriptor + 8) + 4) = descriptor.
+    initializer = bytes.fromhex(
+        "8b 44 24 04"
+        "8b 50 08"
+        "8b 4a 04"
+        "89 01"
+        "c3"
+    )
+    data[0x100 : 0x100 + len(initializer)] = initializer
+    # inspect: outer = descriptor->object; leaf(outer).
+    inspector = bytes.fromhex(
+        "8b 44 24 04"
+        "8b 48 08"
+        "51"
+        "e8 13 00 00 00"
+        "59"
+        "c3"
+    )
+    data[0x120 : 0x120 + len(inspector)] = inspector
+    leaf = bytes.fromhex(
+        "8b 44 24 04"
+        + (
+            "c7 40 04 00 00 00 00"
+            if hostile
+            else "8b 48 10"
+        )
+        + "31 c0"
+        + "c3"
+    )
+    data[0x140 : 0x140 + len(leaf)] = leaf
+    return pe.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe.Section(".text", text_va, 0, 0x200, 0x200, 0x60000020),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+
+
+def object_callback_back_reference_image(tmp_path, *, mutation=None):
+    image = load_dispatch_image(
+        tmp_path,
+        mode="copied-descriptor-registered-object-back-reference",
+    )
+    old_text, old_rdata, old_reloc = image.sections
+    extension_size = 0x200
+    data = bytearray(
+        image.data[: old_rdata.raw_offset]
+        + b"\xcc" * extension_size
+        + image.data[old_rdata.raw_offset :]
+    )
+    text = replace(old_text, raw_size=0x400, virt_size=0x400)
+    rdata = replace(
+        old_rdata,
+        raw_offset=old_rdata.raw_offset + extension_size,
+    )
+    reloc = replace(
+        old_reloc,
+        raw_offset=old_reloc.raw_offset + extension_size,
+    )
+
+    def write_text(address, program):
+        offset = text.raw_offset + address - text.va
+        data[offset : offset + len(program)] = program
+
+    def append_call(program, base, target):
+        call_address = base + len(program)
+        program.append(0xE8)
+        program.extend(struct.pack("<i", target - (call_address + 5)))
+
+    # wrapper(): descriptor = copy(source); factory(descriptor).
+    wrapper = bytearray.fromhex("6a 00 6a 00 68 00 23 40 00")
+    append_call(wrapper, 0x00401200, 0x00401060)
+    wrapper.extend(bytes.fromhex("83 c4 0c 50"))
+    append_call(wrapper, 0x00401200, 0x00401220)
+    wrapper.extend(bytes.fromhex("59 c3"))
+    write_text(0x00401200, wrapper)
+
+    # factory(descriptor): allocate and construct one receiver, publish it
+    # into descriptor+0xc, allocate receiver+8, and initialize +8 -> +0.
+    factory = bytearray.fromhex(
+        "53 56 57"
+        "8b 5c 24 10"
+        "68 24 00 00 00"
+    )
+    append_call(factory, 0x00401220, 0x004010E0)
+    factory.extend(bytes.fromhex("89 c6 59 85 f6"))
+    factory.extend(
+        bytes(
+            (
+                0x74,
+                (
+                    0x2E
+                    if mutation == "post-initializer-clobber"
+                    else (
+                        0x07
+                        if mutation == "nullable-store-after-constructor"
+                        else 0x27
+                    )
+                ),
+            )
+        )
+    )
+    factory.extend(bytes.fromhex("89 f1"))
+    append_call(factory, 0x00401220, 0x00401280)
+    factory.extend(
+        bytes.fromhex(
+            "89 73 0c"
+            "6a 04"
+        )
+    )
+    append_call(factory, 0x00401220, 0x004010E0)
+    factory.extend(
+        bytes.fromhex(
+            "59"
+            "89 c7"
+            "89 7e 08"
+            "53"
+        )
+    )
+    append_call(
+        factory,
+        0x00401220,
+        0x004012F0 if mutation == "missing-initializer" else 0x004012A0,
+    )
+    factory.extend(bytes.fromhex("59"))
+    if mutation == "post-initializer-clobber":
+        factory.extend(bytes.fromhex("c7 46 08 00 00 00 00"))
+    factory.extend(
+        bytes.fromhex(
+            "31 c0"
+            "eb 05"
+            "b8 01 00 00 00"
+            "5f 5e 5b"
+            "c2 04 00"
+        )
+    )
+    write_text(0x00401220, factory)
+
+    table_base = 0x00402C00
+    if mutation == "saved-constructor-receiver":
+        constructor = bytearray.fromhex(
+            "83 ec 04"
+            "89 0c 24"
+        )
+        append_call(constructor, 0x00401280, 0x004013A0)
+        constructor.extend(
+            bytes.fromhex(
+                "8b 04 24"
+                "c7 80 20 00 00 00"
+            )
+        )
+        constructor.extend(struct.pack("<I", table_base))
+        constructor.extend(bytes.fromhex("83 c4 04 c3"))
+        constructor_relocation = 0x00401294
+        write_text(0x004013A0, b"\xc3")
+    else:
+        constructor = (
+            bytes.fromhex("c7 81 20 00 00 00")
+            + struct.pack("<I", table_base)
+            + bytes.fromhex("89 c8 c3")
+        )
+        constructor_relocation = 0x00401286
+    write_text(0x00401280, constructor)
+    initializer = bytes.fromhex(
+        "8b 44 24 04"
+        "8b 50 0c"
+        "8b 4a 08"
+        "89 01"
+        "c3"
+    )
+    write_text(0x004012A0, initializer)
+
+    # One observed slot proves that callback argument zero is the receiver.
+    consumer = bytearray.fromhex(
+        "53"
+        "8b 44 24 08"
+        "8b 98 20 00 00 00"
+    )
+    consumer.extend(
+        bytes.fromhex("6a 00")
+        if mutation == "wrong-receiver-argument"
+        else bytes.fromhex("50")
+    )
+    consumer.extend(bytes.fromhex("ff 13 59 5b c2 04 00"))
+    write_text(0x004012C0, consumer)
+    write_text(0x004012D0, bytes.fromhex("c2 04 00"))
+
+    # This table entry has no direct/finite caller.  Its receiver's +8/+0
+    # chain reaches copied descriptor slot zero and forwards that descriptor
+    # to the ordinary slot-zero consumer.
+    callback = bytearray.fromhex(
+        "56"
+        "8b 74 24 08"
+        "8b 4e 08"
+        "8b 01"
+        "50"
+    )
+    append_call(callback, 0x004012E0, 0x00401300)
+    callback.extend(
+        bytes.fromhex(
+            "59"
+            "5e"
+            "c2 04 00"
+        )
+    )
+    write_text(0x004012E0, callback)
+    write_text(0x004012F0, b"\xc3")
+    write_text(
+        0x00401300,
+        bytes.fromhex(
+            "8b 44 24 04"
+            "8b 00"
+            "ff 50 0c"
+            "c2 04 00"
+        ),
+    )
+    if mutation == "alternate-constructor-caller":
+        alternate = bytearray.fromhex("31 c9")
+        append_call(alternate, 0x00401340, 0x00401280)
+        alternate.extend(bytes.fromhex("c3"))
+        write_text(0x00401340, alternate)
+
+    table_offset = rdata.raw_offset + table_base - rdata.va
+    struct.pack_into(
+        "<III",
+        data,
+        table_offset,
+        0x004012D0,
+        0x004012E0,
+        0,
+    )
+    relocations = [
+        *image.relocations,
+        pe.Relocation(constructor_relocation, 3),
+        pe.Relocation(table_base, 3),
+        pe.Relocation(table_base + 4, 3),
+    ]
+    if mutation == "extra-callback-reference":
+        extra_reference = table_base + 0x100
+        extra_offset = rdata.raw_offset + extra_reference - rdata.va
+        struct.pack_into("<I", data, extra_offset, 0x004012E0)
+        relocations.append(pe.Relocation(extra_reference, 3))
+    return replace(
+        image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        sections=(text, rdata, reloc),
+        relocations=tuple(sorted(relocations, key=lambda row: row.va)),
+        executable_ranges=((text.va, text.va + text.virt_size),),
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "resolved"),
+    (
+        (None, True),
+        ("saved-constructor-receiver", True),
+        ("nullable-store-after-constructor", True),
+        ("missing-initializer", False),
+        ("wrong-receiver-argument", False),
+        ("post-initializer-clobber", False),
+        ("alternate-constructor-caller", False),
+        ("extra-callback-reference", False),
+    ),
+)
+def test_no_caller_object_callback_requires_constructed_receiver_invariant(
+    tmp_path, mutation, resolved
+):
+    image = object_callback_back_reference_image(tmp_path, mutation=mutation)
+    anchor_addresses = [0x00401200, 0x004012C0]
+    if mutation == "alternate-constructor-caller":
+        anchor_addresses.append(0x00401340)
+    anchors = tuple(audit_anchor(image, address) for address in anchor_addresses)
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, anchors),
+        generous_limits(image),
+    )
+
+    edge = any(
+        row.source == 0x00401306
+        and row.target == 0x004010F0
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
+    assert edge is resolved
+    assert (
+        any(
+            row.address == 0x00401306 and row.kind == "indirect-flow"
+            for row in cfg.control_targets.unresolved
+        )
+        is not resolved
+    )
+
+
+def test_local_back_reference_survives_intervening_descriptor_call():
+    image = intervening_descriptor_call_back_reference_image()
+    anchors = tuple(
+        audit_anchor(image, address)
+        for address in (0x00401000, 0x00401100, 0x00401120, 0x00401140)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, anchors),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._argument_back_reference_is_initialized_locally(
+        0x00401014,
+        0x00401000,
+        0,
+        8,
+        4,
+        0,
+    )
+
+
+def test_local_back_reference_rejects_nested_clobber_in_descriptor_call():
+    image = intervening_descriptor_call_back_reference_image(hostile=True)
+    anchors = tuple(
+        audit_anchor(image, address)
+        for address in (0x00401000, 0x00401100, 0x00401120, 0x00401140)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, anchors),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert not recovery._argument_back_reference_is_initialized_locally(
+        0x00401014,
+        0x00401000,
+        0,
+        8,
+        4,
+        0,
+    )
+
+
 @pytest.mark.parametrize(
     "mutation",
     ("wrong-source", "missing-initializer", "wrong-global-writer"),
@@ -11616,6 +11982,167 @@ def test_field_summary_accepts_forward_copy_before_destination(tmp_path):
     assert recovery._function_argument_does_not_read_field(0x00401080, 0, -4)
     assert recovery._function_argument_preserves_field(0x00401080, 1, -4)
     assert recovery._function_argument_does_not_read_field(0x00401080, 1, -4)
+
+
+def finite_indirect_field_summary_image(*, hostile_target=False):
+    text_va = 0x00401000
+    data = bytearray(b"\x90" * 0x100)
+    # wrapper(arg): finite_target(arg)
+    data[:11] = bytes.fromhex("8b 44 24 04 50 ff d2 59 c2 04 00")
+    data[0x20:0x23] = bytes.fromhex("c2 04 00")
+    data[0x30:0x3A] = (
+        bytes.fromhex("8b 44 24 04 89 48 08 c2 04 00")
+        if hostile_target
+        else bytes.fromhex("c2 04 00") + b"\x90" * 7
+    )
+    return pe.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe.Section(".text", text_va, 0, 0x100, 0x100, 0x60000020),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x100),),
+    )
+
+
+def test_field_summary_accepts_all_finite_indirect_targets():
+    image = finite_indirect_field_summary_image()
+    anchors = tuple(
+        audit_anchor(image, address)
+        for address in (0x00401000, 0x00401020, 0x00401030)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, anchors),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery._add_edge(
+        0x00401005,
+        0x00401020,
+        "indirect-call-finite-value",
+    )
+    recovery._add_edge(
+        0x00401005,
+        0x00401030,
+        "indirect-call-finite-value",
+    )
+
+    assert recovery._function_argument_preserves_field(0x00401000, 0, 8)
+    assert recovery._function_argument_does_not_read_field(0x00401000, 0, 8)
+
+
+def test_field_summary_rejects_one_hostile_finite_indirect_target():
+    image = finite_indirect_field_summary_image(hostile_target=True)
+    anchors = tuple(
+        audit_anchor(image, address)
+        for address in (0x00401000, 0x00401020, 0x00401030)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, anchors),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery._add_edge(
+        0x00401005,
+        0x00401020,
+        "indirect-call-finite-value",
+    )
+    recovery._add_edge(
+        0x00401005,
+        0x00401030,
+        "indirect-call-finite-value",
+    )
+
+    assert not recovery._function_argument_preserves_field(0x00401000, 0, 8)
+
+
+def returned_argument_alias_field_summary_image(*, hostile=False):
+    text_va = 0x00401000
+    data = bytearray(b"\x90" * 0x100)
+    # wrapper(arg): checked = identity_filter(arg); read/write checked field.
+    wrapper = bytes.fromhex(
+        "8b 44 24 04"  # mov eax, [esp + 4]
+        "50"  # push eax
+        "e8 16 00 00 00"  # call identity_filter
+        "59"  # pop ecx
+        + (
+            "c7 40 08 00 00 00 00"  # mov [eax + 8], 0
+            if hostile
+            else "8b 48 10"  # mov ecx, [eax + 0x10]
+        )
+        + "c2 04 00"
+    )
+    data[: len(wrapper)] = wrapper
+    # identity_filter(arg): return arg for one object kind, else null.
+    data[0x20:0x35] = bytes.fromhex(
+        "8b 44 24 04"
+        "85 c0"
+        "74 0a"
+        "81 78 a0 43 6f 6d 70"
+        "75 01"
+        "c3"
+        "31 c0"
+        "c3"
+    )
+    return pe.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe.Section(".text", text_va, 0, 0x100, 0x100, 0x60000020),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x100),),
+    )
+
+
+def test_field_summary_tracks_used_returned_argument_alias():
+    image = returned_argument_alias_field_summary_image()
+    anchors = tuple(
+        audit_anchor(image, address) for address in (0x00401000, 0x00401020)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, anchors),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_argument_preserves_field(0x00401000, 0, 8)
+    assert recovery._function_argument_does_not_read_field(0x00401000, 0, 8)
+
+
+def test_field_summary_rejects_write_through_returned_argument_alias():
+    image = returned_argument_alias_field_summary_image(hostile=True)
+    anchors = tuple(
+        audit_anchor(image, address) for address in (0x00401000, 0x00401020)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, anchors),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert not recovery._function_argument_preserves_field(0x00401000, 0, 8)
 
 
 def test_registered_copy_origin_survives_stack_return(tmp_path):
@@ -12170,6 +12697,20 @@ def test_reused_trial_discovers_additional_callback_hypothesis(tmp_path, monkeyp
 
     assert len(recoveries) == 3
     assert recoveries[1][0].object_callback_table_hypotheses
+    accepted = recoveries[-1][0].accepted_object_callback_hypotheses
+    assert len(accepted) == 1
+    hypothesis = accepted[0]
+    assert hypothesis.object_field == 0x104
+    assert hypothesis.receiver_identity is None
+    assert tuple(
+        (
+            consumer.transfer_address,
+            consumer.slot_offset,
+            consumer.target,
+            consumer.receiver_argument_index,
+        )
+        for consumer in hypothesis.consumers
+    ) == ((0x00401058, 0, 0x004010D8, None),)
     assert cfg is recoveries[-1][1]
     assert {row.category for row in cfg.seed_inventory.records if "callback" in row.category} == {
         "copied-descriptor-callback-entry",
@@ -12750,6 +13291,44 @@ def test_reachable_object_callback_table_seeds_every_relocated_entry(tmp_path):
     }
     assert {row.address for row in cfg.function_entries} >= {0x00401090, 0x004010A0}
     assert any(row.start <= 0x00402300 and 0x0040230C <= row.end for row in cfg.data_regions)
+
+
+def test_object_callback_hypothesis_records_receiver_argument_binding(
+    tmp_path, monkeypatch
+):
+    image = load_dispatch_image(tmp_path, mode="object-callback-table")
+    data = bytearray(image.data)
+    consumer_offset = image.va_to_offset(0x00401060)
+    assert consumer_offset is not None
+    consumer = bytes.fromhex(
+        "8b 44 24 04"
+        "8b 88 04 01 00 00"
+        "50"
+        "ff 51 04"
+        "59"
+        "c3"
+    )
+    data[consumer_offset : consumer_offset + len(consumer)] = consumer
+    image = replace(
+        image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    recoveries = []
+    original = _DirectCfgRecovery.recover
+
+    def record_recovery(recovery):
+        cfg = original(recovery)
+        recoveries.append(recovery)
+        return cfg
+
+    monkeypatch.setattr(_DirectCfgRecovery, "recover", record_recovery)
+    recover_cfg(image, build_seed_inventory(image, ()), generous_limits(image))
+
+    hypothesis = recoveries[-1].accepted_object_callback_hypotheses[0]
+    assert tuple(
+        consumer.receiver_argument_index for consumer in hypothesis.consumers
+    ) == (0,)
 
 
 def test_disjoint_fresh_receiver_write_does_not_open_object_field_domain(
