@@ -8598,6 +8598,257 @@ def partial_scalar_argument_copy_image(*, full_publish=False):
     )
 
 
+def local_stack_argument_pointer_copy_image(
+    *,
+    mutate_reloaded=False,
+    publish_reloaded=False,
+    clear_return=False,
+    second_local_copy=False,
+):
+    """Round-trip arg0 through one or more private local stack slots."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    stack_size = 0xC if second_local_copy else 8
+    data = bytes.fromhex(
+        ("83 ec 0c" if second_local_copy else "83 ec 08")
+        + ("8b 44 24 10" if second_local_copy else "8b 44 24 0c")
+        + "89 44 24 04"  # mov [esp + 4], eax
+        + "8b 44 24 04"  # mov eax, [esp + 4]
+        + (
+            "89 44 24 08"  # mov [esp + 8], eax
+            "8b 44 24 08"  # mov eax, [esp + 8]
+            if second_local_copy
+            else ""
+        )
+        + ("c6 00 7f" if mutate_reloaded else "")
+        + ("a3 00 30 40 00" if publish_reloaded else "")
+        + ("31 c0" if clear_return else "")
+        + f"83 c4 {stack_size:02x}"
+        + "c3"  # ret
+    )
+    return pe_mod.Image(
+        data=data,
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+
+
+def incoming_ecx_use_image(*, clear_first):
+    """Either consume incoming ECX or replace it with the XOR-zero idiom."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytes.fromhex(
+        (
+            "31 c9"  # xor ecx, ecx
+            if clear_first
+            else "85 c9"  # test ecx, ecx
+        )
+        + "c3"
+    )
+    return pe_mod.Image(
+        data=data,
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+
+
+def scoped_global_stack_pointer_publication_image(
+    *,
+    mutation=None,
+    save_partial_clobber=False,
+    publish_partial_clobber=False,
+):
+    """Publish arg0 through a LIFO caller-stack diagnostic descriptor."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {
+        None,
+        "bad-global-restore",
+        "active-zero-reset",
+        "missing-pop",
+        "mutating-reader",
+    }
+    text_va = 0x00401000
+    push_helper = 0x00401080
+    pop_helper = 0x004010C0
+    reader = 0x00401100
+    payload_reader = 0x00401160
+    save_restore = 0x00401180
+    noop = 0x004011C0
+    zero_reset = 0x004011D0
+    global_slot = 0x00402000
+    text = bytearray(b"\x90" * 0x200)
+    relocations = []
+
+    def emit(address, encoded):
+        encoded = bytes.fromhex(encoded)
+        offset = address - text_va
+        text[offset : offset + len(encoded)] = encoded
+        return address + len(encoded)
+
+    def emit_call(address, target):
+        displacement = target - (address + 5)
+        return emit(
+            address,
+            "e8" + displacement.to_bytes(4, "little", signed=True).hex(),
+        )
+
+    def emit_absolute(address, prefix, target):
+        prefix_bytes = bytes.fromhex(prefix)
+        relocations.append(pe_mod.Relocation(address + len(prefix_bytes), 3))
+        return emit(address, prefix + target.to_bytes(4, "little").hex())
+
+    # caller(payload): publish one local descriptor, exercise both kinds of
+    # global readers, then pop the exact descriptor on every return path.
+    cursor = emit_call(text_va, zero_reset)
+    cursor = emit(cursor, "83ec208b5c24248d4424106a005350")
+    cursor = emit_call(cursor, push_helper)
+    cursor = emit(cursor, "83c40c")
+    cursor = emit_call(cursor, save_restore)
+    cursor = emit_call(cursor, reader)
+    if mutation == "active-zero-reset":
+        cursor = emit_call(cursor, zero_reset)
+    if mutation != "missing-pop":
+        cursor = emit(cursor, "8d44241050")
+        cursor = emit_call(cursor, pop_helper)
+        cursor = emit(cursor, "83c404")
+    emit(cursor, "83c420c3")
+
+    # push(node, payload, tag): node->payload = payload; node->next = head;
+    # head = node.
+    cursor = emit(push_helper, "8b4424088b4c24048941048a54240c885108")
+    cursor = emit_absolute(cursor, "a1", global_slot)
+    cursor = emit(cursor, "8901")
+    cursor = emit_absolute(cursor, "890d", global_slot)
+    emit(cursor, "c3")
+
+    # pop(node): head = node->next.
+    cursor = emit(pop_helper, "8b4c2404")
+    cursor = emit_absolute(cursor, "3b0d", global_slot)
+    cursor = emit(cursor, "8b01")
+    cursor = emit_absolute(cursor, "a3", global_slot)
+    emit(cursor, "c3")
+
+    # reader(): copy the complete linked-list domain to an indexed local
+    # stack array, reload each node, and inspect its payload.
+    cursor = emit(reader, "83ec2031c9")
+    cursor = emit_absolute(cursor, "8b15", global_slot)
+    loop = cursor
+    cursor = emit(cursor, "89148c418b1285d275f6")
+    assert cursor - loop == 10
+    cursor = emit(cursor, "498b148c8b4204506a00")
+    cursor = emit_call(cursor, payload_reader)
+    emit(cursor, "83c40883c420c3")
+
+    # payload_reader(unused, payload): either read payload[0] or mutate it.
+    cursor = emit(payload_reader, "8b442408")
+    if mutation == "mutating-reader":
+        cursor = emit(cursor, "c6007f")
+    else:
+        cursor = emit(cursor, "803800")
+    emit(cursor, "c3")
+
+    # save_restore(): an opaque nested operation may change the global head,
+    # but every path restores the exact saved value.
+    cursor = emit(save_restore, "83ec08")
+    cursor = emit_absolute(cursor, "a1", global_slot)
+    cursor = emit(cursor, "89442404")
+    if save_partial_clobber or publish_partial_clobber:
+        cursor = emit(cursor, "b07f")  # mov al, 0x7f
+        if publish_partial_clobber:
+            cursor = emit_absolute(cursor, "a3", global_slot + 4)
+        else:
+            cursor = emit(cursor, "88442403")  # local scalar byte copy
+        cursor = emit(cursor, "31c0")  # kill the corrupted register
+    cursor = emit_call(cursor, noop)
+    if mutation == "bad-global-restore":
+        cursor = emit_absolute(cursor, "c705", global_slot)
+        cursor = emit(cursor, "00000000")
+    else:
+        cursor = emit(cursor, "8b442404")
+        cursor = emit_absolute(cursor, "a3", global_slot)
+    emit(cursor, "31c083c408c3")
+    emit(noop, "c3")
+    cursor = emit_absolute(zero_reset, "c705", global_slot)
+    emit(cursor, "00000000c3")
+
+    data = bytes(text) + b"\0" * 0x100
+    image = pe_mod.Image(
+        data=data,
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(text),
+                len(text),
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                global_slot,
+                len(text),
+                0x100,
+                0x100,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(relocations),
+        executable_ranges=((text_va, text_va + len(text)),),
+    )
+    assert image.read(global_slot, 4) == b"\0" * 4
+    return image
+
+
 def terminal_argument_pointer_publication_image(*, call_after_publication=False):
     """Publish arg0 to a global immediately before returning."""
     from tools.mwcc_retro import pe as pe_mod
@@ -9319,6 +9570,31 @@ def test_callee_argument_effect_bounds_mutually_recursive_global_alias():
     assert "recursive-global-alias-effect" in result[1]
 
 
+def test_callee_argument_effect_bounds_global_alias_during_independent_replay():
+    image = closed_argument_pointer_publication_image(
+        "hidden-recursive-mutation"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.producer_induction_forbidden_depth = 1
+
+    result = recovery._callee_argument_byte_effect(
+        0x00401040,
+        x86_cfg_module._GLOBAL_ALIAS_ARGUMENT_INDEX,
+        (0,),
+        frozenset(),
+        global_alias_slots=frozenset({0x00403000}),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset(range(0x100))
+    assert "recursive-global-alias-effect" in result[1]
+
+
 def test_callee_argument_effect_bounds_recursive_formal_global_alias():
     image = recursive_field_preservation_image()
     recovery = _DirectCfgRecovery(
@@ -9446,6 +9722,248 @@ def test_callee_argument_effect_allows_partial_scalar_copy():
 
     assert result is not None
     assert result[0] == frozenset()
+
+
+def test_callee_argument_effect_allows_local_stack_pointer_copy():
+    image = local_stack_argument_pointer_copy_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._callee_argument_byte_effect(
+        image.entrypoint,
+        0,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset()
+
+
+def test_callee_argument_effect_tracks_local_stack_pointer_reload():
+    image = local_stack_argument_pointer_copy_image(mutate_reloaded=True)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._callee_argument_byte_effect(
+        image.entrypoint,
+        0,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset({0x7F})
+
+
+def test_callee_argument_effect_allows_multiple_local_stack_pointer_copies():
+    image = local_stack_argument_pointer_copy_image(
+        second_local_copy=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._callee_argument_byte_effect(
+        image.entrypoint,
+        0,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset()
+
+
+def test_closed_scc_escape_proof_allows_closed_local_stack_pointer_alias():
+    image = local_stack_argument_pointer_copy_image(clear_return=True)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_argument_does_not_escape_closed_scc(
+        image.entrypoint,
+        0,
+    )
+    assert recovery._function_argument_escapes_only_via_return_closed_scc(
+        image.entrypoint,
+        0,
+    )
+
+
+def test_closed_scc_escape_proof_rejects_published_local_stack_pointer_alias():
+    image = local_stack_argument_pointer_copy_image(
+        publish_reloaded=True,
+        clear_return=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert not recovery._function_argument_does_not_escape_closed_scc(
+        image.entrypoint,
+        0,
+    )
+    assert not recovery._function_argument_escapes_only_via_return_closed_scc(
+        image.entrypoint,
+        0,
+    )
+
+
+def test_incoming_register_read_ignores_full_xor_zeroing_idiom():
+    image = incoming_ecx_use_image(clear_first=True)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert not recovery._function_reads_incoming_register(
+        image.entrypoint,
+        "ecx",
+    )
+
+
+def test_incoming_register_read_observes_real_use_before_definition():
+    image = incoming_ecx_use_image(clear_first=False)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_reads_incoming_register(
+        image.entrypoint,
+        "ecx",
+    )
+
+
+def test_global_slot_save_restore_allows_dead_partial_register_alias():
+    image = scoped_global_stack_pointer_publication_image(
+        save_partial_clobber=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    accesses = recovery._function_global_slot_accesses(
+        0x00401180,
+        0x00402000,
+    )
+
+    assert recovery._global_slot_save_restore_is_closed(
+        0x00401180,
+        0x00402000,
+        accesses,
+    )
+
+
+def test_global_slot_save_restore_rejects_published_partial_register_alias():
+    image = scoped_global_stack_pointer_publication_image(
+        publish_partial_clobber=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    accesses = recovery._function_global_slot_accesses(
+        0x00401180,
+        0x00402000,
+    )
+
+    assert not recovery._global_slot_save_restore_is_closed(
+        0x00401180,
+        0x00402000,
+        accesses,
+    )
+
+
+def test_callee_argument_effect_allows_closed_lifo_global_stack_publication():
+    image = scoped_global_stack_pointer_publication_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._callee_argument_byte_effect(
+        image.entrypoint,
+        0,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset()
+    call_address = next(
+        iter(recovery.direct_call_sources_by_target[0x00401080])
+    )
+    provenance = recovery._scoped_global_stack_publication_provenance(
+        call_address,
+        image.entrypoint,
+        0x00401080,
+        1,
+        0,
+    )
+    assert provenance is not None
+    assert "scoped-global-stack-publication" in provenance
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "bad-global-restore",
+        "active-zero-reset",
+        "missing-pop",
+        "mutating-reader",
+    ),
+)
+def test_callee_argument_effect_rejects_open_global_stack_publication(
+    mutation,
+):
+    image = scoped_global_stack_pointer_publication_image(
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert (
+        recovery._callee_argument_byte_effect(
+            image.entrypoint,
+            0,
+            (0,),
+            frozenset(),
+        )
+        is None
+    )
 
 
 def test_callee_argument_effect_rejects_full_tainted_publication():
@@ -13492,7 +14010,7 @@ def test_byte_producer_checkpoint_requires_durable_resume(tmp_path):
     assert len(certificates) == 1
     certificate = json.loads(certificates[0].read_bytes())
     assert certificate["compiler_sha256"] == image.sha256
-    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == ("movzx-producer-analysis-v17")
+    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == ("movzx-producer-analysis-v21")
     assert certificate["query"]["analysis_semantics"] == (_MOVZX_PRODUCER_ANALYSIS_SEMANTICS)
     assert certificate["query"]["movzx_address"] == 0x00401044
     assert certificate["result"] == {
