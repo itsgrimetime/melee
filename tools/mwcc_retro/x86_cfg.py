@@ -21766,8 +21766,10 @@ class _DirectCfgRecovery:
             for call in sorted(
                 (
                     row
-                    for row in self.direct_calls
-                    if function_entry <= row.address < address
+                    for row in self._function_direct_calls(
+                        function_entry
+                    )
+                    if row.address < address
                 ),
                 key=lambda row: row.address,
                 reverse=True,
@@ -21852,9 +21854,11 @@ class _DirectCfgRecovery:
         stack_states = self._function_stack_states(function_entry)
         if stack_states is None:
             return None
-        for candidate in sorted(self.instructions):
-            if not call.address < candidate < read_address:
-                continue
+        for candidate in self._function_instruction_addresses_between(
+            function_entry,
+            call.address + 1,
+            read_address,
+        ):
             decoded = self._owned_decoded(candidate)
             if decoded.group(CS_GRP_CALL):
                 return None
@@ -21940,15 +21944,16 @@ class _DirectCfgRecovery:
     ) -> tuple[int, frozenset[int], str] | None:
         if function_entry not in self.function_addresses:
             return None
-        following_entry = min(
-            (row for row in self.function_addresses if row > function_entry),
-            default=0x1_0000_0000,
+        following_entry = self._following_function_entry(
+            function_entry
+        )
+        function_addresses = self._function_instruction_addresses(
+            function_entry
         )
         if any(
             self._owned_decoded(address).group(CS_GRP_CALL)
-            for address in sorted(self.instructions)
-            if function_entry <= address < following_entry
-            and self._reachable_within_function(
+            for address in function_addresses
+            if self._reachable_within_function(
                 function_entry,
                 address,
                 function_entry,
@@ -21992,9 +21997,8 @@ class _DirectCfgRecovery:
             return None
         returns = [
             address
-            for address in sorted(self.instructions)
-            if function_entry <= address < following_entry
-            and self._owned_decoded(address).group(CS_GRP_RET)
+            for address in function_addresses
+            if self._owned_decoded(address).group(CS_GRP_RET)
             and self._reachable_within_function(
                 function_entry,
                 address,

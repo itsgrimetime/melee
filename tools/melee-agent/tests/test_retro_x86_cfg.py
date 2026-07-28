@@ -15060,6 +15060,48 @@ def test_fixed_outparam_store_closes_stack_callback_value(tmp_path):
     assert edge.target == 0x00401090
 
 
+def test_stack_outparam_query_uses_function_indexes(tmp_path):
+    class NoIterationSet(set):
+        def __iter__(self):
+            raise AssertionError(
+                "stack outparam query scanned every direct call"
+            )
+
+    class NoIterationDict(dict):
+        def __iter__(self):
+            raise AssertionError(
+                "stack outparam query sorted every instruction"
+            )
+
+    image = load_dispatch_image(tmp_path, mode="outparam-callback")
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    expected = recovery._finite_stack_slot_before(
+        0x0040100D,
+        base_family="esp",
+        displacement=4,
+        function_entry=0x00401000,
+        visited=frozenset(),
+    )
+    recovery.direct_calls = NoIterationSet(recovery.direct_calls)
+    recovery.instructions = NoIterationDict(recovery.instructions)
+
+    assert (
+        recovery._finite_stack_slot_before(
+            0x0040100D,
+            base_family="esp",
+            displacement=4,
+            function_entry=0x00401000,
+            visited=frozenset(),
+        )
+        == expected
+    )
+
+
 def test_conditional_outparam_store_remains_open(tmp_path):
     cfg = dispatch_cfg(tmp_path, mode="outparam-conditional-callback")
     assert any(row.address == 0x00401014 and row.kind == "indirect-flow" for row in cfg.control_targets.unresolved)
