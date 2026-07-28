@@ -53,6 +53,7 @@ from tools.mwcc_retro.semantic_memo import (
 
 _REGISTER_FAMILIES = ("eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp")
 _DECODED_INSTRUCTION_CACHE_LIMIT = 1024
+_CHECKPOINTED_DECODED_INSTRUCTION_CACHE_LIMIT = 524_288
 _GLOBAL_ALIAS_ARGUMENT_INDEX = -1
 
 if TYPE_CHECKING:
@@ -1992,10 +1993,30 @@ class _DirectCfgRecovery:
         readable_global_effect_store: (
             ReadableGlobalEffectMemoStore | None
         ) = None,
+        decoded_instruction_cache_limit: int | None = None,
     ) -> None:
         _validate_capstone_audit_contract()
+        if decoded_instruction_cache_limit is None:
+            decoded_instruction_cache_limit = (
+                _DECODED_INSTRUCTION_CACHE_LIMIT
+            )
+        if (
+            isinstance(decoded_instruction_cache_limit, bool)
+            or not isinstance(
+                decoded_instruction_cache_limit,
+                int,
+            )
+            or decoded_instruction_cache_limit <= 0
+        ):
+            raise ValueError(
+                "decoded_instruction_cache_limit must be a "
+                "positive int"
+            )
         self.image = image
         self.limits = limits
+        self.decoded_instruction_cache_limit = (
+            decoded_instruction_cache_limit
+        )
         self.highlow_relocation_vas = frozenset(
             relocation.va for relocation in image.relocations if relocation.type == 3
         )
@@ -38276,7 +38297,10 @@ class _DirectCfgRecovery:
         address = decoded.address
         self.decoded_instruction_cache[address] = decoded
         self.decoded_instruction_cache.move_to_end(address)
-        while len(self.decoded_instruction_cache) > _DECODED_INSTRUCTION_CACHE_LIMIT:
+        while (
+            len(self.decoded_instruction_cache)
+            > self.decoded_instruction_cache_limit
+        ):
             self.decoded_instruction_cache.popitem(last=False)
 
     def _register_family(self, register: int) -> str:
@@ -41939,6 +41963,11 @@ def _recover_cfg_fixed_point(
                 readable_global_effect_store=(
                     readable_global_effect_store
                 ),
+                decoded_instruction_cache_limit=(
+                    _CHECKPOINTED_DECODED_INSTRUCTION_CACHE_LIMIT
+                    if producer_certificate_session is not None
+                    else _DECODED_INSTRUCTION_CACHE_LIMIT
+                ),
             )
             current_cfg = current_recovery.recover()
         else:
@@ -42040,6 +42069,11 @@ def _recover_cfg_fixed_point(
             finite_control_memo=finite_control_memo,
             readable_global_effect_store=(
                 readable_global_effect_store
+            ),
+            decoded_instruction_cache_limit=(
+                _CHECKPOINTED_DECODED_INSTRUCTION_CACHE_LIMIT
+                if producer_certificate_session is not None
+                else _DECODED_INSTRUCTION_CACHE_LIMIT
             ),
         )
         trial_cfg = trial_recovery.recover()

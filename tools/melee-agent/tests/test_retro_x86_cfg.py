@@ -18338,11 +18338,12 @@ def test_owned_instruction_reuses_audited_decode(tmp_path, monkeypatch):
         image,
         build_seed_inventory(image, ()),
         generous_limits(image),
+        decoded_instruction_cache_limit=8,
     )
     recovery.recover()
     expected = recovery.instructions[0x00401000]
     recovery._owned_decoded(0x00401000)
-    assert len(recovery.decoded_instruction_cache) <= _DECODED_INSTRUCTION_CACHE_LIMIT
+    assert len(recovery.decoded_instruction_cache) <= 8
 
     def reject_decode(_address):
         raise AssertionError("owned instruction was decoded more than once")
@@ -18665,6 +18666,10 @@ def test_checkpointed_recovery_shares_and_closes_semantic_memo_store(
     assert created[0].image_sha256 == image.sha256
     assert created[0].lru_entries == 512
     assert len(recoveries) == 2
+    assert all(
+        recovery.decoded_instruction_cache_limit == 524_288
+        for recovery in recoveries
+    )
     assert all(
         recovery.readable_global_effect_store is created[0]
         for recovery in recoveries
