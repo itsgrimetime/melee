@@ -54,6 +54,7 @@ from tools.mwcc_retro.semantic_memo import (
 _REGISTER_FAMILIES = ("eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp")
 _DECODED_INSTRUCTION_CACHE_LIMIT = 1024
 _CHECKPOINTED_DECODED_INSTRUCTION_CACHE_LIMIT = 524_288
+_CHECKPOINTED_READABLE_GLOBAL_EFFECT_LRU_ENTRIES = 32_768
 _GLOBAL_ALIAS_ARGUMENT_INDEX = -1
 
 if TYPE_CHECKING:
@@ -42148,7 +42149,9 @@ def recover_cfg(
                     producer_checkpoint_dir
                     / ".readable-global-effect-v1.sqlite3",
                     image_sha256=image.sha256,
-                    lru_entries=512,
+                    lru_entries=(
+                        _CHECKPOINTED_READABLE_GLOBAL_EFFECT_LRU_ENTRIES
+                    ),
                 )
             )
         except SemanticMemoStoreError as exc:

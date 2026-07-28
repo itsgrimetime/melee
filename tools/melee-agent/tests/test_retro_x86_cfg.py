@@ -18706,7 +18706,7 @@ def test_checkpointed_recovery_shares_and_closes_semantic_memo_store(
         checkpoint_dir / ".readable-global-effect-v1.sqlite3"
     )
     assert created[0].image_sha256 == image.sha256
-    assert created[0].lru_entries == 512
+    assert created[0].lru_entries == 32_768
     assert len(recoveries) == 2
     assert all(
         recovery.decoded_instruction_cache_limit == 524_288
