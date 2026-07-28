@@ -9720,6 +9720,49 @@ def test_bounded_object_provenance_preserves_flags_and_digest():
     )
 
 
+def test_object_register_bounds_nested_provenance_without_losing_semantic_markers(
+    monkeypatch,
+):
+    image, factory_call, _consumer_call, _observation = (
+        guarded_call_return_object_origins_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    nested_detail = (
+        "nested-call-return;"
+        + "proof-step;" * 1000
+        + "guarded-object-association-induction;"
+        + "readable-global-call-induction;"
+        + "global-append-tail=0x403000;"
+    )
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_call_return_values_before",
+        lambda *_args, **_kwargs: (frozenset({0x29}), nested_detail),
+    )
+
+    result = recovery._finite_object_byte_register_values_before(
+        factory_call + 5,
+        "eax",
+        image.entrypoint,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+    assert len(result[1]) < 5000
+    assert "provenance-sha256=" in result[1]
+    assert "guarded-object-association-induction" in result[1]
+    assert "readable-global-call-induction" in result[1]
+    assert "global-append-tail=" in result[1]
+
+
 def test_callee_argument_effect_allows_inert_call_after_global_publication():
     image = terminal_argument_pointer_publication_image(call_after_publication=True)
     recovery = _DirectCfgRecovery(
@@ -13521,6 +13564,56 @@ def test_byte_producer_memo_invalidates_finite_result_for_new_root_writer():
 
     assert blocked is None
     assert blocked_recovery.high_water["max_producer_domain_invalidations"] >= 1
+
+
+def test_global_slot_dependency_fingerprint_reuses_unchanged_writer_inventory(
+    tmp_path,
+):
+    class CountingSet(set):
+        iterations = 0
+
+        def __iter__(self):
+            self.iterations += 1
+            return super().__iter__()
+
+    image = load_cfg_image(tmp_path)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    slot = 0x00402300
+    writes = CountingSet(
+        {
+            _GlobalSlotWrite(
+                instruction_address=0x00401013,
+                value=0,
+                provenance="initial-writer",
+            )
+        }
+    )
+    recovery.global_slot_writes[slot] = writes
+    recovery.global_slot_write_count = len(writes)
+
+    first = recovery._producer_dependency_fingerprint("global-slot", slot)
+    second = recovery._producer_dependency_fingerprint("global-slot", slot)
+
+    assert second == first
+    assert writes.iterations == 1
+
+    writes.add(
+        _GlobalSlotWrite(
+            instruction_address=0x00401018,
+            value=None,
+            provenance="new-unknown-writer",
+        )
+    )
+    recovery.global_slot_write_count += 1
+    changed = recovery._producer_dependency_fingerprint("global-slot", slot)
+
+    assert changed != first
+    assert writes.iterations == 2
 
 
 def test_byte_producer_memo_is_seed_order_independent():

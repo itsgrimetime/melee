@@ -2105,6 +2105,9 @@ class _DirectCfgRecovery:
         self.producer_function_fingerprint_cache: dict[
             int, tuple[tuple[Any, ...], str]
         ] = {}
+        self.producer_dependency_fingerprint_cache: dict[
+            tuple[str, int], tuple[int, str]
+        ] = {}
         self.producer_seed_revision = 0
         self.producer_seed_index_version = (-1, -1)
         self.producer_seed_records_by_address: dict[int, tuple[SeedRecord, ...]] = {}
@@ -2686,6 +2689,13 @@ class _DirectCfgRecovery:
         if dependency_kind == "function":
             return self._producer_function_fingerprint(identifier)
         if dependency_kind == "global-slot":
+            cache_key = (dependency_kind, identifier)
+            cached = self.producer_dependency_fingerprint_cache.get(cache_key)
+            if (
+                cached is not None
+                and cached[0] == self.global_slot_write_count
+            ):
+                return cached[1]
             rows = (
                 f"{row.instruction_address:#x}:{row.value if row.value is not None else 'unknown'}:{row.provenance}"
                 for row in sorted(
@@ -2697,8 +2707,22 @@ class _DirectCfgRecovery:
                     ),
                 )
             )
-            return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
+            digest = hashlib.sha256(
+                "\n".join(rows).encode("utf-8")
+            ).hexdigest()
+            self.producer_dependency_fingerprint_cache[cache_key] = (
+                self.global_slot_write_count,
+                digest,
+            )
+            return digest
         if dependency_kind == "dynamic-field":
+            cache_key = (dependency_kind, identifier)
+            cached = self.producer_dependency_fingerprint_cache.get(cache_key)
+            if (
+                cached is not None
+                and cached[0] == self.dynamic_field_write_count
+            ):
+                return cached[1]
             rows = (
                 f"{write_displacement:+#x}:"
                 f"{write.instruction_address:#x}:{write.width}:"
@@ -2719,7 +2743,14 @@ class _DirectCfgRecovery:
                 if write_displacement < identifier + 4
                 and identifier < write_displacement + write.width
             )
-            return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
+            digest = hashlib.sha256(
+                "\n".join(rows).encode("utf-8")
+            ).hexdigest()
+            self.producer_dependency_fingerprint_cache[cache_key] = (
+                self.dynamic_field_write_count,
+                digest,
+            )
+            return digest
         raise CfgRecoveryError(f"unknown producer dependency kind: {dependency_kind}")
 
     def _producer_dependency_snapshot(
@@ -3844,8 +3875,24 @@ class _DirectCfgRecovery:
             )
             if _DirectCfgRecovery._object_result_has_flag(detail, flag)
         ]
+        semantic_markers = [
+            marker
+            for marker in (
+                "guarded-object-association-induction",
+                "readable-global-call-induction",
+                "exact-call-global-object-induction",
+                "global-object-byte-induction",
+                "recursive-readable-object-domain",
+                "recursive-no-input-object-domain",
+                "null-closed-zero-link-induction",
+                "closed-global-append-link-induction",
+            )
+            if marker in detail
+        ]
+        if "global-append-tail=" in detail:
+            semantic_markers.append("global-append-tail=compacted")
         return (
-            ";".join((root, *flags))
+            ";".join((root, *flags, *semantic_markers))
             + f";provenance-bytes={len(detail)};"
             f"provenance-sha256={hashlib.sha256(detail.encode()).hexdigest()}"
         )
@@ -17556,20 +17603,32 @@ class _DirectCfgRecovery:
             details.append(f"definition={definition_address:#x};{result[1]}")
         if not values:
             if saw_optional_empty:
+                detail = (
+                    f"object-register={register_family};"
+                    + "|".join(details)
+                )
                 return (
                     frozenset(),
-                    f"object-register={register_family};" + "|".join(details),
+                    self._bounded_object_result_provenance(detail),
                 )
             if saw_guard_disjoint:
+                detail = (
+                    f"guard-disjoint;object-register={register_family};"
+                    + "|".join(details)
+                )
                 return (
                     frozenset(),
-                    f"guard-disjoint;object-register={register_family};" + "|".join(details),
+                    self._bounded_object_result_provenance(detail),
                 )
             return None
         self._check_count("max_finite_values", len(values))
+        detail = (
+            f"object-register={register_family};"
+            + "|".join(details)
+        )
         return (
             frozenset(values),
-            f"object-register={register_family};" + "|".join(details),
+            self._bounded_object_result_provenance(detail),
         )
 
     def _pointer_definition_has_closed_nonnull_guard(
@@ -40570,6 +40629,7 @@ class _DirectCfgRecovery:
         self.global_slot_write_count = 0
         self.dynamic_field_writes = {}
         self.dynamic_field_write_count = 0
+        self.producer_dependency_fingerprint_cache.clear()
         self.dynamic_field_cache = {}
         self.semantic_data_references = {
             SemanticReference(
