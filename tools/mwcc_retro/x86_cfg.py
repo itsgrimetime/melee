@@ -63,6 +63,39 @@ if TYPE_CHECKING:
     from tools.mwcc_retro.pe import Image
 
 
+def _build_span_overlap_index(
+    spans: Iterable[tuple[int, int]],
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Index half-open spans by start and the maximum prior end."""
+    ordered = sorted(spans)
+    starts: list[int] = []
+    prefix_max_ends: list[int] = []
+    maximum_end: int | None = None
+    for start, end in ordered:
+        starts.append(start)
+        maximum_end = (
+            end if maximum_end is None else max(maximum_end, end)
+        )
+        prefix_max_ends.append(maximum_end)
+    return tuple(starts), tuple(prefix_max_ends)
+
+
+def _span_overlap_index_contains(
+    index: tuple[tuple[int, ...], tuple[int, ...]],
+    start: int,
+    end: int,
+) -> bool:
+    """Return whether [start, end) overlaps any indexed half-open span."""
+    if start >= end:
+        return False
+    starts, prefix_max_ends = index
+    candidate_count = bisect_left(starts, end)
+    return (
+        candidate_count > 0
+        and prefix_max_ends[candidate_count - 1] > start
+    )
+
+
 class CfgRecoveryError(ValueError):
     """Raised when evidence cannot safely seed x86 CFG recovery."""
 
@@ -39945,22 +39978,27 @@ class _DirectCfgRecovery:
         for relocation in self.image.relocations:
             relocation_rows.setdefault(relocation.va, []).append(relocation.type)
 
+        owned_write_spans = [
+            (address, address + 1) for address in self.global_slot_writes
+        ]
+        for address, writers in self.absolute_memory_writes.items():
+            for writer in writers:
+                decoded = self._owned_decoded(writer)
+                owned_write_spans.extend(
+                    (address, address + operand.size)
+                    for operand in decoded.operands
+                    if operand.type == X86_OP_MEM
+                    and operand.access & CS_AC_WRITE
+                    and self._absolute_memory_operand(operand) == address
+                )
+        owned_write_overlap_index = _build_span_overlap_index(
+            owned_write_spans
+        )
+
         def overlaps_owned_write(start: int, end: int) -> bool:
-            if any(start <= address < end for address in self.global_slot_writes):
-                return True
-            for address, writers in self.absolute_memory_writes.items():
-                for writer in writers:
-                    decoded = self._owned_decoded(writer)
-                    if any(
-                        operand.type == X86_OP_MEM
-                        and operand.access & CS_AC_WRITE
-                        and self._absolute_memory_operand(operand) == address
-                        and address < end
-                        and start < address + operand.size
-                        for operand in decoded.operands
-                    ):
-                        return True
-            return False
+            return _span_overlap_index_contains(
+                owned_write_overlap_index, start, end
+            )
 
         replayed_records = frozenset(self.seed_records)
         for transfer_address, (flow_kind, is_far) in sorted(self.indirect_candidates.items()):

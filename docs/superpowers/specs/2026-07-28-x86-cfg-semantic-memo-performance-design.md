@@ -189,6 +189,18 @@ The batch size is a fixed source constant rather than host-derived or adaptive,
 keeping work scheduling reproducible while amortizing whole-image setup across
 enough queries to be material.
 
+### Relocated-dispatch write-overlap index
+
+Production phase timing then isolated a 374-second relocated-dispatch
+bootstrap pass over 20,925 tentative slots. The scan tested every slot against
+every known absolute write, repeatedly decoding the same writer instructions.
+
+Build the exact owned-write interval set once per bootstrap pass, sort it by
+start, and retain the maximum end seen at every prefix. A slot overlap query is
+then one binary search plus one integer comparison. Half-open interval
+semantics, global-slot treatment, operand filtering, candidate ordering, caps,
+and all accepted or rejected hypotheses remain unchanged.
+
 ## Correctness Invariants
 
 - Cache-disabled, cold-cache, warm-cache, and evicted-cache runs return equal

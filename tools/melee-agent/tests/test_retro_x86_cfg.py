@@ -4544,6 +4544,40 @@ def test_relocated_dispatch_bootstrap_hypotheses_honor_global_entry_cap():
     assert raised.value.observed == 76
 
 
+def test_span_overlap_index_preserves_half_open_interval_semantics():
+    index = x86_cfg_module._build_span_overlap_index(
+        ((0x1000, 0x1100), (0x1020, 0x1024), (0x1200, 0x1204))
+    )
+
+    assert not x86_cfg_module._span_overlap_index_contains(
+        index, 0x0FFC, 0x1000
+    )
+    assert x86_cfg_module._span_overlap_index_contains(
+        index, 0x0FFC, 0x1001
+    )
+    assert x86_cfg_module._span_overlap_index_contains(
+        index, 0x1080, 0x1084
+    )
+    assert not x86_cfg_module._span_overlap_index_contains(
+        index, 0x1100, 0x1200
+    )
+    assert x86_cfg_module._span_overlap_index_contains(
+        index, 0x1203, 0x1208
+    )
+    assert not x86_cfg_module._span_overlap_index_contains(
+        index, 0x1204, 0x1208
+    )
+    assert not x86_cfg_module._span_overlap_index_contains(
+        x86_cfg_module._build_span_overlap_index(()), 0x1000, 0x1004
+    )
+    negative_index = x86_cfg_module._build_span_overlap_index(
+        ((-0x20, -0x10),)
+    )
+    assert not x86_cfg_module._span_overlap_index_contains(
+        negative_index, -0x0F, -0x01
+    )
+
+
 def test_relocated_dispatch_bootstrap_probes_terminator_after_full_domain():
     image, transfer_address, _callbacks = cyclic_relocated_movzx_dispatch_image(entry_count=256)
     recovery = _DirectCfgRecovery(

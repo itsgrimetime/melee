@@ -775,6 +775,9 @@ Measured decision: retain the enlarged checkpointed semantic LRU and batch up
 to 32 atomically checkpointed producer queries per production CLI process.
 The latter removes repeated whole-image setup without changing any semantic
 cache key, producer query, certificate, or fresh-resume validation rule.
+Also replace the measured quadratic relocated-dispatch write-overlap scan with
+an exact prefix-maximum interval index; the production pass spent 374 seconds
+testing 20,925 tentative slots and accepted none.
 
 - [ ] **Step 7: Run exact Task 4 closure twice** (in progress)
 
