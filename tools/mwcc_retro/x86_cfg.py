@@ -44,6 +44,11 @@ from capstone.x86 import (
 )
 from tools.mwcc_retro.semantic_memo import (
     DependencyMemoEntry as _DependencyMemoEntry,
+    InMemoryReadableGlobalEffectMemoStore,
+    ReadableGlobalEffectKey,
+    ReadableGlobalEffectMemoStore,
+    SemanticMemoStoreError,
+    SqliteReadableGlobalEffectMemoStore,
 )
 
 _REGISTER_FAMILIES = ("eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp")
@@ -1984,6 +1989,9 @@ class _DirectCfgRecovery:
         producer_domain_memo: dict[tuple[Any, ...], _ProducerDomainMemoEntry] | None = None,
         producer_certificate_session: _ProducerCertificateSession | None = None,
         finite_control_memo: dict[tuple[Any, ...], _ProducerDomainMemoEntry] | None = None,
+        readable_global_effect_store: (
+            ReadableGlobalEffectMemoStore | None
+        ) = None,
     ) -> None:
         _validate_capstone_audit_contract()
         self.image = image
@@ -2060,7 +2068,11 @@ class _DirectCfgRecovery:
         self.readable_global_input_contracts: list[tuple[Any, ...]] = []
         self.readable_function_argument_contracts: list[tuple[int, tuple[int, ...], frozenset[int]]] = []
         self.readable_global_effect_argument_cache: dict[tuple[Any, ...], tuple[int, ...]] = {}
-        self.readable_global_effect_cache: dict[tuple[Any, ...], _DependencyMemoEntry] = {}
+        self.readable_global_effect_store = (
+            InMemoryReadableGlobalEffectMemoStore()
+            if readable_global_effect_store is None
+            else readable_global_effect_store
+        )
         self.producer_induction_uses = 0
         self.producer_induction_forbidden_depth = 0
         self.recursive_object_input_closed_cache: dict[tuple[Any, ...], bool] = {}
@@ -15744,7 +15756,6 @@ class _DirectCfgRecovery:
                 "recursive_object_input_closed_cache",
                 "recursive_readable_argument_cache",
                 "readable_global_effect_argument_cache",
-                "readable_global_effect_cache",
                 "finite_control_memo",
                 "global_list_field_cache",
                 "argument_return_offset_cache",
@@ -15771,6 +15782,15 @@ class _DirectCfgRecovery:
                 setattr(self, name, isolated_state)
             for name in isolated_memo_names:
                 setattr(self, name, {})
+            suspended_readable_store = (
+                self.readable_global_effect_store
+            )
+            isolated_readable_store = (
+                InMemoryReadableGlobalEffectMemoStore()
+            )
+            self.readable_global_effect_store = (
+                isolated_readable_store
+            )
             prior_forbidden_depth = self.producer_induction_forbidden_depth
             self.producer_induction_forbidden_depth += 1
             try:
@@ -15787,6 +15807,9 @@ class _DirectCfgRecovery:
                 local_memos = {name: getattr(self, name) for name in isolated_memo_names}
                 for name, state in suspended_induction_state.items():
                     setattr(self, name, state)
+                self.readable_global_effect_store = (
+                    suspended_readable_store
+                )
                 if any(active_state for active_state in local_induction_state.values()):
                     raise AssertionError("independent recursive readable replay leaked state")
             if (
@@ -15798,6 +15821,13 @@ class _DirectCfgRecovery:
             ):
                 for name, memo in local_memos.items():
                     suspended_induction_state[name].update(memo)
+                for memo_key, memo_entry in (
+                    isolated_readable_store.entries.items()
+                ):
+                    suspended_readable_store.put(
+                        memo_key,
+                        memo_entry,
+                    )
                 return (
                     independent[0],
                     f"repeated-call-independent-domain;{independent[1]}",
@@ -19592,15 +19622,15 @@ class _DirectCfgRecovery:
             *self._producer_exact_call_context_signature(),
             context,
         )
-        cache_key = (
-            call_target,
-            slot,
-            field_path,
-            exact_context_signature,
-            self._summary_fact_signature(),
-            self.control_flow_revision,
+        cache_key = ReadableGlobalEffectKey(
+            call_target=call_target,
+            slot=slot,
+            field_path=field_path,
+            exact_call_contexts=exact_context_signature,
+            summary_fact_signature=self._summary_fact_signature(),
+            control_flow_revision=self.control_flow_revision,
         )
-        cached = self.readable_global_effect_cache.get(cache_key)
+        cached = self.readable_global_effect_store.get(cache_key)
         if cached is not None and self._dependency_memo_hit(cached):
             if cached.result is None:
                 return None
@@ -19700,18 +19730,23 @@ class _DirectCfgRecovery:
                 raise AssertionError("readable global call context stack corrupted")
             self._propagate_producer_dependencies(dependencies)
             self._discard_readable_global_call_induction_memo(prior_memo_keys)
-        final_cache_key = (
-            call_target,
-            slot,
-            field_path,
-            exact_context_signature,
-            self._summary_fact_signature(),
-            self.control_flow_revision,
+        final_cache_key = ReadableGlobalEffectKey(
+            call_target=call_target,
+            slot=slot,
+            field_path=field_path,
+            exact_call_contexts=exact_context_signature,
+            summary_fact_signature=self._summary_fact_signature(),
+            control_flow_revision=self.control_flow_revision,
         )
-        self.readable_global_effect_cache[final_cache_key] = _DependencyMemoEntry(
-            image_sha256=self.image.sha256,
-            dependencies=self._producer_dependency_snapshot(dependencies),
-            result=summary_result,
+        self.readable_global_effect_store.put(
+            final_cache_key,
+            _DependencyMemoEntry(
+                image_sha256=self.image.sha256,
+                dependencies=self._producer_dependency_snapshot(
+                    dependencies
+                ),
+                result=summary_result,
+            ),
         )
         if summary_result is None:
             return None
@@ -41812,40 +41847,18 @@ class _DirectCfgRecovery:
         )
 
 
-def recover_cfg(
+def _recover_cfg_fixed_point(
     image: Image,
     seeds: SeedInventory | Sequence[int],
     limits: AnalysisLimits,
     *,
-    producer_checkpoint_dir: Path | None = None,
-    producer_query_budget: int | None = None,
-    producer_progress_callback=None,
+    producer_certificate_session: (
+        _ProducerCertificateSession | None
+    ),
+    readable_global_effect_store: (
+        ReadableGlobalEffectMemoStore
+    ),
 ) -> RawCfg:
-    """Recover direct x86 CFG and exact ownership (decoder slice)."""
-    if producer_checkpoint_dir is None:
-        if producer_query_budget is not None:
-            raise ValueError("producer_query_budget requires producer_checkpoint_dir")
-        if producer_progress_callback is not None:
-            raise ValueError(
-                "producer_progress_callback requires producer_checkpoint_dir"
-            )
-        producer_certificate_session = None
-    else:
-        if producer_query_budget is None:
-            producer_query_budget = 1
-        if (
-            isinstance(producer_query_budget, bool)
-            or not isinstance(producer_query_budget, int)
-            or producer_query_budget < 0
-        ):
-            raise ValueError("producer_query_budget must be a non-negative int")
-        producer_certificate_session = _ProducerCertificateSession(
-            image_sha256=image.sha256,
-            limits=limits,
-            checkpoint_dir=producer_checkpoint_dir,
-            query_budget=producer_query_budget,
-            progress_callback=producer_progress_callback,
-        )
     seed_inventory = seeds if isinstance(seeds, SeedInventory) else _explicit_seed_inventory(image, seeds)
 
     def identity(row):
@@ -41923,6 +41936,9 @@ def recover_cfg(
                 producer_domain_memo=producer_domain_memo,
                 producer_certificate_session=producer_certificate_session,
                 finite_control_memo=finite_control_memo,
+                readable_global_effect_store=(
+                    readable_global_effect_store
+                ),
             )
             current_cfg = current_recovery.recover()
         else:
@@ -42022,6 +42038,9 @@ def recover_cfg(
             producer_domain_memo=producer_domain_memo,
             producer_certificate_session=producer_certificate_session,
             finite_control_memo=finite_control_memo,
+            readable_global_effect_store=(
+                readable_global_effect_store
+            ),
         )
         trial_cfg = trial_recovery.recover()
         reproduced_identities = {
@@ -42041,6 +42060,93 @@ def recover_cfg(
                 rejected_object_bases.add(hypothesis.table_base)
         if new_candidates.keys() <= reproduced_identities:
             reusable_trial = trial_recovery, trial_cfg
+
+
+def recover_cfg(
+    image: Image,
+    seeds: SeedInventory | Sequence[int],
+    limits: AnalysisLimits,
+    *,
+    producer_checkpoint_dir: Path | None = None,
+    producer_query_budget: int | None = None,
+    producer_progress_callback=None,
+) -> RawCfg:
+    """Recover direct x86 CFG and exact ownership (decoder slice)."""
+    if producer_checkpoint_dir is None:
+        if producer_query_budget is not None:
+            raise ValueError(
+                "producer_query_budget requires producer_checkpoint_dir"
+            )
+        if producer_progress_callback is not None:
+            raise ValueError(
+                "producer_progress_callback requires "
+                "producer_checkpoint_dir"
+            )
+        producer_certificate_session = None
+        readable_global_effect_store = (
+            InMemoryReadableGlobalEffectMemoStore()
+        )
+    else:
+        if producer_query_budget is None:
+            producer_query_budget = 1
+        if (
+            isinstance(producer_query_budget, bool)
+            or not isinstance(producer_query_budget, int)
+            or producer_query_budget < 0
+        ):
+            raise ValueError(
+                "producer_query_budget must be a non-negative int"
+            )
+        producer_certificate_session = _ProducerCertificateSession(
+            image_sha256=image.sha256,
+            limits=limits,
+            checkpoint_dir=producer_checkpoint_dir,
+            query_budget=producer_query_budget,
+            progress_callback=producer_progress_callback,
+        )
+        try:
+            readable_global_effect_store = (
+                SqliteReadableGlobalEffectMemoStore(
+                    producer_checkpoint_dir
+                    / ".readable-global-effect-v1.sqlite3",
+                    image_sha256=image.sha256,
+                    lru_entries=512,
+                )
+            )
+        except SemanticMemoStoreError as exc:
+            raise CfgRecoveryError(
+                f"semantic memo cache open failed: {exc}"
+            ) from exc
+
+    try:
+        result = _recover_cfg_fixed_point(
+            image,
+            seeds,
+            limits,
+            producer_certificate_session=(
+                producer_certificate_session
+            ),
+            readable_global_effect_store=(
+                readable_global_effect_store
+            ),
+        )
+    except BaseException as exc:
+        try:
+            readable_global_effect_store.close()
+        except SemanticMemoStoreError:
+            pass
+        if isinstance(exc, SemanticMemoStoreError):
+            raise CfgRecoveryError(
+                f"semantic memo cache operation failed: {exc}"
+            ) from exc
+        raise
+    try:
+        readable_global_effect_store.close()
+    except SemanticMemoStoreError as exc:
+        raise CfgRecoveryError(
+            f"semantic memo cache close failed: {exc}"
+        ) from exc
+    return result
 
 
 def canonical_jsonl_bytes(cfg: RawCfg) -> bytes:

@@ -713,6 +713,11 @@ class SqliteReadableGlobalEffectMemoStore:
         connection = self.connection
         self.connection = None
         try:
-            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            try:
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.DatabaseError as exc:
+                raise SemanticMemoStoreError(
+                    "semantic memo SQLite checkpoint failed"
+                ) from exc
         finally:
             connection.close()

@@ -22,6 +22,9 @@ from retro_pe_fixture import (  # noqa: E402
 )
 from tools.mwcc_retro import pe  # noqa: E402
 from tools.mwcc_retro import x86_cfg as x86_cfg_module
+from tools.mwcc_retro.semantic_memo import (  # noqa: E402
+    InMemoryReadableGlobalEffectMemoStore,
+)
 from tools.mwcc_retro.x86_cfg import (  # noqa: E402
     _DECODED_INSTRUCTION_CACHE_LIMIT,
     _MOVZX_PRODUCER_ANALYSIS_SEMANTICS,
@@ -5824,13 +5827,32 @@ def test_guarded_exact_call_rejects_open_global_object_publication(mode):
 
 
 def test_readable_global_call_effect_reuses_callee_summary(monkeypatch):
+    class RecordingStore(InMemoryReadableGlobalEffectMemoStore):
+        def __init__(self):
+            super().__init__()
+            self.gets = 0
+            self.puts = 0
+
+        def get(self, key):
+            self.gets += 1
+            return super().get(key)
+
+        def put(self, key, entry):
+            self.puts += 1
+            super().put(key, entry)
+
     image, _observation = exact_call_global_object_slot_image("recursive-preserve")
+    store = RecordingStore()
     recovery = _DirectCfgRecovery(
         image,
         build_seed_inventory(image, ()),
         generous_limits(image),
+        readable_global_effect_store=store,
     )
     recovery.recover()
+    store.entries.clear()
+    store.gets = 0
+    store.puts = 0
     evaluations = []
     original = recovery._finite_local_global_object_byte_values_before
 
@@ -5856,11 +5878,39 @@ def test_readable_global_call_effect_reuses_callee_summary(monkeypatch):
 
     first = recovery._finite_exact_call_readable_global_object_effect(*arguments)
     first_evaluations = len(evaluations)
+    first_puts = store.puts
     second = recovery._finite_exact_call_readable_global_object_effect(*arguments)
 
     assert first is not None and second is not None
     assert first_evaluations
+    assert first_puts
+    assert store.gets >= 2
     assert len(evaluations) == first_evaluations
+
+    original_fingerprint = (
+        recovery._producer_dependency_fingerprint
+    )
+
+    def changed_fingerprint(dependency_kind, identifier):
+        if (
+            dependency_kind == "function"
+            and identifier == call_target
+        ):
+            return "f" * 64
+        return original_fingerprint(dependency_kind, identifier)
+
+    monkeypatch.setattr(
+        recovery,
+        "_producer_dependency_fingerprint",
+        changed_fingerprint,
+    )
+    stale = recovery._finite_exact_call_readable_global_object_effect(
+        *arguments
+    )
+
+    assert stale is not None
+    assert len(evaluations) > first_evaluations
+    assert store.puts > first_puts
 
 
 def test_guarded_exact_global_establishment_supports_recursive_induction():
@@ -18560,6 +18610,108 @@ def test_hypothesis_replay_reuses_all_reproduced_trial_cfg(tmp_path, monkeypatch
     assert len(recoveries) == 2
     assert cfg is recoveries[-1][1]
     assert any(row.category == "copied-descriptor-callback-entry" for row in cfg.seed_inventory.records)
+
+
+def test_checkpointed_recovery_shares_and_closes_semantic_memo_store(
+    tmp_path,
+    monkeypatch,
+):
+    class RecordingStore(InMemoryReadableGlobalEffectMemoStore):
+        def __init__(self, path, *, image_sha256, lru_entries):
+            super().__init__()
+            self.path = path
+            self.image_sha256 = image_sha256
+            self.lru_entries = lru_entries
+            self.close_calls = 0
+            created.append(self)
+
+        def close(self):
+            self.close_calls += 1
+
+    image = load_dispatch_image(
+        tmp_path,
+        mode="copied-descriptor-slot-zero-hypothesis",
+    )
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    created = []
+    recoveries = []
+    original = _DirectCfgRecovery.recover
+
+    def record_recovery(recovery):
+        cfg = original(recovery)
+        recoveries.append(recovery)
+        return cfg
+
+    monkeypatch.setattr(
+        x86_cfg_module,
+        "SqliteReadableGlobalEffectMemoStore",
+        RecordingStore,
+        raising=False,
+    )
+    monkeypatch.setattr(_DirectCfgRecovery, "recover", record_recovery)
+
+    recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+        producer_checkpoint_dir=checkpoint_dir,
+        producer_query_budget=0,
+    )
+
+    assert len(created) == 1
+    assert created[0].path == (
+        checkpoint_dir / ".readable-global-effect-v1.sqlite3"
+    )
+    assert created[0].image_sha256 == image.sha256
+    assert created[0].lru_entries == 512
+    assert len(recoveries) == 2
+    assert all(
+        recovery.readable_global_effect_store is created[0]
+        for recovery in recoveries
+    )
+    assert created[0].close_calls == 1
+
+
+def test_checkpointed_recovery_closes_semantic_memo_store_on_failure(
+    tmp_path,
+    monkeypatch,
+):
+    class RecordingStore(InMemoryReadableGlobalEffectMemoStore):
+        def __init__(self, *_args, **_kwargs):
+            super().__init__()
+            self.close_calls = 0
+            created.append(self)
+
+        def close(self):
+            self.close_calls += 1
+
+    image = load_cfg_image(tmp_path)
+    created = []
+    monkeypatch.setattr(
+        x86_cfg_module,
+        "SqliteReadableGlobalEffectMemoStore",
+        RecordingStore,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "recover",
+        lambda _recovery: (_ for _ in ()).throw(
+            RuntimeError("synthetic recovery failure")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic recovery failure"):
+        recover_cfg(
+            image,
+            build_seed_inventory(image, ()),
+            generous_limits(image),
+            producer_checkpoint_dir=tmp_path / "producer-checkpoints",
+            producer_query_budget=0,
+        )
+
+    assert len(created) == 1
+    assert created[0].close_calls == 1
 
 
 def test_reproduced_trial_revalidates_pre_finite_after_late_finite_edge(tmp_path, monkeypatch):
