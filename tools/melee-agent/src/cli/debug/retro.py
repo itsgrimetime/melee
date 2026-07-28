@@ -30,6 +30,7 @@ from tools.mwcc_retro import (
 from src.mwcc_debug.diff_capture import _run_with_process_group_timeout  # noqa: E402
 
 RETRO_DUMP_TIMEOUT_SECONDS = 600
+_STATIC_BACKEND_PRODUCER_QUERY_BUDGET = 32
 
 
 def setup_mwcc_ghidra(**kwargs):
@@ -1542,7 +1543,7 @@ def _run_static_backend_map_audit(
         producer_checkpoint_dir=(
             out_dir / ".producer-domain-checkpoints.v1"
         ),
-        producer_query_budget=1,
+        producer_query_budget=_STATIC_BACKEND_PRODUCER_QUERY_BUDGET,
         producer_progress_callback=report_static_progress,
     )
     format_dispatch = backend_lifetime_audit.validate_gc125n_formatoperands(

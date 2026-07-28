@@ -739,7 +739,7 @@ Reject the implementation if the database exceeds 2 GB, process footprint
 exceeds 8 GB, swap grows, or the pool contains more dependency objects than
 distinct tuples.
 
-- [ ] **Step 4: Resume the focused exact query with bounded monitoring**
+- [x] **Step 4: Resume the focused exact query with bounded monitoring**
 
 Run the branch-local diagnostic for:
 
@@ -754,7 +754,7 @@ Monitor physical footprint and swap after cache open, after ten minutes, and
 before completion. Require less than 8 GB footprint and no swap increase.
 Preserve every completed durable summary if the timeout fires.
 
-- [ ] **Step 5: Compare focused-query semantics**
+- [x] **Step 5: Compare focused-query semantics**
 
 Run the focused query twice against the same completed production store and
 require byte-equal JSON values/provenance. Compare that result with the
@@ -763,7 +763,7 @@ completed result is bottom, use a narrowly targeted streamed trace to identify
 the exact final rejecting branch before making any semantic change. Do not
 change a proof rule based only on timing or cache behavior.
 
-- [ ] **Step 6: Decide secondary optimization from the new profile**
+- [x] **Step 6: Decide secondary optimization from the new profile**
 
 If the focused query remains materially CPU-bound, write a separate design
 and implementation plan for only the dominant measured immutable helper.
@@ -771,7 +771,12 @@ Candidates are decoded-instruction LRU sizing, reachability/successor cache,
 function stack-state cache, or read-before-write cache. Do not combine more
 than one unmeasured candidate.
 
-- [ ] **Step 7: Run exact Task 4 closure twice**
+Measured decision: retain the enlarged checkpointed semantic LRU and batch up
+to 32 atomically checkpointed producer queries per production CLI process.
+The latter removes repeated whole-image setup without changing any semantic
+cache key, producer query, certificate, or fresh-resume validation rule.
+
+- [ ] **Step 7: Run exact Task 4 closure twice** (in progress)
 
 Use the ordinary branch-local `probe-backend-map --static-only` workflow and
 the same producer checkpoint directory until the producer certificates are

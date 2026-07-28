@@ -169,6 +169,26 @@ Apply only optimizations with measured material impact:
 Each secondary change is a separate commit and benchmark. No speculative cache
 is added merely because a helper appears frequently in a stack sample.
 
+### Bounded producer-query batching
+
+The exact Task 4 replay exposed a separate orchestration cost after the focused
+memo workload was closed: the production CLI allowed only one new producer
+query per process. Every query was checkpointed atomically, but every process
+still rebuilt and replayed the shared whole-image fixed point before exiting.
+
+The production CLI therefore evaluates at most 32 new producer queries per
+process. This changes no query, dependency, certificate, or proof semantics.
+Each certificate is still written atomically immediately after its query
+finishes, and any process that completed a query must still exit through
+`ProducerCheckpointIncomplete` so the next process independently validates the
+new certificates before publication. The external three-hour timeout remains
+the wall-clock bound; an interruption can lose only the currently evaluating
+query.
+
+The batch size is a fixed source constant rather than host-derived or adaptive,
+keeping work scheduling reproducible while amortizing whole-image setup across
+enough queries to be material.
+
 ## Correctness Invariants
 
 - Cache-disabled, cold-cache, warm-cache, and evicted-cache runs return equal
