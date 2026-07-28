@@ -42,6 +42,9 @@ from capstone.x86 import (
     X86_OP_REG,
     X86_REG_INVALID,
 )
+from tools.mwcc_retro.semantic_memo import (
+    DependencyMemoEntry as _DependencyMemoEntry,
+)
 
 _REGISTER_FAMILIES = ("eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp")
 _DECODED_INSTRUCTION_CACHE_LIMIT = 1024
@@ -1038,13 +1041,6 @@ class _ProducerDomainMemoEntry:
     image_sha256: str
     dependencies: tuple[tuple[str, int, str], ...]
     result: tuple[frozenset[int], str] | None
-
-
-@dataclass(frozen=True, slots=True)
-class _DependencyMemoEntry:
-    image_sha256: str
-    dependencies: tuple[tuple[str, int, str], ...]
-    result: Any
 
 
 @dataclass(frozen=True, slots=True)
