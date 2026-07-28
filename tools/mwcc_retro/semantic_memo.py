@@ -411,6 +411,11 @@ class SqliteReadableGlobalEffectMemoStore:
             DependencyMemoEntry,
         ] = OrderedDict()
         self.dependency_pool: dict[DependencyRows, DependencyRows] = {}
+        self.dependency_payload_cache: dict[
+            int,
+            tuple[DependencyRows, str, bytes, bytes],
+        ] = {}
+        self.published_dependency_sha256: set[str] = set()
         self.connection: sqlite3.Connection | None = None
         is_new = not self.path.exists()
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -521,8 +526,11 @@ class SqliteReadableGlobalEffectMemoStore:
         self,
         key: ReadableGlobalEffectKey,
         entry: DependencyMemoEntry,
+        *,
+        intern: bool = True,
     ) -> DependencyMemoEntry:
-        entry = _intern_entry(self.dependency_pool, entry)
+        if intern:
+            entry = _intern_entry(self.dependency_pool, entry)
         self.lru[key] = entry
         self.lru.move_to_end(key)
         while len(self.lru) > self.lru_entries:
@@ -584,7 +592,7 @@ class SqliteReadableGlobalEffectMemoStore:
             )
         dependencies = _decode_dependencies(row[2])
         result = _decode_result(row[3])
-        return self._remember(
+        entry = self._remember(
             key,
             DependencyMemoEntry(
                 image_sha256=self.image_sha256,
@@ -592,6 +600,14 @@ class SqliteReadableGlobalEffectMemoStore:
                 result=result,
             ),
         )
+        self.dependency_payload_cache[id(entry.dependencies)] = (
+            entry.dependencies,
+            row[1],
+            dependency_bytes,
+            row[2],
+        )
+        self.published_dependency_sha256.add(row[1])
+        return entry
 
     def put(
         self,
@@ -602,54 +618,92 @@ class SqliteReadableGlobalEffectMemoStore:
             raise SemanticMemoStoreError(
                 "semantic memo entry compiler SHA mismatch"
             )
+        try:
+            entry = _intern_entry(self.dependency_pool, entry)
+        except TypeError as exc:
+            raise SemanticMemoStoreError(
+                "dependency payload contains an unhashable row"
+            ) from exc
         key_bytes = _canonical_json_bytes(_key_payload(key))
         key_sha256 = hashlib.sha256(key_bytes).hexdigest()
-        dependency_bytes = _canonical_json_bytes(
-            _dependency_payload(entry.dependencies)
+        dependency_cache_key = id(entry.dependencies)
+        cached_dependency = self.dependency_payload_cache.get(
+            dependency_cache_key
         )
-        dependency_sha256 = hashlib.sha256(
-            dependency_bytes
-        ).hexdigest()
+        if (
+            cached_dependency is None
+            or cached_dependency[0] is not entry.dependencies
+        ):
+            dependency_bytes = _canonical_json_bytes(
+                _dependency_payload(entry.dependencies)
+            )
+            dependency_sha256 = hashlib.sha256(
+                dependency_bytes
+            ).hexdigest()
+            compressed_dependencies = zlib.compress(
+                dependency_bytes,
+                level=1,
+            )
+            self.dependency_payload_cache[dependency_cache_key] = (
+                entry.dependencies,
+                dependency_sha256,
+                dependency_bytes,
+                compressed_dependencies,
+            )
+        else:
+            (
+                _dependencies,
+                dependency_sha256,
+                dependency_bytes,
+                compressed_dependencies,
+            ) = cached_dependency
         result_bytes = _canonical_json_bytes(
             _result_payload(entry.result)
         )
         compressed_key = zlib.compress(key_bytes, level=1)
-        compressed_dependencies = zlib.compress(
-            dependency_bytes,
-            level=1,
-        )
         compressed_result = zlib.compress(result_bytes, level=1)
         connection = self._connection()
+        dependency_is_published = (
+            dependency_sha256
+            in self.published_dependency_sha256
+        )
         try:
             with connection:
-                existing_dependency = connection.execute(
-                    "SELECT payload FROM dependencies "
-                    "WHERE dependency_sha256 = ?",
-                    (dependency_sha256,),
-                ).fetchone()
-                if existing_dependency is None:
-                    connection.execute(
-                        "INSERT INTO dependencies("
-                        "dependency_sha256, payload) VALUES (?, ?)",
-                        (
-                            dependency_sha256,
-                            compressed_dependencies,
-                        ),
-                    )
-                else:
-                    try:
-                        existing_dependency_bytes = zlib.decompress(
-                            existing_dependency[0]
+                if not dependency_is_published:
+                    existing_dependency = connection.execute(
+                        "SELECT payload FROM dependencies "
+                        "WHERE dependency_sha256 = ?",
+                        (dependency_sha256,),
+                    ).fetchone()
+                    if existing_dependency is None:
+                        connection.execute(
+                            "INSERT INTO dependencies("
+                            "dependency_sha256, payload) VALUES (?, ?)",
+                            (
+                                dependency_sha256,
+                                compressed_dependencies,
+                            ),
                         )
-                    except zlib.error as exc:
-                        raise SemanticMemoStoreError(
-                            "semantic memo dependency payload is not "
-                            "valid compressed data"
-                        ) from exc
-                    if existing_dependency_bytes != dependency_bytes:
-                        raise SemanticMemoStoreError(
-                            "semantic memo dependency digest collision"
-                        )
+                    else:
+                        try:
+                            existing_dependency_bytes = (
+                                zlib.decompress(
+                                    existing_dependency[0]
+                                )
+                            )
+                        except zlib.error as exc:
+                            raise SemanticMemoStoreError(
+                                "semantic memo dependency payload is "
+                                "not valid compressed data"
+                            ) from exc
+                        if (
+                            existing_dependency_bytes
+                            != dependency_bytes
+                        ):
+                            raise SemanticMemoStoreError(
+                                "semantic memo dependency digest "
+                                "collision"
+                            )
                 existing_key = connection.execute(
                     "SELECT key_payload FROM memo "
                     "WHERE key_sha256 = ?",
@@ -689,7 +743,10 @@ class SqliteReadableGlobalEffectMemoStore:
             raise SemanticMemoStoreError(
                 "semantic memo SQLite write failed"
             ) from exc
-        self._remember(key, entry)
+        self.published_dependency_sha256.add(
+            dependency_sha256
+        )
+        self._remember(key, entry, intern=False)
 
     def __len__(self) -> int:
         try:

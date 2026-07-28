@@ -3,6 +3,7 @@ import sqlite3
 import zlib
 
 import pytest
+from tools.mwcc_retro import semantic_memo as semantic_memo_module
 from tools.mwcc_retro.semantic_memo import (
     DependencyMemoEntry,
     InMemoryReadableGlobalEffectMemoStore,
@@ -348,3 +349,48 @@ def test_sqlite_store_does_not_publish_rolled_back_rows(tmp_path):
     ) as store:
         assert len(store) == 0
         assert store.get(readable_key()) is None
+
+
+def test_sqlite_store_serializes_shared_dependencies_once(
+    tmp_path,
+    monkeypatch,
+):
+    path = tmp_path / "readable-global.sqlite3"
+    dependency_serializations = 0
+    original = semantic_memo_module._canonical_json_bytes
+
+    def count_dependency_serializations(value):
+        nonlocal dependency_serializations
+        if (
+            isinstance(value, list)
+            and value
+            and isinstance(value[0], dict)
+            and "fingerprint" in value[0]
+        ):
+            dependency_serializations += 1
+        return original(value)
+
+    monkeypatch.setattr(
+        semantic_memo_module,
+        "_canonical_json_bytes",
+        count_dependency_serializations,
+    )
+    second_key = readable_key(
+        ((0x401000, 0x402001, 0x403000),)
+    )
+    with SqliteReadableGlobalEffectMemoStore(
+        path,
+        image_sha256="b" * 64,
+        lru_entries=1,
+    ) as store:
+        store.put(readable_key(), finite_entry())
+        store.put(
+            second_key,
+            DependencyMemoEntry(
+                "b" * 64,
+                tuple(list(finite_entry().dependencies)),
+                None,
+            ),
+        )
+
+    assert dependency_serializations == 1
