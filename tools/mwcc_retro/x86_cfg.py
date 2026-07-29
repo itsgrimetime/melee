@@ -2312,6 +2312,9 @@ class _DirectCfgRecovery:
         self.incoming_call_domain_cache: dict[
             tuple[int, tuple[int, ...], int], bool
         ] = {}
+        self.provisional_unowned_raw_callers_by_target: dict[
+            int, frozenset[int]
+        ] = {}
         self.guarded_slot_zero_consumer_cache: dict[
             tuple[tuple[int, ...], int],
             tuple[tuple[int, int, int, int], ...],
@@ -21654,7 +21657,12 @@ class _DirectCfgRecovery:
             )
             self.finite_argument_cache[cache_key] = final
             return final
-        if not self._incoming_call_domain_is_closed(function_entry):
+        if not (
+            self._incoming_call_domain_is_closed(function_entry)
+            or self._least_reachable_incoming_call_domain_is_closed(
+                function_entry
+            )
+        ):
             self.finite_argument_cache[cache_key] = None
             return None
         callers = self._incoming_call_sites(function_entry)
@@ -34426,7 +34434,144 @@ class _DirectCfgRecovery:
             )
         else:
             result = bool(decoded)
+        if result:
+            self.provisional_unowned_raw_callers_by_target.pop(
+                function_entry,
+                None,
+            )
         self.incoming_call_domain_cache[cache_key] = result
+        return result
+
+    def _least_reachable_incoming_call_domain_is_closed(
+        self,
+        function_entry: int,
+    ) -> bool:
+        """Close callers in the current least-reachable instruction graph.
+
+        Raw E8 bytes outside current instruction ownership are not promoted to
+        callers.  Record them as provisional dependencies so the final exact
+        executable-residue partition and independent Ghidra reconciliation
+        must account for them.  If a later fixed-point pass owns one of those
+        sites, summary/call facts invalidate the finite-argument query and the
+        newly reachable caller participates normally.
+        """
+        self._note_producer_dependency(function_entry)
+        decoded = set(
+            self.direct_call_sources_by_target.get(
+                function_entry,
+                (),
+            )
+        )
+        raw = self._raw_direct_call_sites(function_entry)
+        if (
+            not decoded
+            or not decoded <= raw
+            or any(
+                row.va == function_entry
+                for row in self.image.exports
+            )
+        ):
+            self.provisional_unowned_raw_callers_by_target.pop(
+                function_entry,
+                None,
+            )
+            return False
+
+        provisional = set()
+        for source in sorted(raw - decoded):
+            owner = self.byte_owners.get(source)
+            if owner is not None:
+                if owner == source:
+                    self.provisional_unowned_raw_callers_by_target.pop(
+                        function_entry,
+                        None,
+                    )
+                    return False
+                continue
+            if any(
+                self.byte_owners.get(address) is not None
+                for address in range(source, source + 5)
+            ):
+                self.provisional_unowned_raw_callers_by_target.pop(
+                    function_entry,
+                    None,
+                )
+                return False
+            provisional.add(source)
+
+        if self.highlow_relocation_references_by_value is None:
+            references_by_value: dict[int, set[int]] = {}
+            for relocation in self.image.relocations:
+                if not (
+                    relocation.type == 3
+                    and _is_mapped_span(
+                        self.image,
+                        relocation.va,
+                        4,
+                    )
+                ):
+                    continue
+                value = int.from_bytes(
+                    _read_loader_initialized(
+                        self.image,
+                        relocation.va,
+                        4,
+                    ),
+                    "little",
+                )
+                references_by_value.setdefault(value, set()).add(
+                    relocation.va
+                )
+            self.highlow_relocation_references_by_value = {
+                value: frozenset(addresses)
+                for value, addresses in references_by_value.items()
+            }
+        relocation_references = (
+            self.highlow_relocation_references_by_value.get(
+                function_entry,
+                frozenset(),
+            )
+        )
+        accepted_references = {
+            row.provenance_address
+            for row in self.seed_records
+            if row.address == function_entry
+            and row.category
+            in {
+                "callback-table-entry",
+                "copied-descriptor-callback-entry",
+                "global-function-pointer",
+                "object-callback-table-entry",
+            }
+        }
+        indirect_sources = {
+            source
+            for source, kind in self.incoming_edges.get(
+                function_entry,
+                (),
+            )
+            if kind.startswith("indirect-call-")
+        }
+        if relocation_references or accepted_references:
+            result = (
+                relocation_references == accepted_references
+                and bool(indirect_sources)
+                and all(
+                    self.relocation_types_by_va.get(address) == (3,)
+                    for address in accepted_references
+                )
+            )
+        else:
+            result = True
+        if result and provisional:
+            self.provisional_unowned_raw_callers_by_target[
+                function_entry
+            ] = frozenset(provisional)
+        else:
+            self.provisional_unowned_raw_callers_by_target.pop(
+                function_entry,
+                None,
+            )
         return result
 
     def _copied_slot_zero_source_bases(
@@ -41486,6 +41631,57 @@ class _DirectCfgRecovery:
                 )
         return tuple(sorted(candidates, key=lambda row: row.address))
 
+    def _record_provisional_unowned_raw_caller_diagnostics(
+        self,
+        candidates: tuple[RawE8Candidate, ...],
+    ) -> None:
+        by_pair = {
+            (row.address, row.target): row
+            for row in candidates
+        }
+        for target, sources in sorted(
+            self.provisional_unowned_raw_callers_by_target.items()
+        ):
+            decoded = self.direct_call_sources_by_target.get(
+                target,
+                set(),
+            )
+            for source in sorted(sources):
+                candidate = by_pair.get((source, target))
+                if (
+                    source in decoded
+                    or candidate is None
+                    or candidate.classification
+                    not in {
+                        "owned-data",
+                        "unreachable-executable-residue",
+                    }
+                ):
+                    classification = (
+                        "missing"
+                        if candidate is None
+                        else candidate.classification
+                    )
+                    raise CfgRecoveryError(
+                        "provisional unowned raw caller escaped the "
+                        "non-code/residue partition: "
+                        f"source={source:#x};target={target:#x};"
+                        f"classification={classification}"
+                    )
+                self.diagnostics.add(
+                    OwnershipDiagnostic(
+                        kind="provisional-unowned-raw-caller",
+                        address=source,
+                        detail=(
+                            f"target={target:#x};"
+                            f"classification={candidate.classification};"
+                            "proof=current-least-reachable-call-domain;"
+                            "recovery-restarts-on-ownership-growth;"
+                            "pending-exact-residue-reconciliation"
+                        ),
+                    )
+                )
+
     def _provisional_unreachable_residue(
         self,
         data_regions: tuple[ByteRegion, ...],
@@ -41962,6 +42158,9 @@ class _DirectCfgRecovery:
                 )
         raw_e8_candidates = self._raw_e8_candidates(
             data_regions, padding_regions, provisional_residue
+        )
+        self._record_provisional_unowned_raw_caller_diagnostics(
+            raw_e8_candidates
         )
         for limit_name in self.limits.__dataclass_fields__:
             self.limits.check(limit_name, self.high_water[limit_name])

@@ -44,6 +44,14 @@ candidates partitioned.
   resolver integration is green in 950 x86 CFG tests and resolves exact-state
   addresses `0x4d03e6`, `0x4d099b`, `0x4d131a`, and `0x4d24b7`; a fresh exact
   replay still must confirm the frontier delta.
+- Finite argument domains now distinguish current least-reachable callers from
+  raw `E8` bytes in provisional residue.  Every excluded raw caller is retained
+  as a `provisional-unowned-raw-caller` obligation in the exact partition;
+  ownership growth reopens the domain, and publication still requires exact
+  residue/Ghidra reconciliation.  Positive and promoted-hostile tests are
+  green.  Exact-state hydration now also resolves the recursive callback calls
+  at `0x44c96e` and `0x44c9db`, for six locally demonstrated blocker closures
+  total before replay.
 - The fourth exact continuation completed 128 queries in 3,232.45 seconds at
   5.27 GB maximum RSS with no swap, then exposed a further 24-query wave.
 - The retained finite-control indexes advanced the same 420-second profiled
@@ -129,8 +137,8 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 950 passed.
-- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,077 passed.
+- `test_retro_x86_cfg.py`: 952 passed.
+- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,079 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
 - Task 8 focused/adjacent suites: 184 / 533 passed.

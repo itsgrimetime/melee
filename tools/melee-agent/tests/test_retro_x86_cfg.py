@@ -15498,6 +15498,88 @@ def test_recursive_forwarding_does_not_widen_cdecl_callback_domain(tmp_path):
     assert edges[0x00401042] == 0x00401090
 
 
+def recursive_callback_with_unowned_raw_caller_image(tmp_path):
+    image = load_dispatch_image(
+        tmp_path,
+        mode="cdecl-recursive-callback",
+    )
+    source = 0x004010E0
+    target = 0x00401030
+    offset = image.va_to_offset(source)
+    assert offset is not None
+    data = bytearray(image.data)
+    data[offset] = 0xE8
+    data[offset + 1 : offset + 5] = (
+        target - (source + 5)
+    ).to_bytes(4, "little", signed=True)
+    data[offset + 5] = 0xC3
+    return replace(
+        image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        relocations=tuple(
+            row
+            for row in image.relocations
+            if not source <= row.va < source + 6
+        ),
+    )
+
+
+def test_unowned_raw_caller_is_deferred_to_residue_reconciliation(
+    tmp_path,
+):
+    image = recursive_callback_with_unowned_raw_caller_image(tmp_path)
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    edges = {
+        row.source: row.target
+        for row in cfg.control_targets.finite_internal_edges
+        if row.flow_kind == "indirect-call-finite-value"
+    }
+
+    assert edges[0x00401035] == 0x00401090
+    assert edges[0x00401042] == 0x00401090
+    assert any(
+        row.address == 0x004010E0
+        and row.kind == "provisional-unowned-raw-caller"
+        and "target=0x401030" in row.detail
+        for row in cfg.ownership_diagnostics
+    )
+    assert any(
+        row.address == 0x004010E0
+        and row.target == 0x00401030
+        and row.classification
+        == "unreachable-executable-residue"
+        for row in cfg.raw_e8_candidates
+    )
+    assert not cfg.provisional_unreachable_residue.accepted
+
+
+def test_promoted_raw_caller_reopens_finite_argument_domain(tmp_path):
+    image = recursive_callback_with_unowned_raw_caller_image(tmp_path)
+    cfg = recover_cfg(
+        image,
+        (image.entrypoint, 0x004010E0),
+        generous_limits(image),
+    )
+
+    assert {
+        0x00401035,
+        0x00401042,
+    } <= {
+        row.address
+        for row in cfg.control_targets.unresolved
+        if row.kind == "indirect-flow"
+    }
+    assert not any(
+        row.kind == "provisional-unowned-raw-caller"
+        for row in cfg.ownership_diagnostics
+    )
+
+
 def test_recursive_unknown_argument_keeps_callback_unresolved(tmp_path):
     cfg = dispatch_cfg(tmp_path, mode="cdecl-recursive-unknown")
     assert any(row.address == 0x00401035 and row.kind == "indirect-flow" for row in cfg.control_targets.unresolved)
