@@ -1108,6 +1108,228 @@ def test_registered_linked_callback_rejects_open_provenance(mutation):
     )
 
 
+def finite_word_register_store_image(*, unknown_caller=False):
+    """Store one closed scalar argument through AX into an object field."""
+    text_va = 0x00401000
+    callee = text_va + 0x40
+    hidden_caller = text_va + 0x60
+    text = bytearray(b"\xcc" * 0x80)
+
+    # root(): callee(0x1234)
+    text[0:14] = bytes.fromhex(
+        "68 34 12 00 00"
+        "e8 36 00 00 00"
+        "83 c4 04"
+        "c3"
+    )
+    # callee(value): object->field = (u16)value
+    text[0x40:0x49] = bytes.fromhex(
+        "8b 44 24 04"
+        "66 89 42 14"
+        "c3"
+    )
+    if unknown_caller:
+        # hidden_caller(): callee(eax)
+        text[0x60:0x6A] = bytes.fromhex(
+            "50"
+            "e8 da ff ff ff"
+            "83 c4 04"
+            "c3"
+        )
+
+    image_bytes = bytes(text)
+    image = pe.Image(
+        data=image_bytes,
+        sha256=hashlib.sha256(image_bytes).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe.Section(
+                ".text",
+                text_va,
+                0,
+                len(text),
+                len(text),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(text)),),
+    )
+    return image, callee + 4, (() if not unknown_caller else (hidden_caller,))
+
+
+def argument_pointee_publisher_image(*, unknown_source=False):
+    """Publish argument 1 into an association field on argument 0."""
+    text_va = 0x00401000
+    publisher = text_va + 0x60
+    text = bytearray(b"\xcc" * 0x80)
+    cursor = 0
+
+    def emit(encoded):
+        nonlocal cursor
+        encoded = bytes.fromhex(encoded)
+        text[cursor : cursor + len(encoded)] = encoded
+        cursor += len(encoded)
+
+    emit("83 ec 40")
+    if unknown_source:
+        emit("8b 44 24 44")
+    else:
+        emit("66 c7 44 24 14 34 12")
+        emit("8d 04 24")
+    emit("8d 4c 24 20")
+    emit("50 51")
+    call_address = text_va + cursor
+    displacement = publisher - (call_address + 5)
+    emit("e8" + displacement.to_bytes(4, "little", signed=True).hex())
+    emit("83 c4 08 83 c4 40 c3")
+
+    # publisher(outer, object): both list-shape arms set outer->tail.
+    text[0x60:0x77] = bytes.fromhex(
+        "8b 54 24 04"
+        "8b 4c 24 08"
+        "83 7a 14 00"
+        "74 05"
+        "89 4a 18"
+        "eb 03"
+        "89 4a 18"
+        "c3"
+    )
+    image_bytes = bytes(text)
+    image = pe.Image(
+        data=image_bytes,
+        sha256=hashlib.sha256(image_bytes).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe.Section(
+                ".text",
+                text_va,
+                0,
+                len(text),
+                len(text),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(text)),),
+    )
+    return image, publisher
+
+
+def test_argument_pointee_publisher_carries_finite_object_field():
+    image, publisher = argument_pointee_publisher_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._callee_argument_allocation_pointee_effect(
+        publisher,
+        0,
+        0x18,
+        (0x14,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result.values == frozenset({0x34})
+
+
+def test_argument_pointee_publisher_rejects_open_object_field():
+    image, publisher = argument_pointee_publisher_image(
+        unknown_source=True
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert (
+        recovery._callee_argument_allocation_pointee_effect(
+            publisher,
+            0,
+            0x18,
+            (0x14,),
+            frozenset(),
+        )
+        is None
+    )
+
+
+def test_finite_byte_store_extracts_closed_word_register_domain():
+    image, store, extra_seeds = finite_word_register_store_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(
+            image,
+            tuple(audit_anchor(image, address) for address in extra_seeds),
+        ),
+        generous_limits(image),
+    )
+    recovery.recover()
+    decoded = recovery._owned_decoded(store)
+
+    low = recovery._finite_byte_store_values(
+        decoded,
+        0,
+        image.entrypoint + 0x40,
+        frozenset(),
+    )
+    high = recovery._finite_byte_store_values(
+        decoded,
+        1,
+        image.entrypoint + 0x40,
+        frozenset(),
+    )
+
+    assert low is not None and low[0] == frozenset({0x34})
+    assert high is not None and high[0] == frozenset({0x12})
+
+
+def test_finite_byte_store_rejects_open_word_register_domain():
+    image, store, extra_seeds = finite_word_register_store_image(
+        unknown_caller=True
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(
+            image,
+            tuple(audit_anchor(image, address) for address in extra_seeds),
+        ),
+        generous_limits(image),
+    )
+    recovery.recover()
+    decoded = recovery._owned_decoded(store)
+
+    assert (
+        recovery._finite_byte_store_values(
+            decoded,
+            0,
+            image.entrypoint + 0x40,
+            frozenset(),
+        )
+        is None
+    )
+
+
 def finite_incoming_edge_image():
     """Finite calls where a later edge expands an earlier caller domain."""
     text_va = 0x00401000
@@ -13396,6 +13618,10 @@ def fresh_nested_return_allocation_image(
     dead_partial_outer_eax=False,
     live_partial_outer_eax=False,
     empty_nested_association=False,
+    dynamic_outer_size=None,
+    preserved_scalar_loop=False,
+    overlap_scalar_after_loop=False,
+    escape_scalar_pointer=False,
 ):
     """Return a guarded fresh object pointing to a guarded fresh object."""
     from tools.mwcc_retro import pe as pe_mod
@@ -13416,11 +13642,44 @@ def fresh_nested_return_allocation_image(
         text[offset + 1 : offset + 5] = displacement.to_bytes(4, "little", signed=True)
         return offset + 5
 
-    cursor = emit(0, "53 56 6a 1a")
+    assert dynamic_outer_size in {None, "closed", "computed", "unknown"}
+    cursor = emit(0, "53 56")
+    if dynamic_outer_size == "closed":
+        cursor = emit(cursor, "b8 1a 00 00 00 50")
+    elif dynamic_outer_size == "computed":
+        cursor = emit(
+            cursor,
+            "0f b6 c1"
+            "83 c0 01"
+            "6b c0 02"
+            "83 c0 20"
+            "50",
+        )
+    elif dynamic_outer_size == "unknown":
+        cursor = emit(cursor, "51")
+    else:
+        cursor = emit(cursor, "6a 1a")
     cursor = emit_call(cursor, 0x100)
     cursor = emit(cursor, "89 c6 59 85 f6")
     outer_failure_branch = cursor
     cursor = emit(cursor, "74 00")
+    if preserved_scalar_loop:
+        cursor = emit(
+            cursor,
+            "66 c7 46 14 34 12"
+            "8d 7e 1c"
+            "b9 03 00 00 00"
+            "c6 07 7f"
+            "83 c7 0c"
+            "49"
+            "75 f7",
+        )
+        if overlap_scalar_after_loop:
+            cursor = emit(cursor, "88 56 14")
+        if escape_scalar_pointer:
+            cursor = emit(cursor, "56")
+            cursor = emit_call(cursor, 0x1A0)
+            cursor = emit(cursor, "59")
     inner_failure_branch = None
     if empty_nested_association:
         cursor = emit(cursor, "6a 1a 56")
@@ -13465,6 +13724,7 @@ def fresh_nested_return_allocation_image(
     emit(cursor, "a1 14 30 40 00 01 1d 14 30 40 00 5b c3")
     emit(0x160, "c3")
     emit(0x180, "31 c0 57 8b 4c 24 0c 8b 7c 24 08 f3 aa 5f c3")
+    emit(0x1A0, "c3")
 
     image = pe_mod.Image(
         data=bytes(data),
@@ -13506,6 +13766,148 @@ def test_byte_producer_follows_nested_fresh_return_allocations():
 
     assert result is not None
     assert result[0] == frozenset({0x32})
+
+
+def test_fresh_allocation_accepts_closed_dynamic_size():
+    image, return_address = fresh_nested_return_allocation_image(
+        dynamic_outer_size="closed"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_object_byte_register_values_before(
+        return_address,
+        "eax",
+        image.entrypoint,
+        (10, 0),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset({0x32})
+
+
+def test_fresh_allocation_rejects_unknown_dynamic_size():
+    image, return_address = fresh_nested_return_allocation_image(
+        dynamic_outer_size="unknown"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert (
+        recovery._finite_object_byte_register_values_before(
+            return_address,
+            "eax",
+            image.entrypoint,
+            (10, 0),
+            frozenset(),
+        )
+        is None
+    )
+
+
+def test_fresh_allocation_accepts_bounded_computed_size():
+    image, return_address = fresh_nested_return_allocation_image(
+        dynamic_outer_size="computed"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_object_byte_register_values_before(
+        return_address,
+        "eax",
+        image.entrypoint,
+        (10, 0),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset({0x32})
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, frozenset({0x34})),
+        ("overlap", None),
+        ("escape", None),
+    ),
+)
+def test_fresh_allocation_lower_bound_fallback_is_fail_closed(
+    monkeypatch,
+    mutation,
+    expected,
+):
+    image, return_address = fresh_nested_return_allocation_image(
+        preserved_scalar_loop=True,
+        overlap_scalar_after_loop=mutation == "overlap",
+        escape_scalar_pointer=mutation == "escape",
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    allocator = image.entrypoint + 0x100
+    allocation_call = min(
+        address
+        for address, target in recovery.direct_call_targets_by_source.items()
+        if target == allocator
+    )
+    original = recovery._relative_pointer_states
+
+    def cap_full_allocation_replay(function_entry, **kwargs):
+        if (
+            kwargs.get("root_call") == allocation_call
+            and kwargs.get("stop_address") == return_address
+        ):
+            raise AnalysisLimitError(
+                "max_summary_iterations",
+                configured=1,
+                observed=2,
+            )
+        return original(function_entry, **kwargs)
+
+    monkeypatch.setattr(
+        recovery,
+        "_relative_pointer_states",
+        cap_full_allocation_replay,
+    )
+
+    if expected is None:
+        with pytest.raises(AnalysisLimitError):
+            recovery._finite_object_byte_register_values_before(
+                return_address,
+                "eax",
+                image.entrypoint,
+                (0x14,),
+                frozenset(),
+            )
+        return
+
+    result = recovery._finite_object_byte_register_values_before(
+        return_address,
+        "eax",
+        image.entrypoint,
+        (0x14,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == expected
 
 
 def test_fresh_allocation_reports_zeroed_nested_association_as_empty():

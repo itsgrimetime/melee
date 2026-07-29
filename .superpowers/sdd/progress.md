@@ -141,6 +141,24 @@ candidates partitioned.
   closed.  The exact raw-control frontier is now 59 addresses: 24 remaining
   raw indirect transfers, four constructor-descriptor transfers, 30 movzx
   lifecycle transfers, and one registered-linked callback.
+- The remaining registered-linked callback at `0x4c7ad1` is now traced through
+  the loader-zero `0x587c74` registry, its main-node/object intrusive lists,
+  the `0x49d060` list publisher, and the central object constructor at
+  `0x4a2660`.  The constructor stores the exact signed head index to object
+  `+0x14` before filling a variable-length tail at `+0x1c`.
+- Fresh-allocation field proof now accepts a finite dynamic allocation-size
+  interval, extracts bytes from closed multi-byte register stores, and uses a
+  fail-closed lower/upper alias bound when an exact loop-offset set would grow
+  to the summary cap.  On the retail constructor this proves that the exact
+  `0x22` index survives every later tail-fill path without weakening the
+  ordinary exact-offset proof.
+- Allocation-pointee summaries now carry a finite secondary object argument
+  through a closed association-field publication.  This covers the retail
+  publisher's two `outer->tail = object` arms while rejecting an open source
+  field or later unproved mutation.  Focused hostile regressions and the full
+  974-test x86 CFG suite pass.  A fresh exact replay is still required to bind
+  all publisher callers, allocator-session totality, and the two raw call
+  sites that become owned only after graph expansion.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published
@@ -206,7 +224,7 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 964 passed.
+- `test_retro_x86_cfg.py`: 974 passed.
 - Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,091 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.

@@ -3589,7 +3589,27 @@ class _DirectCfgRecovery:
                 frozenset({value & 0xFF}),
                 f"immediate-byte={value & 0xFF:#x}",
             )
-        if destination.size != 1 or byte_index != 0 or source.type != X86_OP_REG:
+        if source.type != X86_OP_REG:
+            return None
+        if destination.size > 1:
+            result = self._finite_register_values_before(
+                decoded.address,
+                self._register_family(source.reg),
+                function_entry,
+                visited,
+            )
+            if result is None:
+                return None
+            values = frozenset(
+                (value >> (8 * byte_index)) & 0xFF
+                for value in result[0]
+            )
+            self._check_count("max_finite_values", len(values))
+            return (
+                values,
+                f"register-store-byte={byte_index};{result[1]}",
+            )
+        if byte_index != 0:
             return None
         guard = self._guard_for_index(decoded.address, source.reg)
         if guard is not None:
@@ -11817,7 +11837,62 @@ class _DirectCfgRecovery:
                     and address != direct_publication
                     and address not in global_publications
                 ):
-                    return None
+                    source_argument = (
+                        self._operand_argument_index(
+                            address,
+                            row.operands[1],
+                            function_entry,
+                        )
+                        if (
+                            len(field_path) == 1
+                            and row.id == X86_INS_MOV
+                            and len(row.operands) == 2
+                            and operand_index == 0
+                            and operand.size == 4
+                            and write_offset == target_field
+                        )
+                        else None
+                    )
+                    if (
+                        source_argument is None
+                        or source_argument == argument_index
+                        or not self._function_argument_preserves_field(
+                            function_entry,
+                            source_argument,
+                            field_path[0],
+                        )
+                    ):
+                        return None
+                    source_values = (
+                        self._finite_argument_object_byte_values_before(
+                            address,
+                            function_entry,
+                            source_argument,
+                            field_path,
+                            next_visited,
+                        )
+                    )
+                    if source_values is None or not source_values[0]:
+                        return None
+                    publishers.append(
+                        (
+                            address,
+                            _AllocationPointeeEffect(
+                                _AbstractObjectIdentity(
+                                    "argument-publication",
+                                    address,
+                                ),
+                                source_values[0],
+                                f"argument-publication={address:#x};"
+                                f"source-argument={source_argument};"
+                                f"{source_values[1]}",
+                                may_preserve_empty=self._object_result_has_flag(
+                                    source_values[1],
+                                    "optional-empty-association",
+                                ),
+                            ),
+                        )
+                    )
             if not row.group(CS_GRP_CALL):
                 if row.group(CS_GRP_JUMP) and not self.non_call_successors.get(address) and any(state[0]):
                     return None
@@ -16460,6 +16535,476 @@ class _DirectCfgRecovery:
                 return False
         return True
 
+    def _fresh_allocation_lower_bound_states(
+        self,
+        allocation_call: int,
+        observation_address: int,
+        function_entry: int,
+        target_field: int,
+        target_width: int,
+        allowed_writers: frozenset[int],
+        *,
+        excluded_addresses: frozenset[int] = frozenset(),
+    ) -> dict[int, tuple[tuple[frozenset[int], ...], int]] | None:
+        """Track a fresh pointer by minimum interior offset.
+
+        Exact offset sets can grow once per loop iteration while a constructor
+        fills a variable-length tail.  For preservation of an earlier field,
+        only a lower bound is needed: an alias already beyond the field and
+        advanced by nonnegative constants cannot write it.  Unsupported
+        arithmetic, pointer publication, and writes that are not provably
+        above the field remain open.
+        """
+        if (
+            function_entry not in self.function_addresses
+            or allocation_call not in self.instructions
+            or observation_address not in self.instructions
+            or target_field < 0
+            or target_width <= 0
+        ):
+            return None
+        following_entry = self._following_function_entry(function_entry)
+        if not (
+            function_entry
+            <= allocation_call
+            < observation_address
+            < following_entry
+        ):
+            return None
+
+        predecessors: dict[int, set[int]] = {}
+        for address in self._function_instruction_addresses(function_entry):
+            if address in excluded_addresses:
+                continue
+            for successor in self._summary_successors(
+                address,
+                function_entry,
+                following_entry,
+            ):
+                if successor not in excluded_addresses:
+                    predecessors.setdefault(successor, set()).add(address)
+        reverse_reachable = {observation_address}
+        pending_reverse = [observation_address]
+        while pending_reverse:
+            current = pending_reverse.pop()
+            for predecessor in predecessors.get(current, ()):
+                if predecessor not in reverse_reachable:
+                    reverse_reachable.add(predecessor)
+                    pending_reverse.append(predecessor)
+        if allocation_call not in reverse_reachable:
+            return None
+
+        family_index = {
+            family: index for index, family in enumerate(_REGISTER_FAMILIES)
+        }
+        empty = tuple(None for _ in _REGISTER_FAMILIES)
+        lower_states: dict[
+            int,
+            tuple[tuple[int, int | None] | None, ...],
+        ] = {
+            allocation_call: empty
+        }
+        pending = [allocation_call]
+        queued = {allocation_call}
+        iterations = 0
+        target_end = target_field + target_width
+
+        def interval_for_register(
+            state: list[tuple[int, int | None] | None],
+            register: int,
+        ) -> tuple[int, int | None] | None:
+            if register == X86_REG_INVALID:
+                return None
+            return state[
+                family_index[self._register_family(register)]
+            ]
+
+        def operand_interval(
+            state: list[tuple[int, int | None] | None],
+            operand,
+        ) -> tuple[int, int | None] | None:
+            if operand.type != X86_OP_REG:
+                return None
+            return interval_for_register(state, operand.reg)
+
+        def tracked_family(register: int) -> str | None:
+            if register in {
+                X86_REG_INVALID,
+                x86_const.X86_REG_EFLAGS,
+            }:
+                return None
+            family = self._register_family(register)
+            return family if family in family_index else None
+
+        while pending:
+            current = heapq.heappop(pending)
+            queued.remove(current)
+            iterations += 1
+            self._check_count("max_summary_iterations", iterations)
+            incoming = lower_states[current]
+            state = list(incoming)
+            if current == observation_address:
+                continue
+            decoded = self._owned_decoded(current)
+            operands = decoded.operands
+
+            for operand in operands:
+                if operand.type != X86_OP_MEM:
+                    continue
+                base_interval = interval_for_register(
+                    state,
+                    operand.mem.base,
+                )
+                index_interval = interval_for_register(
+                    state,
+                    operand.mem.index,
+                )
+                if not operand.access & CS_AC_WRITE:
+                    continue
+                if index_interval is not None:
+                    return None
+                if base_interval is None:
+                    continue
+                if (
+                    operand.mem.index != X86_REG_INVALID
+                    or operand.size <= 0
+                ):
+                    return None
+                if current not in allowed_writers:
+                    lower, upper = base_interval
+                    wholly_below = (
+                        upper is not None
+                        and upper + operand.mem.disp + operand.size
+                        <= target_field
+                    )
+                    wholly_above = (
+                        lower + operand.mem.disp >= target_end
+                    )
+                    if not (wholly_below or wholly_above):
+                        return None
+
+            if (
+                decoded.id == X86_INS_MOV
+                and len(operands) == 2
+                and operands[0].type == X86_OP_MEM
+                and operand_interval(state, operands[1]) is not None
+            ):
+                return None
+            if (
+                decoded.mnemonic == "push"
+                and len(operands) == 1
+                and operand_interval(state, operands[0]) is not None
+            ):
+                return None
+
+            if decoded.group(CS_GRP_CALL):
+                if current == allocation_call:
+                    for family in ("eax", "ecx", "edx"):
+                        state[family_index[family]] = None
+                    state[family_index["eax"]] = (0, 0)
+                else:
+                    if state[family_index["ecx"]] is not None:
+                        return None
+                    for family in ("eax", "ecx", "edx"):
+                        state[family_index[family]] = None
+            elif decoded.id == X86_INS_MOV and len(operands) == 2:
+                destination, source = operands
+                if destination.type == X86_OP_REG:
+                    destination_index = family_index[
+                        self._register_family(destination.reg)
+                    ]
+                    source_interval = operand_interval(state, source)
+                    if destination.size != 4:
+                        if (
+                            state[destination_index] is not None
+                            or source_interval is not None
+                        ):
+                            return None
+                    else:
+                        state[destination_index] = source_interval
+            elif decoded.id == X86_INS_LEA and len(operands) == 2:
+                destination, source = operands
+                if destination.type != X86_OP_REG or source.type != X86_OP_MEM:
+                    return None
+                destination_index = family_index[
+                    self._register_family(destination.reg)
+                ]
+                base_interval = interval_for_register(
+                    state,
+                    source.mem.base,
+                )
+                index_interval = interval_for_register(
+                    state,
+                    source.mem.index,
+                )
+                if index_interval is not None:
+                    return None
+                if base_interval is None:
+                    state[destination_index] = None
+                elif source.mem.index != X86_REG_INVALID:
+                    return None
+                else:
+                    lower, upper = base_interval
+                    state[destination_index] = (
+                        lower + source.mem.disp,
+                        None
+                        if upper is None
+                        else upper + source.mem.disp,
+                    )
+            elif (
+                decoded.id == X86_INS_XOR
+                and len(operands) == 2
+                and all(operand.type == X86_OP_REG for operand in operands)
+                and self._register_family(operands[0].reg)
+                == self._register_family(operands[1].reg)
+            ):
+                state[
+                    family_index[self._register_family(operands[0].reg)]
+                ] = None
+            elif (
+                decoded.mnemonic in {"add", "sub"}
+                and len(operands) == 2
+                and operands[0].type == X86_OP_REG
+                and operands[1].type == X86_OP_IMM
+            ):
+                destination_index = family_index[
+                    self._register_family(operands[0].reg)
+                ]
+                if state[destination_index] is not None:
+                    delta = operands[1].imm
+                    if decoded.mnemonic == "sub":
+                        delta = -delta
+                    lower, upper = state[destination_index]
+                    state[destination_index] = (
+                        lower + delta,
+                        None if upper is None else upper + delta,
+                    )
+            elif (
+                decoded.mnemonic in {"inc", "dec"}
+                and len(operands) == 1
+                and operands[0].type == X86_OP_REG
+            ):
+                destination_index = family_index[
+                    self._register_family(operands[0].reg)
+                ]
+                if state[destination_index] is not None:
+                    lower, upper = state[destination_index]
+                    delta = 1 if decoded.mnemonic == "inc" else -1
+                    state[destination_index] = (
+                        lower + delta,
+                        None if upper is None else upper + delta,
+                    )
+            elif (
+                decoded.mnemonic == "pop"
+                and len(operands) == 1
+                and operands[0].type == X86_OP_REG
+            ):
+                state[
+                    family_index[self._register_family(operands[0].reg)]
+                ] = None
+            else:
+                alias_read = any(
+                    operand.type == X86_OP_REG
+                    and operand.access & CS_AC_READ
+                    and operand_interval(state, operand) is not None
+                    for operand in operands
+                ) or any(
+                    (family := tracked_family(register)) is not None
+                    and state[family_index[family]] is not None
+                    for register in decoded.regs_read
+                )
+                written_families = {
+                    self._register_family(operand.reg)
+                    for operand in operands
+                    if operand.type == X86_OP_REG
+                    and operand.access & CS_AC_WRITE
+                }
+                written_families.update(
+                    family
+                    for register in decoded.regs_write
+                    if (family := tracked_family(register)) is not None
+                )
+                if alias_read and written_families:
+                    return None
+                if any(
+                    state[family_index[family]] is not None
+                    for family in written_families
+                ):
+                    return None
+
+            outgoing = tuple(state)
+            for successor in self._summary_successors(
+                current,
+                function_entry,
+                following_entry,
+            ):
+                if (
+                    successor not in reverse_reachable
+                    or successor in excluded_addresses
+                ):
+                    continue
+                existing = lower_states.get(successor)
+                if existing is None:
+                    merged = outgoing
+                else:
+                    merged_rows = []
+                    for left, right in zip(existing, outgoing):
+                        if left is None:
+                            merged_rows.append(right)
+                            continue
+                        if right is None:
+                            merged_rows.append(left)
+                            continue
+                        left_lower, left_upper = left
+                        right_lower, right_upper = right
+                        upper = (
+                            None
+                            if (
+                                left_upper is None
+                                or right_upper is None
+                                or right_upper > left_upper
+                            )
+                            else max(left_upper, right_upper)
+                        )
+                        merged_rows.append(
+                            (min(left_lower, right_lower), upper)
+                        )
+                    merged = tuple(merged_rows)
+                if existing == merged:
+                    continue
+                lower_states[successor] = merged
+                if successor not in queued:
+                    heapq.heappush(pending, successor)
+                    queued.add(successor)
+
+        if observation_address not in lower_states:
+            return None
+        return {
+            address: (
+                tuple(
+                    (
+                        frozenset()
+                        if value is None or value[1] != value[0]
+                        else frozenset({value[0]})
+                    )
+                    for value in interval_state
+                ),
+                2,
+            )
+            for address, interval_state in lower_states.items()
+        }
+
+    def _finite_fresh_allocation_scalar_byte_values_lower_bound(
+        self,
+        allocation_call: int,
+        observation_address: int,
+        function_entry: int,
+        target_field: int,
+        allocation_size: int,
+        visited: frozenset[tuple[int, str]],
+        *,
+        excluded_addresses: frozenset[int] = frozenset(),
+    ) -> tuple[
+        frozenset[int],
+        list[str],
+        dict[int, tuple[tuple[frozenset[int], ...], int]],
+    ] | None:
+        """Prove one scalar byte before a variable-tail constructor loop."""
+        following_entry = self._following_function_entry(function_entry)
+        call = self.instructions.get(allocation_call)
+        if call is None:
+            return None
+        start_address = allocation_call + call.size
+        writers: set[int] = set()
+        values: set[int] = set()
+        details: list[str] = []
+        for address in self._function_instruction_addresses(function_entry):
+            if not start_address <= address < observation_address:
+                continue
+            if not (
+                self._reachable_within_function(
+                    start_address,
+                    address,
+                    function_entry,
+                    following_entry,
+                    excluded=excluded_addresses,
+                )
+                and self._reachable_within_function(
+                    address,
+                    observation_address,
+                    function_entry,
+                    following_entry,
+                    excluded=excluded_addresses,
+                )
+            ):
+                continue
+            decoded = self._owned_decoded(address)
+            for destination in decoded.operands:
+                if (
+                    destination.type != X86_OP_MEM
+                    or not destination.access & CS_AC_WRITE
+                    or destination.mem.base == X86_REG_INVALID
+                    or destination.mem.index != X86_REG_INVALID
+                    or destination.size <= 0
+                ):
+                    continue
+                origins = self._fresh_allocation_origin_calls_before(
+                    address,
+                    self._register_family(destination.mem.base),
+                    function_entry,
+                )
+                if origins != frozenset({allocation_call}):
+                    continue
+                write_offset = destination.mem.disp
+                if (
+                    write_offset < 0
+                    or write_offset + destination.size > allocation_size
+                    or not (
+                        write_offset < target_field + 1
+                        and target_field
+                        < write_offset + destination.size
+                    )
+                ):
+                    continue
+                result = self._finite_byte_store_values(
+                    decoded,
+                    target_field - write_offset,
+                    function_entry,
+                    visited,
+                )
+                if result is None or not result[0]:
+                    return None
+                writers.add(address)
+                values.update(result[0])
+                details.append(
+                    f"writer={address:#x};lower-bound-preserved;{result[1]}"
+                )
+        frozen_writers = frozenset(writers)
+        if (
+            not writers
+            or self._reachable_within_function(
+                start_address,
+                observation_address,
+                function_entry,
+                following_entry,
+                excluded=frozen_writers | excluded_addresses,
+            )
+        ):
+            return None
+        states = self._fresh_allocation_lower_bound_states(
+            allocation_call,
+            observation_address,
+            function_entry,
+            target_field,
+            1,
+            frozen_writers,
+            excluded_addresses=excluded_addresses,
+        )
+        if states is None:
+            return None
+        self._check_count("max_finite_values", len(values))
+        return frozenset(values), details, states
+
     def _finite_fresh_allocation_object_byte_values_before(
         self,
         allocation_call: int,
@@ -16486,12 +17031,32 @@ class _DirectCfgRecovery:
             return None
         size_argument = self._owned_fixed_bump_allocator_size_argument(allocator)
         pushed_size = None if size_argument is None else self._pushed_call_argument(allocation_call, size_argument)
+        size_result = (
+            None
+            if pushed_size is None
+            else self._finite_operand_values_before(
+                pushed_size[0].address,
+                pushed_size[1],
+                function_entry,
+                visited | {key},
+            )
+        )
+        if size_result is None and pushed_size is not None:
+            interval = self._bounded_unsigned_operand_interval_before(
+                pushed_size[0].address,
+                pushed_size[1],
+                function_entry,
+            )
+            if interval is not None:
+                size_result = (
+                    frozenset({interval[0], interval[1]}),
+                    interval[2],
+                )
         if (
-            pushed_size is None
-            or pushed_size[1].type != X86_OP_IMM
-            or not 0
-            < (allocation_size := pushed_size[1].imm & 0xFFFF_FFFF)
-            <= 0x1000_0000
+            size_result is None
+            or not size_result[0]
+            or not 0 < (allocation_size := min(size_result[0]))
+            or max(size_result[0]) > 0x1000_0000
             or field_path[0] + (1 if len(field_path) == 1 else 4) > allocation_size
         ):
             return None
@@ -16511,16 +17076,78 @@ class _DirectCfgRecovery:
             excluded=excluded_addresses,
         ):
             return None
-        states = self._relative_pointer_states(
-            function_entry,
-            root_call=allocation_call,
-            propagate_call_returns=False,
-            stop_address=observation_address,
-            excluded_addresses=excluded_addresses,
-            root_stack_alias=allowed_stack_publication,
-        )
+        states = None
+        exact_state_error = None
+        try:
+            states = self._relative_pointer_states(
+                function_entry,
+                root_call=allocation_call,
+                propagate_call_returns=False,
+                stop_address=observation_address,
+                excluded_addresses=excluded_addresses,
+                root_stack_alias=allowed_stack_publication,
+            )
+        except AnalysisLimitError as error:
+            exact_state_error = error
         if states is None or observation_address not in states:
-            return None
+            lower_bound_result = (
+                None
+                if (
+                    len(field_path) != 1
+                    or allowed_stack_publication is not None
+                    or object_guard is not None
+                )
+                else self._finite_fresh_allocation_scalar_byte_values_lower_bound(
+                    allocation_call,
+                    observation_address,
+                    function_entry,
+                    field_path[0],
+                    allocation_size,
+                    visited | {key},
+                    excluded_addresses=excluded_addresses,
+                )
+            )
+            if lower_bound_result is None:
+                if exact_state_error is not None:
+                    raise exact_state_error
+                return None
+            values, details, states = lower_bound_result
+            has_local_guard = self._allocation_result_has_closed_nonnull_guard(
+                allocation_call,
+                observation_address,
+                function_entry,
+                states,
+            )
+            totality = None
+            if not has_local_guard:
+                totality = self._allocator_totality_certificate(
+                    allocator,
+                    function_entry,
+                    lifetime_roots=(
+                        self._producer_allocator_lifetime_context()
+                    ),
+                )
+                if totality is None:
+                    return None
+            return (
+                values,
+                f"fresh-allocation={allocation_call:#x};"
+                f"allocator={allocator:#x};size={allocation_size:#x};"
+                + (
+                    "local-nonnull-guard;"
+                    if totality is None
+                    else (
+                        f"allocator-session={totality.session_root:#x};"
+                        "lifetime-roots="
+                        + ",".join(
+                            f"{root:#x}"
+                            for root in sorted(totality.lifetime_roots)
+                        )
+                        + ";"
+                    )
+                )
+                + "|".join(details),
+            )
         family_index = {
             family: index for index, family in enumerate(_REGISTER_FAMILIES)
         }
@@ -22505,19 +23132,11 @@ class _DirectCfgRecovery:
         provenance = []
         for definition in sorted(definitions):
             decoded = self._owned_decoded(definition)
-            if (
-                decoded.id not in {X86_INS_MOV, X86_INS_LEA}
-                or len(decoded.operands) != 2
-                or decoded.operands[0].type != X86_OP_REG
-                or self._register_family(decoded.operands[0].reg) != register_family
-            ):
-                return None
-            result = self._finite_operand_values_before(
-                definition,
-                decoded.operands[1],
+            result = self._finite_register_definition_values(
+                decoded,
+                register_family,
                 function_entry,
                 visited | {key},
-                lea=decoded.id == X86_INS_LEA,
             )
             if result is None:
                 return None
@@ -22530,6 +23149,612 @@ class _DirectCfgRecovery:
         return (
             frozenset(values),
             f"register={register_family};" + "|".join(provenance),
+        )
+
+    def _finite_register_definition_values(
+        self,
+        decoded,
+        register_family: str,
+        function_entry: int,
+        visited: frozenset[tuple[int, str]],
+    ) -> tuple[frozenset[int], str] | None:
+        """Evaluate one bounded scalar register definition."""
+        operands = decoded.operands
+        if (
+            len(operands) >= 1
+            and operands[0].type == X86_OP_REG
+            and self._register_family(operands[0].reg) == register_family
+        ):
+            if (
+                decoded.id in {X86_INS_MOV, X86_INS_LEA}
+                and len(operands) == 2
+            ):
+                return self._finite_operand_values_before(
+                    decoded.address,
+                    operands[1],
+                    function_entry,
+                    visited,
+                    lea=decoded.id == X86_INS_LEA,
+                )
+            if decoded.mnemonic == "movzx" and len(operands) == 2:
+                source = operands[1]
+                if source.type == X86_OP_REG:
+                    result = self._finite_register_values_before(
+                        decoded.address,
+                        self._register_family(source.reg),
+                        function_entry,
+                        visited,
+                    )
+                    mask = (1 << (8 * source.size)) - 1
+                    if result is None:
+                        if source.size != 1:
+                            return None
+                        values = frozenset(range(mask + 1))
+                        detail = "readable-byte=all-byte-values"
+                    else:
+                        values = frozenset(value & mask for value in result[0])
+                        detail = result[1]
+                    self._check_count("max_finite_values", len(values))
+                    return values, f"movzx-register-width={source.size};{detail}"
+                if source.type == X86_OP_MEM and source.size == 1:
+                    values = frozenset(range(0x100))
+                    self._check_count("max_finite_values", len(values))
+                    return values, "movzx-readable-byte=all-byte-values"
+                return None
+            if (
+                decoded.id == X86_INS_XOR
+                and len(operands) == 2
+                and operands[1].type == X86_OP_REG
+                and self._register_family(operands[1].reg) == register_family
+            ):
+                return frozenset({0}), "self-xor=0"
+
+        operation = decoded.mnemonic
+        if operation in {"inc", "dec"} and len(operands) == 1:
+            left = self._finite_register_values_before(
+                decoded.address,
+                register_family,
+                function_entry,
+                visited,
+            )
+            if left is None:
+                return None
+            delta = 1 if operation == "inc" else -1
+            values = frozenset(
+                (value + delta) & 0xFFFF_FFFF for value in left[0]
+            )
+            self._check_count("max_finite_values", len(values))
+            return values, f"{operation};{left[1]}"
+
+        if (
+            operation in {"add", "sub", "and", "or", "shl"}
+            and len(operands) == 2
+            and operands[0].type == X86_OP_REG
+            and self._register_family(operands[0].reg) == register_family
+        ):
+            left = self._finite_register_values_before(
+                decoded.address,
+                register_family,
+                function_entry,
+                visited,
+            )
+            right = self._finite_operand_values_before(
+                decoded.address,
+                operands[1],
+                function_entry,
+                visited,
+            )
+            if left is None or right is None:
+                return None
+
+            def combine(lhs: int, rhs: int) -> int:
+                if operation == "add":
+                    return (lhs + rhs) & 0xFFFF_FFFF
+                if operation == "sub":
+                    return (lhs - rhs) & 0xFFFF_FFFF
+                if operation == "and":
+                    return lhs & rhs
+                if operation == "or":
+                    return lhs | rhs
+                return (lhs << (rhs & 0x1F)) & 0xFFFF_FFFF
+
+            values = frozenset(
+                combine(lhs, rhs)
+                for lhs in left[0]
+                for rhs in right[0]
+            )
+            self._check_count("max_finite_values", len(values))
+            return values, f"{operation};left={left[1]};right={right[1]}"
+
+        if (
+            operation == "imul"
+            and len(operands) == 3
+            and operands[0].type == X86_OP_REG
+            and self._register_family(operands[0].reg) == register_family
+        ):
+            left = self._finite_operand_values_before(
+                decoded.address,
+                operands[1],
+                function_entry,
+                visited,
+            )
+            right = self._finite_operand_values_before(
+                decoded.address,
+                operands[2],
+                function_entry,
+                visited,
+            )
+            if left is None or right is None:
+                return None
+            values = frozenset(
+                (lhs * rhs) & 0xFFFF_FFFF
+                for lhs in left[0]
+                for rhs in right[0]
+            )
+            self._check_count("max_finite_values", len(values))
+            return values, f"imul;left={left[1]};right={right[1]}"
+        return None
+
+    def _bounded_unsigned_operand_interval_before(
+        self,
+        address: int,
+        operand,
+        function_entry: int,
+    ) -> tuple[int, int, str] | None:
+        """Evaluate a bounded scalar interval on paths reaching one use.
+
+        This intentionally small forward interpreter covers compiler-shaped
+        allocation-size arithmetic. Unknown joins, wraparound, calls, and
+        unsupported writes remain bottom.
+        """
+        if function_entry not in self.function_addresses:
+            return None
+        following_entry = self._following_function_entry(function_entry)
+        family_index = {
+            family: index for index, family in enumerate(_REGISTER_FAMILIES)
+        }
+        unknown_registers: tuple[tuple[int, int] | None, ...] = (None,) * len(
+            _REGISTER_FAMILIES
+        )
+        absolute_write_spans = []
+        for write_address, writers in self.absolute_memory_writes.items():
+            for writer in writers:
+                decoded = self._owned_decoded(writer)
+                absolute_write_spans.extend(
+                    (write_address, write_address + candidate.size)
+                    for candidate in decoded.operands
+                    if (
+                        candidate.type == X86_OP_MEM
+                        and candidate.size > 0
+                        and candidate.access & CS_AC_WRITE
+                        and self._absolute_memory_operand(candidate)
+                        == write_address
+                    )
+                )
+        absolute_write_overlap_index = _build_span_overlap_index(
+            absolute_write_spans
+        )
+        states: dict[
+            int,
+            tuple[
+                tuple[tuple[int, int] | None, ...],
+                int,
+                tuple[tuple[int, tuple[int, int]], ...],
+            ],
+        ] = {function_entry: (unknown_registers, 0, ())}
+        pending = [function_entry]
+        queued = {function_entry}
+        iterations = 0
+
+        def merge_interval(
+            left: tuple[int, int] | None,
+            right: tuple[int, int] | None,
+        ) -> tuple[int, int] | None:
+            if left is None or right is None:
+                return None
+            return min(left[0], right[0]), max(left[1], right[1])
+
+        def merge_state(left, right):
+            if left[1] != right[1]:
+                return None
+            registers = tuple(
+                merge_interval(lhs, rhs)
+                for lhs, rhs in zip(left[0], right[0], strict=True)
+            )
+            left_stack = dict(left[2])
+            right_stack = dict(right[2])
+            stack = {
+                offset: merged
+                for offset in left_stack.keys() & right_stack.keys()
+                if (
+                    merged := merge_interval(
+                        left_stack[offset],
+                        right_stack[offset],
+                    )
+                )
+                is not None
+            }
+            return registers, left[1], tuple(sorted(stack.items()))
+
+        def interval_values(interval):
+            if interval is None:
+                return None
+            low, high = interval
+            if (
+                high - low + 1
+                > self.limits.max_finite_values
+            ):
+                return None
+            return range(low, high + 1)
+
+        def memory_interval(row_address, memory, size, state):
+            registers, stack_delta, stack_rows = state
+            stack = dict(stack_rows)
+            if (
+                memory.segment != X86_REG_INVALID
+                or memory.index != X86_REG_INVALID
+            ):
+                return None
+            if memory.base != X86_REG_INVALID:
+                base_family = self._register_family(memory.base)
+                if base_family == "esp":
+                    logical = stack_delta + memory.disp
+                    if logical in stack:
+                        return stack[logical]
+                    if logical >= 4 and logical % 4 == 0:
+                        argument = self._finite_argument_values(
+                            function_entry,
+                            logical // 4 - 1,
+                            frozenset(),
+                        )
+                        if argument is not None and argument[0]:
+                            return min(argument[0]), max(argument[0])
+                    return None
+                base = registers[family_index[base_family]]
+                if base is None or base[0] != base[1]:
+                    return None
+                absolute = (base[0] + memory.disp) & 0xFFFF_FFFF
+            else:
+                absolute = memory.disp & 0xFFFF_FFFF
+            if (
+                size <= 0
+                or absolute + size > 0x1_0000_0000
+                or _span_overlap_index_contains(
+                    absolute_write_overlap_index,
+                    absolute,
+                    absolute + size,
+                )
+            ):
+                return None
+            try:
+                raw = _read_loader_initialized(self.image, absolute, size)
+            except ValueError:
+                return None
+            value = int.from_bytes(raw, "little")
+            return value, value
+
+        def operand_interval(row_address, candidate, state):
+            if candidate.type == X86_OP_IMM:
+                value = candidate.imm & 0xFFFF_FFFF
+                return value, value
+            if candidate.type == X86_OP_REG:
+                return state[0][
+                    family_index[self._register_family(candidate.reg)]
+                ]
+            if candidate.type == X86_OP_MEM:
+                return memory_interval(
+                    row_address,
+                    candidate.mem,
+                    candidate.size,
+                    state,
+                )
+            return None
+
+        def bounded_binary(operation, left, right):
+            if left is None or right is None:
+                return None
+            left_values = interval_values(left)
+            right_values = interval_values(right)
+            if left_values is None or right_values is None:
+                return None
+            if (
+                len(left_values) * len(right_values)
+                > self.limits.max_finite_values
+            ):
+                return None
+            values = []
+            for lhs in left_values:
+                for rhs in right_values:
+                    if operation == "add":
+                        value = lhs + rhs
+                    elif operation == "sub":
+                        if rhs > lhs:
+                            return None
+                        value = lhs - rhs
+                    elif operation == "imul":
+                        value = lhs * rhs
+                    elif operation == "shl":
+                        value = lhs << (rhs & 0x1F)
+                    elif operation == "and":
+                        value = lhs & rhs
+                    else:
+                        return None
+                    if not 0 <= value <= 0xFFFF_FFFF:
+                        return None
+                    values.append(value)
+            if not values:
+                return None
+            return min(values), max(values)
+
+        def branch_successors(decoded, state):
+            successors = tuple(
+                successor
+                for successor in self._summary_successors(
+                    decoded.address,
+                    function_entry,
+                    following_entry,
+                )
+                if successor == address
+                or self._reachable_within_function(
+                    successor,
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+            )
+            if decoded.mnemonic not in {"je", "jz", "jne", "jnz"}:
+                return successors
+            previous = self._previous_instruction(decoded.address)
+            zero = None
+            if previous is not None:
+                condition = self._owned_decoded(previous.address)
+                if condition.mnemonic == "cmp" and len(condition.operands) == 2:
+                    left = operand_interval(
+                        condition.address,
+                        condition.operands[0],
+                        state,
+                    )
+                    right = operand_interval(
+                        condition.address,
+                        condition.operands[1],
+                        state,
+                    )
+                    if (
+                        left is not None
+                        and right is not None
+                        and left[0] == left[1]
+                        and right[0] == right[1]
+                    ):
+                        zero = left[0] == right[0]
+                elif (
+                    condition.mnemonic in {"and", "test"}
+                    and condition.operands
+                ):
+                    tested = operand_interval(
+                        decoded.address,
+                        condition.operands[0],
+                        state,
+                    )
+                    if tested is not None and tested[0] == tested[1]:
+                        zero = tested[0] == 0
+            if zero is None:
+                return successors
+            branch_taken = (
+                zero
+                if decoded.mnemonic in {"je", "jz"}
+                else not zero
+            )
+            target = self._direct_target(decoded)
+            selected = (
+                target
+                if branch_taken
+                else decoded.address + decoded.size
+            )
+            return (selected,) if selected in successors else ()
+
+        while pending:
+            current = heapq.heappop(pending)
+            queued.remove(current)
+            if current not in self.instructions:
+                return None
+            incoming = states[current]
+            if current == address:
+                iterations += 1
+                self.limits.check("max_summary_iterations", iterations)
+                continue
+            decoded = self._owned_decoded(current)
+            registers = list(incoming[0])
+            stack_delta = incoming[1]
+            stack = dict(incoming[2])
+            handled_families: set[str] = set()
+            operands = decoded.operands
+
+            if decoded.mnemonic == "push" and len(operands) == 1:
+                stack_delta -= 4
+                pushed = operand_interval(current, operands[0], incoming)
+                if pushed is None:
+                    stack.pop(stack_delta, None)
+                else:
+                    stack[stack_delta] = pushed
+            elif decoded.mnemonic == "pop" and len(operands) == 1:
+                if operands[0].type == X86_OP_REG:
+                    family = self._register_family(operands[0].reg)
+                    registers[family_index[family]] = stack.get(stack_delta)
+                    handled_families.add(family)
+                stack.pop(stack_delta, None)
+                stack_delta += 4
+            elif (
+                decoded.mnemonic in {"add", "sub"}
+                and len(operands) == 2
+                and operands[0].type == X86_OP_REG
+                and self._register_family(operands[0].reg) == "esp"
+                and operands[1].type == X86_OP_IMM
+            ):
+                amount = operands[1].imm & 0xFFFF_FFFF
+                stack_delta += amount if decoded.mnemonic == "add" else -amount
+                handled_families.add("esp")
+            elif decoded.id == X86_INS_MOV and len(operands) == 2:
+                destination, source = operands
+                if destination.type == X86_OP_REG:
+                    family = self._register_family(destination.reg)
+                    registers[family_index[family]] = (
+                        operand_interval(
+                            current,
+                            source,
+                            incoming,
+                        )
+                        if destination.size == 4
+                        else None
+                    )
+                    handled_families.add(family)
+                elif (
+                    destination.type == X86_OP_MEM
+                    and destination.size == 4
+                    and destination.mem.segment == X86_REG_INVALID
+                    and destination.mem.index == X86_REG_INVALID
+                    and destination.mem.base != X86_REG_INVALID
+                    and self._register_family(destination.mem.base) == "esp"
+                ):
+                    logical = stack_delta + destination.mem.disp
+                    value = operand_interval(current, source, incoming)
+                    if value is None:
+                        stack.pop(logical, None)
+                    else:
+                        stack[logical] = value
+            elif (
+                decoded.mnemonic in {"movzx", "movsx"}
+                and len(operands) == 2
+                and operands[0].type == X86_OP_REG
+            ):
+                family = self._register_family(operands[0].reg)
+                source = operand_interval(current, operands[1], incoming)
+                width = 8 * operands[1].size
+                if source is None:
+                    source = (0, (1 << width) - 1)
+                if decoded.mnemonic == "movzx":
+                    mask = (1 << width) - 1
+                    result = (
+                        0 if source[0] != source[1] else source[0] & mask,
+                        mask if source[0] != source[1] else source[0] & mask,
+                    )
+                elif source[0] == source[1]:
+                    value = source[0] & ((1 << width) - 1)
+                    if value & (1 << (width - 1)):
+                        value -= 1 << width
+                    result = (
+                        None
+                        if value < 0
+                        else (value, value)
+                    )
+                else:
+                    result = None
+                registers[family_index[family]] = result
+                handled_families.add(family)
+            elif (
+                decoded.id == X86_INS_XOR
+                and len(operands) == 2
+                and all(operand.type == X86_OP_REG for operand in operands)
+                and all(operand.size == 4 for operand in operands)
+                and self._register_family(operands[0].reg)
+                == self._register_family(operands[1].reg)
+            ):
+                family = self._register_family(operands[0].reg)
+                registers[family_index[family]] = (0, 0)
+                handled_families.add(family)
+            elif (
+                decoded.mnemonic in {"inc", "dec"}
+                and len(operands) == 1
+                and operands[0].type == X86_OP_REG
+                and operands[0].size == 4
+            ):
+                family = self._register_family(operands[0].reg)
+                prior = incoming[0][family_index[family]]
+                delta = (1, 1)
+                registers[family_index[family]] = bounded_binary(
+                    "add" if decoded.mnemonic == "inc" else "sub",
+                    prior,
+                    delta,
+                )
+                handled_families.add(family)
+            elif (
+                decoded.mnemonic in {"add", "sub", "and", "shl"}
+                and len(operands) == 2
+                and operands[0].type == X86_OP_REG
+                and operands[0].size == 4
+            ):
+                family = self._register_family(operands[0].reg)
+                registers[family_index[family]] = bounded_binary(
+                    decoded.mnemonic,
+                    incoming[0][family_index[family]],
+                    operand_interval(current, operands[1], incoming),
+                )
+                handled_families.add(family)
+            elif (
+                decoded.mnemonic == "imul"
+                and len(operands) == 3
+                and operands[0].type == X86_OP_REG
+                and operands[0].size == 4
+            ):
+                family = self._register_family(operands[0].reg)
+                registers[family_index[family]] = bounded_binary(
+                    "imul",
+                    operand_interval(current, operands[1], incoming),
+                    operand_interval(current, operands[2], incoming),
+                )
+                handled_families.add(family)
+
+            written_families = {
+                self._register_family(register)
+                for register in decoded.regs_write
+            } | {
+                self._register_family(candidate.reg)
+                for candidate in operands
+                if (
+                    candidate.type == X86_OP_REG
+                    and candidate.access & CS_AC_WRITE
+                )
+            }
+            for family in (
+                written_families
+                - handled_families
+                - {"esp"}
+            ) & family_index.keys():
+                registers[family_index[family]] = None
+            if decoded.group(CS_GRP_CALL):
+                return None
+
+            output = (
+                tuple(registers),
+                stack_delta,
+                tuple(sorted(stack.items())),
+            )
+            successors = branch_successors(decoded, incoming)
+            for successor in successors:
+                if not function_entry <= successor < following_entry:
+                    continue
+                prior = states.get(successor)
+                updated = output if prior is None else merge_state(prior, output)
+                if updated is None:
+                    return None
+                if prior == updated:
+                    continue
+                states[successor] = updated
+                if successor not in queued:
+                    heapq.heappush(pending, successor)
+                    queued.add(successor)
+            iterations += 1
+            self.limits.check("max_summary_iterations", iterations)
+
+        state = states.get(address)
+        if state is None:
+            return None
+        result = operand_interval(address, operand, state)
+        if result is None or result[1] > 0x1000_0000:
+            return None
+        return (
+            result[0],
+            result[1],
+            f"bounded-unsigned-interval={result[0]:#x}..{result[1]:#x}",
         )
 
     def _finite_register_values_before(
@@ -22570,12 +23795,13 @@ class _DirectCfgRecovery:
                 for row in decoded.operands
             )
             if writes_family:
-                if (
-                    decoded.id in {X86_INS_MOV, X86_INS_LEA}
-                    and len(decoded.operands) == 2
-                    and decoded.operands[0].type == X86_OP_REG
-                    and self._register_family(decoded.operands[0].reg) == register_family
-                ):
+                result = self._finite_register_definition_values(
+                    decoded,
+                    register_family,
+                    function_entry,
+                    visited | {key},
+                )
+                if result is not None:
                     if self._loop_can_bypass_register_definition(
                         address,
                         previous.address,
@@ -22587,15 +23813,6 @@ class _DirectCfgRecovery:
                         )
                         if affine_loop:
                             return affine_values
-                    result = self._finite_operand_values_before(
-                        previous.address,
-                        decoded.operands[1],
-                        function_entry,
-                        visited | {key},
-                        lea=decoded.id == X86_INS_LEA,
-                    )
-                    if result is None:
-                        return None
                     values, detail = result
                     return (
                         values,
