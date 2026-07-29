@@ -52,6 +52,14 @@ candidates partitioned.
   green.  Exact-state hydration now also resolves the recursive callback calls
   at `0x44c96e` and `0x44c9db`, for six locally demonstrated blocker closures
   total before replay.
+- A stack-local callback proof now accepts only one exact four-byte write that
+  dominates the indirect transfer, rejects bypasses, intervening calls,
+  overlapping pushes/writes, and possible pointer aliases, and requires every
+  loop re-entry to pass through the write again.  Positive and hostile tests
+  are green.  Exact-state hydration proves the saved callback at `0x4d1bba`
+  has the finite domain `{0}`; its dominating nonzero guard therefore makes
+  the transfer unreachable.  This raises the locally demonstrated exact
+  blocker closures to seven before replay.
 - The fourth exact continuation completed 128 queries in 3,232.45 seconds at
   5.27 GB maximum RSS with no swap, then exposed a further 24-query wave.
 - The retained finite-control indexes advanced the same 420-second profiled
@@ -137,8 +145,8 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 952 passed.
-- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,079 passed.
+- `test_retro_x86_cfg.py`: 955 passed.
+- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,082 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
 - Task 8 focused/adjacent suites: 184 / 533 passed.

@@ -15069,6 +15069,119 @@ def test_cdecl_argument_is_recovered_from_entry_relative_esp(tmp_path):
     assert "stack-argument=0" in edge.provenance
 
 
+def stack_local_callback_image(*, bypass_store=False, alias_clobber=False):
+    text_va = 0x00401000
+    callback = text_va + 0x40
+    data = bytearray(b"\xcc" * 0x80)
+    cursor = 0
+
+    def emit(encoded):
+        nonlocal cursor
+        encoded = bytes.fromhex(encoded)
+        data[cursor : cursor + len(encoded)] = encoded
+        cursor += len(encoded)
+
+    emit("83 ec 08")
+    bypass_branch = None
+    if bypass_store:
+        emit("85 c0")
+        bypass_branch = cursor
+        emit("74 00")
+    store = cursor
+    emit("c7 44 24 04 " + callback.to_bytes(4, "little").hex())
+    if alias_clobber:
+        emit("89 08")
+    compare = cursor
+    emit("83 7c 24 04 00")
+    zero_branch = cursor
+    emit("74 00")
+    emit("6a 01")
+    transfer = text_va + cursor
+    emit("ff 54 24 08")
+    emit("83 c4 0c")
+    cleanup = cursor
+    emit("c3")
+    data[zero_branch + 1] = cleanup - (zero_branch + 2)
+    if bypass_branch is not None:
+        data[bypass_branch + 1] = compare - (bypass_branch + 2)
+    data[callback - text_va] = 0xC3
+    image = pe.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(pe.Relocation(text_va + store + 4, 3),),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+    return image, transfer, callback
+
+
+def test_dominating_stack_local_store_closes_callback_target():
+    image, transfer, callback = stack_local_callback_image()
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    edge = next(
+        row
+        for row in cfg.control_targets.finite_internal_edges
+        if row.source == transfer
+        and row.flow_kind == "indirect-call-finite-value"
+    )
+    assert edge.target == callback
+    assert "stack-local-must-write=" in edge.provenance
+
+
+def test_bypassable_stack_local_store_keeps_callback_unresolved():
+    image, transfer, _callback = stack_local_callback_image(
+        bypass_store=True
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert any(
+        row.address == transfer and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
+def test_potential_alias_after_stack_local_store_keeps_callback_unresolved():
+    image, transfer, _callback = stack_local_callback_image(
+        alias_clobber=True
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert any(
+        row.address == transfer and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+
+
 def test_dominating_equal_guard_closes_callback_argument(tmp_path):
     cfg = dispatch_cfg(tmp_path, mode="guarded-equal-callback")
     edge = next(

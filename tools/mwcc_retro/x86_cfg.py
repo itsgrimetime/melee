@@ -21775,6 +21775,20 @@ class _DirectCfgRecovery:
                             values,
                             f"stack-argument={argument_index};{detail}",
                         )
+        if (
+            logical_offset is not None
+            and logical_offset < 0
+            and stack_states is not None
+        ):
+            local_result = self._finite_dominating_stack_local_write(
+                address,
+                logical_offset,
+                function_entry,
+                stack_states,
+                visited | {key},
+            )
+            if local_result is not None:
+                return local_result
         if argument_result is not None and stack_states is not None:
             following_entry = min(
                 (row for row in self.function_addresses if row > function_entry),
@@ -21906,6 +21920,162 @@ class _DirectCfgRecovery:
                 return argument_result
             cursor = previous.address
         return argument_result
+
+    def _finite_dominating_stack_local_write(
+        self,
+        address: int,
+        logical_offset: int,
+        function_entry: int,
+        stack_states: dict[int, tuple[int, int | None]],
+        visited: frozenset[tuple[int, str]],
+    ) -> tuple[frozenset[int], str] | None:
+        following_entry = self._following_function_entry(function_entry)
+        target_start = logical_offset
+        target_end = logical_offset + 4
+        function_addresses = self._function_instruction_addresses(function_entry)
+        exact_writes = []
+        for candidate in function_addresses:
+            if (
+                candidate == address
+                or candidate not in stack_states
+                or not self._reachable_within_function(
+                    function_entry,
+                    candidate,
+                    function_entry,
+                    following_entry,
+                )
+                or not self._reachable_within_function(
+                    candidate,
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+            ):
+                continue
+            decoded = self._owned_decoded(candidate)
+            if decoded.id != X86_INS_MOV or len(decoded.operands) != 2:
+                continue
+            destination = decoded.operands[0]
+            if (
+                destination.type != X86_OP_MEM
+                or destination.size != 4
+                or destination.mem.segment != X86_REG_INVALID
+                or destination.mem.index != X86_REG_INVALID
+                or destination.mem.base == X86_REG_INVALID
+            ):
+                continue
+            base_family = self._register_family(destination.mem.base)
+            if base_family not in {"esp", "ebp"}:
+                continue
+            state = stack_states[candidate]
+            base_delta = state[0] if base_family == "esp" else state[1]
+            if (
+                base_delta is None
+                or base_delta + destination.mem.disp != target_start
+                or self._reachable_within_function(
+                    function_entry,
+                    address,
+                    function_entry,
+                    following_entry,
+                    excluded=candidate,
+                )
+            ):
+                continue
+            exact_writes.append(decoded)
+        if len(exact_writes) != 1:
+            return None
+        write = exact_writes[0]
+        if any(
+            self._reachable_within_function(
+                successor,
+                address,
+                function_entry,
+                following_entry,
+                excluded=write.address,
+            )
+            for successor in self._summary_successors(
+                address,
+                function_entry,
+                following_entry,
+            )
+        ):
+            return None
+
+        for candidate in function_addresses:
+            if candidate in {write.address, address}:
+                continue
+            if (
+                not self._reachable_within_function(
+                    write.address,
+                    candidate,
+                    function_entry,
+                    following_entry,
+                    excluded=address,
+                )
+                or not self._reachable_within_function(
+                    candidate,
+                    address,
+                    function_entry,
+                    following_entry,
+                    excluded=write.address,
+                )
+            ):
+                continue
+            decoded = self._owned_decoded(candidate)
+            if decoded.group(CS_GRP_CALL):
+                return None
+            state = stack_states.get(candidate)
+            if decoded.mnemonic == "push":
+                if state is None:
+                    return None
+                push_start = state[0] - 4
+                if push_start < target_end and target_start < push_start + 4:
+                    return None
+            for operand in decoded.operands:
+                if (
+                    operand.type != X86_OP_MEM
+                    or not operand.access & CS_AC_WRITE
+                ):
+                    continue
+                if (
+                    operand.mem.segment == X86_REG_INVALID
+                    and operand.mem.base == X86_REG_INVALID
+                    and operand.mem.index == X86_REG_INVALID
+                ):
+                    continue
+                if (
+                    operand.mem.segment != X86_REG_INVALID
+                    or operand.mem.index != X86_REG_INVALID
+                    or operand.mem.base == X86_REG_INVALID
+                ):
+                    return None
+                base_family = self._register_family(operand.mem.base)
+                if base_family not in {"esp", "ebp"}:
+                    return None
+                if state is None:
+                    return None
+                base_delta = state[0] if base_family == "esp" else state[1]
+                if base_delta is None:
+                    return None
+                write_start = base_delta + operand.mem.disp
+                write_end = write_start + operand.size
+                if write_start < target_end and target_start < write_end:
+                    return None
+
+        result = self._finite_operand_values_before(
+            write.address,
+            write.operands[1],
+            function_entry,
+            visited,
+        )
+        if result is None:
+            return None
+        values, detail = result
+        return (
+            values,
+            f"stack-local-must-write={write.address:#x};"
+            f"logical-stack={logical_offset:+#x};{detail}",
+        )
 
     def _finite_call_output_to_stack(
         self,
