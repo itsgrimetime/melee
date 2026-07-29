@@ -1,12 +1,13 @@
 # Issue #1240 Progress Ledger
 
-Last reconciled: 2026-07-16, replacement root orchestration.
+Last reconciled: 2026-07-28, replacement root orchestration.
 
 ## Durable foundation
 
 - Tasks 1-3 remain complete at `ea3d1ca65..660606143`.
 - Branch: `codex/issue-1240-retail-pcode-proof`.
-- Current committed head: `1de0a5216`.
+- Current committed foundation: `921a19d7c`, plus the verified
+  finite-control optimization checkpoint.
 - The installed `gc_125n.json` PCode instrumentation gate is still disabled and
   the exact proof registry is still empty, as required before promotion.
 
@@ -23,11 +24,17 @@ candidates partitioned.
   29-entry callback table at `0x54d050`, 19 object calls, and 3 stream calls all
   have finite targets with zero blockers.
 - Movzx producer-domain family: implementation/tests and quiescent fixed-point
-  regression are green; the authoritative optimized exact replay is running.
+  regression are green; 1,168 durable producer certificates have been
+  checkpointed and the authoritative optimized exact replay is continuing.
 - Remaining families after those two close: global-stack, constructor,
   nested-descriptor, helper-return, and linked-list targets.
-- Full `test_retro_x86_cfg.py`: 435 passed after separating semantic-reference
-  coverage from read-derived data ownership evidence.
+- Full `test_retro_x86_cfg.py`: 945 passed. The adjacent Task 4 performance
+  slice is 1,072 passed with scoped static gates green.
+- The fourth exact continuation completed 128 queries in 3,232.45 seconds at
+  5.27 GB maximum RSS with no swap, then exposed a further 24-query wave.
+- The retained finite-control indexes advanced the same 420-second profiled
+  workload from pass 18 to pass 27. An unsafe partial stack-state cache was
+  found by the full suite and removed before checkpointing.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published
@@ -93,7 +100,8 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 435 passed.
+- `test_retro_x86_cfg.py`: 945 passed.
+- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,072 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
 - Task 8 focused/adjacent suites: 184 / 533 passed.

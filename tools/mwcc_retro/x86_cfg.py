@@ -2226,6 +2226,9 @@ class _DirectCfgRecovery:
         self.intrusive_list_insert_cache: dict[
             tuple[int, tuple[int, ...], int], tuple[int, int] | None
         ] = {}
+        self.intrusive_list_link_store_cache: dict[
+            tuple[int, tuple[int, ...], int], bool
+        ] = {}
         self.global_list_field_cache: dict[
             tuple[int, int, int, int, tuple[int, ...], int], bool
         ] = {}
@@ -2236,6 +2239,10 @@ class _DirectCfgRecovery:
         self.function_address_index_revision: tuple[int, int] | None = None
         self.sorted_instruction_addresses: tuple[int, ...] = ()
         self.sorted_function_addresses: tuple[int, ...] = ()
+        self.stack_call_dependency_prefix_cache: dict[
+            tuple[int, tuple[int, ...], int],
+            tuple[tuple[int, ...], tuple[frozenset[int], ...]],
+        ] = {}
         self.global_stack_field_cache: dict[tuple[Any, ...], _DependencyMemoEntry] = {}
         self.zero_fill_function_cache: dict[tuple[Any, ...], bool] = {}
         self.relative_pointer_state_cache: dict[tuple[Any, ...], Any] = {}
@@ -21194,13 +21201,35 @@ class _DirectCfgRecovery:
         """Bind stack-state proofs to finite callees crossed before a use."""
         if not self.producer_dependency_collectors:
             return
-        for call_address in self._function_instruction_addresses(function_entry):
-            if call_address >= address:
-                break
-            if not self._owned_decoded(call_address).group(CS_GRP_CALL):
-                continue
-            for target in self.call_targets_by_source.get(call_address, ()):
-                self._note_producer_dependency(target)
+        cache_key = (
+            function_entry,
+            self._summary_fact_signature(),
+            self.control_flow_revision,
+        )
+        cached = self.stack_call_dependency_prefix_cache.get(cache_key)
+        if cached is None:
+            call_addresses = []
+            dependencies = set()
+            dependency_prefixes = [frozenset()]
+            for candidate in self._function_instruction_addresses(
+                function_entry
+            ):
+                if not self._owned_decoded(candidate).group(CS_GRP_CALL):
+                    continue
+                call_addresses.append(candidate)
+                dependencies.update(
+                    self.call_targets_by_source.get(candidate, ())
+                )
+                dependency_prefixes.append(frozenset(dependencies))
+            cached = (
+                tuple(call_addresses),
+                tuple(dependency_prefixes),
+            )
+            self.stack_call_dependency_prefix_cache[cache_key] = cached
+        call_addresses, dependency_prefixes = cached
+        prefix_index = bisect_left(call_addresses, address)
+        for target in dependency_prefixes[prefix_index]:
+            self._note_producer_dependency(target)
 
     def _stack_argument_index_at(self, address: int, operand, function_entry: int) -> int | None:
         if (
@@ -29433,7 +29462,10 @@ class _DirectCfgRecovery:
             self._summary_fact_signature(),
             self.control_flow_revision,
         )
-        if not active and cache_key in self.intrusive_list_insert_cache:
+        if (
+            function_entry not in active
+            and cache_key in self.intrusive_list_insert_cache
+        ):
             return self.intrusive_list_insert_cache[cache_key]
         if function_entry in active or function_entry not in self.function_addresses:
             return None
@@ -29442,9 +29474,28 @@ class _DirectCfgRecovery:
             (row for row in self.function_addresses if row > function_entry),
             default=0x1_0000_0000,
         )
+        if cache_key not in self.intrusive_list_link_store_cache:
+            self.intrusive_list_link_store_cache[cache_key] = any(
+                decoded.id == X86_INS_MOV
+                and len(decoded.operands) == 2
+                and decoded.operands[0].type == X86_OP_MEM
+                and decoded.operands[0].mem.segment == X86_REG_INVALID
+                and decoded.operands[0].mem.base != X86_REG_INVALID
+                and decoded.operands[0].mem.index == X86_REG_INVALID
+                and decoded.operands[0].mem.disp == 0
+                for address in self._function_instruction_addresses(
+                    function_entry
+                )
+                for decoded in (self._owned_decoded(address),)
+            )
+        list_arguments = (
+            range(4)
+            if self.intrusive_list_link_store_cache[cache_key]
+            else ()
+        )
         direct_candidates = []
         # Domain bits: 1=cursor, 2=node argument, 4=existing/null, 8=unknown.
-        for list_argument in range(4):
+        for list_argument in list_arguments:
             for node_argument in range(4):
                 if list_argument == node_argument:
                     continue
@@ -32180,23 +32231,51 @@ class _DirectCfgRecovery:
             (row for row in self.function_addresses if row > function_entry),
             default=0x1_0000_0000,
         )
+        function_addresses = self._function_instruction_addresses(
+            function_entry
+        )
+        successors_by_address = {
+            address: self._summary_successors(
+                address,
+                function_entry,
+                following_entry,
+            )
+            for address in function_addresses
+        }
+        predecessors_by_address: dict[int, set[int]] = {}
+        for source, successors in successors_by_address.items():
+            for target in successors:
+                predecessors_by_address.setdefault(target, set()).add(source)
+
+        def reachable_region(
+            start: int,
+            adjacency: dict[int, tuple[int, ...]] | dict[int, set[int]],
+        ) -> frozenset[int]:
+            pending = [start]
+            visited = set()
+            while pending:
+                current = heapq.heappop(pending)
+                if current in visited:
+                    continue
+                visited.add(current)
+                self.limits.check("max_summary_iterations", len(visited))
+                for successor in adjacency.get(current, ()):
+                    if successor not in visited:
+                        heapq.heappush(pending, successor)
+            return frozenset(visited)
+
+        entry_reachable = reachable_region(
+            function_entry,
+            successors_by_address,
+        )
+        reaches_load = reachable_region(
+            load_address,
+            predecessors_by_address,
+        )
 
         writes = []
-        for address in self._function_instruction_addresses(function_entry):
-            if not (
-                self._reachable_within_function(
-                    function_entry,
-                    address,
-                    function_entry,
-                    following_entry,
-                )
-                and self._reachable_within_function(
-                    address,
-                    load_address,
-                    function_entry,
-                    following_entry,
-                )
-            ):
+        for address in function_addresses:
+            if address not in entry_reachable or address not in reaches_load:
                 continue
             decoded = self._owned_decoded(address)
             for destination in decoded.operands:
@@ -32232,20 +32311,15 @@ class _DirectCfgRecovery:
         ):
             return None
 
-        for address in self._function_instruction_addresses(function_entry):
-            if address == store.address or not (
-                self._reachable_within_function(
-                    function_entry,
-                    address,
-                    function_entry,
-                    following_entry,
-                )
-                and self._reachable_within_function(
-                    address,
-                    store.address,
-                    function_entry,
-                    following_entry,
-                )
+        reaches_store = reachable_region(
+            store.address,
+            predecessors_by_address,
+        )
+        for address in function_addresses:
+            if (
+                address == store.address
+                or address not in entry_reachable
+                or address not in reaches_store
             ):
                 continue
             decoded = self._owned_decoded(address)
@@ -32259,20 +32333,15 @@ class _DirectCfgRecovery:
             ):
                 return None
 
+        store_reachable = reachable_region(
+            store.address,
+            successors_by_address,
+        )
         for call in self.direct_calls:
-            if not store.address < call.address < load_address or not (
-                self._reachable_within_function(
-                    store.address,
-                    call.address,
-                    function_entry,
-                    following_entry,
-                )
-                and self._reachable_within_function(
-                    call.address,
-                    load_address,
-                    function_entry,
-                    following_entry,
-                )
+            if (
+                not store.address < call.address < load_address
+                or call.address not in store_reachable
+                or call.address not in reaches_load
             ):
                 continue
             for argument_index in range(8):

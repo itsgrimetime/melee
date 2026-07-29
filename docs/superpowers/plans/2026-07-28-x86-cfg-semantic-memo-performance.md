@@ -686,7 +686,7 @@ git commit -m "perf(mwcc-retro): share restartable semantic memo state"
 - Consumes: production pooled/persistent memo store
 - Produces: benchmark evidence, exact focused-query result, and a go/no-go decision for any secondary optimization
 
-- [ ] **Step 1: Run the full focused correctness suite**
+- [x] **Step 1: Run the full focused correctness suite**
 
 ```bash
 cd tools/melee-agent
@@ -702,7 +702,9 @@ cd ../..
 
 Expected: all tests PASS.
 
-- [ ] **Step 2: Run all static gates**
+Result after the finite-control optimization checkpoint: 1,072 passed.
+
+- [x] **Step 2: Run all static gates**
 
 ```bash
 python -m ruff check \
@@ -779,6 +781,14 @@ Also replace the measured quadratic relocated-dispatch write-overlap scan with
 an exact prefix-maximum interval index; the production pass spent 374 seconds
 testing 20,925 tentative slots and accepted none.
 
+The next bounded profile isolated repeated finite-control graph traversals.
+Batch saved-receiver reachability, cache completed intrusive-list proofs outside
+their own active recursion, prefilter functions without the necessary
+intrusive link store, and index stack call-dependency prefixes. These exact
+changes advanced the same 420-second workload from pass 18 to pass 27. A
+smaller attempted partial stack-state cache was removed after the full CFG
+suite exposed a stale semantic-closure result.
+
 - [ ] **Step 7: Run exact Task 4 closure twice** (in progress)
 
 Use the ordinary branch-local `probe-backend-map --static-only` workflow and
@@ -791,6 +801,12 @@ byte-for-byte and require:
 - accepted residue reconciliation;
 - exact `formatoperands` dispatch invariants;
 - identical canonical output members and manifest digests.
+
+The fourth resumable production process completed 128 atomically checkpointed
+queries in 3,232.45 seconds with a 5.27 GB maximum resident set and no swap.
+That batch crossed multiple fixed-point waves but correctly exited incomplete
+with 24 newly exposed queries. The next continuation measures the retained
+finite-control indexes without profiler overhead.
 
 - [ ] **Step 8: Push the optimization checkpoints**
 

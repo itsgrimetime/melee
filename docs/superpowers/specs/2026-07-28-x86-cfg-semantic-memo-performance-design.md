@@ -204,6 +204,33 @@ then one binary search plus one integer comparison. Half-open interval
 semantics, global-slot treatment, operand filtering, candidate ordering, caps,
 and all accepted or rejected hypotheses remain unchanged.
 
+### Finite-control query indexes
+
+A bounded 420-second `cProfile` sample of the resumed production workload
+showed that the remaining runtime was dominated by repeated whole-function
+graph traversals inside finite-control semantic queries. Four exact
+optimizations were retained:
+
+- compute the forward and reverse reachability regions once when proving a
+  saved constructor receiver instead of issuing one reachability search per
+  instruction;
+- reuse a completed intrusive-list proof from unrelated recursive contexts,
+  while never bypassing a cycle containing the queried function;
+- skip the direct intrusive-list dataflow matrix when the function contains no
+  instruction with the necessary exact link-store shape, while preserving
+  wrapper analysis;
+- index the cumulative direct-call dependency prefix once per exact
+  function/fact/revision key instead of rescanning the function for every stack
+  dependency query.
+
+The same 420-second sample advanced from pass 18 to pass 27 after these
+changes. The saved-receiver helper fell from 126.55 seconds to 4.91 seconds,
+and stack call-dependency collection fell from 45.6 seconds to 3.0 seconds.
+An attempted cache for stack-state graphs stopped at semantically open calls
+was rejected: the complete x86 CFG suite demonstrated that call closure can
+change without the proposed structural cache key changing. The original
+fail-safe behavior remains.
+
 ## Correctness Invariants
 
 - Cache-disabled, cold-cache, warm-cache, and evicted-cache runs return equal

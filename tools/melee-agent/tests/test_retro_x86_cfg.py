@@ -16435,6 +16435,75 @@ def test_recursive_list_query_does_not_poison_later_field_proof(tmp_path):
     )
 
 
+def test_intrusive_list_insert_cache_reuses_proof_in_unrelated_recursion(
+    tmp_path,
+    monkeypatch,
+):
+    image = load_dispatch_image(
+        tmp_path,
+        mode="copied-descriptor-field-list-returned-object",
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.intrusive_list_insert_cache.clear()
+    successor_queries = []
+    original = recovery._summary_successors
+
+    def count_successors(*args, **kwargs):
+        successor_queries.append(args[0])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        recovery,
+        "_summary_successors",
+        count_successors,
+    )
+
+    first = recovery._intrusive_list_insert_arguments(0x00401180)
+    first_query_count = len(successor_queries)
+    second = recovery._intrusive_list_insert_arguments(
+        0x00401180,
+        frozenset({0xDEAD}),
+    )
+
+    assert first == second == (0, 1)
+    assert first_query_count
+    assert len(successor_queries) == first_query_count
+
+
+def test_intrusive_list_insert_skips_dataflow_without_link_store(
+    monkeypatch,
+):
+    image = incoming_ecx_use_image(clear_first=False)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.intrusive_list_insert_cache.clear()
+
+    def reject_dataflow(*_args, **_kwargs):
+        raise AssertionError(
+            "non-writer function entered intrusive-list dataflow"
+        )
+
+    monkeypatch.setattr(
+        recovery,
+        "_summary_successors",
+        reject_dataflow,
+    )
+
+    assert (
+        recovery._intrusive_list_insert_arguments(image.entrypoint)
+        is None
+    )
+
+
 def test_field_origin_rejects_unknown_intrusive_list_insertion(tmp_path):
     cfg = dispatch_cfg(
         tmp_path,
@@ -17046,6 +17115,48 @@ def test_no_caller_object_callback_requires_constructed_receiver_invariant(tmp_p
     )
 
 
+def test_saved_constructor_receiver_batches_reachability_queries(
+    tmp_path,
+    monkeypatch,
+):
+    image = object_callback_back_reference_image(
+        tmp_path,
+        mutation="saved-constructor-receiver",
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(
+            image,
+            (
+                audit_anchor(image, 0x00401200),
+                audit_anchor(image, 0x004012C0),
+            ),
+        ),
+        generous_limits(image),
+    )
+    recovery.recover()
+    load = recovery._owned_decoded(0x0040128B)
+    reachability_queries = []
+    original = recovery._reachable_within_function
+
+    def count_reachability(*args, **kwargs):
+        reachability_queries.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        recovery,
+        "_reachable_within_function",
+        count_reachability,
+    )
+
+    assert recovery._stack_slot_incoming_ecx_identity(
+        load.address,
+        load.operands[1],
+        0x00401280,
+    ) == _AbstractObjectIdentity("argument", 0)
+    assert len(reachability_queries) <= 1
+
+
 def test_local_back_reference_survives_intervening_descriptor_call():
     image = intervening_descriptor_call_back_reference_image()
     anchors = tuple(audit_anchor(image, address) for address in (0x00401000, 0x00401100, 0x00401120, 0x00401140))
@@ -17084,6 +17195,66 @@ def test_local_back_reference_rejects_nested_clobber_in_descriptor_call():
         4,
         0,
     )
+
+
+def test_stack_call_dependencies_reuse_function_call_index(
+    monkeypatch,
+):
+    image = intervening_descriptor_call_back_reference_image()
+    anchors = tuple(
+        audit_anchor(image, address)
+        for address in (
+            0x00401000,
+            0x00401100,
+            0x00401120,
+            0x00401140,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, anchors),
+        generous_limits(image),
+    )
+    recovery.recover()
+    first_dependencies = set()
+    recovery.producer_dependency_collectors.append(first_dependencies)
+    try:
+        recovery._note_stack_call_dependencies_before(
+            0x00401014,
+            0x00401000,
+        )
+    finally:
+        assert (
+            recovery.producer_dependency_collectors.pop()
+            is first_dependencies
+        )
+
+    def reject_rescan(*_args, **_kwargs):
+        raise AssertionError("stack dependency query rescanned function")
+
+    monkeypatch.setattr(
+        recovery,
+        "_function_instruction_addresses",
+        reject_rescan,
+    )
+    second_dependencies = set()
+    recovery.producer_dependency_collectors.append(second_dependencies)
+    try:
+        recovery._note_stack_call_dependencies_before(
+            0x00401014,
+            0x00401000,
+        )
+    finally:
+        assert (
+            recovery.producer_dependency_collectors.pop()
+            is second_dependencies
+        )
+
+    assert first_dependencies == second_dependencies
+    assert {
+        ("function", 0x00401100),
+        ("function", 0x00401120),
+    } <= first_dependencies
 
 
 @pytest.mark.parametrize(
