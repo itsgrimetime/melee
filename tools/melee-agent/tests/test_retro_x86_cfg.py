@@ -208,9 +208,16 @@ def nested_global_stack_callback_image(
     *,
     field_offset,
     mutation=None,
+    consumer_shape="register",
+    initialize_callbacks=True,
 ):
     """Two LIFO stack contexts with distinct return-arm restorations."""
     assert field_offset in {0x10, 0x18, 0x20, 0x24}
+    assert consumer_shape in {
+        "register",
+        "reloaded-memory-guard",
+        "reloaded-memory-unguarded",
+    }
     assert mutation in {
         None,
         "missing-restore-arm",
@@ -271,11 +278,12 @@ def nested_global_stack_callback_image(
         cursor = emit_call(cursor, zero_fill)
         cursor = emit(cursor, "83c408")
         cursor = emit(cursor, "8b442474")
-        for displacement in (0x10, 0x18, 0x20, 0x24):
-            cursor = emit(
-                cursor,
-                f"894424{base + displacement:02x}",
-            )
+        if initialize_callbacks:
+            for displacement in (0x10, 0x18, 0x20, 0x24):
+                cursor = emit(
+                    cursor,
+                    f"894424{base + displacement:02x}",
+                )
         if mutation == "unknown-overlapping-write" and base == 0:
             cursor = emit(cursor, f"895424{field_offset:02x}")
         return cursor
@@ -333,10 +341,28 @@ def nested_global_stack_callback_image(
 
     cursor = consumer
     cursor = emit_absolute(cursor, "a1", global_slot)
-    cursor = emit(cursor, f"8b48{field_offset:02x}")
-    cursor = emit(cursor, "85c97402")
-    indirect_call = cursor
-    cursor = emit(cursor, "ffd1c3")
+    if consumer_shape == "register":
+        cursor = emit(cursor, f"8b48{field_offset:02x}")
+        cursor = emit(cursor, "85c97402")
+        indirect_call = cursor
+        cursor = emit(cursor, "ffd1c3")
+    elif consumer_shape == "reloaded-memory-guard":
+        cursor = emit(cursor, f"8378{field_offset:02x}00")
+        branch = cursor
+        cursor = emit(cursor, "7400")
+        cursor = emit_call(cursor, callback)
+        cursor = emit_absolute(cursor, "8b15", global_slot)
+        indirect_call = cursor
+        cursor = emit(cursor, f"ff52{field_offset:02x}")
+        return_address = cursor
+        cursor = emit(cursor, "c3")
+        text[branch - text_va + 1] = (
+            return_address - (branch + 2)
+        ) & 0xFF
+    else:
+        cursor = emit_absolute(cursor, "8b15", global_slot)
+        indirect_call = cursor
+        cursor = emit(cursor, f"ff52{field_offset:02x}c3")
     assert cursor <= zero_fill
 
     emit(zero_fill, "31c0578b4c240c8b7c2408f3aa5fc3")
@@ -15999,6 +16025,49 @@ def test_nested_global_stack_publications_restore_every_return_arm(
     )
     assert edge.target == 0x004011C0
     assert f"field={field_offset:+#x}" in edge.provenance
+
+
+def test_zero_global_stack_field_guard_closes_reloaded_memory_call():
+    image, call_address, *_rest = nested_global_stack_callback_image(
+        field_offset=0x10,
+        consumer_shape="reloaded-memory-guard",
+        initialize_callbacks=False,
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert not [
+        row
+        for row in cfg.control_targets.unresolved
+        if row.address == call_address
+    ]
+    assert any(
+        row.address == call_address
+        and row.kind == "proven-unreachable-control"
+        and "finite-zero-guard-unreachable" in row.detail
+        for row in cfg.ownership_diagnostics
+    )
+
+
+def test_zero_global_stack_field_without_guard_keeps_memory_call_blocking():
+    image, call_address, *_rest = nested_global_stack_callback_image(
+        field_offset=0x10,
+        consumer_shape="reloaded-memory-unguarded",
+        initialize_callbacks=False,
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert any(
+        row.address == call_address and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
 
 
 def test_inactive_stack_context_writes_do_not_poison_prior_publications():

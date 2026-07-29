@@ -35952,6 +35952,27 @@ class _DirectCfgRecovery:
                         ),
                     )
                 )
+            elif values == frozenset({0}):
+                finite_unreachable = self._finite_zero_control_is_unreachable(
+                    instruction.address,
+                    operand,
+                    function_entry,
+                    frozenset(),
+                )
+                if finite_unreachable is not None:
+                    require_retained_targets_sound(frozenset())
+                    self.diagnostics.add(
+                        OwnershipDiagnostic(
+                            kind="proven-unreachable-control",
+                            address=instruction.address,
+                            detail=(
+                                "zero-domain contradicts nonzero guard: "
+                                f"{finite_unreachable};"
+                                f"{stable_control_detail(detail)}"
+                            ),
+                        )
+                    )
+                    return True
         if not values or any(
             not _is_executable_span(self.image, value, 1) for value in values
         ):
