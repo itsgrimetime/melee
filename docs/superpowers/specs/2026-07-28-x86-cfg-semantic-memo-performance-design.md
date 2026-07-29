@@ -176,8 +176,11 @@ memo workload was closed: the production CLI allowed only one new producer
 query per process. Every query was checkpointed atomically, but every process
 still rebuilt and replayed the shared whole-image fixed point before exiting.
 
-The production CLI therefore evaluates at most 32 new producer queries per
-process. This changes no query, dependency, certificate, or proof semantics.
+The production CLI therefore evaluates at most 128 new producer queries per
+process. The first production batch demonstrated that 32 queries could be
+consumed by an intermediate fixed-point wave before the final 24-query wave;
+128 covers several such waves while remaining explicitly bounded. This
+changes no query, dependency, certificate, or proof semantics.
 Each certificate is still written atomically immediately after its query
 finishes, and any process that completed a query must still exit through
 `ProducerCheckpointIncomplete` so the next process independently validates the

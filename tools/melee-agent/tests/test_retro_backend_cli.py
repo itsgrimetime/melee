@@ -754,7 +754,7 @@ def test_static_backend_map_constructs_task7_inputs_and_publishes_nine_members(
     assert observed["recover_kwargs"]["producer_checkpoint_dir"] == (
         tmp_path / "out/.producer-domain-checkpoints.v1"
     )
-    assert observed["recover_kwargs"]["producer_query_budget"] == 32
+    assert observed["recover_kwargs"]["producer_query_budget"] == 128
     assert callable(observed["recover_kwargs"]["producer_progress_callback"])
 
 

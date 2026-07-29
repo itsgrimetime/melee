@@ -772,7 +772,7 @@ function stack-state cache, or read-before-write cache. Do not combine more
 than one unmeasured candidate.
 
 Measured decision: retain the enlarged checkpointed semantic LRU and batch up
-to 32 atomically checkpointed producer queries per production CLI process.
+to 128 atomically checkpointed producer queries per production CLI process.
 The latter removes repeated whole-image setup without changing any semantic
 cache key, producer query, certificate, or fresh-resume validation rule.
 Also replace the measured quadratic relocated-dispatch write-overlap scan with
