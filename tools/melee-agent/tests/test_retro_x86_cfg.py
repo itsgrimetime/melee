@@ -15251,6 +15251,27 @@ def test_sibling_guard_closes_exact_global_stack_callback_effect(tmp_path):
     assert result[0] == frozenset()
 
 
+def test_sibling_guard_closes_exact_global_stack_control_target(tmp_path):
+    image, indirect_call = global_stack_callback_image(
+        tmp_path,
+        separate_guard=True,
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    edge = next(
+        row
+        for row in cfg.control_targets.finite_internal_edges
+        if row.source == indirect_call
+        and row.flow_kind == "indirect-call-finite-value"
+    )
+    assert edge.target == 0x00401150
+    assert "sibling-nonzero-guard=" in edge.provenance
+
+
 def test_sibling_guard_rejects_zero_global_stack_callback_effect(tmp_path):
     image, indirect_call = global_stack_callback_image(
         tmp_path,
@@ -15299,6 +15320,29 @@ def test_zero_global_stack_callback_arm_is_unreachable(tmp_path):
 
     assert result is not None
     assert result[0] == frozenset()
+
+
+def test_sibling_guard_rejects_zero_global_stack_control_target(tmp_path):
+    image, indirect_call = global_stack_callback_image(
+        tmp_path,
+        separate_guard=True,
+        missing_guarded_callback=True,
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert any(
+        row.address == indirect_call and row.kind == "indirect-flow"
+        for row in cfg.control_targets.unresolved
+    )
+    assert not any(
+        row.source == indirect_call
+        and row.flow_kind == "indirect-call-finite-value"
+        for row in cfg.control_targets.finite_internal_edges
+    )
 
 
 @pytest.mark.parametrize("field_offset", (0x10, 0x18, 0x20, 0x24))

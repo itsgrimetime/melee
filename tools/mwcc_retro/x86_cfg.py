@@ -33997,6 +33997,49 @@ class _DirectCfgRecovery:
                 "stack-storage-excluded"
             )
 
+        if 0 in values and any(value != 0 for value in values):
+            sibling_guarded = (
+                self._finite_sibling_guarded_global_stack_targets_before(
+                    instruction.address,
+                    operand,
+                    function_entry,
+                    frozenset(),
+                )
+            )
+            if sibling_guarded is not None:
+                sibling_values, sibling_detail = sibling_guarded
+                if (
+                    not sibling_values
+                    or 0 in sibling_values
+                    or not sibling_values <= (values - {0})
+                ):
+                    raise CfgRecoveryError(
+                        "sibling-guarded finite-control domain is not a "
+                        "nonzero subset of the base domain: "
+                        f"transfer={instruction.address:#x};base="
+                        + ",".join(
+                            f"{value:#x}" for value in sorted(values)
+                        )
+                        + ";filtered="
+                        + ",".join(
+                            f"{value:#x}"
+                            for value in sorted(sibling_values)
+                        )
+                    )
+                values = sibling_values
+                detail = (
+                    f"{sibling_detail};base-global-stack-domain={detail}"
+                )
+                self.diagnostics.add(
+                    OwnershipDiagnostic(
+                        kind="proven-unreachable-control-context",
+                        address=instruction.address,
+                        detail=(
+                            "zero global-stack contexts contradict sibling "
+                            f"nonzero guard;{sibling_detail}"
+                        ),
+                    )
+                )
         if 0 in values:
             guard = self._dominating_nonzero_guard(
                 instruction.address, operand, function_entry

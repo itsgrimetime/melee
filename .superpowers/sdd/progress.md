@@ -15,9 +15,9 @@ Last reconciled: 2026-07-28, replacement root orchestration.
 
 In progress.  The committed implementation and current repair diff now recover
 the retail raw PE closure, reconcile executable residue, and close several
-additional indirect-flow families.  Current exact facts before the last two
-families were integrated: 361,219 instructions, 97,168 blocks, 155,669 edges,
-26,070 calls, 3,251 functions, 564 jump tables, and all 28,783 raw `E8`
+additional indirect-flow families.  The authoritative producer-quiescent
+diagnostic replay contains 360,322 instructions, 96,910 blocks, 155,292 edges,
+26,000 calls, 3,242 functions, 564 jump tables, and all 28,783 raw `E8`
 candidates partitioned.
 
 - Receiver-sensitive object/stream family: exact 23-site slice closed.  The
@@ -25,11 +25,25 @@ candidates partitioned.
   have finite targets with zero blockers.
 - Movzx producer-domain family: implementation/tests and quiescent fixed-point
   regression are green; 1,168 durable producer certificates have been
-  checkpointed and the authoritative optimized exact replay is continuing.
-- Remaining families after those two close: global-stack, constructor,
-  nested-descriptor, helper-return, and linked-list targets.
-- Full `test_retro_x86_cfg.py`: 948 passed. The adjacent Task 4 performance
-  slice is now 1,075 passed with scoped static gates green.
+  checkpointed.  The current exact certificates prove association/readability
+  but conservatively admit byte values `0..255`; the 30 index-75 blockers need
+  a closed lifecycle proof before they can use the retail `0..74` table bound.
+- The exact diagnostic frontier contains 75 obligations: 36 computed-flow
+  blockers (30 movzx, 3 constructor-descriptor, 2 registered-static
+  helper-result, and 1 registered-linked callback), 32 raw indirect calls,
+  1 object-callback-table blocker, and the 6 independently triaged residue
+  relocation obligations.
+- The six relocation obligations remain exactly the reviewed set at
+  `0x401d37`, `0x401d97`, `0x425b27`, `0x4e0ae7`, `0x50652f`, and `0x50f5b3`.
+  Five are exact decoded calls/pushes in provisional residue; `0x50652f` is
+  the exact retail Ninji marker text and not code.
+- A read-only hydrator reconstructs the persisted exact graph plus its derived
+  write indexes in about 12 seconds and answers whole blocker batches without
+  replaying CFG discovery.  It identified four global-stack calls whose
+  already-proved sibling byte guard selects the sole nonzero callback.  The
+  resolver integration is green in 950 x86 CFG tests and resolves exact-state
+  addresses `0x4d03e6`, `0x4d099b`, `0x4d131a`, and `0x4d24b7`; a fresh exact
+  replay still must confirm the frontier delta.
 - The fourth exact continuation completed 128 queries in 3,232.45 seconds at
   5.27 GB maximum RSS with no swap, then exposed a further 24-query wave.
 - The retained finite-control indexes advanced the same 420-second profiled
@@ -41,8 +55,11 @@ candidates partitioned.
   current-architecture replay floor of about 38-40 minutes.
 - A clean producer-quiescent replay then reached final publication validation
   in 2,425.01 seconds. All producer certificates were fresh, but 69 downstream
-  raw control transfers remain fail-closed. An exact diagnostic replay is
-  persisting their current details before the next proof-family repair.
+  raw control transfers remained fail-closed.
+- The exact diagnostic replay completed in 2,303.13 seconds (38m23s) at
+  5.30 GB maximum RSS with no swap and persisted the complete 75-obligation
+  frontier above.  Compared with the 3,232.45-second continuation, this is
+  28.8% less wall time, or 1.40x throughput.
 - The next exact optimization trusts already-audited decoded cache hits and
   memoizes Capstone's immutable instruction-group set in the eight measured
   hot traversals. Microbenchmarks improved cached decode lookup by 4.0x and a
@@ -112,8 +129,8 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 945 passed.
-- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,072 passed.
+- `test_retro_x86_cfg.py`: 950 passed.
+- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,077 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
 - Task 8 focused/adjacent suites: 184 / 533 passed.
