@@ -2070,6 +2070,7 @@ class _DirectCfgRecovery:
         self.seed_records = set(seed_inventory.records)
         self.instructions: dict[int, Instruction] = {}
         self.decoded_instruction_cache: OrderedDict[int, Any] = OrderedDict()
+        self.decoded_instruction_group_cache: dict[int, frozenset[int]] = {}
         self.register_family_cache: dict[int, str] = {}
         self.instruction_by_end: dict[int, Instruction] = {}
         self.byte_owners: dict[int, int] = {}
@@ -21403,6 +21404,7 @@ class _DirectCfgRecovery:
             if current not in self.instructions:
                 return None
             decoded = self._owned_decoded(current)
+            decoded_groups = self._owned_decoded_groups(decoded)
             incoming = states[current]
             writes_family = any(
                 self._register_family(row) == register_family
@@ -21428,18 +21430,19 @@ class _DirectCfgRecovery:
                     )
                     output = None if argument_index is None else (argument_index, frozenset({current}))
             elif (
-                decoded.group(CS_GRP_CALL) and register_family in {"eax", "ecx", "edx"}
+                CS_GRP_CALL in decoded_groups
+                and register_family in {"eax", "ecx", "edx"}
             ) or writes_family:
                 output = None
             else:
                 output = incoming
 
             next_address = decoded.address + decoded.size
-            if decoded.group(CS_GRP_RET) or decoded.group(CS_GRP_IRET):
+            if CS_GRP_RET in decoded_groups or CS_GRP_IRET in decoded_groups:
                 successors: tuple[int, ...] = ()
-            elif decoded.group(CS_GRP_CALL):
+            elif CS_GRP_CALL in decoded_groups:
                 successors = (next_address,)
-            elif decoded.group(CS_GRP_JUMP):
+            elif CS_GRP_JUMP in decoded_groups:
                 successors = tuple(
                     sorted(self.non_call_successors.get(decoded.address, ()))
                 )
@@ -21515,6 +21518,7 @@ class _DirectCfgRecovery:
             if current not in self.instructions:
                 return None
             decoded = self._owned_decoded(current)
+            decoded_groups = self._owned_decoded_groups(decoded)
             incoming = states[current]
             writes_family = any(
                 self._register_family(row) == register_family
@@ -21555,24 +21559,25 @@ class _DirectCfgRecovery:
                 and self._register_family(decoded.operands[1].reg) == register_family
             ):
                 output = frozenset({current})
-            elif decoded.group(CS_GRP_CALL) and register_family == "eax":
+            elif CS_GRP_CALL in decoded_groups and register_family == "eax":
                 # EAX is defined by the call return.  Consumers still have
                 # to prove the callee's return domain explicitly; retaining
                 # the definition lets those fail-closed proofs inspect it.
                 output = frozenset({current})
             elif (
-                decoded.group(CS_GRP_CALL) and register_family in {"eax", "ecx", "edx"}
+                CS_GRP_CALL in decoded_groups
+                and register_family in {"eax", "ecx", "edx"}
             ) or writes_family:
                 output = None
             else:
                 output = incoming
 
             next_address = decoded.address + decoded.size
-            if decoded.group(CS_GRP_RET) or decoded.group(CS_GRP_IRET):
+            if CS_GRP_RET in decoded_groups or CS_GRP_IRET in decoded_groups:
                 successors: tuple[int, ...] = ()
-            elif decoded.group(CS_GRP_CALL):
+            elif CS_GRP_CALL in decoded_groups:
                 successors = (next_address,)
-            elif decoded.group(CS_GRP_JUMP):
+            elif CS_GRP_JUMP in decoded_groups:
                 successors = tuple(
                     sorted(self.non_call_successors.get(decoded.address, ()))
                 )
@@ -22107,6 +22112,7 @@ class _DirectCfgRecovery:
                 self.stack_state_cache[cache_key] = None
                 return None
             decoded = self._owned_decoded(address)
+            decoded_groups = self._owned_decoded_groups(decoded)
             sp_delta, bp_delta = states[address]
             handled_esp_write = False
             handled_ebp_write = False
@@ -22160,7 +22166,11 @@ class _DirectCfgRecovery:
                 for operand in decoded.operands
                 if operand.type == X86_OP_REG and operand.access & CS_AC_WRITE
             }
-            if decoded.group(CS_GRP_CALL) or decoded.group(CS_GRP_RET) or decoded.group(CS_GRP_IRET):
+            if (
+                CS_GRP_CALL in decoded_groups
+                or CS_GRP_RET in decoded_groups
+                or CS_GRP_IRET in decoded_groups
+            ):
                 handled_esp_write = True
             if "esp" in written_families and not handled_esp_write:
                 self.stack_state_cache[cache_key] = None
@@ -22168,9 +22178,9 @@ class _DirectCfgRecovery:
             if "ebp" in written_families and not handled_ebp_write:
                 bp_delta = None
 
-            if decoded.group(CS_GRP_RET) or decoded.group(CS_GRP_IRET):
+            if CS_GRP_RET in decoded_groups or CS_GRP_IRET in decoded_groups:
                 successors: tuple[int, ...] = ()
-            elif decoded.group(CS_GRP_CALL):
+            elif CS_GRP_CALL in decoded_groups:
                 cleanup = self._closed_call_stack_cleanup(decoded.address)
                 if cleanup is None:
                     saw_open_call = True
@@ -22178,7 +22188,7 @@ class _DirectCfgRecovery:
                 else:
                     sp_delta += cleanup
                     successors = (decoded.address + decoded.size,)
-            elif decoded.group(CS_GRP_JUMP):
+            elif CS_GRP_JUMP in decoded_groups:
                 successors = tuple(
                     sorted(self.non_call_successors.get(decoded.address, ()))
                 )
@@ -22239,7 +22249,7 @@ class _DirectCfgRecovery:
             seen.add(address)
             self.limits.check("max_summary_iterations", len(seen))
             decoded = self._owned_decoded(address)
-            if not decoded.group(CS_GRP_RET):
+            if not self._owned_decoded_in_group(decoded, CS_GRP_RET):
                 for successor in self._summary_successors(
                     address, function_entry, following_entry
                 ):
@@ -29510,10 +29520,11 @@ class _DirectCfgRecovery:
                     current = heapq.heappop(pending)
                     queued.remove(current)
                     decoded = self._owned_decoded(current)
+                    decoded_groups = self._owned_decoded_groups(decoded)
                     state = dict(states[current])
-                    if decoded.group(CS_GRP_RET):
+                    if CS_GRP_RET in decoded_groups:
                         continue
-                    if decoded.group(CS_GRP_CALL):
+                    if CS_GRP_CALL in decoded_groups:
                         for family in ("eax", "ecx", "edx"):
                             state[family] = 8
                     elif (
@@ -32740,12 +32751,13 @@ class _DirectCfgRecovery:
         if cached is not None:
             return cached
         decoded = self._owned_decoded(address)
+        decoded_groups = self._owned_decoded_groups(decoded)
         next_address = decoded.address + decoded.size
-        if decoded.group(CS_GRP_RET) or decoded.group(CS_GRP_IRET):
+        if CS_GRP_RET in decoded_groups or CS_GRP_IRET in decoded_groups:
             successors: tuple[int, ...] = ()
-        elif decoded.group(CS_GRP_CALL):
+        elif CS_GRP_CALL in decoded_groups:
             successors = () if self._call_is_proven_no_return(decoded, frozenset()) else (next_address,)
-        elif decoded.group(CS_GRP_JUMP):
+        elif CS_GRP_JUMP in decoded_groups:
             successors = tuple(
                 sorted(self.non_call_successors.get(decoded.address, ()))
             )
@@ -32803,14 +32815,15 @@ class _DirectCfgRecovery:
             seen.add(address)
             self.limits.check("max_summary_iterations", len(seen))
             decoded = self._owned_decoded(address)
-            if decoded.group(CS_GRP_RET) or decoded.group(CS_GRP_IRET):
+            decoded_groups = self._owned_decoded_groups(decoded)
+            if CS_GRP_RET in decoded_groups or CS_GRP_IRET in decoded_groups:
                 self.no_return_cache[cache_key] = False
                 return False
-            if decoded.group(CS_GRP_CALL):
+            if CS_GRP_CALL in decoded_groups:
                 if self._call_is_proven_no_return(decoded, visited | {function_entry}):
                     continue
                 successors = (decoded.address + decoded.size,)
-            elif decoded.group(CS_GRP_JUMP):
+            elif CS_GRP_JUMP in decoded_groups:
                 successors = tuple(
                     sorted(self.non_call_successors.get(decoded.address, ()))
                 )
@@ -38400,6 +38413,16 @@ class _DirectCfgRecovery:
         self._cache_decoded_instruction(decoded)
         return decoded
 
+    def _owned_decoded_groups(self, decoded) -> frozenset[int]:
+        groups = self.decoded_instruction_group_cache.get(decoded.address)
+        if groups is None:
+            groups = frozenset(decoded.groups)
+            self.decoded_instruction_group_cache[decoded.address] = groups
+        return groups
+
+    def _owned_decoded_in_group(self, decoded, group: int) -> bool:
+        return group in self._owned_decoded_groups(decoded)
+
     def _cache_decoded_instruction(self, decoded) -> None:
         address = decoded.address
         self.decoded_instruction_cache[address] = decoded
@@ -40712,7 +40735,7 @@ class _DirectCfgRecovery:
     def _update_exact_state(self, decoded, state: dict[str, _ExactValue]) -> None:
         instruction = self.instructions[decoded.address]
         step = self._chain_step(instruction)
-        if decoded.group(CS_GRP_CALL):
+        if self._owned_decoded_in_group(decoded, CS_GRP_CALL):
             state.clear()
             return
         if len(decoded.operands) == 2:

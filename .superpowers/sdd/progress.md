@@ -6,8 +6,8 @@ Last reconciled: 2026-07-28, replacement root orchestration.
 
 - Tasks 1-3 remain complete at `ea3d1ca65..660606143`.
 - Branch: `codex/issue-1240-retail-pcode-proof`.
-- Current committed foundation: `706d09df8`, the verified finite-control
-  optimization checkpoint.
+- The committed foundation includes the verified finite-control and audited
+  decoded-instruction cache checkpoints.
 - The installed `gc_125n.json` PCode instrumentation gate is still disabled and
   the exact proof registry is still empty, as required before promotion.
 
@@ -28,8 +28,8 @@ candidates partitioned.
   checkpointed and the authoritative optimized exact replay is continuing.
 - Remaining families after those two close: global-stack, constructor,
   nested-descriptor, helper-return, and linked-list targets.
-- Full `test_retro_x86_cfg.py`: 947 passed. The adjacent Task 4 performance
-  slice is now 1,074 passed with scoped static gates green.
+- Full `test_retro_x86_cfg.py`: 948 passed. The adjacent Task 4 performance
+  slice is now 1,075 passed with scoped static gates green.
 - The fourth exact continuation completed 128 queries in 3,232.45 seconds at
   5.27 GB maximum RSS with no swap, then exposed a further 24-query wave.
 - The retained finite-control indexes advanced the same 420-second profiled
@@ -43,6 +43,10 @@ candidates partitioned.
   in 2,425.01 seconds. All producer certificates were fresh, but 69 downstream
   raw control transfers remain fail-closed. An exact diagnostic replay is
   persisting their current details before the next proof-family repair.
+- The next exact optimization trusts already-audited decoded cache hits and
+  memoizes Capstone's immutable instruction-group set in the eight measured
+  hot traversals. Microbenchmarks improved cached decode lookup by 4.0x and a
+  cached group query by 2.8x; the 1,075-test adjacent slice remains green.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published

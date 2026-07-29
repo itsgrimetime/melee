@@ -18653,6 +18653,33 @@ def test_owned_instruction_audits_decode_after_eviction(tmp_path, monkeypatch):
     assert address not in recovery.decoded_instruction_cache
 
 
+def test_owned_instruction_group_membership_is_cached(tmp_path):
+    image = load_dispatch_image(tmp_path, mode="copied-descriptor-registered-object")
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.decoded_instruction_group_cache.clear()
+    accesses = []
+
+    class AuditedDecode:
+        address = 0x00401000
+
+        @property
+        def groups(self):
+            accesses.append(self.address)
+            return [capstone.CS_GRP_CALL]
+
+    decoded = AuditedDecode()
+
+    assert recovery._owned_decoded_in_group(decoded, capstone.CS_GRP_CALL)
+    assert not recovery._owned_decoded_in_group(decoded, capstone.CS_GRP_RET)
+    assert recovery._owned_decoded_in_group(decoded, capstone.CS_GRP_CALL)
+    assert accesses == [decoded.address]
+
+
 def test_register_family_reuses_capstone_name_lookup(tmp_path, monkeypatch):
     image = load_dispatch_image(tmp_path, mode="copied-descriptor-registered-object")
     recovery = _DirectCfgRecovery(

@@ -796,6 +796,12 @@ every miss before reinsertion. The focused regression must prove that a hit
 performs no second byte conversion, and the existing eviction regression must
 prove that a miss still re-decodes and audits.
 
+Use the same immutable instruction-address boundary to memoize Capstone's
+exact group-ID set. Replace group queries only in the eight measured hot
+traversals, covering about 44.6 million of the profile's 50.96 million calls.
+Require a regression proving that multiple group queries materialize
+`decoded.groups` once, then run the complete adjacent Task 4 slice.
+
 - [ ] **Step 7: Run exact Task 4 closure twice** (in progress)
 
 Use the ordinary branch-local `probe-backend-map --static-only` workflow and

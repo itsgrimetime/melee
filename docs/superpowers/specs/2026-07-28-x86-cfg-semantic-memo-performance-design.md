@@ -247,6 +247,18 @@ lookups reduced the best lookup cost from 568.2 ns to 142.9 ns (4.0x). The
 instruction record, image bytes, cache eviction behavior, and all proof
 artifacts remain unchanged.
 
+The same immutable-address fact also permits a local cache of Capstone group
+membership. The profile spent 42.00 cumulative seconds across 50,958,337
+`group()` calls, of which 25.80 seconds were repeatedly materializing the
+same `groups` property. Cache the exact group set lazily per owned instruction
+address and use it in the eight hottest whole-function traversals. Those
+callers accounted for about 44.6 million (87.5%) of the profiled group calls.
+A two-million-lookup microbenchmark reduced one cached membership query from
+558.6 ns through Capstone to 197.5 ns through the helper; traversals that fetch
+the set once use direct membership for their remaining classifications. The
+cache stores only Capstone's exact group IDs and never infers an instruction
+class.
+
 ## Correctness Invariants
 
 - Cache-disabled, cold-cache, warm-cache, and evicted-cache runs return equal
