@@ -96,6 +96,118 @@ def load_large_cfg_program(tmp_path, program):
     return pe.load(path, expected_sha256=digest, require_pe32_i386=True)
 
 
+def bounded_call_return_interval_image(tmp_path, *, mutation=None):
+    """Feed one assumed helper result through allocation-size arithmetic."""
+    assert mutation in {None, "second-call", "caller-saved-input"}
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        program[offset] = 0xE8
+        displacement = (base + target_offset) - (base + offset + 5)
+        program[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    cursor = 0
+    if mutation == "caller-saved-input":
+        cursor = emit(cursor, "b9 07 00 00 00")
+    call_address = base + cursor
+    cursor = emit_call(cursor, 0x80)
+    if mutation == "second-call":
+        cursor = emit_call(cursor, 0x88)
+    if mutation == "caller-saved-input":
+        cursor = emit(cursor, "01 c8")
+    else:
+        cursor = emit(cursor, "83 c0 20 6b c8 0c 83 c1 28")
+    use_address = base + cursor
+    cursor = emit(cursor, "50" if mutation == "caller-saved-input" else "51")
+    emit(cursor, "59 c3")
+    emit(0x80, "c3")
+    emit(0x88, "c3")
+
+    image = load_large_cfg_program(tmp_path, program)
+    return image, base, call_address, use_address
+
+
+def intrusive_list_count_image(tmp_path, *, mutation=None):
+    """Count up to two predicates for each node on a null-terminated chain."""
+    assert mutation in {
+        None,
+        "counter-write",
+        "cursor-write",
+        "link-offset",
+        "third-increment",
+        "wrong-return",
+    }
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        program[offset] = 0xE8
+        displacement = (base + target_offset) - (base + offset + 5)
+        program[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    cursor = emit(0, "53 8b 5c 24 08 55 31 ed 85 db")
+    initial_exit = cursor
+    cursor = emit(cursor, "0f 84 00 00 00 00")
+    loop_header = cursor
+    cursor = emit(cursor, "f6 43 1c 01")
+    skip_first = cursor
+    cursor = emit(cursor, "74 00 45")
+    first_done = cursor
+    program[skip_first + 1] = first_done - (skip_first + 2)
+    cursor = emit(cursor, "f6 43 1c 02")
+    skip_second = cursor
+    cursor = emit(cursor, "74 00 45")
+    second_done = cursor
+    program[skip_second + 1] = second_done - (skip_second + 2)
+    cursor = emit_call(cursor, 0x80)
+    if mutation == "counter-write":
+        cursor = emit(cursor, "89 c5")
+    elif mutation == "cursor-write":
+        cursor = emit(cursor, "89 c3")
+    elif mutation == "third-increment":
+        cursor = emit(cursor, "45")
+    link_offset = 4 if mutation == "link-offset" else 0
+    cursor = emit(cursor, f"8b 5b {link_offset:02x} 85 db")
+    loop_branch = cursor
+    cursor = emit(cursor, "0f 85 00 00 00 00")
+    exit_address = cursor
+    cursor = emit(
+        cursor,
+        "89 d8" if mutation == "wrong-return" else "89 e8",
+    )
+    emit(cursor, "5d 5b c3")
+    program[initial_exit + 2 : initial_exit + 6] = (
+        exit_address - (initial_exit + 6)
+    ).to_bytes(4, "little", signed=True)
+    program[loop_branch + 2 : loop_branch + 6] = (
+        loop_header - (loop_branch + 6)
+    ).to_bytes(4, "little", signed=True)
+    emit(0x80, "c3")
+
+    return load_large_cfg_program(tmp_path, program), base
+
+
 def global_stack_callback_image(
     tmp_path,
     *,
@@ -14937,6 +15049,97 @@ def test_returned_fresh_variadic_count_uses_closed_width_contract(
         assert result is not None
         assert result[0] == expected
         assert "bounded-test-width" in result[1]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "assumptions", "expected"),
+    (
+        (None, "valid", (0x1A8, 0xDA8)),
+        (None, "missing", None),
+        (None, "duplicate", None),
+        (None, "invalid-range", None),
+        (None, "non-call", None),
+        (None, "wrap", None),
+        ("second-call", "valid", None),
+        ("caller-saved-input", "valid", None),
+    ),
+)
+def test_bounded_unsigned_interval_requires_exact_call_return_contract(
+    tmp_path,
+    mutation,
+    assumptions,
+    expected,
+):
+    image, function_entry, call_address, use_address = (
+        bounded_call_return_interval_image(tmp_path, mutation=mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    use = recovery._owned_decoded(use_address)
+    rows = {
+        "valid": ((call_address, 0, 0x100),),
+        "missing": (),
+        "duplicate": (
+            (call_address, 0, 0x100),
+            (call_address, 0x20, 0x80),
+        ),
+        "invalid-range": ((call_address, 0x101, 0x100),),
+        "non-call": ((use_address, 0, 0x100),),
+        "wrap": ((call_address, 0xFFFF_FFF0, 0xFFFF_FFFF),),
+    }[assumptions]
+
+    result = recovery._bounded_unsigned_operand_interval_before(
+        use_address,
+        use.operands[0],
+        function_entry,
+        assumed_call_return_intervals=rows,
+    )
+
+    if expected is None:
+        assert result is None
+    else:
+        assert result[:2] == expected
+        assert "bounded-unsigned-interval" in result[2]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, (0, 0, 2)),
+        ("link-offset", (0, 4, 2)),
+        ("third-increment", (0, 0, 3)),
+        ("counter-write", None),
+        ("cursor-write", None),
+        ("wrong-return", None),
+    ),
+)
+def test_intrusive_list_count_shape_bounds_increments_per_node(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry = intrusive_list_count_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._intrusive_list_count_return_shape(function_entry)
+
+    if expected is None:
+        assert result is None
+    else:
+        assert result[:3] == expected
+        assert "intrusive-list-count" in result[3]
 
 
 @pytest.mark.parametrize(

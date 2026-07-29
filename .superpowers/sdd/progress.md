@@ -217,6 +217,16 @@ candidates partitioned.
   rejected.  The remaining blocker is now only the dynamic allocation extent
   on two of the constructor's three arms; the third arm already proves
   `0x28..0xc34`.
+- Bounded allocation arithmetic can now consume an explicitly certified
+  interval from one exact helper call.  Uncertified or duplicate calls, invalid
+  ranges, caller-saved inputs, stack-memory assumptions across the call, and
+  arithmetic wrap remain fail-closed.  The retail helper at `0x4bc7b0` now has
+  a checked list-counter shape: argument 0, link field `+0`, a zero-initialized
+  callee-saved counter, and at most two increments on every single-node path.
+  The remaining linked-count obligation is the separate provenance/stability
+  certificate showing that every reachable node belongs to the fixed-size
+  allocation family; only then can its address-space bound be supplied as the
+  helper-return interval.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published
@@ -282,7 +292,7 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 1,026 passed.
+- `test_retro_x86_cfg.py`: 1,040 passed.
 - Task 4 backend/struct-map adjacent slice: 830 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.

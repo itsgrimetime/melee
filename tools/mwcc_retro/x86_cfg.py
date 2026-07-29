@@ -25482,6 +25482,10 @@ class _DirectCfgRecovery:
             tuple[int, int, int],
             ...,
         ] = (),
+        assumed_call_return_intervals: tuple[
+            tuple[int, int, int],
+            ...,
+        ] = (),
     ) -> tuple[int, int, str] | None:
         """Evaluate a bounded scalar interval on paths reaching one use.
 
@@ -25504,6 +25508,22 @@ class _DirectCfgRecovery:
             if 0 <= lower <= upper <= 0xFFFF_FFFF
         }
         if len(assumptions) != len(assumed_memory_intervals):
+            return None
+        call_return_assumptions = {
+            call_address: (lower, upper)
+            for call_address, lower, upper in assumed_call_return_intervals
+            if 0 <= lower <= upper <= 0xFFFF_FFFF
+        }
+        if len(call_return_assumptions) != len(
+            assumed_call_return_intervals
+        ):
+            return None
+        if any(
+            not function_entry <= call_address < following_entry
+            or call_address not in self.instructions
+            or not self._owned_decoded(call_address).group(CS_GRP_CALL)
+            for call_address in call_return_assumptions
+        ):
             return None
         absolute_write_spans = []
         for write_address, writers in self.absolute_memory_writes.items():
@@ -25906,6 +25926,15 @@ class _DirectCfgRecovery:
                     operand_interval(current, operands[2], incoming),
                 )
                 handled_families.add(family)
+            elif decoded.group(CS_GRP_CALL):
+                call_return = call_return_assumptions.get(current)
+                if call_return is None:
+                    return None
+                for family in _CALL_CLOBBERED_REGISTER_NAMES:
+                    registers[family_index[family]] = None
+                    handled_families.add(family)
+                registers[family_index["eax"]] = call_return
+                stack.clear()
 
             written_families = {
                 self._register_family(register)
@@ -25924,8 +25953,6 @@ class _DirectCfgRecovery:
                 - {"esp"}
             ) & family_index.keys():
                 registers[family_index[family]] = None
-            if decoded.group(CS_GRP_CALL):
-                return None
 
             output = (
                 tuple(registers),
@@ -34053,6 +34080,320 @@ class _DirectCfgRecovery:
             self.runtime_global_copy_field_active.remove(cache_key)
         self.runtime_global_copy_field_cache[cache_key] = True
         return True
+
+    def _intrusive_list_count_return_shape(
+        self,
+        function_entry: int,
+    ) -> tuple[int, int, int, str] | None:
+        """Recognize a returned counter over one null-terminated node chain."""
+        if function_entry not in self.function_addresses:
+            return None
+        following_entry = self._following_function_entry(function_entry)
+        addresses = self._function_instruction_addresses(function_entry)
+        returns = [
+            address
+            for address in addresses
+            if self._owned_decoded(address).group(CS_GRP_RET)
+        ]
+        backedges = [
+            edge
+            for edge in self.non_call_backedges
+            if (
+                function_entry <= edge.target < edge.source
+                and edge.source < following_entry
+            )
+        ]
+        if len(returns) != 1 or len(backedges) != 1:
+            return None
+
+        return_address = returns[0]
+        epilogue_pops: set[int] = set()
+        cursor = return_address
+        return_copy = None
+        for _ in range(8):
+            previous = self._previous_instruction(cursor)
+            if (
+                previous is None
+                or previous.address < function_entry
+                or previous.address + previous.size != cursor
+            ):
+                return None
+            decoded = self._owned_decoded(previous.address)
+            if (
+                decoded.mnemonic == "pop"
+                and len(decoded.operands) == 1
+                and decoded.operands[0].type == X86_OP_REG
+            ):
+                epilogue_pops.add(decoded.address)
+                cursor = decoded.address
+                continue
+            return_copy = decoded
+            break
+        if not (
+            return_copy is not None
+            and return_copy.id == X86_INS_MOV
+            and len(return_copy.operands) == 2
+            and return_copy.operands[0].type == X86_OP_REG
+            and return_copy.operands[0].size == 4
+            and self._register_family(return_copy.operands[0].reg) == "eax"
+            and return_copy.operands[1].type == X86_OP_REG
+            and return_copy.operands[1].size == 4
+        ):
+            return None
+        counter_family = self._register_family(
+            return_copy.operands[1].reg
+        )
+
+        backedge = backedges[0]
+        loop_header = backedge.target
+        loop_branch = self._owned_decoded(backedge.source)
+        condition_instruction = self._previous_instruction(
+            loop_branch.address
+        )
+        if (
+            loop_branch.mnemonic not in {"jne", "jnz"}
+            or self._direct_target(loop_branch) != loop_header
+            or condition_instruction is None
+            or condition_instruction.address + condition_instruction.size
+            != loop_branch.address
+        ):
+            return None
+        condition = self._owned_decoded(condition_instruction.address)
+        if not (
+            condition.mnemonic == "test"
+            and len(condition.operands) == 2
+            and all(row.type == X86_OP_REG for row in condition.operands)
+            and all(row.size == 4 for row in condition.operands)
+            and self._register_family(condition.operands[0].reg)
+            == self._register_family(condition.operands[1].reg)
+        ):
+            return None
+        node_family = self._register_family(condition.operands[0].reg)
+        advance_instruction = self._previous_instruction(
+            condition.address
+        )
+        if (
+            advance_instruction is None
+            or advance_instruction.address + advance_instruction.size
+            != condition.address
+        ):
+            return None
+        advance = self._owned_decoded(advance_instruction.address)
+        if not (
+            advance.id == X86_INS_MOV
+            and len(advance.operands) == 2
+            and advance.operands[0].type == X86_OP_REG
+            and advance.operands[0].size == 4
+            and self._register_family(advance.operands[0].reg)
+            == node_family
+            and advance.operands[1].type == X86_OP_MEM
+            and advance.operands[1].size == 4
+            and advance.operands[1].mem.segment == X86_REG_INVALID
+            and advance.operands[1].mem.base != X86_REG_INVALID
+            and self._register_family(advance.operands[1].mem.base)
+            == node_family
+            and advance.operands[1].mem.index == X86_REG_INVALID
+        ):
+            return None
+        link_offset = advance.operands[1].mem.disp
+
+        callee_saved = {"ebx", "ebp", "esi", "edi"}
+        if (
+            counter_family == node_family
+            or counter_family not in callee_saved
+            or node_family not in callee_saved
+        ):
+            return None
+
+        argument_loads = []
+        zero_initializers = []
+        for row_address in addresses:
+            if row_address >= loop_header:
+                break
+            row = self._owned_decoded(row_address)
+            if (
+                row.id == X86_INS_MOV
+                and len(row.operands) == 2
+                and row.operands[0].type == X86_OP_REG
+                and self._register_family(row.operands[0].reg)
+                == node_family
+                and (
+                    argument_index := self._stack_argument_index_at(
+                        row_address,
+                        row.operands[1],
+                        function_entry,
+                    )
+                )
+                is not None
+            ):
+                argument_loads.append((row, argument_index))
+            if (
+                row.id == X86_INS_XOR
+                and len(row.operands) == 2
+                and all(
+                    operand.type == X86_OP_REG
+                    and operand.size == 4
+                    and self._register_family(operand.reg)
+                    == counter_family
+                    for operand in row.operands
+                )
+            ):
+                zero_initializers.append(row)
+        if len(argument_loads) != 1 or len(zero_initializers) != 1:
+            return None
+        argument_load, argument_index = argument_loads[0]
+        zero_initializer = zero_initializers[0]
+        if (
+            argument_index >= 4
+            or self._reachable_within_function(
+                function_entry,
+                loop_header,
+                function_entry,
+                following_entry,
+                excluded=argument_load.address,
+            )
+            or self._reachable_within_function(
+                function_entry,
+                loop_header,
+                function_entry,
+                following_entry,
+                excluded=zero_initializer.address,
+            )
+        ):
+            return None
+
+        initial_guards = []
+        for row_address in addresses:
+            if not (
+                max(argument_load.address, zero_initializer.address)
+                < row_address < loop_header
+            ):
+                continue
+            row = self._owned_decoded(row_address)
+            if not (
+                row.mnemonic == "test"
+                and len(row.operands) == 2
+                and all(
+                    operand.type == X86_OP_REG
+                    and self._register_family(operand.reg) == node_family
+                    for operand in row.operands
+                )
+            ):
+                continue
+            branch_instruction = self.instructions.get(
+                row.address + row.size
+            )
+            if branch_instruction is None:
+                continue
+            branch = self._owned_decoded(branch_instruction.address)
+            if (
+                branch.mnemonic in {"je", "jz"}
+                and branch.address + branch.size == loop_header
+                and self._direct_target(branch) == return_copy.address
+            ):
+                initial_guards.append((row, branch))
+        if len(initial_guards) != 1:
+            return None
+
+        def writes_family(decoded, family: str) -> bool:
+            return any(
+                register != x86_const.X86_REG_EFLAGS
+                and self._register_family(register) == family
+                for register in decoded.regs_write
+            ) or any(
+                operand.type == X86_OP_REG
+                and operand.access & CS_AC_WRITE
+                and self._register_family(operand.reg) == family
+                for operand in decoded.operands
+            )
+
+        increments: set[int] = set()
+        for row_address in addresses:
+            row = self._owned_decoded(row_address)
+            if writes_family(row, counter_family):
+                if row.address == zero_initializer.address:
+                    pass
+                elif (
+                    row.mnemonic == "inc"
+                    and len(row.operands) == 1
+                    and row.operands[0].type == X86_OP_REG
+                    and row.operands[0].size == 4
+                    and loop_header <= row.address < backedge.source
+                ):
+                    increments.add(row.address)
+                elif row.address in epilogue_pops:
+                    pass
+                else:
+                    return None
+            if writes_family(row, node_family) and (
+                row.address
+                not in {
+                    argument_load.address,
+                    advance.address,
+                    *epilogue_pops,
+                }
+            ):
+                return None
+        if not increments:
+            return None
+
+        visiting: set[int] = set()
+        memo: dict[int, int] = {}
+        saw_backedge = False
+        saw_exit = False
+
+        def max_iteration_increments(row_address: int) -> int | None:
+            nonlocal saw_backedge, saw_exit
+            if row_address == return_copy.address:
+                saw_exit = True
+                return 0
+            if row_address in memo:
+                return memo[row_address]
+            if (
+                row_address in visiting
+                or not function_entry <= row_address < following_entry
+            ):
+                return None
+            visiting.add(row_address)
+            successors = self._summary_successors(
+                row_address,
+                function_entry,
+                following_entry,
+            )
+            downstream = []
+            for successor in successors:
+                if successor == loop_header:
+                    if row_address != backedge.source:
+                        visiting.remove(row_address)
+                        return None
+                    saw_backedge = True
+                    downstream.append(0)
+                    continue
+                nested = max_iteration_increments(successor)
+                if nested is None:
+                    visiting.remove(row_address)
+                    return None
+                downstream.append(nested)
+            visiting.remove(row_address)
+            if not downstream:
+                return None
+            result = (1 if row_address in increments else 0) + max(
+                downstream
+            )
+            memo[row_address] = result
+            return result
+
+        maximum = max_iteration_increments(loop_header)
+        if maximum is None or maximum <= 0 or not saw_backedge or not saw_exit:
+            return None
+        return (
+            argument_index,
+            link_offset,
+            maximum,
+            f"intrusive-list-count={function_entry:#x};"
+            f"head-argument={argument_index};link={link_offset:+#x};"
+            f"increments-per-node={maximum}",
+        )
 
     def _intrusive_list_return_argument(self, function_entry: int) -> int | None:
         """Return the argument whose null-terminated link chain is returned."""
