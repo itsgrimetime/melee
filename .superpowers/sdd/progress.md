@@ -319,9 +319,14 @@ resolution, and final queue refresh.
   constructor allocation arms, close parent `0x49d060`, and perform the fresh
   run-018/reconciliation/adversarial review.
 - Context-sensitive producer summaries now bind the complete exact-call stack
-  in their memo keys and propagate nested call contexts.  This prevents one
-  caller's finite argument value from contaminating another caller while
-  retaining the original multi-caller union.
+  only where allocation-pointee values depend on ancestor callers, while hot
+  byte-effect summaries remain keyed to their own exact call.  Nested call
+  contexts are propagated explicitly and repeated exact call edges are
+  canonicalized.  This prevents one caller's finite argument value from
+  contaminating another caller without defeating recursive memo reuse.  A
+  full-stack prototype hit the 262,144-entry cache cap after about nine
+  minutes; the bounded hybrid restores the retail query to 145.51 seconds
+  with a 2.56 GB maximum RSS.
 - `test_retro_x86_cfg.py`: 1,073 passed.
 - Task 4 backend/struct-map adjacent slice: 830 passed.
 - Task 5/6 + CFG/PE: 589 passed.

@@ -189,7 +189,7 @@ class AnalysisLimits:
 
 
 _PRODUCER_CERTIFICATE_SCHEMA = "mwcc-retro-x86-producer-certificate-v1"
-_MOVZX_PRODUCER_ANALYSIS_SEMANTICS = "movzx-producer-analysis-v23"
+_MOVZX_PRODUCER_ANALYSIS_SEMANTICS = "movzx-producer-analysis-v24"
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -2528,6 +2528,19 @@ class _DirectCfgRecovery:
     ) -> tuple[tuple[int, int, int], ...]:
         return tuple(self.producer_exact_call_contexts)
 
+    def _producer_distinct_exact_call_context_signature(
+        self,
+    ) -> tuple[tuple[int, int, int], ...]:
+        """Return a recursion-bounded signature of active exact call edges."""
+        seen: set[tuple[int, int, int]] = set()
+        distinct_reversed = []
+        for context in reversed(self.producer_exact_call_contexts):
+            if context in seen:
+                continue
+            seen.add(context)
+            distinct_reversed.append(context)
+        return tuple(reversed(distinct_reversed))
+
     def _producer_object_guard_context(self, field_path: tuple[int, ...]) -> _ObjectByteGuard | None:
         candidates = self._producer_object_guard_context_candidates(field_path)
         return candidates[0] if candidates else None
@@ -3876,7 +3889,7 @@ class _DirectCfgRecovery:
             tuple(sorted(excluded_addresses)),
             require_nonzero_return,
             tuple(sorted(global_alias_slots)),
-            self._producer_exact_call_context_signature(),
+            self._producer_exact_call_context(function_entry),
             self._summary_fact_signature(),
             self.control_flow_revision,
         )
@@ -12522,7 +12535,7 @@ class _DirectCfgRecovery:
             argument_index,
             target_field,
             field_path,
-            self._producer_exact_call_context_signature(),
+            self._producer_distinct_exact_call_context_signature(),
             self._producer_object_guard_context_signature(),
             self._producer_allocator_lifetime_context_signature(),
             self._summary_fact_signature(),
