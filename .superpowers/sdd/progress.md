@@ -292,15 +292,37 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- Task 4 now has a scoped fresh-intrusive-list bound: it rejects stack or
-  open-link nodes, requires one owned monotonic allocator, evaluates every
-  exact request through the allocator's unavoidable normalization, and bounds
-  a `0x20`-stride arena at `0x08000000` live nodes.  The exact retail tag-16
-  query still closes only through the pre-existing outer-list association
-  induction, so the next repair is to bind the manager's loader-zero scratch
-  root (`0x581c3a`) and its four `0x1e -> 0x20` prepend allocations into that
-  invariant before using the count-helper return interval.
-- `test_retro_x86_cfg.py`: 1,046 passed.
+- Task 4 now has a scoped fresh-intrusive-list bound: it rejects stack,
+  open-link, missing-storeback, and unwitnessed-empty lists; requires one
+  owned monotonic allocator; evaluates every exact request through the
+  allocator's unavoidable normalization; and bounds a `0x20`-stride arena at
+  `0x08000000` live nodes.
+- The loader-zero global scratch transformer is closed with exact
+  caller/lifetime context.  Global-append summaries now exclude calls after
+  the guarded observation, return direct scalar discriminator tags, accept
+  only dominating whole-field empty overwrites, retain optional-empty
+  association evidence, and admit selected clones only for their exact scalar
+  tag query.  Hostile post-observation writes, selected-clone payload reads,
+  malformed storeback, and context-sensitive memo reuse remain rejected.
+- Hydrated retail progress for the tag-16 dispatcher now closes publications
+  through `0x477c9d`; the selected-clone scalar extension targets the next
+  former tag blocker at `0x477e5c`.  Payload publication `0x4767ce` closes as
+  optional-empty after its dominating null overwrite.  The next observed
+  payload blocker is `0x4776dd`, whose source reaches the current-object
+  restoration at `0x477844`.
+- The next repair is a narrow heap-context save/restore identity certificate:
+  bind one fresh context node, its exact save from the current-object global,
+  its closed head/tail-list publication, every list reader's preservation of
+  the saved field, and the exact later restore.  Unknown field overlap, node
+  escape, malformed list publication, or an unclosed reader must fail closed.
+  After that, rerun the retail dispatcher query, close the two remaining
+  constructor allocation arms, close parent `0x49d060`, and perform the fresh
+  run-018/reconciliation/adversarial review.
+- Context-sensitive producer summaries now bind the complete exact-call stack
+  in their memo keys and propagate nested call contexts.  This prevents one
+  caller's finite argument value from contaminating another caller while
+  retaining the original multi-caller union.
+- `test_retro_x86_cfg.py`: 1,073 passed.
 - Task 4 backend/struct-map adjacent slice: 830 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.

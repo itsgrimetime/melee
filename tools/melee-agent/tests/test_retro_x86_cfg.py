@@ -270,6 +270,313 @@ def fresh_intrusive_list_head_image(tmp_path, *, mutation=None):
     return load_large_cfg_program(tmp_path, program), base, observation
 
 
+def fresh_global_scratch_list_transformer_image(
+    *,
+    mutation=None,
+    traverse_outer=False,
+    traversal_mutation=None,
+):
+    """Publish a fresh prepend through a temporary loader-zero global root."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {
+        None,
+        "decoy-global",
+        "pop",
+        "bad-pop-offset",
+        "missing-link",
+        "nonfresh-input",
+        "wrong-storeback",
+    }
+    assert traversal_mutation in {
+        None,
+        "wrong-link",
+        "clobber-link",
+    }
+    assert traverse_outer or traversal_mutation is None
+    text_va = 0x00401000
+    data_va = 0x00403000
+    root_slot = data_va
+    data = bytearray(0x500)
+    text = memoryview(data)[:0x300]
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (
+            text_va + offset + 5
+        )
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    def patch_short(branch, target):
+        displacement = target - (branch + 2)
+        assert -0x80 <= displacement <= 0x7F
+        text[branch + 1] = displacement & 0xFF
+
+    # caller(): initialize outer->head, transform it, then observe the outer.
+    cursor = emit(0, "53 83 ec 20 8d 1c 24")
+    if mutation == "nonfresh-input":
+        cursor = emit(cursor, "89 4c 24 12")
+    else:
+        cursor = emit(cursor, "c7 44 24 12 00 00 00 00")
+    cursor = emit(cursor, "53")
+    cursor = emit_call(cursor, 0x80)
+    cursor = emit(cursor, "59")
+    observation = text_va + cursor
+    emit(cursor, "89 d8 83 c4 20 5b c3")
+
+    # transform(outer): root = outer->head; root = fresh(root);
+    # outer->head = root.  The tag is deliberately initialized after the
+    # global publication to mirror the retail helper ordering.
+    cursor = emit(
+        0x80,
+        "53 56"
+        "8b 74 24 0c"
+    )
+    empty_branch = None
+    if traverse_outer:
+        cursor = emit(cursor, "85 f6")
+        empty_branch = cursor
+        cursor = emit(cursor, "74 00")
+    loop_head = cursor
+    cursor = emit(cursor, "8b 46 12" "a3 00 30 40 00")
+    if mutation == "decoy-global":
+        cursor = emit(cursor, "a3 08 30 40 00")
+    cursor = emit(cursor, "6a 1e")
+    cursor = emit_call(cursor, 0x180)
+    cursor = emit(cursor, "89 c3 59 85 db")
+    failure_branch = cursor
+    cursor = emit(cursor, "74 00")
+    if mutation == "missing-link":
+        cursor = emit(cursor, "89 0b")
+    else:
+        cursor = emit(cursor, "a1 00 30 40 00 89 03")
+    cursor = emit(cursor, "89 1d 00 30 40 00 c6 43 1c 29")
+    if mutation in {"pop", "bad-pop-offset"}:
+        pop_offset = 4 if mutation == "bad-pop-offset" else 0
+        cursor = emit(
+            cursor,
+            f"a1 00 30 40 00 8b 40 {pop_offset:02x}"
+            "a3 00 30 40 00",
+        )
+    cursor = emit(cursor, "a1 00 30 40 00")
+    storeback_field = 0x16 if mutation == "wrong-storeback" else 0x12
+    cursor = emit(cursor, f"89 46 {storeback_field:02x}")
+    if traverse_outer:
+        if traversal_mutation == "clobber-link":
+            cursor = emit(cursor, "c7 06 00 00 00 00")
+        cursor = emit(
+            cursor,
+            "8b 76 04" if traversal_mutation == "wrong-link" else "8b 36",
+        )
+        cursor = emit(cursor, "85 f6")
+        backedge = cursor
+        cursor = emit(cursor, "75 00")
+        patch_short(backedge, loop_head)
+    clean_return = cursor
+    cursor = emit(cursor, "5e 5b c3")
+    if empty_branch is not None:
+        patch_short(empty_branch, clean_return)
+    failure = cursor
+    emit(cursor, "eb fe")
+    text[failure_branch + 1] = failure - (failure_branch + 2)
+
+    # Retail-shaped fixed bump allocator and grow helper.
+    cursor = emit(
+        0x180,
+        "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08"
+        "39 1d 10 30 40 00 7d 0d 53"
+        "68 18 30 40 00",
+    )
+    cursor = emit_call(cursor, 0x1F0)
+    emit(
+        cursor,
+        "59 59 29 1d 10 30 40 00"
+        "a1 14 30 40 00 01 1d 14 30 40 00 5b c3",
+    )
+    emit(0x1F0, "c3")
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0x300,
+                0x300,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                0x300,
+                0x200,
+                0x200,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x300),),
+    )
+    return image, observation
+
+
+def fresh_tail_append_transformer_image(*, mutation=None):
+    """Append one fresh node to an argument-owned intrusive list."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {
+        None,
+        "missing-link",
+        "missing-probe",
+        "wrong-traversal",
+    }
+    text_va = 0x00401000
+    data_va = 0x00403000
+    data = bytearray(0x500)
+    text = memoryview(data)[:0x300]
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (
+            text_va + offset + 5
+        )
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    def patch_short(branch, target):
+        displacement = target - (branch + 2)
+        assert -0x80 <= displacement <= 0x7F
+        text[branch + 1] = displacement & 0xFF
+
+    cursor = emit(
+        0,
+        "53 83 ec 20 8d 1c 24"
+        "c7 44 24 12 00 00 00 00"
+        "53",
+    )
+    cursor = emit_call(cursor, 0x80)
+    cursor = emit(cursor, "59")
+    observation = text_va + cursor
+    emit(cursor, "89 d8 83 c4 20 5b c3")
+
+    cursor = emit(0x80, "53 56 57 8b 74 24 10 6a 1e")
+    cursor = emit_call(cursor, 0x180)
+    cursor = emit(cursor, "89 c3 59 85 db")
+    failure_branch = cursor
+    cursor = emit(cursor, "74 00")
+    if mutation == "missing-link":
+        cursor = emit(cursor, "89 0b")
+    else:
+        cursor = emit(cursor, "c7 03 00 00 00 00")
+    if mutation == "missing-probe":
+        cursor = emit(cursor, "90")
+    else:
+        cursor = emit(cursor, "c6 43 1c 29")
+    cursor = emit(cursor, "8b 7e 12 85 ff")
+    empty_branch = cursor
+    cursor = emit(cursor, "74 00")
+    loop = cursor
+    traversal_offset = 4 if mutation == "wrong-traversal" else 0
+    cursor = emit(cursor, f"8b 47 {traversal_offset:02x} 85 c0")
+    tail_branch = cursor
+    cursor = emit(cursor, "74 00 89 c7")
+    loop_branch = cursor
+    cursor = emit(cursor, "eb 00")
+    tail_publication = cursor
+    cursor = emit(cursor, "89 1f")
+    done_branch = cursor
+    cursor = emit(cursor, "eb 00")
+    head_publication = cursor
+    cursor = emit(cursor, "89 5e 12")
+    done = cursor
+    cursor = emit(cursor, "5f 5e 5b c3")
+    failure = cursor
+    emit(cursor, "eb fe")
+
+    patch_short(failure_branch, failure)
+    patch_short(empty_branch, head_publication)
+    patch_short(tail_branch, tail_publication)
+    patch_short(loop_branch, loop)
+    patch_short(done_branch, done)
+
+    cursor = emit(
+        0x180,
+        "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08"
+        "39 1d 10 30 40 00 7d 0d 53"
+        "68 18 30 40 00",
+    )
+    cursor = emit_call(cursor, 0x1F0)
+    emit(
+        cursor,
+        "59 59 29 1d 10 30 40 00"
+        "a1 14 30 40 00 01 1d 14 30 40 00 5b c3",
+    )
+    emit(0x1F0, "c3")
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0x300,
+                0x300,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                0x300,
+                0x200,
+                0x200,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x300),),
+    )
+    return image, observation
+
+
 def global_stack_callback_image(
     tmp_path,
     *,
@@ -5242,6 +5549,10 @@ def global_append_tail_pointee_image(*, mutation=None):
         "unknown-payload",
         "unselected-clone",
         "selected-clone",
+        "unrelated-root-caller",
+        "selected-empty-association",
+        "selected-overwritten-empty-association",
+        "consumer-post-observation-global-write",
     }
     text_va = 0x00401000
     rdata_va = 0x00402000
@@ -5262,6 +5573,8 @@ def global_append_tail_pointee_image(*, mutation=None):
 
     cursor = emit_call(0, 0x40)
     cursor = emit_call(cursor, 0xC0)
+    if mutation == "unrelated-root-caller":
+        cursor = emit_call(cursor, 0x3A0)
     if mutation == "out-of-scope-global-write":
         cursor = emit_call(cursor, 0x3E0)
     emit(cursor, "c3")
@@ -5271,7 +5584,22 @@ def global_append_tail_pointee_image(*, mutation=None):
         cursor = emit_call(cursor, 0x1C0)
         cursor = emit(cursor, f"83 c4 04 c6 04 24 {tag:02x}")
         cursor = emit(cursor, "8d 04 24 50")
-        append_target = 0x260 if mutation in {"unselected-clone", "selected-clone"} and tag == 74 else 0x200
+        append_target = (
+            0x260
+            if (
+                mutation in {"unselected-clone", "selected-clone"}
+                and tag == 74
+            )
+            or (
+                mutation
+                in {
+                    "selected-empty-association",
+                    "selected-overwritten-empty-association",
+                }
+                and tag == 0
+            )
+            else 0x200
+        )
         cursor = emit_call(cursor, append_target)
         cursor = emit(cursor, "83 c4 04")
         if mutation == "unselected-unknown-payload" and tag == 0:
@@ -5306,6 +5634,8 @@ def global_append_tail_pointee_image(*, mutation=None):
     loop_branch = cursor
     cursor = emit(cursor, "75 00")
     done = cursor
+    if mutation == "consumer-post-observation-global-write":
+        cursor = emit_call(cursor, 0x3E0)
     emit(cursor, "5e 5b c3")
     text[empty_branch + 1] = done - (empty_branch + 2)
     text[next_branch + 1] = next_node - (next_branch + 2)
@@ -5374,14 +5704,32 @@ def global_append_tail_pointee_image(*, mutation=None):
         regular_failure = cursor
         emit(cursor, "eb fe")
         text[regular_failure_branch + 1] = regular_failure - (regular_failure_branch + 2)
-    elif mutation == "unselected-unknown-payload":
+    elif mutation in {
+        "unselected-unknown-payload",
+        "selected-empty-association",
+        "selected-overwritten-empty-association",
+    }:
         cursor = emit(0x260, "53 6a 1a")
         cursor = emit_call(cursor, 0x300)
         cursor = emit(cursor, "59 89 c3 85 db")
         unselected_failure_branch = cursor
         cursor = emit(
             cursor,
-            "74 00 c7 03 00 00 00 00 c6 43 04 06 a1 00 30 40 00 89 18 89 1d 00 30 40 00 89 53 0a 5b c3",
+            (
+                "74 00 c7 03 00 00 00 00 c6 43 04 05 "
+                "89 53 0a a1 00 30 40 00 89 18 89 1d 00 30 40 00 "
+                "c7 43 0a 00 00 00 00 5b c3"
+                if mutation == "selected-overwritten-empty-association"
+                else
+                "74 00 c7 03 00 00 00 00 c6 43 04 05 "
+                "a1 00 30 40 00 89 18 89 1d 00 30 40 00 "
+                "c7 43 0a 00 00 00 00 5b c3"
+                if mutation == "selected-empty-association"
+                else
+                "74 00 c7 03 00 00 00 00 c6 43 04 06 "
+                "a1 00 30 40 00 89 18 89 1d 00 30 40 00 "
+                "89 53 0a 5b c3"
+            ),
         )
         unselected_failure = cursor
         emit(cursor, "eb fe")
@@ -5398,6 +5746,10 @@ def global_append_tail_pointee_image(*, mutation=None):
     assert cursor < 0x360
     emit(0x360, "c3")
     emit(0x380, "31 c0 57 8b 4c 24 0c 8b 7c 24 08 f3 aa 5f c3")
+    if mutation == "unrelated-root-caller":
+        cursor = emit(0x3A0, "83 ec 08 8d 04 24 50")
+        cursor = emit_call(cursor, 0x1C0)
+        emit(cursor, "59 83 c4 08 c3")
     emit(0x3C0, "c3")
     emit(0x3E0, "89 15 00 30 40 00 c3")
 
@@ -5467,8 +5819,195 @@ def test_global_append_tail_ignores_writer_outside_closed_lifetime():
     assert table.guard_bound == 74
 
 
+def test_global_append_tail_uses_exact_root_publication_caller():
+    image, _movzx_address, transfer_address = (
+        global_append_tail_pointee_image(
+            mutation="unrelated-root-caller",
+        )
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert cfg.jump_table_at(transfer_address).guard_bound == 74
+
+
+def test_global_append_tail_allows_selected_empty_association():
+    image, _movzx_address, transfer_address = (
+        global_append_tail_pointee_image(
+            mutation="selected-empty-association",
+        )
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert cfg.jump_table_at(transfer_address).guard_bound == 74
+
+
+def test_global_append_tail_returns_direct_scalar_tag():
+    image, _movzx_address, _transfer_address = (
+        global_append_tail_pointee_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    pointer_slot = 0x00403000
+    root_publication = next(
+        write.instruction_address
+        for write in recovery.global_slot_writes[pointer_slot]
+        if recovery._registrar_function_entry(
+            write.instruction_address
+        )
+        == 0x004011C0
+    )
+
+    effect = recovery._closed_global_append_tail_effect(
+        pointer_slot,
+        root_publication,
+        0,
+        (4,),
+        frozenset(),
+    )
+
+    assert effect is not None
+    assert effect.values == frozenset({5})
+
+
+def test_global_append_tail_returns_selected_clone_scalar_tag():
+    image, _movzx_address, _transfer_address = (
+        global_append_tail_pointee_image(mutation="selected-clone")
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    pointer_slot = 0x00403000
+    publication = next(
+        write.instruction_address
+        for write in recovery.global_slot_writes[pointer_slot]
+        if recovery._registrar_function_entry(
+            write.instruction_address
+        )
+        == 0x00401200
+    )
+
+    result = recovery._global_append_allocation_effect(
+        publication,
+        pointer_slot,
+        0,
+        (4,),
+        frozenset(),
+        (4, frozenset({5})),
+    )
+
+    assert result is not None
+    effect, _link_load, _link_writer, selected = result
+    assert selected
+    assert effect.values == frozenset({5})
+
+
+def test_global_append_tail_applies_lifetime_to_discriminator_path():
+    image, _movzx_address, transfer_address = (
+        global_append_tail_pointee_image(
+            mutation="consumer-post-observation-global-write",
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    pointer_slot = 0x00403000
+    root_owner = 0x004011C0
+    root_publication = next(
+        write.instruction_address
+        for write in recovery.global_slot_writes[pointer_slot]
+        if recovery._registrar_function_entry(
+            write.instruction_address
+        )
+        == root_owner
+    )
+    root_call = next(
+        address
+        for address in recovery.direct_call_sources_by_target[root_owner]
+        if recovery._registrar_function_entry(address) == 0x00401040
+    )
+    exact_context = (root_owner, root_call, 0x00401040)
+    guard = _ObjectByteGuard(
+        function_entry=0x00401140,
+        observation_address=transfer_address,
+        register_family="ebx",
+        field_path=(0, 10, 0),
+        discriminator_field=4,
+        values=frozenset({5}),
+        guard_address=transfer_address - 10,
+        provenance="modeled-tag-five-guard",
+        discriminator_path=(0, 4),
+    )
+    recovery.producer_exact_call_contexts.append(exact_context)
+    recovery.producer_object_guard_contexts.append(guard)
+    try:
+        effect = recovery._closed_global_append_tail_effect(
+            pointer_slot,
+            root_publication,
+            0,
+            (4,),
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_object_guard_contexts.pop() == guard
+        assert (
+            recovery.producer_exact_call_contexts.pop()
+            == exact_context
+        )
+
+    assert effect is not None
+    assert effect.values == frozenset({5})
+
+
+def test_global_append_tail_excludes_post_observation_consumer_calls():
+    image, _movzx_address, transfer_address = (
+        global_append_tail_pointee_image(
+            mutation="consumer-post-observation-global-write",
+        )
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert cfg.jump_table_at(transfer_address).guard_bound == 74
+
+
 def test_global_append_tail_accepts_finite_optional_payload_overwrite():
     image, _movzx_address, transfer_address = global_append_tail_pointee_image(mutation="finite-payload-overwrite")
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert cfg.jump_table_at(transfer_address).guard_bound == 74
+
+
+def test_global_append_tail_accepts_dominating_empty_overwrite():
+    image, _movzx_address, transfer_address = (
+        global_append_tail_pointee_image(
+            mutation="selected-overwritten-empty-association",
+        )
+    )
     cfg = recover_cfg(
         image,
         build_seed_inventory(image, ()),
@@ -5718,7 +6257,7 @@ def test_guarded_recursive_call_return_closes_from_terminal_base():
         assert recovery.producer_object_guard_contexts.pop() == guard
 
     assert result is not None
-    assert result[0] == frozenset({0x29})
+    assert result[0] == frozenset({0x29}), result
     assert "recursive-object-domain" in result[1]
 
 
@@ -9957,6 +10496,154 @@ def terminal_argument_pointer_publication_image(*, call_after_publication=False)
     )
 
 
+def zeroed_argument_global_publication_image(*, byte_count=0x1A):
+    """Zero arg0, publish it globally, then return through exact origins."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    zero_fill = 0x00401040
+    data_va = 0x00403000
+    text = bytearray(b"\x90" * 0x80)
+    cursor = 0
+
+    def emit(encoded):
+        nonlocal cursor
+        encoded = bytes.fromhex(encoded)
+        text[cursor : cursor + len(encoded)] = encoded
+        cursor += len(encoded)
+
+    emit("8b 44 24 04")  # mov eax, [esp + 4]
+    emit(f"6a {byte_count:02x}")  # push byte_count
+    emit("50")  # push eax
+    displacement = zero_fill - (text_va + cursor + 5)
+    emit("e8 " + displacement.to_bytes(4, "little", signed=True).hex())
+    emit("83 c4 08")
+    emit("8b 44 24 04")  # reload exact arg0
+    emit("a3 00 30 40 00")  # publish arg0 to the writable global
+    emit("31 c0 c3")
+    text[zero_fill - text_va : zero_fill - text_va + 15] = bytes.fromhex(
+        "31 c0 57 8b 4c 24 0c 8b 7c 24 08 f3 aa 5f c3"
+    )
+    data = bytes(text) + bytes(0x20)
+    return pe_mod.Image(
+        data=data,
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(text),
+                len(text),
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                len(text),
+                0x20,
+                0x20,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(text)),),
+    )
+
+
+def stack_zeroed_global_alias_image(mode):
+    """Zero a stack object, publish it, and exercise the live global alias."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mode in {"preserve", "mutate", "replace-then-mutate"}
+    text_va = 0x00401000
+    constructor = 0x00401040
+    zero_fill = 0x00401080
+    mutator = 0x004010A0
+    replacer = 0x004010C0
+    global_slot = 0x00403000
+    text = bytearray(b"\x90" * 0x100)
+
+    def emit(address, encoded):
+        encoded = bytes.fromhex(encoded)
+        offset = address - text_va
+        text[offset : offset + len(encoded)] = encoded
+        return address + len(encoded)
+
+    def emit_call(address, target):
+        displacement = target - (address + 5)
+        return emit(
+            address,
+            "e8" + displacement.to_bytes(4, "little", signed=True).hex(),
+        )
+
+    cursor = emit(text_va, "83 ec 20 8d 44 24 04 50")
+    cursor = emit_call(cursor, constructor)
+    cursor = emit(cursor, "59")
+    if mode == "replace-then-mutate":
+        cursor = emit_call(cursor, replacer)
+    if mode in {"mutate", "replace-then-mutate"}:
+        cursor = emit_call(cursor, mutator)
+    observation = cursor
+    emit(cursor, "8d 44 24 04 83 c4 20 c3")
+
+    cursor = emit(constructor, "8b 44 24 04 6a 1a 50")
+    cursor = emit_call(cursor, zero_fill)
+    cursor = emit(
+        cursor,
+        "83 c4 08 8b 44 24 04 a3 00 30 40 00 31 c0 c3",
+    )
+    emit(
+        zero_fill,
+        "31 c0 57 8b 4c 24 0c 8b 7c 24 08 f3 aa 5f c3",
+    )
+    emit(mutator, "a1 00 30 40 00 c6 40 12 7f c3")
+    emit(replacer, "c7 05 00 30 40 00 00 00 00 00 c3")
+
+    data = bytes(text) + bytes(0x20)
+    image = pe_mod.Image(
+        data=data,
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(text),
+                len(text),
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                global_slot,
+                len(text),
+                0x20,
+                0x20,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(text)),),
+    )
+    return image, observation
+
+
 def terminal_indirect_argument_pointer_publication_image(
     *,
     observe=False,
@@ -10580,6 +11267,63 @@ def test_callee_argument_effect_allows_terminal_global_pointer_publication():
 
     assert result is not None
     assert result[0] == frozenset()
+
+
+def test_callee_argument_effect_records_zero_fill_with_global_publication():
+    image = zeroed_argument_global_publication_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._callee_argument_byte_effect(
+        image.entrypoint,
+        0,
+        (0x12,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset({0})
+    assert "strict-zero-fill" in result[1]
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    (
+        ("preserve", frozenset({0})),
+        ("replace-then-mutate", frozenset({0})),
+        ("mutate", None),
+    ),
+)
+def test_stack_object_tracks_zeroing_callee_global_alias_until_observation(
+    mode,
+    expected,
+):
+    image, observation = stack_zeroed_global_alias_image(mode)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_stack_object_byte_values_before(
+        observation,
+        -0x1C,
+        image.entrypoint,
+        (0x12,),
+        frozenset(),
+    )
+
+    if expected is None:
+        assert result is None
+    else:
+        assert result is not None
+        assert result[0] == expected
+        assert "closed-stack-global-alias" in result[1]
 
 
 def test_callee_argument_effect_allows_terminal_indirect_pointer_publication():
@@ -13695,6 +14439,7 @@ def _modeled_guarded_association_result(
     nested_target=(6, 14, 0),
     nested_discriminator=(6, 0),
     nested_values=frozenset({3}),
+    nested_register="eax",
     close_outer=True,
 ):
     image, _factory_call, _consumer_call, _observation = guarded_call_return_object_origins_image()
@@ -13744,16 +14489,17 @@ def _modeled_guarded_association_result(
         field_path,
         visited,
     ):
-        assert register_family == "eax"
         assert current_function == function_entry
         if address == nested_address:
+            assert register_family == nested_register
             return None
         assert address == outer_address
+        assert register_family == "eax"
         recovery.producer_object_guard_contexts.append(nested_guard)
         try:
             nested = recovery._finite_object_byte_register_values_before(
                 nested_address,
-                "eax",
+                nested_register,
                 function_entry,
                 nested_target,
                 visited,
@@ -13840,6 +14586,17 @@ def test_guarded_object_association_induction_requires_strict_path_shift(
         monkeypatch,
         nested_target=(14, 0),
         nested_discriminator=(0,),
+    )
+
+    assert result is None
+
+
+def test_guarded_object_association_induction_requires_same_register(
+    monkeypatch,
+):
+    _recovery, result = _modeled_guarded_association_result(
+        monkeypatch,
+        nested_register="ebx",
     )
 
     assert result is None
@@ -15279,6 +16036,229 @@ def test_fresh_intrusive_list_bound_requires_closed_arena_nodes(
         assert result[0] == expected
         assert "fresh-intrusive-list" in result[1]
         assert "stride=0x20" in result[1]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, 0x0800_0000),
+        ("decoy-global", 0x0800_0000),
+        ("pop", 0x0800_0000),
+        ("bad-pop-offset", None),
+        ("missing-link", None),
+        ("nonfresh-input", None),
+        ("wrong-storeback", None),
+    ),
+)
+def test_fresh_intrusive_list_bound_follows_global_scratch_transformer(
+    mutation,
+    expected,
+):
+    image, observation = fresh_global_scratch_list_transformer_image(
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    head_operand = recovery._owned_decoded(observation).operands[1]
+
+    result = recovery._fresh_intrusive_list_node_bound_before(
+        observation,
+        head_operand,
+        image.entrypoint,
+        0,
+        0x1C,
+        0x20,
+        head_path=(0x12,),
+    )
+
+    if expected is None:
+        assert result is None
+    else:
+        assert result is not None
+        assert result[0] == expected
+        assert "allocator=0x401180" in result[1]
+
+
+@pytest.mark.parametrize(
+    ("traversal_mutation", "expected_links"),
+    (
+        (None, frozenset({0})),
+        ("wrong-link", frozenset({4})),
+        ("clobber-link", frozenset()),
+    ),
+)
+def test_allocation_pointee_effect_records_closed_outer_traversal(
+    traversal_mutation,
+    expected_links,
+):
+    image, _observation = fresh_global_scratch_list_transformer_image(
+        traverse_outer=True,
+        traversal_mutation=traversal_mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    requirement = x86_cfg_module._FreshObjectRequirement(
+        1,
+        frozenset({(0x1C,), (0, 0x1C)}),
+        0x20,
+    )
+    recovery.producer_fresh_object_requirements.append(requirement)
+    try:
+        effect = recovery._callee_argument_allocation_pointee_effect(
+            image.entrypoint + 0x80,
+            0,
+            0x12,
+            (0x1C,),
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_fresh_object_requirements.pop() is requirement
+
+    assert effect is not None
+    assert effect.traversal_links == expected_links
+
+
+def test_stack_call_consumes_guarded_outer_traversal_effect(
+    monkeypatch,
+):
+    image, observation = fresh_global_scratch_list_transformer_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    call_address = next(
+        call.address
+        for call in recovery.direct_calls
+        if call.target == image.entrypoint + 0x80
+    )
+    pushed = recovery._pushed_call_argument(call_address, 0)
+    assert pushed is not None
+    root_offset = recovery._stack_pointer_logical_offset(
+        pushed[0].address,
+        pushed[1],
+        image.entrypoint,
+    )
+    assert root_offset is not None
+    field_path = (0, 0x12, 0x1C)
+    guard = _ObjectByteGuard(
+        image.entrypoint,
+        observation,
+        "ebx",
+        field_path,
+        4,
+        frozenset({0x10}),
+        observation,
+        "modeled-tag-sixteen",
+        (0, 4),
+    )
+    calls = []
+
+    def modeled_effect(
+        function_entry,
+        argument_index,
+        target_field,
+        nested_path,
+        visited,
+    ):
+        calls.append(
+            (
+                function_entry,
+                argument_index,
+                target_field,
+                nested_path,
+            )
+        )
+        if target_field != 0x12 or nested_path != (0x1C,):
+            return None
+        return x86_cfg_module._AllocationPointeeEffect(
+            x86_cfg_module._AbstractObjectIdentity(
+                "modeled-fresh-list",
+                call_address,
+            ),
+            frozenset({0x29}),
+            "modeled-traversal-effect",
+            traversal_links=frozenset({0}),
+        )
+
+    monkeypatch.setattr(
+        recovery,
+        "_callee_argument_allocation_pointee_effect",
+        modeled_effect,
+    )
+    recovery.producer_object_guard_contexts.append(guard)
+    try:
+        result = recovery._stack_object_call_byte_effect(
+            call_address,
+            observation,
+            root_offset,
+            image.entrypoint,
+            field_path,
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_object_guard_contexts.pop() is guard
+
+    assert result is not None
+    assert result[0] == frozenset({0x29}), result
+    assert "guarded-association-traversal" in result[1]
+    assert (
+        image.entrypoint + 0x80,
+        0,
+        0x12,
+        (0x1C,),
+    ) in calls
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, 0x0800_0000),
+        ("missing-link", None),
+        ("missing-probe", None),
+        ("wrong-traversal", None),
+    ),
+)
+def test_fresh_intrusive_list_bound_follows_tail_append_transformer(
+    mutation,
+    expected,
+):
+    image, observation = fresh_tail_append_transformer_image(
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    head_operand = recovery._owned_decoded(observation).operands[1]
+
+    result = recovery._fresh_intrusive_list_node_bound_before(
+        observation,
+        head_operand,
+        image.entrypoint,
+        0,
+        0x1C,
+        0x20,
+        head_path=(0x12,),
+    )
+
+    if expected is None:
+        assert result is None
+    else:
+        assert result is not None
+        assert result[0] == expected
+        assert "allocator=0x401180" in result[1]
 
 
 @pytest.mark.parametrize(
@@ -16742,7 +17722,7 @@ def test_byte_producer_checkpoint_requires_durable_resume(tmp_path):
     assert len(certificates) == 1
     certificate = json.loads(certificates[0].read_bytes())
     assert certificate["compiler_sha256"] == image.sha256
-    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == ("movzx-producer-analysis-v22")
+    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == ("movzx-producer-analysis-v23")
     assert certificate["query"]["analysis_semantics"] == (_MOVZX_PRODUCER_ANALYSIS_SEMANTICS)
     assert certificate["query"]["movzx_address"] == 0x00401044
     assert certificate["result"] == {
