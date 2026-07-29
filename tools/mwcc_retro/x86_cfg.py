@@ -32233,15 +32233,12 @@ class _DirectCfgRecovery:
         call_row = self._previous_instruction(definition_address)
         if call_row is None:
             return None
-        call = next(
-            (row for row in self.direct_calls if row.address == call_row.address),
-            None,
-        )
-        if call is None:
+        call_address = call_row.address
+        if call_address not in self.direct_call_targets_by_source:
             return None
         arguments = []
         for argument_index in range(4):
-            pushed = self._pushed_call_argument(call.address, argument_index)
+            pushed = self._pushed_call_argument(call_address, argument_index)
             if pushed is None:
                 break
             arguments.append(pushed[1])
@@ -32307,7 +32304,7 @@ class _DirectCfgRecovery:
                     following_entry,
                 )
             ):
-                return _AbstractObjectIdentity("fresh-allocation", call.address)
+                return _AbstractObjectIdentity("fresh-allocation", call_address)
             condition = None
         return None
 

@@ -291,6 +291,23 @@ from 99.56 seconds to 95.19 seconds (4.4%) with identical resolver outcomes,
 approximately 2.68 GB maximum RSS, and no swap. Regressions require reuse of a
 call-free result and explicitly forbid caching across a call cleanup.
 
+### Indexed guarded-allocation call lookup
+
+The next profile found 4,880 guarded fresh-receiver checks spending about
+5.3 self seconds locating a call by linearly scanning the approximately
+26,000 recovered direct calls. Recovery already maintains the exact source
+address to direct-target index used throughout the remaining analysis. The
+guarded receiver check needs only to establish that the preceding instruction
+is an accepted direct call and to preserve its source address, so it can use
+that index without reconstructing a `DirectCall` row.
+
+This substitution reduced the identical profiled batch from 95.19 seconds to
+89.69 seconds (5.8%), for a cumulative 15.4% reduction from the corrected
+105.96-second baseline. Resolver outcomes remained identical, maximum RSS was
+approximately 2.50 GB, and no swap occurred. A regression replaces the
+complete direct-call set with an iteration-forbidden set and requires the
+guarded fresh-allocation identity to remain exact.
+
 ## Correctness Invariants
 
 - Cache-disabled, cold-cache, warm-cache, and evicted-cache runs return equal

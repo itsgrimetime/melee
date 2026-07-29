@@ -104,6 +104,12 @@ candidates partitioned.
   on hits; traversals crossing another call remain uncached.  The same profile
   improved again from 99.56 seconds to 95.19 seconds (4.4%), with identical
   outcomes, about 2.68 GB maximum RSS, and no swap.
+- Guarded fresh-receiver checks now use the existing exact direct-call source
+  index instead of linearly scanning approximately 26,000 recovered calls.
+  The same profile improved from 95.19 seconds to 89.69 seconds (5.8%), or
+  15.4% cumulatively from the corrected 105.96-second baseline, with identical
+  outcomes, about 2.50 GB maximum RSS, and no swap. This closes the bounded
+  optimization gate; the active lane returns to exact Task 4 proof closure.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published

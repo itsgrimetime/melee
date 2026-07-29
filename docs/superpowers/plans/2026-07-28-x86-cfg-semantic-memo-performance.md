@@ -815,6 +815,15 @@ crosses another call. The identical profile improved again from 99.56 seconds
 to 95.19 seconds (4.4%) with unchanged outcomes, about 2.68 GB maximum RSS,
 and no swap.
 
+The final bounded profile found 4,880 guarded fresh-receiver checks linearly
+scanning the approximately 26,000 recovered direct calls by source address.
+Use the existing exact source-address index instead. The identical profile
+improved from 95.19 seconds to 89.69 seconds (5.8%), a cumulative 15.4%
+reduction from the corrected 105.96-second baseline, with unchanged outcomes,
+about 2.50 GB maximum RSS, and no swap. This meets the bounded optimization
+gate; return the active lane to exact Task 4 closure rather than pursuing
+larger architectural work.
+
 - [ ] **Step 7: Run exact Task 4 closure twice** (in progress)
 
 Use the ordinary branch-local `probe-backend-map --static-only` workflow and

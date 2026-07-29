@@ -18992,6 +18992,36 @@ def test_incoming_call_sites_use_target_index(tmp_path):
     assert recovery._incoming_call_sites(0x004010A0) == expected
 
 
+def test_guarded_fresh_receiver_uses_direct_call_index():
+    class NoIterationSet(set):
+        def __iter__(self):
+            raise AssertionError(
+                "guarded fresh receiver scanned every direct call"
+            )
+
+    image = fresh_string_copy_argument_effect_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.direct_calls = NoIterationSet(recovery.direct_calls)
+
+    identity = recovery._guarded_fresh_receiver_identity(
+        image.entrypoint + 0x17,
+        image.entrypoint + 0x0D,
+        "esi",
+        image.entrypoint,
+        1,
+    )
+
+    assert identity == _AbstractObjectIdentity(
+        "fresh-allocation",
+        image.entrypoint + 8,
+    )
+
+
 def test_owned_instruction_reuses_audited_decode(tmp_path, monkeypatch):
     image = load_dispatch_image(tmp_path, mode="copied-descriptor-registered-object")
     recovery = _DirectCfgRecovery(
