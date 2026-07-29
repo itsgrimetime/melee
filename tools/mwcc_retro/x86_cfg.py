@@ -36706,7 +36706,11 @@ class _DirectCfgRecovery:
         command_root_field = root_argument[1].mem.disp
 
         def result_targets_before(
-            address: int, family: str, function_entry: int
+            address: int,
+            family: str,
+            function_entry: int,
+            *,
+            allow_guarded_zero: bool,
         ) -> frozenset[int] | None:
             definitions = self._register_definitions_across_blocks(
                 address, family, function_entry
@@ -36722,6 +36726,28 @@ class _DirectCfgRecovery:
                         return None
                     targets.add(target)
                     continue
+                literal_zero = (
+                    definition.id == X86_INS_XOR
+                    and len(definition.operands) == 2
+                    and all(
+                        operand.type == X86_OP_REG
+                        and operand.size == 4
+                        and self._register_family(operand.reg) == family
+                        for operand in definition.operands
+                    )
+                ) or (
+                    definition.id == X86_INS_MOV
+                    and len(definition.operands) == 2
+                    and definition.operands[0].type == X86_OP_REG
+                    and self._register_family(
+                        definition.operands[0].reg
+                    )
+                    == family
+                    and definition.operands[1].type == X86_OP_IMM
+                    and definition.operands[1].imm & 0xFFFF_FFFF == 0
+                )
+                if literal_zero and allow_guarded_zero:
+                    continue
                 if not (
                     definition.id == X86_INS_MOV
                     and len(definition.operands) == 2
@@ -36733,6 +36759,7 @@ class _DirectCfgRecovery:
                     definition_address,
                     self._register_family(definition.operands[1].reg),
                     function_entry,
+                    allow_guarded_zero=allow_guarded_zero,
                 )
                 if nested is None:
                     return None
@@ -36750,14 +36777,37 @@ class _DirectCfgRecovery:
         producer_entry = next(iter(producer_entries))
         self._note_producer_dependency(producer_entry)
         helper_targets = set()
+        helper_result_guards = set()
         for call in consumer_incoming:
             pushed = self._pushed_call_argument(call.address, 0)
             if pushed is None or pushed[1].type != X86_OP_REG:
                 return block("descriptor consumer argument is not a helper result")
+            family = self._register_family(pushed[1].reg)
+            guard = self._dominating_nonzero_guard(
+                pushed[0].address,
+                pushed[1],
+                producer_entry,
+            )
+            allow_guarded_zero = (
+                guard is not None
+                and self._register_definitions_across_blocks(
+                    guard[0],
+                    family,
+                    producer_entry,
+                )
+                == self._register_definitions_across_blocks(
+                    pushed[0].address,
+                    family,
+                    producer_entry,
+                )
+            )
+            if allow_guarded_zero:
+                helper_result_guards.add(guard)
             targets = result_targets_before(
                 pushed[0].address,
-                self._register_family(pushed[1].reg),
+                family,
                 producer_entry,
+                allow_guarded_zero=allow_guarded_zero,
             )
             if targets is None or len(targets) != 1:
                 return block("descriptor helper-result domain is incomplete")
@@ -36835,12 +36885,14 @@ class _DirectCfgRecovery:
             return block("descriptor lookup is not a null-terminated array walk")
 
         helper_calls = self._direct_calls_to(lookup_helper)
-        if not helper_calls or any(
-            self._registrar_function_entry(row.address) != producer_entry
+        producer_helper_calls = tuple(
+            row
             for row in helper_calls
-        ):
-            return block("descriptor lookup is used outside its producer")
-        for call in helper_calls:
+            if self._registrar_function_entry(row.address) == producer_entry
+        )
+        if not producer_helper_calls:
+            return block("descriptor lookup is not called by its producer")
+        for call in producer_helper_calls:
             pushed = self._pushed_call_argument(call.address, 0)
             if pushed is None or (
                 self._stack_argument_index_at(
@@ -36914,6 +36966,7 @@ class _DirectCfgRecovery:
                 pushed[0].address,
                 self._register_family(operand.reg),
                 caller,
+                allow_guarded_zero=False,
             )
             if targets is None or len(targets) != 1:
                 return block("top-level descriptor registry helper is ambiguous")
@@ -37315,8 +37368,18 @@ class _DirectCfgRecovery:
             f"handler-types={','.join(str(row) for row in sorted(handler_types))};"
             f"walker={walker_entry:#x};next-field={next_field:+#x};"
             f"consumer={consumer_entry:#x};root-field={command_root_field:+#x};"
+            "helper-result-guards="
+            + (
+                ",".join(
+                    f"{condition:#x}/{branch:#x}"
+                    for condition, branch in sorted(helper_result_guards)
+                )
+                or "none"
+            )
+            + ";"
             f"lookup={lookup_helper:#x};registry-root={registry_root:#x};"
             f"registry-field={registry_field:+#x};"
+            f"lookup-callers={len(helper_calls)};"
             f"compiler-descriptor={compiler_descriptor:#x};"
             f"groups={group_count};containers={len(seen_containers)};"
             f"descriptors={len(descriptors)};nodes={len(command_nodes)}"

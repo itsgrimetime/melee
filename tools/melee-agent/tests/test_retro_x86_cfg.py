@@ -476,7 +476,14 @@ def generous_limits(image):
 
 def registered_static_command_image(*, mutation=None):
     """Closed registered descriptor graph with type-13/15 callbacks."""
-    assert mutation in {None, "unrelocated-node-link", "hidden-setter-caller"}
+    assert mutation in {
+        None,
+        "external-lookup-caller",
+        "guarded-helper-result-merge",
+        "guarded-nonhelper-result-merge",
+        "hidden-setter-caller",
+        "unrelocated-node-link",
+    }
     text_va = 0x00401000
     data_va = 0x00402000
     root = text_va
@@ -497,6 +504,7 @@ def registered_static_command_image(*, mutation=None):
     setter = text_va + 0x250
     callback_13 = text_va + 0x270
     callback_15 = text_va + 0x280
+    external_lookup = text_va + 0x2A0
 
     dispatch_table = data_va
     compiler_descriptor = data_va + 0x100
@@ -544,7 +552,10 @@ def registered_static_command_image(*, mutation=None):
     cursor = emit_call(cursor, fixed_registry)
     cursor = emit(cursor, "50")
     cursor = emit_call(cursor, wrapper)
-    cursor = emit(cursor, "83c404c3")
+    cursor = emit(cursor, "83c404")
+    if mutation == "external-lookup-caller":
+        cursor = emit_call(cursor, external_lookup)
+    cursor = emit(cursor, "c3")
     assert cursor <= dispatcher
 
     cursor = dispatcher
@@ -615,17 +626,44 @@ def registered_static_command_image(*, mutation=None):
     patch_short_branch(lookup_done_branch, lookup_done)
     patch_short_branch(loop_back, lookup + 7)
 
-    cursor = emit(producer, "568b74240856")
-    cursor = emit_call(cursor, lookup)
-    cursor = emit(cursor, "83c40485c0")
-    producer_done_branch = cursor
-    cursor = emit(cursor, "7400")
-    cursor = emit(cursor, "50")
-    cursor = emit_call(cursor, consumer)
-    cursor = emit(cursor, "83c404")
-    producer_done = cursor
-    emit(cursor, "5ec3")
-    patch_short_branch(producer_done_branch, producer_done)
+    if mutation in {
+        "guarded-helper-result-merge",
+        "guarded-nonhelper-result-merge",
+    }:
+        cursor = emit(producer, "568b742408")
+        if mutation == "guarded-helper-result-merge":
+            cursor = emit(cursor, "31ff")
+        else:
+            cursor = emit_absolute(cursor, "bf", compiler_descriptor)
+        cursor = emit(cursor, "85f6")
+        skip_helper_branch = cursor
+        cursor = emit(cursor, "7400")
+        cursor = emit(cursor, "56")
+        cursor = emit_call(cursor, lookup)
+        cursor = emit(cursor, "83c40489c7")
+        merged_result = cursor
+        cursor = emit(cursor, "85ff")
+        producer_done_branch = cursor
+        cursor = emit(cursor, "7400")
+        cursor = emit(cursor, "57")
+        cursor = emit_call(cursor, consumer)
+        cursor = emit(cursor, "83c404")
+        producer_done = cursor
+        emit(cursor, "5ec3")
+        patch_short_branch(skip_helper_branch, merged_result)
+        patch_short_branch(producer_done_branch, producer_done)
+    else:
+        cursor = emit(producer, "568b74240856")
+        cursor = emit_call(cursor, lookup)
+        cursor = emit(cursor, "83c40485c0")
+        producer_done_branch = cursor
+        cursor = emit(cursor, "7400")
+        cursor = emit(cursor, "50")
+        cursor = emit_call(cursor, consumer)
+        cursor = emit(cursor, "83c404")
+        producer_done = cursor
+        emit(cursor, "5ec3")
+        patch_short_branch(producer_done_branch, producer_done)
 
     cursor = emit(wrapper, "8b44240450")
     cursor = emit_call(cursor, producer)
@@ -667,6 +705,10 @@ def registered_static_command_image(*, mutation=None):
     emit(cursor, "c3")
     emit(callback_13, "c3")
     emit(callback_15, "c3")
+    if mutation == "external-lookup-caller":
+        cursor = emit_absolute(external_lookup, "68", registry_root)
+        cursor = emit_call(cursor, lookup)
+        emit(cursor, "83c404c3")
     if mutation == "hidden-setter-caller":
         emit(text_va + 0x2A0, "e8")
         displacement = setter - (text_va + 0x2A0 + 5)
@@ -764,6 +806,65 @@ def test_registered_static_command_callbacks_are_closed():
     assert set(seeds) == set(callbacks)
     assert all("compiler-descriptor=0x402100" in row.detail for row in seeds.values())
     assert all("groups=1;containers=1;descriptors=1;nodes=2" in row.detail for row in seeds.values())
+
+
+def test_registered_static_command_accepts_guarded_zero_helper_merge():
+    image, call_sites, callbacks = registered_static_command_image(
+        mutation="guarded-helper-result-merge"
+    )
+    cfg = recover_cfg(image, (image.entrypoint,), generous_limits(image))
+    edges = {(row.source, row.target, row.kind) for row in cfg.edges}
+
+    assert all(
+        (
+            call_site,
+            callback,
+            "indirect-call-registered-static-command",
+        )
+        in edges
+        for call_site, callback in zip(call_sites, callbacks, strict=True)
+    )
+
+
+def test_registered_static_command_accepts_unrelated_lookup_caller():
+    image, call_sites, callbacks = registered_static_command_image(
+        mutation="external-lookup-caller"
+    )
+    cfg = recover_cfg(image, (image.entrypoint,), generous_limits(image))
+    edges = {(row.source, row.target, row.kind) for row in cfg.edges}
+
+    assert all(
+        (
+            call_site,
+            callback,
+            "indirect-call-registered-static-command",
+        )
+        in edges
+        for call_site, callback in zip(call_sites, callbacks, strict=True)
+    )
+
+
+def test_registered_static_command_rejects_guarded_nonhelper_merge():
+    image, call_sites, callbacks = registered_static_command_image(
+        mutation="guarded-nonhelper-result-merge"
+    )
+    cfg = recover_cfg(image, (image.entrypoint,), generous_limits(image))
+    edges = {(row.source, row.target, row.kind) for row in cfg.edges}
+
+    assert not any(
+        (
+            call_site,
+            callback,
+            "indirect-call-registered-static-command",
+        )
+        in edges
+        for call_site, callback in zip(call_sites, callbacks, strict=True)
+    )
+    assert any(
+        row.kind == "computed-flow-blocker"
+        and "descriptor helper-result domain is incomplete" in row.detail
+        for row in cfg.ownership_diagnostics
+    )
 
 
 def test_registered_static_command_rejects_unrelocated_graph_link():

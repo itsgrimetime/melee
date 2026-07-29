@@ -60,6 +60,20 @@ candidates partitioned.
   has the finite domain `{0}`; its dominating nonzero guard therefore makes
   the transfer unreachable.  This raises the locally demonstrated exact
   blocker closures to seven before replay.
+- Re-running the global-slot resolver against the hydrated exact graph after
+  the least-reachable caller-domain fix closes `0x4743e3` without any new
+  correlation rule.  Its loader-zero slot now has four proved nonzero callback
+  values supplied by the closed registrar argument domain.  This raises the
+  locally demonstrated exact blocker closures to eight before replay.
+- The registered-static command proof now follows a helper result through a
+  guarded merge with literal zero, provided the same reaching-definition set
+  is tested and passed to the descriptor consumer.  It validates only the
+  producer's calls to the pure lookup helper while retaining a closed domain
+  for every direct helper caller, so unrelated read-only lookup users do not
+  invalidate the graph.  Positive and hostile fixtures are green, and exact
+  hydration closes `0x42a1aa` and `0x42a304` with 16 and one relocated callback
+  targets respectively.  This raises the locally demonstrated exact blocker
+  closures to ten before replay.
 - The fourth exact continuation completed 128 queries in 3,232.45 seconds at
   5.27 GB maximum RSS with no swap, then exposed a further 24-query wave.
 - The retained finite-control indexes advanced the same 420-second profiled
@@ -145,8 +159,8 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 955 passed.
-- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,082 passed.
+- `test_retro_x86_cfg.py`: 958 passed.
+- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,085 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
 - Task 8 focused/adjacent suites: 184 / 533 passed.
