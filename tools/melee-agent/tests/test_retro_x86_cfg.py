@@ -14337,6 +14337,131 @@ def returned_fresh_argument_copy_image(
     return image, call_address, allocation_call, return_address
 
 
+def bounded_global_signed_word_image(*, mutation=None):
+    """Load a word closed over copy, selected-loop, and zero writers."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {
+        None,
+        "cyclic-copy",
+        "unknown-writer",
+        "partial-overlap",
+        "address-escape",
+    }
+    text_va = 0x00401000
+    data_va = 0x00403000
+    slot = data_va + 0x20
+    immutable_word = data_va + 0x30
+    selector_table = data_va + 0x40
+    data = bytearray(0x400)
+    text = memoryview(data)[:0x200]
+    relocations = []
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_absolute(offset, prefix, absolute, suffix=""):
+        prefix = bytes.fromhex(prefix)
+        suffix = bytes.fromhex(suffix)
+        text[offset : offset + len(prefix)] = prefix
+        relocation_offset = offset + len(prefix)
+        text[
+            relocation_offset : relocation_offset + 4
+        ] = absolute.to_bytes(4, "little")
+        text[
+            relocation_offset + 4 : relocation_offset + 4 + len(suffix)
+        ] = suffix
+        relocations.append(pe_mod.Relocation(text_va + relocation_offset, 3))
+        return relocation_offset + 4 + len(suffix)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        text[offset + 1 : offset + 5] = (
+            text_va + target_offset - (text_va + offset + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit_call(0, 0x40)
+    cursor = emit_call(cursor, 0x80)
+    cursor = emit_call(cursor, 0xC0)
+    if mutation == "cyclic-copy":
+        cursor = emit_call(cursor, 0xE0)
+    if mutation == "address-escape":
+        cursor = emit(cursor, "68")
+        text[cursor : cursor + 4] = slot.to_bytes(4, "little")
+        relocations.append(pe_mod.Relocation(text_va + cursor, 3))
+        cursor += 4
+        cursor = emit(cursor, "59")
+    load_address = text_va + cursor
+    cursor = emit_absolute(cursor, "0f bf 05", slot)
+    emit(cursor, "c3")
+
+    cursor = 0x40
+    if mutation == "unknown-writer":
+        cursor = emit_absolute(cursor, "66 89 0d", slot)
+    else:
+        cursor = emit_absolute(cursor, "66 a1", immutable_word)
+        cursor = emit_absolute(cursor, "66 a3", slot)
+    emit(cursor, "c3")
+
+    cursor = emit(0x80, "ba 20 00 00 00 b9 1f 00 00 00")
+    loop = cursor
+    cursor = emit_absolute(cursor, "80 b9", selector_table, "01")
+    cursor = emit(cursor, "75 02 89 ca 49 83 f9 0e")
+    backedge = cursor
+    cursor = emit(cursor, "7d 00")
+    text[backedge + 1] = (loop - (backedge + 2)) & 0xFF
+    cursor = emit(cursor, "b8 20 00 00 00 29 d0")
+    cursor = emit_absolute(cursor, "66 a3", slot)
+    emit(cursor, "c3")
+
+    cursor = emit_absolute(0xC0, "66 c7 05", slot, "00 00")
+    if mutation == "partial-overlap":
+        cursor = emit_absolute(cursor, "c6 05", slot + 1, "00")
+    emit(cursor, "c3")
+
+    if mutation == "cyclic-copy":
+        cursor = emit_absolute(0xE0, "66 a1", slot)
+        cursor = emit_absolute(cursor, "66 a3", immutable_word)
+        emit(cursor, "c3")
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0x200,
+                0x200,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                0x200,
+                0x200,
+                0x200,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(relocations),
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+    return image, load_address, slot
+
+
 @pytest.mark.parametrize(
     ("allocation_size", "overlap", "escape", "expected"),
     (
@@ -14380,6 +14505,84 @@ def test_returned_fresh_argument_copy_binds_extent_and_preservation(
         assert result is not None
         assert result[0] == expected
         assert "extent=0x20..0x20" in result[1]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, (0, 0x12)),
+        ("cyclic-copy", (0, 0x12)),
+        ("unknown-writer", None),
+        ("partial-overlap", None),
+        ("address-escape", None),
+    ),
+)
+def test_bounded_global_signed_word_closes_every_writer(mutation, expected):
+    image, load_address, slot = bounded_global_signed_word_image(
+        mutation=mutation
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    load = recovery._owned_decoded(load_address)
+
+    result = recovery._bounded_nonnegative_signed_word_operand_before(
+        load_address + load.size,
+        load.operands[0],
+        image.entrypoint,
+    )
+
+    if expected is None:
+        assert result is None
+    else:
+        assert result is not None
+        assert result[:2] == expected
+        assert "global-signed-word" in result[2]
+        assert "loop-selected-difference" in result[2]
+        assert recovery.bounded_signed_word_global_slot_cache
+        dependencies = set()
+        recovery.producer_dependency_collectors.append(dependencies)
+        try:
+            assert (
+                recovery._bounded_nonnegative_signed_word_operand_before(
+                    load_address + load.size,
+                    load.operands[0],
+                    image.entrypoint,
+                )
+                == result
+            )
+        finally:
+            assert (
+                recovery.producer_dependency_collectors.pop()
+                is dependencies
+            )
+        assert ("global-slot", slot) in dependencies
+        assert {
+            ("function", image.entrypoint + 0x40),
+            ("function", image.entrypoint + 0x80),
+            ("function", image.entrypoint + 0xC0),
+        } <= dependencies
+        prior_fingerprint = recovery._producer_dependency_fingerprint(
+            "global-slot",
+            slot,
+        )
+        writer = min(recovery.absolute_memory_writes[slot])
+        instruction = recovery.instructions[writer]
+        recovery.instructions[writer] = replace(
+            instruction,
+            bytes_hex=instruction.bytes_hex + "00",
+        )
+        recovery.absolute_memory_write_count += 1
+        assert (
+            recovery._producer_dependency_fingerprint(
+                "global-slot",
+                slot,
+            )
+            != prior_fingerprint
+        )
 
 
 def test_byte_producer_follows_nested_fresh_return_allocations():

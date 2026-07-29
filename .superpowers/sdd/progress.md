@@ -189,6 +189,16 @@ candidates partitioned.
   `0x28..0x60c1c`.  The full CFG file is 999 passing tests and the adjacent
   Task 4 slice is 1,126 passing tests; scoped Ruff, `py_compile`, and
   `git diff --check` are green.
+- The remaining tag-1 constructor widths are closed over the retail signed
+  global-word network.  All relocated references must be direct accesses;
+  every overlapping writer must be an exact whole-word immediate, a
+  straight-line word copy, or the bounded `0x20 - selected_counter` loop
+  shape.  The cyclic copy component
+  `{0x581370,0x5883ea,0x588438,0x58843a}` has the exact nonnegative interval
+  `0..18`, and all four formerly open wrapper callsites now prove constructor
+  byte `{1}`.  Unknown writers, partial overlaps, and address escapes remain
+  blocked.  A dependency-aware cache replays every slot and writer-function
+  dependency without rescanning the network for each caller.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published
@@ -254,8 +264,8 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 999 passed.
-- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,126 passed.
+- `test_retro_x86_cfg.py`: 1,004 passed.
+- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,131 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
 - Task 8 focused/adjacent suites: 184 / 533 passed.

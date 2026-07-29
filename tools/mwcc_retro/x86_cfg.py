@@ -2080,6 +2080,14 @@ class _DirectCfgRecovery:
         self.highlow_relocation_references_by_value: (
             dict[int, frozenset[int]] | None
         ) = None
+        self.bounded_signed_word_global_slot_cache: dict[
+            tuple[Any, ...],
+            tuple[
+                tuple[int, int, str],
+                frozenset[int],
+                frozenset[int],
+            ],
+        ] = {}
         self.initializer_relocation_lookup_count = 0
         self.seed_records = set(seed_inventory.records)
         self.instructions: dict[int, Instruction] = {}
@@ -2108,6 +2116,7 @@ class _DirectCfgRecovery:
         self.global_slot_writes: dict[int, set[_GlobalSlotWrite]] = {}
         self.global_slot_write_count = 0
         self.absolute_memory_writes: dict[int, set[int]] = {}
+        self.absolute_memory_write_count = 0
         self.dynamic_field_writes: dict[int, set[_DynamicFieldWrite]] = {}
         self.dynamic_field_write_count = 0
         self.dynamic_field_cache: dict[
@@ -2184,7 +2193,7 @@ class _DirectCfgRecovery:
             int, tuple[tuple[Any, ...], str]
         ] = {}
         self.producer_dependency_fingerprint_cache: dict[
-            tuple[str, int], tuple[int, str]
+            tuple[str, int], tuple[Any, str]
         ] = {}
         self.producer_seed_revision = 0
         self.producer_seed_index_version = (-1, -1)
@@ -2794,13 +2803,18 @@ class _DirectCfgRecovery:
             return self._producer_function_fingerprint(identifier)
         if dependency_kind == "global-slot":
             cache_key = (dependency_kind, identifier)
+            version = (
+                self.global_slot_write_count,
+                len(self.absolute_memory_writes),
+                self.absolute_memory_write_count,
+            )
             cached = self.producer_dependency_fingerprint_cache.get(cache_key)
             if (
                 cached is not None
-                and cached[0] == self.global_slot_write_count
+                and cached[0] == version
             ):
                 return cached[1]
-            rows = (
+            rows = [
                 f"{row.instruction_address:#x}:{row.value if row.value is not None else 'unknown'}:{row.provenance}"
                 for row in sorted(
                     self.global_slot_writes.get(identifier, ()),
@@ -2810,12 +2824,32 @@ class _DirectCfgRecovery:
                         row.provenance,
                     ),
                 )
+            ]
+            rows.extend(
+                f"absolute={write_start:#x}:{writer:#x}:"
+                f"{self.instructions[writer].bytes_hex}:"
+                f"width={destination.size}"
+                for write_start, writers in sorted(
+                    self.absolute_memory_writes.items()
+                )
+                for writer in sorted(writers)
+                for destination in self._owned_decoded(writer).operands
+                if (
+                    destination.type == X86_OP_MEM
+                    and destination.access & CS_AC_WRITE
+                    and destination.size > 0
+                    and self._absolute_memory_operand(destination)
+                    == write_start
+                    and write_start < identifier + 4
+                    and identifier
+                    < write_start + destination.size
+                )
             )
             digest = hashlib.sha256(
                 "\n".join(rows).encode("utf-8")
             ).hexdigest()
             self.producer_dependency_fingerprint_cache[cache_key] = (
-                self.global_slot_write_count,
+                version,
                 digest,
             )
             return digest
@@ -3176,7 +3210,13 @@ class _DirectCfgRecovery:
         for operand in decoded.operands:
             absolute = self._absolute_memory_operand(operand)
             if absolute is not None and operand.access & CS_AC_WRITE:
-                self.absolute_memory_writes.setdefault(absolute, set()).add(address)
+                writers = self.absolute_memory_writes.setdefault(
+                    absolute,
+                    set(),
+                )
+                before = len(writers)
+                writers.add(address)
+                self.absolute_memory_write_count += len(writers) - before
         for byte_address in range(address, end):
             self.byte_owners[byte_address] = address
         self._check_count("max_instructions", len(self.instructions))
@@ -25111,6 +25151,581 @@ class _DirectCfgRecovery:
             f"bounded-unsigned-interval={result[0]:#x}..{result[1]:#x}",
         )
 
+    def _highlow_references_to_value(self, value: int) -> frozenset[int]:
+        """Return every HIGHLOW relocation whose loader value is ``value``."""
+        if self.highlow_relocation_references_by_value is None:
+            references_by_value: dict[int, set[int]] = {}
+            for relocation in self.image.relocations:
+                if not (
+                    relocation.type == 3
+                    and _is_mapped_span(
+                        self.image,
+                        relocation.va,
+                        4,
+                    )
+                ):
+                    continue
+                relocated_value = int.from_bytes(
+                    _read_loader_initialized(
+                        self.image,
+                        relocation.va,
+                        4,
+                    ),
+                    "little",
+                )
+                references_by_value.setdefault(
+                    relocated_value,
+                    set(),
+                ).add(relocation.va)
+            self.highlow_relocation_references_by_value = {
+                relocated_value: frozenset(addresses)
+                for relocated_value, addresses in references_by_value.items()
+            }
+        return self.highlow_relocation_references_by_value.get(
+            value,
+            frozenset(),
+        )
+
+    def _absolute_slot_has_only_direct_references(
+        self,
+        slot: int,
+    ) -> bool:
+        """Require every relocated reference to one slot to be a direct access."""
+        references = self._highlow_references_to_value(slot)
+        return bool(
+            references
+            and not any(row.va == slot for row in self.image.exports)
+            and all(
+                (owner := self.byte_owners.get(reference)) is not None
+                and any(
+                    operand.type == X86_OP_MEM
+                    and self._absolute_memory_operand(operand) == slot
+                    for operand in self._owned_decoded(owner).operands
+                )
+                for reference in references
+            )
+        )
+
+    def _absolute_word_register_source_before(
+        self,
+        address: int,
+        register_family: str,
+        function_entry: int,
+    ) -> tuple[int, str] | None:
+        """Trace one register to a straight-line absolute word load."""
+        cursor = address
+        for _ in range(16):
+            previous = self._previous_instruction(cursor)
+            if previous is None or previous.address < function_entry:
+                return None
+            decoded = self._owned_decoded(previous.address)
+            writes_family = any(
+                self._register_family(register) == register_family
+                for register in decoded.regs_write
+                if register != x86_const.X86_REG_EFLAGS
+            ) or any(
+                operand.type == X86_OP_REG
+                and operand.access & CS_AC_WRITE
+                and self._register_family(operand.reg) == register_family
+                for operand in decoded.operands
+            )
+            if writes_family:
+                if not (
+                    decoded.id == X86_INS_MOV
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_REG
+                    and self._register_family(decoded.operands[0].reg)
+                    == register_family
+                    and decoded.operands[1].type == X86_OP_MEM
+                    and decoded.operands[1].size == 2
+                    and (
+                        source_slot := self._absolute_memory_operand(
+                            decoded.operands[1]
+                        )
+                    )
+                    is not None
+                    and self._absolute_slot_has_only_direct_references(
+                        source_slot
+                    )
+                ):
+                    return None
+                return (
+                    source_slot,
+                    f"absolute-word-source={source_slot:#x};"
+                    f"load={decoded.address:#x}",
+                )
+            if (
+                decoded.group(CS_GRP_CALL)
+                or decoded.group(CS_GRP_JUMP)
+                or decoded.group(CS_GRP_RET)
+                or previous.address in self.block_starts
+            ):
+                return None
+            cursor = previous.address
+        return None
+
+    def _bounded_immutable_word_register_before(
+        self,
+        address: int,
+        register_family: str,
+        function_entry: int,
+    ) -> tuple[int, int, str] | None:
+        """Trace one register to an immutable absolute unsigned-word load."""
+        source = self._absolute_word_register_source_before(
+            address,
+            register_family,
+            function_entry,
+        )
+        if source is None:
+            return None
+        source_slot, source_detail = source
+        if any(
+            write_start < source_slot + 2
+            and source_slot < write_start + destination.size
+            for write_start, writers in self.absolute_memory_writes.items()
+            for writer in writers
+            for destination in self._owned_decoded(writer).operands
+            if (
+                destination.type == X86_OP_MEM
+                and destination.access & CS_AC_WRITE
+                and destination.size > 0
+                and self._absolute_memory_operand(destination)
+                == write_start
+            )
+        ):
+            return None
+        try:
+            raw = _read_loader_initialized(
+                self.image,
+                source_slot,
+                2,
+            )
+        except ValueError:
+            return None
+        value = int.from_bytes(raw, "little")
+        if value > 0x7FFF:
+            return None
+        return (
+            value,
+            value,
+            f"immutable-word={source_slot:#x};"
+            f"value={value:#x};{source_detail}",
+        )
+
+    def _bounded_loop_selected_difference_before(
+        self,
+        address: int,
+        operand,
+        function_entry: int,
+    ) -> tuple[int, int, str] | None:
+        """Recognize ``base - selected descending-loop counter``."""
+        if operand.type != X86_OP_REG:
+            return None
+        result_family = self._register_family(operand.reg)
+        subtraction = None
+        cursor = address
+        for _ in range(8):
+            previous = self._previous_instruction(cursor)
+            if previous is None or previous.address < function_entry:
+                return None
+            decoded = self._owned_decoded(previous.address)
+            writes_result = any(
+                self._register_family(register) == result_family
+                for register in decoded.regs_write
+                if register != x86_const.X86_REG_EFLAGS
+            ) or any(
+                candidate.type == X86_OP_REG
+                and candidate.access & CS_AC_WRITE
+                and self._register_family(candidate.reg) == result_family
+                for candidate in decoded.operands
+            )
+            if writes_result:
+                if not (
+                    decoded.mnemonic == "sub"
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_REG
+                    and self._register_family(decoded.operands[0].reg)
+                    == result_family
+                    and decoded.operands[1].type == X86_OP_REG
+                ):
+                    return None
+                subtraction = decoded
+                break
+            if (
+                decoded.group(CS_GRP_CALL)
+                or decoded.group(CS_GRP_JUMP)
+                or decoded.group(CS_GRP_RET)
+                or previous.address in self.block_starts
+            ):
+                return None
+            cursor = previous.address
+        if subtraction is None:
+            return None
+
+        base_definition = self._previous_instruction(subtraction.address)
+        if base_definition is None:
+            return None
+        base_move = self._owned_decoded(base_definition.address)
+        if not (
+            base_definition.address + base_definition.size
+            == subtraction.address
+            and base_move.id == X86_INS_MOV
+            and len(base_move.operands) == 2
+            and base_move.operands[0].type == X86_OP_REG
+            and self._register_family(base_move.operands[0].reg)
+            == result_family
+            and base_move.operands[1].type == X86_OP_IMM
+        ):
+            return None
+        base = base_move.operands[1].imm & 0xFFFF_FFFF
+        if base > 0x7FFF:
+            return None
+
+        selector_family = self._register_family(
+            subtraction.operands[1].reg
+        )
+        selector_definitions = self._register_definitions_across_blocks(
+            subtraction.address,
+            selector_family,
+            function_entry,
+        )
+        if not selector_definitions or len(selector_definitions) != 2:
+            return None
+        selector_initializers = []
+        selector_copies = []
+        for definition_address in selector_definitions:
+            definition = self._owned_decoded(definition_address)
+            if not (
+                definition.id == X86_INS_MOV
+                and len(definition.operands) == 2
+                and definition.operands[0].type == X86_OP_REG
+                and self._register_family(definition.operands[0].reg)
+                == selector_family
+            ):
+                return None
+            if definition.operands[1].type == X86_OP_IMM:
+                selector_initializers.append(definition)
+            elif definition.operands[1].type == X86_OP_REG:
+                selector_copies.append(definition)
+            else:
+                return None
+        if (
+            len(selector_initializers) != 1
+            or len(selector_copies) != 1
+            or selector_initializers[0].operands[1].imm
+            & 0xFFFF_FFFF
+            != base
+        ):
+            return None
+        selector_copy = selector_copies[0]
+        counter_family = self._register_family(
+            selector_copy.operands[1].reg
+        )
+
+        enclosing_backedges = tuple(
+            edge
+            for edge in self.non_call_backedges
+            if (
+                edge.target <= selector_copy.address <= edge.source
+                and edge.source < subtraction.address
+            )
+        )
+        if len(enclosing_backedges) != 1:
+            return None
+        backedge = enclosing_backedges[0]
+        branch = self._owned_decoded(backedge.source)
+        condition_instruction = self._previous_instruction(branch.address)
+        if (
+            branch.mnemonic != "jge"
+            or self._direct_target(branch) != backedge.target
+            or condition_instruction is None
+            or condition_instruction.address + condition_instruction.size
+            != branch.address
+        ):
+            return None
+        condition = self._owned_decoded(condition_instruction.address)
+        decrement_instruction = self._previous_instruction(
+            condition.address
+        )
+        if (
+            condition.mnemonic != "cmp"
+            or len(condition.operands) != 2
+            or condition.operands[0].type != X86_OP_REG
+            or self._register_family(condition.operands[0].reg)
+            != counter_family
+            or condition.operands[1].type != X86_OP_IMM
+            or decrement_instruction is None
+            or decrement_instruction.address
+            + decrement_instruction.size
+            != condition.address
+        ):
+            return None
+        decrement = self._owned_decoded(
+            decrement_instruction.address
+        )
+        if not (
+            decrement.mnemonic == "dec"
+            and len(decrement.operands) == 1
+            and decrement.operands[0].type == X86_OP_REG
+            and self._register_family(decrement.operands[0].reg)
+            == counter_family
+        ):
+            return None
+        lower = condition.operands[1].imm & 0xFFFF_FFFF
+
+        counter_initializer = None
+        cursor = backedge.target
+        for _ in range(16):
+            previous = self._previous_instruction(cursor)
+            if previous is None or previous.address < function_entry:
+                return None
+            candidate = self._owned_decoded(previous.address)
+            writes_counter = any(
+                self._register_family(register) == counter_family
+                for register in candidate.regs_write
+                if register != x86_const.X86_REG_EFLAGS
+            ) or any(
+                operand.type == X86_OP_REG
+                and operand.access & CS_AC_WRITE
+                and self._register_family(operand.reg) == counter_family
+                for operand in candidate.operands
+            )
+            if writes_counter:
+                counter_initializer = candidate
+                break
+            if (
+                candidate.group(CS_GRP_CALL)
+                or candidate.group(CS_GRP_JUMP)
+                or candidate.group(CS_GRP_RET)
+                or previous.address in self.block_starts
+            ):
+                return None
+            cursor = previous.address
+        if not (
+            counter_initializer is not None
+            and counter_initializer.id == X86_INS_MOV
+            and len(counter_initializer.operands) == 2
+            and counter_initializer.operands[0].type == X86_OP_REG
+            and self._register_family(
+                counter_initializer.operands[0].reg
+            )
+            == counter_family
+            and counter_initializer.operands[1].type == X86_OP_IMM
+        ):
+            return None
+        upper = counter_initializer.operands[1].imm & 0xFFFF_FFFF
+        if not (
+            0 <= lower <= upper <= base <= 0x7FFF
+            and upper - lower + 1 <= 4096
+            and selector_initializers[0].address < backedge.target
+            and counter_initializer.address < backedge.target
+        ):
+            return None
+
+        for candidate_address in (
+            self._function_instruction_addresses_between(
+                function_entry,
+                backedge.target,
+                backedge.source + 1,
+            )
+        ):
+            candidate = self._owned_decoded(candidate_address)
+            if candidate.group(CS_GRP_CALL):
+                return None
+            for family, allowed in (
+                (selector_family, {selector_copy.address}),
+                (counter_family, {decrement.address}),
+            ):
+                writes_family = any(
+                    self._register_family(register) == family
+                    for register in candidate.regs_write
+                    if register != x86_const.X86_REG_EFLAGS
+                ) or any(
+                    operand.type == X86_OP_REG
+                    and operand.access & CS_AC_WRITE
+                    and self._register_family(operand.reg) == family
+                    for operand in candidate.operands
+                )
+                if writes_family and candidate.address not in allowed:
+                    return None
+        return (
+            0,
+            base - lower,
+            f"loop-selected-difference={subtraction.address:#x};"
+            f"base={base:#x};counter={lower:#x}..{upper:#x};"
+            f"backedge={backedge.source:#x}",
+        )
+
+    def _bounded_nonnegative_signed_word_global_slot(
+        self,
+        slot: int,
+    ) -> tuple[int, int, str] | None:
+        """Bound a closed network of direct whole-word copy writers."""
+        cache_key = (
+            slot,
+            self._summary_fact_signature(),
+            self.control_flow_revision,
+            len(self.absolute_memory_writes),
+            self.absolute_memory_write_count,
+        )
+        cached = self.bounded_signed_word_global_slot_cache.get(
+            cache_key
+        )
+        if cached is not None:
+            result, dependency_slots, dependency_functions = cached
+            for dependency_slot in dependency_slots:
+                self._note_producer_global_slot_dependency(
+                    dependency_slot
+                )
+            for dependency_function in dependency_functions:
+                self._note_producer_dependency(dependency_function)
+            return result
+
+        lower = 0x7FFF
+        upper = 0
+        details = []
+        pending = [slot]
+        visited_slots = set()
+        dependency_functions = set()
+        while pending:
+            current_slot = heapq.heappop(pending)
+            if current_slot in visited_slots:
+                continue
+            visited_slots.add(current_slot)
+            self._note_producer_global_slot_dependency(current_slot)
+            if not self._absolute_slot_has_only_direct_references(
+                current_slot
+            ):
+                return None
+            try:
+                initial = int.from_bytes(
+                    _read_loader_initialized(
+                        self.image,
+                        current_slot,
+                        2,
+                    ),
+                    "little",
+                )
+            except ValueError:
+                return None
+            if initial > 0x7FFF:
+                return None
+            lower = min(lower, initial)
+            upper = max(upper, initial)
+            details.append(
+                f"slot={current_slot:#x};loader={initial:#x}"
+            )
+
+            writers = []
+            for write_start, addresses in (
+                self.absolute_memory_writes.items()
+            ):
+                for writer_address in addresses:
+                    decoded = self._owned_decoded(writer_address)
+                    for destination in decoded.operands:
+                        if not (
+                            destination.type == X86_OP_MEM
+                            and destination.access & CS_AC_WRITE
+                            and destination.size > 0
+                            and self._absolute_memory_operand(
+                                destination
+                            )
+                            == write_start
+                            and write_start < current_slot + 2
+                            and current_slot
+                            < write_start + destination.size
+                        ):
+                            continue
+                        writers.append(
+                            (
+                                writer_address,
+                                decoded,
+                                destination,
+                            )
+                        )
+            for writer_address, decoded, destination in sorted(
+                writers,
+                key=lambda row: row[0],
+            ):
+                owner = self._registrar_function_entry(writer_address)
+                if (
+                    owner is None
+                    or decoded.id != X86_INS_MOV
+                    or len(decoded.operands) != 2
+                    or destination is not decoded.operands[0]
+                    or destination.size != 2
+                    or self._absolute_memory_operand(destination)
+                    != current_slot
+                ):
+                    return None
+                self._note_producer_dependency(owner)
+                dependency_functions.add(owner)
+                source = decoded.operands[1]
+                result = None
+                if source.type == X86_OP_IMM:
+                    value = source.imm & 0xFFFF
+                    if value <= 0x7FFF:
+                        result = (
+                            value,
+                            value,
+                            f"immediate={value:#x}",
+                        )
+                elif source.type == X86_OP_REG:
+                    source_family = self._register_family(source.reg)
+                    linked_source = (
+                        self._absolute_word_register_source_before(
+                            writer_address,
+                            source_family,
+                            owner,
+                        )
+                    )
+                    if linked_source is not None:
+                        source_slot, source_detail = linked_source
+                        if source_slot not in visited_slots:
+                            heapq.heappush(pending, source_slot)
+                        details.append(
+                            f"writer={writer_address:#x};"
+                            f"copy={source_slot:#x};{source_detail}"
+                        )
+                        continue
+                    result = (
+                        self._bounded_loop_selected_difference_before(
+                            writer_address,
+                            source,
+                            owner,
+                        )
+                    )
+                if result is None:
+                    return None
+                lower = min(lower, result[0])
+                upper = max(upper, result[1])
+                if upper > 0x7FFF:
+                    return None
+                details.append(
+                    f"writer={writer_address:#x};{result[2]}"
+                )
+            if len(visited_slots) + len(pending) > 64:
+                return None
+        if not visited_slots:
+            return None
+        result = (
+            lower,
+            upper,
+            f"global-signed-word={slot:#x};"
+            "slots="
+            + ",".join(
+                f"{value:#x}" for value in sorted(visited_slots)
+            )
+            + ";"
+            + "|".join(details),
+        )
+        self.bounded_signed_word_global_slot_cache[cache_key] = (
+            result,
+            frozenset(visited_slots),
+            frozenset(dependency_functions),
+        )
+        return result
+
     def _bounded_nonnegative_signed_word_operand_before(
         self,
         address: int,
@@ -25210,6 +25825,26 @@ class _DirectCfgRecovery:
             cursor = previous.address
         if definition is None:
             return None
+
+        definition_slot = self._absolute_memory_operand(
+            definition.operands[1]
+        )
+        if definition_slot is not None:
+            global_interval = (
+                self._bounded_nonnegative_signed_word_global_slot(
+                    definition_slot
+                )
+            )
+            if global_interval is not None:
+                lower = global_interval[0] + delta
+                upper = global_interval[1] + delta
+                if 0 <= lower <= upper <= 0x7FFF:
+                    return (
+                        lower,
+                        upper,
+                        f"{global_interval[2]};delta={delta:+#x};"
+                        f"bounds={lower:#x}..{upper:#x}",
+                    )
 
         following_entry = self._following_function_entry(function_entry)
         guarded_arms: list[tuple[int, int, int]] = []
