@@ -131,7 +131,16 @@ candidates partitioned.
   evidence refreshes the accepted hypothesis and forces a clean rerun before
   its evidence can be consumed, rather than reusing stale subset evidence.
   The hostile consumer-expansion regression, the 964-test CFG suite, and the
-  1,091-test adjacent Task 4 slice are green; exact replay remains required.
+  1,091-test adjacent Task 4 slice are green.
+- The stable-identity exact replay completed in 4,068.11 seconds at 6.09 GB
+  maximum RSS with no swaps.  Its final accepted object-plus-copied-descriptor
+  graph is stable at 363,420 instructions, 97,858 blocks, 156,726 edges, and
+  564 jump tables.  The `0x54d050` object-table hypothesis now survives its
+  mandatory clean replay and closes `0x425a59`; the expansion exposes no new
+  indirect-control obligations.  All ten earlier local closures also remain
+  closed.  The exact raw-control frontier is now 59 addresses: 24 remaining
+  raw indirect transfers, four constructor-descriptor transfers, 30 movzx
+  lifecycle transfers, and one registered-linked callback.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published
