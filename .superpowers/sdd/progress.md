@@ -180,6 +180,15 @@ candidates partitioned.
   together, so one invalid table could suppress otherwise reproducible
   neighbors.  A hostile two-table regression proves that an invalid first
   table is rejected cleanly and a valid second table remains accepted.
+- Returned-fresh constructor proof now binds scalar argument bytes to exact
+  stores, requires the allocation extent to cover every observed field, and
+  rejects later overlap, pointer escape, indexed aliases, or an open size.
+  The retail variadic constructor contract is closed across all 241 wrapper
+  callers: only the two `#` format tags consume the variable width, their
+  signed-word guards bound it, and the resulting allocation remains within
+  `0x28..0x60c1c`.  The full CFG file is 999 passing tests and the adjacent
+  Task 4 slice is 1,126 passing tests; scoped Ruff, `py_compile`, and
+  `git diff --check` are green.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published
@@ -245,8 +254,8 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 985 passed.
-- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,112 passed.
+- `test_retro_x86_cfg.py`: 999 passed.
+- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,126 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
 - Task 8 focused/adjacent suites: 184 / 533 passed.

@@ -1006,6 +1006,20 @@ class _AllocationPointeeEffect:
 
 
 @dataclass(frozen=True, slots=True)
+class _ReturnedFreshByteSource:
+    """One exact source byte copied into a returned fresh allocation."""
+
+    kind: str
+    argument_index: int
+    source_field: int | None
+    byte_shift: int
+    allocation_calls: frozenset[int]
+    writer: int
+    locally_guarded: bool
+    provenance: str
+
+
+@dataclass(frozen=True, slots=True)
 class _ObjectByteGuard:
     """One structurally proven equality domain for the current object."""
 
@@ -1033,7 +1047,7 @@ class _OwnedBumpAllocatorFact:
 class _AllocatorTotalityCertificate:
     session_root: int
     init_target: int
-    backend_root: int
+    backend_roots: frozenset[int]
     grow_target: int
     system_allocators: frozenset[int]
     callback_slot: int
@@ -4269,6 +4283,243 @@ class _DirectCfgRecovery:
                 if operand.type == X86_OP_IMM and operand.imm & 0xFFFF_FFFF == slot:
                     return False
         return True
+
+    def _active_global_object_publication_is_terminal(
+        self,
+        publication_address: int,
+        destination,
+        source_offsets: frozenset[int],
+        function_entry: int,
+        field_path: tuple[int, ...],
+        observation_address: int,
+        following_entry: int,
+        excluded_addresses: frozenset[int],
+    ) -> int | None:
+        """Close one alias store shared by active global-object proofs."""
+        slot = self._absolute_memory_operand(destination)
+        if (
+            destination.size != 4
+            or slot is None
+            or source_offsets != frozenset({0})
+            or (slot, field_path)
+            not in self.global_object_contract_active
+        ):
+            return None
+        for address in self._function_instruction_addresses(function_entry):
+            if (
+                address == publication_address
+                or address in excluded_addresses
+                or not self._reachable_within_function(
+                    publication_address,
+                    address,
+                    function_entry,
+                    following_entry,
+                    excluded=excluded_addresses,
+                )
+                or not self._reachable_within_function(
+                    address,
+                    observation_address,
+                    function_entry,
+                    following_entry,
+                    excluded=excluded_addresses,
+                )
+            ):
+                continue
+            candidate = self._owned_decoded(address)
+            if candidate.group(CS_GRP_CALL):
+                return None
+            for operand in candidate.operands:
+                if (
+                    operand.type == X86_OP_MEM
+                    and operand.access & CS_AC_READ
+                    and (
+                        referenced := self._absolute_memory_operand(
+                            operand
+                        )
+                    )
+                    is not None
+                    and referenced < slot + 4
+                    and slot < referenced + operand.size
+                ):
+                    return None
+                if (
+                    operand.type == X86_OP_IMM
+                    and operand.imm & 0xFFFF_FFFF == slot
+                ):
+                    return None
+        return slot
+
+    def _active_global_object_append_link_is_terminal(
+        self,
+        publication_address: int,
+        destination,
+        source_offsets: frozenset[int],
+        allocation_call: int,
+        function_entry: int,
+        field_path: tuple[int, ...],
+        observation_address: int,
+        following_entry: int,
+        excluded_addresses: frozenset[int],
+    ) -> int | None:
+        """Close ``old_tail->next = fresh; tail = fresh`` aliasing."""
+        if (
+            destination.size != 4
+            or destination.mem.segment != X86_REG_INVALID
+            or destination.mem.base == X86_REG_INVALID
+            or destination.mem.index != X86_REG_INVALID
+            or destination.mem.disp != 0
+            or source_offsets != frozenset({0})
+        ):
+            return None
+        active_slots = {
+            slot
+            for slot, active_path in self.global_object_contract_active
+            if active_path == field_path
+        }
+        if len(active_slots) < 2:
+            return None
+        try:
+            if any(
+                int.from_bytes(
+                    _read_loader_initialized(self.image, slot, 4),
+                    "little",
+                )
+                != 0
+                for slot in active_slots
+            ):
+                return None
+        except ValueError:
+            return None
+        tail_family = self._register_family(destination.mem.base)
+        origins = self._absolute_global_load_origins_before(
+            publication_address,
+            tail_family,
+            function_entry,
+            frozenset(),
+        )
+        if (
+            not origins
+            or len({slot for _address, slot in origins}) != 1
+        ):
+            return None
+        tail_slot = origins[0][1]
+        if tail_slot not in active_slots or not all(
+            self._pointer_definition_has_closed_nonnull_guard(
+                definition,
+                publication_address,
+                function_entry,
+                tail_family,
+            )
+            or self._global_load_definition_has_closed_nonnull_guard(
+                definition,
+                publication_address,
+                function_entry,
+                tail_family,
+                tail_slot,
+            )
+            for definition, _slot in origins
+        ):
+            return None
+        tail_publications = []
+        for candidate_address in self._function_instruction_addresses(
+            function_entry
+        ):
+            if not (
+                publication_address
+                < candidate_address
+                <= observation_address
+                and candidate_address not in excluded_addresses
+                and self._reachable_within_function(
+                    publication_address,
+                    candidate_address,
+                    function_entry,
+                    following_entry,
+                    excluded=excluded_addresses,
+                )
+                and self._reachable_within_function(
+                    candidate_address,
+                    observation_address,
+                    function_entry,
+                    following_entry,
+                    excluded=excluded_addresses,
+                )
+            ):
+                continue
+            candidate = self._owned_decoded(candidate_address)
+            if not (
+                candidate.id == X86_INS_MOV
+                and len(candidate.operands) == 2
+                and candidate.operands[0].size == 4
+                and self._absolute_memory_operand(
+                    candidate.operands[0]
+                )
+                == tail_slot
+                and candidate.operands[1].type == X86_OP_REG
+                and candidate.operands[1].size == 4
+                and self._fresh_allocation_origin_calls_before(
+                    candidate_address,
+                    self._register_family(
+                        candidate.operands[1].reg
+                    ),
+                    function_entry,
+                )
+                == frozenset({allocation_call})
+                and not self._reachable_within_function(
+                    publication_address,
+                    observation_address,
+                    function_entry,
+                    following_entry,
+                    excluded=excluded_addresses
+                    | frozenset({candidate_address}),
+                )
+            ):
+                continue
+            tail_publications.append(candidate_address)
+        if len(tail_publications) != 1:
+            return None
+        for address in self._function_instruction_addresses(function_entry):
+            if (
+                address == publication_address
+                or address in excluded_addresses
+                or not self._reachable_within_function(
+                    publication_address,
+                    address,
+                    function_entry,
+                    following_entry,
+                    excluded=excluded_addresses,
+                )
+                or not self._reachable_within_function(
+                    address,
+                    observation_address,
+                    function_entry,
+                    following_entry,
+                    excluded=excluded_addresses,
+                )
+            ):
+                continue
+            candidate = self._owned_decoded(address)
+            if candidate.group(CS_GRP_CALL):
+                return None
+            for operand in candidate.operands:
+                if (
+                    operand.type == X86_OP_MEM
+                    and operand.access & CS_AC_READ
+                    and (
+                        referenced := self._absolute_memory_operand(
+                            operand
+                        )
+                    )
+                    is not None
+                    and referenced < tail_slot + 4
+                    and tail_slot < referenced + operand.size
+                ):
+                    return None
+                if (
+                    operand.type == X86_OP_IMM
+                    and operand.imm & 0xFFFF_FFFF == tail_slot
+                ):
+                    return None
+        return tail_slot
 
     def _scoped_fresh_global_wrapper_publication_is_terminal(
         self,
@@ -10585,7 +10836,7 @@ class _DirectCfgRecovery:
                         _AllocatorTotalityCertificate(
                             session_root=session_root,
                             init_target=init_target,
-                            backend_root=backend_call.target,
+                            backend_roots=frozenset({backend_call.target}),
                             grow_target=fact.grow_target,
                             system_allocators=system_allocators,
                             callback_slot=callback_slot,
@@ -10615,25 +10866,68 @@ class _DirectCfgRecovery:
                             lifetime_roots=lifetime_roots,
                         )
                     )
-        unique = tuple(dict.fromkeys(session_candidates))
-        if len(unique) != 1:
+        compatible_candidates: dict[
+            tuple[Any, ...],
+            tuple[_AllocatorTotalityCertificate, set[int]],
+        ] = {}
+        for candidate in session_candidates:
+            compatibility_key = (
+                candidate.session_root,
+                candidate.init_target,
+                candidate.grow_target,
+                candidate.system_allocators,
+                candidate.callback_slot,
+                candidate.callback_target,
+                candidate.setjmp_target,
+                candidate.longjmp_target,
+                candidate.reset_targets,
+                candidate.grow_call_sites,
+                candidate.finalizer_targets,
+                candidate.lifetime_roots,
+            )
+            grouped = compatible_candidates.setdefault(
+                compatibility_key,
+                (candidate, set()),
+            )
+            grouped[1].update(candidate.backend_roots)
+        if len(compatible_candidates) != 1:
             return None
-        certificate = unique[0]
+        template, backend_roots = next(iter(compatible_candidates.values()))
+        certificate = _AllocatorTotalityCertificate(
+            session_root=template.session_root,
+            init_target=template.init_target,
+            backend_roots=frozenset(backend_roots),
+            grow_target=template.grow_target,
+            system_allocators=template.system_allocators,
+            callback_slot=template.callback_slot,
+            callback_target=template.callback_target,
+            setjmp_target=template.setjmp_target,
+            longjmp_target=template.longjmp_target,
+            reset_targets=template.reset_targets,
+            grow_call_sites=template.grow_call_sites,
+            finalizer_targets=template.finalizer_targets,
+            lifetime_roots=template.lifetime_roots,
+        )
         for dependency in {
             allocator,
             allocation_caller,
             certificate.session_root,
             certificate.init_target,
-            certificate.backend_root,
             certificate.grow_target,
             certificate.callback_target,
             certificate.setjmp_target,
             certificate.longjmp_target,
+            *certificate.backend_roots,
             *certificate.lifetime_roots,
             *certificate.system_allocators,
             *certificate.finalizer_targets,
             *certificate.reset_targets,
-            *self._direct_function_call_closure(certificate.backend_root),
+            *frozenset().union(
+                *(
+                    self._direct_function_call_closure(root)
+                    for root in certificate.backend_roots
+                )
+            ),
         }:
             self._note_producer_dependency(dependency)
         self._note_producer_global_slot_dependency(certificate.callback_slot)
@@ -11686,7 +11980,12 @@ class _DirectCfgRecovery:
                 f"publish={publication:#x};"
                 f"link={next(iter(link_writers)):#x};"
                 + (
-                    f"session={totality.session_root:#x};backend={totality.backend_root:#x};"
+                    f"session={totality.session_root:#x};backends="
+                    + ",".join(
+                        f"{root:#x}"
+                        for root in sorted(totality.backend_roots)
+                    )
+                    + ";"
                     if totality is not None
                     else "local-nonnull-guard;"
                 )
@@ -15852,6 +16151,876 @@ class _DirectCfgRecovery:
             ):
                 del self.producer_domain_memo[query_key]
 
+    def _returned_fresh_allocation_byte_source(
+        self,
+        function_entry: int,
+        field_path: tuple[int, ...],
+    ) -> _ReturnedFreshByteSource | None:
+        """Recognize a direct argument byte copied into a fresh return.
+
+        This is a deliberately narrow complement to the general fresh-object
+        replay.  It covers constructors and clone helpers whose allocation
+        extent is data-dependent, while still proving the returned pointer's
+        ownership, the exact field writer, and all post-write aliases.
+        """
+        if len(field_path) != 1 or function_entry not in self.function_addresses:
+            return None
+        target_field = field_path[0]
+        if target_field < 0:
+            return None
+        following_entry = self._following_function_entry(function_entry)
+        returns = tuple(
+            address
+            for address in self._function_instruction_addresses(function_entry)
+            if self._owned_decoded(address).group(CS_GRP_RET)
+            and self._reachable_within_function(
+                function_entry,
+                address,
+                function_entry,
+                following_entry,
+            )
+        )
+        if not returns:
+            return None
+
+        candidates: list[
+            tuple[
+                int,
+                str,
+                int,
+                int | None,
+                int,
+                frozenset[int],
+            ]
+        ] = []
+        for address in self._function_instruction_addresses(function_entry):
+            row = self._owned_decoded(address)
+            if (
+                row.id != X86_INS_MOV
+                or len(row.operands) != 2
+                or row.operands[0].type != X86_OP_MEM
+                or row.operands[0].mem.segment != X86_REG_INVALID
+                or row.operands[0].mem.base == X86_REG_INVALID
+                or row.operands[0].mem.index != X86_REG_INVALID
+                or row.operands[0].size <= 0
+                or not row.operands[0].access & CS_AC_WRITE
+                or row.operands[1].type != X86_OP_REG
+            ):
+                continue
+            destination, source = row.operands
+            byte_shift = target_field - destination.mem.disp
+            if not 0 <= byte_shift < destination.size:
+                continue
+            destination_family = self._register_family(
+                destination.mem.base
+            )
+            allocation_calls = self._fresh_allocation_origin_calls_before(
+                address,
+                destination_family,
+                function_entry,
+            )
+            if not allocation_calls:
+                continue
+            source_family = self._register_family(source.reg)
+            source_definitions = self._register_definitions_across_blocks(
+                address,
+                source_family,
+                function_entry,
+            )
+            if not source_definitions or len(source_definitions) != 1:
+                continue
+            source_definition = self._owned_decoded(
+                next(iter(source_definitions))
+            )
+            if (
+                source_definition.id != X86_INS_MOV
+                or len(source_definition.operands) != 2
+                or source_definition.operands[0].type != X86_OP_REG
+                or self._register_family(
+                    source_definition.operands[0].reg
+                )
+                != source_family
+                or source_definition.operands[0].size
+                <= byte_shift
+            ):
+                continue
+            source_operand = source_definition.operands[1]
+            scalar_argument = self._stack_argument_index_at(
+                source_definition.address,
+                source_operand,
+                function_entry,
+            )
+            if scalar_argument is not None:
+                source_kind = "scalar-argument"
+                source_argument = scalar_argument
+                source_field = None
+            elif (
+                source_operand.type == X86_OP_MEM
+                and source_operand.mem.segment == X86_REG_INVALID
+                and source_operand.mem.base != X86_REG_INVALID
+                and source_operand.mem.index == X86_REG_INVALID
+                and source_operand.size > byte_shift
+                and (
+                    source_argument := self._register_argument_origin_index(
+                        source_definition.address,
+                        self._register_family(
+                            source_operand.mem.base
+                        ),
+                        function_entry,
+                    )
+                )
+                is not None
+            ):
+                source_kind = "object-argument"
+                source_field = source_operand.mem.disp + byte_shift
+                if not self._function_argument_preserves_field_before(
+                    source_definition.address,
+                    function_entry,
+                    source_argument,
+                    source_field,
+                ):
+                    continue
+            else:
+                continue
+            if any(
+                self._reachable_within_function(
+                    function_entry,
+                    return_address,
+                    function_entry,
+                    following_entry,
+                    excluded=address,
+                )
+                for return_address in returns
+            ):
+                continue
+            candidates.append(
+                (
+                    address,
+                    source_kind,
+                    source_argument,
+                    source_field,
+                    byte_shift,
+                    allocation_calls,
+                )
+            )
+        if len(candidates) != 1:
+            return None
+        (
+            writer,
+            source_kind,
+            source_argument,
+            source_field,
+            byte_shift,
+            allocation_calls,
+        ) = candidates[0]
+        writer_row = self._owned_decoded(writer)
+        destination_family = self._register_family(
+            writer_row.operands[0].mem.base
+        )
+        if self._reachable_within_function(
+            function_entry,
+            writer,
+            function_entry,
+            following_entry,
+            excluded=allocation_calls,
+        ):
+            return None
+        allocator_targets = {
+            self.direct_call_targets_by_source.get(address)
+            for address in allocation_calls
+        }
+        if None in allocator_targets or any(
+            target is None
+            or self._owned_fixed_bump_allocator_size_argument(target) is None
+            for target in allocator_targets
+        ):
+            return None
+        for dependency in allocator_targets:
+            assert dependency is not None
+            self._note_producer_dependency(dependency)
+
+        family_index = {
+            family: index
+            for index, family in enumerate(_REGISTER_FAMILIES)
+        }
+        locally_guarded = True
+        if len(allocation_calls) == 1:
+            allocation_call = next(iter(allocation_calls))
+            for return_address in returns:
+                try:
+                    states = self._fresh_allocation_lower_bound_states(
+                        allocation_call,
+                        return_address,
+                        function_entry,
+                        target_field,
+                        1,
+                        frozenset({writer}),
+                    )
+                except AnalysisLimitError:
+                    return None
+                writer_state = None if states is None else states.get(writer)
+                return_state = (
+                    None
+                    if states is None
+                    else states.get(return_address)
+                )
+                if (
+                    writer_state is None
+                    or return_state is None
+                    or writer_state[0][family_index[destination_family]]
+                    != frozenset({0})
+                    or return_state[0][family_index["eax"]]
+                    != frozenset({0})
+                ):
+                    return None
+                locally_guarded &= (
+                    self._allocation_result_has_closed_nonnull_guard(
+                        allocation_call,
+                        return_address,
+                        function_entry,
+                        states,
+                    )
+                )
+        else:
+            # The multi-allocation form is intentionally a short join tail:
+            # each branch defines EAX, one common writer initializes the byte,
+            # and no alias or call may intervene before the return.
+            if destination_family != "eax":
+                return None
+            for return_address in returns:
+                if (
+                    self._register_definitions_across_blocks(
+                        return_address,
+                        "eax",
+                        function_entry,
+                    )
+                    != allocation_calls
+                ):
+                    return None
+                for address in self._function_instruction_addresses(
+                    function_entry
+                ):
+                    if address in allocation_calls or address == writer:
+                        continue
+                    if not (
+                        self._reachable_within_function(
+                            address,
+                            return_address,
+                            function_entry,
+                            following_entry,
+                        )
+                        and any(
+                            self._reachable_within_function(
+                                allocation_call,
+                                address,
+                                function_entry,
+                                following_entry,
+                            )
+                            for allocation_call in allocation_calls
+                        )
+                    ):
+                        continue
+                    row = self._owned_decoded(address)
+                    if row.group(CS_GRP_CALL):
+                        return None
+                    if any(
+                        operand.type == X86_OP_REG
+                        and operand.access & CS_AC_READ
+                        and self._register_family(operand.reg) == "eax"
+                        for operand in row.operands
+                    ):
+                        return None
+                    for operand in row.operands:
+                        if (
+                            operand.type == X86_OP_MEM
+                            and operand.mem.base != X86_REG_INVALID
+                            and self._register_family(
+                                operand.mem.base
+                            )
+                            == "eax"
+                            and (
+                                row.id == X86_INS_LEA
+                                or operand.mem.index
+                                != X86_REG_INVALID
+                            )
+                        ):
+                            return None
+                        if (
+                            operand.type == X86_OP_MEM
+                            and operand.access & CS_AC_WRITE
+                            and operand.mem.base != X86_REG_INVALID
+                            and self._register_family(
+                                operand.mem.base
+                            )
+                            == "eax"
+                            and (
+                                operand.mem.index != X86_REG_INVALID
+                                or operand.size <= 0
+                                or (
+                                    operand.mem.disp
+                                    < target_field + 1
+                                    and target_field
+                                    < operand.mem.disp + operand.size
+                                )
+                            )
+                        ):
+                            return None
+            locally_guarded = False
+
+        return _ReturnedFreshByteSource(
+            kind=source_kind,
+            argument_index=source_argument,
+            source_field=source_field,
+            byte_shift=byte_shift,
+            allocation_calls=allocation_calls,
+            writer=writer,
+            locally_guarded=locally_guarded,
+            provenance=(
+                f"returned-fresh-byte-copy={writer:#x};"
+                f"source={source_kind}:{source_argument};"
+                "allocations="
+                + ",".join(
+                    f"{address:#x}"
+                    for address in sorted(allocation_calls)
+                )
+            ),
+        )
+
+    def _returned_fresh_variadic_extent_contract(
+        self,
+        call_address: int,
+        call_target: int,
+        caller_entry: int,
+        source: _ReturnedFreshByteSource,
+        source_values: frozenset[int],
+    ) -> tuple[tuple[tuple[int, int, int], ...], str] | None:
+        """Prove the retail variadic constructor's variable width is bounded."""
+        if (
+            source.kind != "scalar-argument"
+            or len(source.allocation_calls) != 1
+            or not source_values
+        ):
+            return None
+        allocation_call = next(iter(source.allocation_calls))
+        following_entry = self._following_function_entry(call_target)
+        family_index = {
+            family: index
+            for index, family in enumerate(_REGISTER_FAMILIES)
+        }
+        contracts = []
+        for compare_address in self._function_instruction_addresses_between(
+            call_target,
+            call_target,
+            allocation_call,
+        ):
+            compared = self._owned_decoded(compare_address)
+            if (
+                compared.mnemonic != "cmp"
+                or len(compared.operands) != 2
+                or compared.operands[0].type != X86_OP_MEM
+                or compared.operands[0].size != 1
+                or compared.operands[0].mem.segment != X86_REG_INVALID
+                or compared.operands[0].mem.base == X86_REG_INVALID
+                or compared.operands[0].mem.index != X86_REG_INVALID
+                or compared.operands[0].mem.disp != 0
+                or compared.operands[1].type != X86_OP_IMM
+                or compared.operands[1].imm & 0xFF != ord("#")
+            ):
+                continue
+            branch_address = compare_address + compared.size
+            branch = self.instructions.get(branch_address)
+            if branch is None:
+                continue
+            branch_row = self._owned_decoded(branch_address)
+            skip_target = self._direct_target(branch_row)
+            if (
+                branch_row.mnemonic not in {"jne", "jnz"}
+                or skip_target is None
+                or not branch_address + branch_row.size
+                < skip_target
+                < allocation_call
+                or not self._reachable_within_function(
+                    skip_target,
+                    allocation_call,
+                    call_target,
+                    following_entry,
+                )
+            ):
+                continue
+            pointer_family = self._register_family(
+                compared.operands[0].mem.base
+            )
+            pointer_definitions = self._register_definitions_across_blocks(
+                compare_address,
+                pointer_family,
+                call_target,
+            )
+            if not pointer_definitions or len(pointer_definitions) != 1:
+                continue
+            pointer_load = self._owned_decoded(
+                next(iter(pointer_definitions))
+            )
+            if (
+                pointer_load.id != X86_INS_MOV
+                or len(pointer_load.operands) != 2
+                or pointer_load.operands[0].type != X86_OP_REG
+                or pointer_load.operands[1].type != X86_OP_MEM
+                or pointer_load.operands[1].size != 4
+                or pointer_load.operands[1].mem.segment
+                != X86_REG_INVALID
+                or pointer_load.operands[1].mem.base
+                == X86_REG_INVALID
+                or pointer_load.operands[1].mem.index
+                != X86_REG_INVALID
+            ):
+                continue
+            table_family = self._register_family(
+                pointer_load.operands[1].mem.base
+            )
+            cursor = pointer_load.address
+            table_base = None
+            table_shift = None
+            argument_load = None
+            for expected in ("add", "shl", "movsx"):
+                found = None
+                for _ in range(32):
+                    previous = self._previous_instruction(cursor)
+                    if previous is None or previous.address < call_target:
+                        break
+                    candidate = self._owned_decoded(previous.address)
+                    writes_table = any(
+                        self._register_family(register) == table_family
+                        for register in candidate.regs_write
+                        if register != x86_const.X86_REG_EFLAGS
+                    ) or any(
+                        operand.type == X86_OP_REG
+                        and operand.access & CS_AC_WRITE
+                        and self._register_family(operand.reg)
+                        == table_family
+                        for operand in candidate.operands
+                    )
+                    cursor = previous.address
+                    if writes_table:
+                        found = candidate
+                        break
+                    if (
+                        candidate.group(CS_GRP_CALL)
+                        or candidate.group(CS_GRP_JUMP)
+                        or candidate.group(CS_GRP_RET)
+                    ):
+                        break
+                if found is None or found.mnemonic != expected:
+                    break
+                if expected == "add":
+                    if (
+                        len(found.operands) != 2
+                        or found.operands[0].type != X86_OP_REG
+                        or self._register_family(
+                            found.operands[0].reg
+                        )
+                        != table_family
+                        or found.operands[1].type != X86_OP_IMM
+                    ):
+                        break
+                    table_base = found.operands[1].imm & 0xFFFF_FFFF
+                elif expected == "shl":
+                    if (
+                        len(found.operands) != 2
+                        or found.operands[0].type != X86_OP_REG
+                        or self._register_family(
+                            found.operands[0].reg
+                        )
+                        != table_family
+                        or found.operands[1].type != X86_OP_IMM
+                        or not 0 < found.operands[1].imm <= 8
+                    ):
+                        break
+                    table_shift = found.operands[1].imm
+                else:
+                    if (
+                        len(found.operands) != 2
+                        or found.operands[0].type != X86_OP_REG
+                        or self._register_family(
+                            found.operands[0].reg
+                        )
+                        != table_family
+                        or found.operands[1].type != X86_OP_MEM
+                        or found.operands[1].size != 2
+                        or self._stack_argument_index_at(
+                            found.address,
+                            found.operands[1],
+                            call_target,
+                        )
+                        != source.argument_index
+                    ):
+                        break
+                    argument_load = found.address
+            if (
+                table_base is None
+                or table_shift is None
+                or argument_load is None
+            ):
+                continue
+            argument_states = self._relative_pointer_states(
+                call_target,
+                argument_index=source.argument_index + 1,
+                allow_partial_taint=True,
+                stop_address=allocation_call,
+            )
+            if argument_states is None:
+                continue
+            width_reads = []
+            for candidate_address in (
+                self._function_instruction_addresses_between(
+                    call_target,
+                    branch_address + branch_row.size,
+                    skip_target,
+                )
+            ):
+                state = argument_states.get(candidate_address)
+                if state is None:
+                    continue
+                candidate = self._owned_decoded(candidate_address)
+                for operand in candidate.operands:
+                    if (
+                        operand.type != X86_OP_MEM
+                        or operand.size != 4
+                        or not operand.access & CS_AC_READ
+                        or operand.mem.segment != X86_REG_INVALID
+                        or operand.mem.base == X86_REG_INVALID
+                        or operand.mem.index != X86_REG_INVALID
+                        or not state[0][
+                            family_index[
+                                self._register_family(
+                                    operand.mem.base
+                                )
+                            ]
+                        ]
+                    ):
+                        continue
+                    width_reads.append(candidate_address)
+            if len(set(width_reads)) != 1:
+                continue
+            width_read = width_reads[0]
+            hash_tags = set()
+            valid_table = True
+            for value in source_values:
+                tag = value & 0xFFFF
+                if tag & 0x8000:
+                    valid_table = False
+                    break
+                entry = (
+                    table_base
+                    + (tag << table_shift)
+                    + pointer_load.operands[1].mem.disp
+                )
+                try:
+                    string_address = int.from_bytes(
+                        _read_loader_initialized(
+                            self.image,
+                            entry,
+                            4,
+                        ),
+                        "little",
+                    )
+                    first = _read_loader_initialized(
+                        self.image,
+                        string_address,
+                        1,
+                    )
+                except ValueError:
+                    valid_table = False
+                    break
+                if first == b"#":
+                    hash_tags.add(value)
+            if valid_table:
+                contracts.append(
+                    (
+                        width_read,
+                        frozenset(hash_tags),
+                        table_base,
+                        table_shift,
+                        pointer_load.operands[1].mem.disp,
+                    )
+                )
+        if len(contracts) != 1:
+            return None
+        width_read, hash_tags, table_base, table_shift, pointer_disp = (
+            contracts[0]
+        )
+
+        pushed_tag = self._pushed_call_argument(
+            call_address,
+            source.argument_index,
+        )
+        pushed_cursor = self._pushed_call_argument(
+            call_address,
+            source.argument_index + 1,
+        )
+        if (
+            pushed_tag is None
+            or pushed_cursor is None
+            or pushed_tag[2] != caller_entry
+            or pushed_cursor[2] != caller_entry
+            or pushed_tag[1].type != X86_OP_REG
+            or self._register_argument_index_across_blocks(
+                pushed_tag[0].address,
+                self._register_family(pushed_tag[1].reg),
+                caller_entry,
+            )
+            != source.argument_index
+            or self._linear_stack_pointer_operand_offset_before(
+                pushed_cursor[0].address,
+                pushed_cursor[1],
+                caller_entry,
+            )
+            != 4 * (source.argument_index + 2)
+        ):
+            return None
+
+        exact_context = self._producer_exact_call_context(caller_entry)
+        if exact_context is not None:
+            caller_sites = (exact_context[0],)
+        else:
+            if not (
+                self._incoming_call_domain_is_closed(caller_entry)
+                or self._least_reachable_incoming_call_domain_is_closed(
+                    caller_entry
+                )
+            ):
+                return None
+            caller_sites = self._incoming_call_sites(caller_entry)
+        if not caller_sites:
+            return None
+        observed_tags = set()
+        width_upper = 0
+        width_details = []
+        for caller_site in caller_sites:
+            owner = self._registrar_function_entry(caller_site)
+            tag_argument = self._pushed_call_argument(
+                caller_site,
+                source.argument_index,
+            )
+            if owner is None or tag_argument is None:
+                return None
+            tag_result = self._finite_operand_values_before(
+                tag_argument[0].address,
+                tag_argument[1],
+                owner,
+                frozenset(),
+            )
+            if tag_result is None or not tag_result[0]:
+                return None
+            observed_tags.update(tag_result[0])
+            if tag_result[0].isdisjoint(hash_tags):
+                continue
+            width_argument = self._pushed_call_argument(
+                caller_site,
+                source.argument_index + 1,
+            )
+            if width_argument is None:
+                return None
+            width = self._bounded_nonnegative_signed_word_operand_before(
+                width_argument[0].address,
+                width_argument[1],
+                owner,
+            )
+            if width is None:
+                return None
+            width_upper = max(width_upper, width[1])
+            width_details.append(
+                f"caller={caller_site:#x};{width[2]}"
+            )
+        if observed_tags != set(source_values):
+            return None
+        return (
+            ((width_read, 0, width_upper),),
+            f"variadic-width-table={table_base:#x};"
+            f"shift={table_shift};pointer-field={pointer_disp:+#x};"
+            "hash-tags="
+            + ",".join(
+                f"{value:#x}" for value in sorted(hash_tags)
+            )
+            + ";"
+            + "|".join(width_details),
+        )
+
+    def _finite_returned_fresh_allocation_byte_values(
+        self,
+        call_address: int,
+        call_target: int,
+        caller_entry: int,
+        field_path: tuple[int, ...],
+        visited: frozenset[tuple[int, str]],
+    ) -> tuple[frozenset[int], str] | None:
+        key = (
+            call_address,
+            "returned-fresh-byte:"
+            f"{call_target:#x}:{','.join(map(str, field_path))}",
+        )
+        if key in visited:
+            return None
+        source = self._returned_fresh_allocation_byte_source(
+            call_target,
+            field_path,
+        )
+        if source is None:
+            return None
+        if not source.locally_guarded:
+            for allocation_call in source.allocation_calls:
+                allocator = self.direct_call_targets_by_source.get(
+                    allocation_call
+                )
+                if (
+                    allocator is None
+                    or self._allocator_totality_certificate(
+                        allocator,
+                        call_target,
+                        lifetime_roots=(
+                            self._producer_allocator_lifetime_context()
+                        ),
+                    )
+                    is None
+                ):
+                    return None
+        pushed = self._pushed_call_argument(
+            call_address,
+            source.argument_index,
+        )
+        if pushed is None or pushed[2] != caller_entry:
+            return None
+        next_visited = visited | {key}
+        source_values = None
+        if source.kind == "scalar-argument":
+            result = self._finite_operand_values_before(
+                pushed[0].address,
+                pushed[1],
+                caller_entry,
+                next_visited,
+            )
+            if result is None or not result[0]:
+                return None
+            source_values = result[0]
+            values = frozenset(
+                (value >> (8 * source.byte_shift)) & 0xFF
+                for value in result[0]
+            )
+            detail = result[1]
+        elif (
+            source.kind == "object-argument"
+            and source.source_field is not None
+        ):
+            result = self._finite_object_byte_operand_values_before(
+                pushed[0].address,
+                pushed[1],
+                caller_entry,
+                (source.source_field,),
+                next_visited,
+            )
+            if result is None:
+                return None
+            values, detail = result
+        else:
+            return None
+        if not values:
+            return None
+
+        assumptions: tuple[tuple[int, int, int], ...] = ()
+        extent_detail = None
+        for allocation_call in source.allocation_calls:
+            allocator = self.direct_call_targets_by_source.get(
+                allocation_call
+            )
+            size_argument = (
+                None
+                if allocator is None
+                else self._owned_fixed_bump_allocator_size_argument(
+                    allocator
+                )
+            )
+            pushed_size = (
+                None
+                if size_argument is None
+                else self._pushed_call_argument(
+                    allocation_call,
+                    size_argument,
+                )
+            )
+            if pushed_size is None or pushed_size[2] != call_target:
+                return None
+            size = self._finite_operand_values_before(
+                pushed_size[0].address,
+                pushed_size[1],
+                call_target,
+                next_visited,
+            )
+            interval = (
+                None
+                if size is not None
+                else self._bounded_unsigned_operand_interval_before(
+                    pushed_size[0].address,
+                    pushed_size[1],
+                    call_target,
+                    assumed_memory_intervals=assumptions,
+                )
+            )
+            if (
+                size is None
+                and interval is None
+                and source_values is not None
+                and not assumptions
+            ):
+                contract = self._returned_fresh_variadic_extent_contract(
+                    call_address,
+                    call_target,
+                    caller_entry,
+                    source,
+                    source_values,
+                )
+                if contract is not None:
+                    assumptions, extent_detail = contract
+                    interval = (
+                        self._bounded_unsigned_operand_interval_before(
+                            pushed_size[0].address,
+                            pushed_size[1],
+                            call_target,
+                            assumed_memory_intervals=assumptions,
+                        )
+                    )
+            lower = (
+                min(size[0])
+                if size is not None and size[0]
+                else None if interval is None else interval[0]
+            )
+            upper = (
+                max(size[0])
+                if size is not None and size[0]
+                else None if interval is None else interval[1]
+            )
+            if (
+                lower is None
+                or upper is None
+                or lower < field_path[0] + 1
+                or upper > 0x1000_0000
+            ):
+                return None
+            size_detail = (
+                size[1]
+                if size is not None
+                else interval[2]
+            )
+            extent_detail = (
+                f"{extent_detail + ';' if extent_detail else ''}"
+                f"allocation={allocation_call:#x};"
+                f"extent={lower:#x}..{upper:#x};{size_detail}"
+            )
+        self._check_count("max_finite_values", len(values))
+        return (
+            values,
+            f"call={call_address:#x};target={call_target:#x};"
+            f"{source.provenance};{extent_detail};{detail}",
+        )
+
     def _finite_object_byte_call_return_values_before(
         self,
         call_address: int,
@@ -16170,6 +17339,17 @@ class _DirectCfgRecovery:
                 + f"guard={downstream_guard.guard_address:#x};"
                 f"{downstream_guard.provenance}",
             )
+        returned_fresh = (
+            self._finite_returned_fresh_allocation_byte_values(
+                call_address,
+                call_target,
+                caller_entry,
+                field_path,
+                next_visited,
+            )
+        )
+        if returned_fresh is not None:
+            return returned_fresh
         object_guard = object_guards[0] if object_guards else None
         guard_disjoint_returns = 0
         optional_empty_returns = 0
@@ -16321,6 +17501,12 @@ class _DirectCfgRecovery:
                     frozenset(),
                     f"call={call_address:#x};target={call_target:#x};optional-empty-association;" + "|".join(details),
                 )
+            return None
+        if optional_empty_returns:
+            # A finite byte domain does not prove that the returned object is
+            # readable when another reachable return can still be null.  An
+            # exact downstream result guard is handled above; without one,
+            # keep the mixed null/non-null return contract fail-closed.
             return None
         self._check_count("max_finite_values", len(values))
         return (
@@ -17166,9 +18352,16 @@ class _DirectCfgRecovery:
         }
 
         def offsets(state, register) -> frozenset[int]:
-            if state is None:
+            if (
+                state is None
+                or register == X86_REG_INVALID
+                or (
+                    family := self._register_family(register)
+                )
+                not in family_index
+            ):
                 return frozenset()
-            return state[0][family_index[self._register_family(register)]]
+            return state[0][family_index[family]]
 
         target_field = field_path[0]
         writers: set[int] = set()
@@ -17712,8 +18905,55 @@ class _DirectCfgRecovery:
                             function_entry,
                         ),
                     )
-                    if publication != allowed_stack_publication:
+                    active_global_slot = (
+                        None
+                        if publication == allowed_stack_publication
+                        else self._active_global_object_publication_is_terminal(
+                            address,
+                            destination,
+                            source_offsets,
+                            function_entry,
+                            field_path,
+                            observation_address,
+                            following_entry,
+                            excluded_addresses,
+                        )
+                    )
+                    active_append_slot = (
+                        None
+                        if (
+                            publication == allowed_stack_publication
+                            or active_global_slot is not None
+                        )
+                        else self._active_global_object_append_link_is_terminal(
+                            address,
+                            destination,
+                            source_offsets,
+                            allocation_call,
+                            function_entry,
+                            field_path,
+                            observation_address,
+                            following_entry,
+                            excluded_addresses,
+                        )
+                    )
+                    if (
+                        publication != allowed_stack_publication
+                        and active_global_slot is None
+                        and active_append_slot is None
+                    ):
                         return None
+                    if active_global_slot is not None:
+                        details.append(
+                            "closed-active-global-publication="
+                            f"{address:#x}:{active_global_slot:#x}"
+                        )
+                    if active_append_slot is not None:
+                        details.append(
+                            "closed-active-global-append-link="
+                            f"{address:#x}:{active_append_slot:#x};"
+                            f"global-append-tail={active_append_slot:#x}"
+                        )
 
         initializers = frozenset(writers | empty_writers)
         if not initializers or self._reachable_within_function(
@@ -18338,6 +19578,11 @@ class _DirectCfgRecovery:
                 "guard-disjoint",
             ):
                 saw_guard_disjoint = True
+            if not result[0] and self._object_result_has_flag(
+                result[1],
+                "optional-empty-association",
+            ):
+                saw_optional_empty = True
             values.update(result[0])
             details.append(f"definition={definition_address:#x};{result[1]}")
         if not values:
@@ -18421,6 +19666,75 @@ class _DirectCfgRecovery:
         )
         return self._reachable_within_function(
             nonnull_arm,
+            observation_address,
+            function_entry,
+            following_entry,
+        ) and not self._reachable_within_function(
+            null_arm,
+            observation_address,
+            function_entry,
+            following_entry,
+        )
+
+    def _global_load_definition_has_closed_nonnull_guard(
+        self,
+        definition_address: int,
+        observation_address: int,
+        function_entry: int,
+        register_family: str,
+        slot: int,
+    ) -> bool:
+        """Recognize ``cmp [slot], 0; je ...; mov reg, [slot]``."""
+        definition = self._owned_decoded(definition_address)
+        if (
+            definition.id != X86_INS_MOV
+            or len(definition.operands) != 2
+            or definition.operands[0].type != X86_OP_REG
+            or definition.operands[0].size != 4
+            or self._register_family(definition.operands[0].reg)
+            != register_family
+            or definition.operands[1].type != X86_OP_MEM
+            or definition.operands[1].size != 4
+            or self._absolute_memory_operand(definition.operands[1])
+            != slot
+        ):
+            return False
+        branch_instruction = self._previous_instruction(
+            definition_address
+        )
+        if branch_instruction is None:
+            return False
+        branch = self._owned_decoded(branch_instruction.address)
+        target = self._direct_target(branch)
+        if target is None:
+            return False
+        fallthrough = branch.address + branch.size
+        if branch.mnemonic in {"je", "jz"}:
+            nonnull_arm, null_arm = fallthrough, target
+        elif branch.mnemonic in {"jne", "jnz"}:
+            nonnull_arm, null_arm = target, fallthrough
+        else:
+            return False
+        if nonnull_arm != definition_address:
+            return False
+        compare_instruction = self._previous_instruction(branch.address)
+        if compare_instruction is None:
+            return False
+        compared = self._owned_decoded(compare_instruction.address)
+        if not (
+            compared.id == x86_const.X86_INS_CMP
+            and len(compared.operands) == 2
+            and compared.operands[0].type == X86_OP_MEM
+            and compared.operands[0].size == 4
+            and self._absolute_memory_operand(compared.operands[0])
+            == slot
+            and compared.operands[1].type == X86_OP_IMM
+            and compared.operands[1].imm & 0xFFFF_FFFF == 0
+        ):
+            return False
+        following_entry = self._following_function_entry(function_entry)
+        return self._reachable_within_function(
+            definition_address,
             observation_address,
             function_entry,
             following_entry,
@@ -23313,6 +24627,11 @@ class _DirectCfgRecovery:
         address: int,
         operand,
         function_entry: int,
+        *,
+        assumed_memory_intervals: tuple[
+            tuple[int, int, int],
+            ...,
+        ] = (),
     ) -> tuple[int, int, str] | None:
         """Evaluate a bounded scalar interval on paths reaching one use.
 
@@ -23329,6 +24648,13 @@ class _DirectCfgRecovery:
         unknown_registers: tuple[tuple[int, int] | None, ...] = (None,) * len(
             _REGISTER_FAMILIES
         )
+        assumptions = {
+            row_address: (lower, upper)
+            for row_address, lower, upper in assumed_memory_intervals
+            if 0 <= lower <= upper <= 0xFFFF_FFFF
+        }
+        if len(assumptions) != len(assumed_memory_intervals):
+            return None
         absolute_write_spans = []
         for write_address, writers in self.absolute_memory_writes.items():
             for writer in writers:
@@ -23455,6 +24781,8 @@ class _DirectCfgRecovery:
                     family_index[self._register_family(candidate.reg)]
                 ]
             if candidate.type == X86_OP_MEM:
+                if row_address in assumptions:
+                    return assumptions[row_address]
                 return memory_interval(
                     row_address,
                     candidate.mem,
@@ -23466,6 +24794,25 @@ class _DirectCfgRecovery:
         def bounded_binary(operation, left, right):
             if left is None or right is None:
                 return None
+            if operation == "add":
+                lower = left[0] + right[0]
+                upper = left[1] + right[1]
+                return (
+                    (lower, upper)
+                    if upper <= 0xFFFF_FFFF
+                    else None
+                )
+            if operation == "sub":
+                if right[1] > left[0]:
+                    return None
+                return left[0] - right[1], left[1] - right[0]
+            if operation == "imul":
+                upper = left[1] * right[1]
+                return (
+                    (left[0] * right[0], upper)
+                    if upper <= 0xFFFF_FFFF
+                    else None
+                )
             left_values = interval_values(left)
             right_values = interval_values(right)
             if left_values is None or right_values is None:
@@ -23478,15 +24825,7 @@ class _DirectCfgRecovery:
             values = []
             for lhs in left_values:
                 for rhs in right_values:
-                    if operation == "add":
-                        value = lhs + rhs
-                    elif operation == "sub":
-                        if rhs > lhs:
-                            return None
-                        value = lhs - rhs
-                    elif operation == "imul":
-                        value = lhs * rhs
-                    elif operation == "shl":
+                    if operation == "shl":
                         value = lhs << (rhs & 0x1F)
                     elif operation == "and":
                         value = lhs & rhs
@@ -23650,6 +24989,8 @@ class _DirectCfgRecovery:
                         0 if source[0] != source[1] else source[0] & mask,
                         mask if source[0] != source[1] else source[0] & mask,
                     )
+                elif source[1] < 1 << (width - 1):
+                    result = source
                 elif source[0] == source[1]:
                     value = source[0] & ((1 << width) - 1)
                     if value & (1 << (width - 1)):
@@ -23768,6 +25109,360 @@ class _DirectCfgRecovery:
             result[0],
             result[1],
             f"bounded-unsigned-interval={result[0]:#x}..{result[1]:#x}",
+        )
+
+    def _bounded_nonnegative_signed_word_operand_before(
+        self,
+        address: int,
+        operand,
+        function_entry: int,
+    ) -> tuple[int, int, str] | None:
+        """Bound one register derived from a guarded signed-word load."""
+        finite = self._finite_operand_values_before(
+            address,
+            operand,
+            function_entry,
+            frozenset(),
+        )
+        if (
+            finite is not None
+            and finite[0]
+            and max(finite[0]) <= 0x7FFF
+        ):
+            return (
+                min(finite[0]),
+                max(finite[0]),
+                finite[1],
+            )
+        if operand.type != X86_OP_REG or operand.size != 4:
+            return None
+        family = self._register_family(operand.reg)
+        cursor = address
+        delta = 0
+        definition = None
+        for _ in range(32):
+            previous = self._previous_instruction(cursor)
+            if previous is None or previous.address < function_entry:
+                return None
+            decoded = self._owned_decoded(previous.address)
+            writes_family = any(
+                self._register_family(register) == family
+                for register in decoded.regs_write
+                if register != x86_const.X86_REG_EFLAGS
+            ) or any(
+                candidate.type == X86_OP_REG
+                and candidate.access & CS_AC_WRITE
+                and self._register_family(candidate.reg) == family
+                for candidate in decoded.operands
+            )
+            if writes_family:
+                if (
+                    decoded.mnemonic in {"inc", "dec"}
+                    and len(decoded.operands) == 1
+                    and decoded.operands[0].type == X86_OP_REG
+                    and self._register_family(
+                        decoded.operands[0].reg
+                    )
+                    == family
+                ):
+                    delta += 1 if decoded.mnemonic == "inc" else -1
+                    cursor = previous.address
+                    continue
+                if (
+                    decoded.mnemonic in {"add", "sub"}
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_REG
+                    and self._register_family(
+                        decoded.operands[0].reg
+                    )
+                    == family
+                    and decoded.operands[1].type == X86_OP_IMM
+                ):
+                    adjustment = (
+                        decoded.operands[1].imm
+                        if decoded.mnemonic == "add"
+                        else -decoded.operands[1].imm
+                    )
+                    delta += adjustment
+                    cursor = previous.address
+                    continue
+                if (
+                    decoded.id == x86_const.X86_INS_MOVSX
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_REG
+                    and self._register_family(
+                        decoded.operands[0].reg
+                    )
+                    == family
+                    and decoded.operands[1].type == X86_OP_MEM
+                    and decoded.operands[1].size == 2
+                ):
+                    definition = decoded
+                    break
+                return None
+            if (
+                decoded.group(CS_GRP_CALL)
+                or decoded.group(CS_GRP_JUMP)
+                or decoded.group(CS_GRP_RET)
+                or previous.address in self.block_starts
+            ):
+                return None
+            cursor = previous.address
+        if definition is None:
+            return None
+
+        following_entry = self._following_function_entry(function_entry)
+        guarded_arms: list[tuple[int, int, int]] = []
+        for branch_address in reversed(
+            self._function_instruction_addresses_between(
+                function_entry,
+                function_entry,
+                address,
+            )
+        ):
+            branch = self._owned_decoded(branch_address)
+            if branch.mnemonic not in {"jg", "jge", "jl", "jle"}:
+                continue
+            condition = self._previous_instruction(branch_address)
+            if condition is None or condition.address + condition.size != branch_address:
+                continue
+            compared = self._owned_decoded(condition.address)
+            if (
+                compared.mnemonic != "cmp"
+                or len(compared.operands) != 2
+                or compared.operands[1].type != X86_OP_IMM
+                or compared.operands[1].imm & 0xFFFF_FFFF > 0x7FFF
+            ):
+                continue
+            same_operand = self._same_guard_operand(
+                condition.address,
+                compared.operands[0],
+                definition.address,
+                definition.operands[1],
+                function_entry,
+            )
+            if not same_operand:
+                guard_slot = self._absolute_memory_operand(
+                    compared.operands[0]
+                )
+                definition_slot = self._absolute_memory_operand(
+                    definition.operands[1]
+                )
+                if self.highlow_relocation_references_by_value is None:
+                    references_by_value: dict[int, set[int]] = {}
+                    for relocation in self.image.relocations:
+                        if not (
+                            relocation.type == 3
+                            and _is_mapped_span(
+                                self.image,
+                                relocation.va,
+                                4,
+                            )
+                        ):
+                            continue
+                        value = int.from_bytes(
+                            _read_loader_initialized(
+                                self.image,
+                                relocation.va,
+                                4,
+                            ),
+                            "little",
+                        )
+                        references_by_value.setdefault(
+                            value,
+                            set(),
+                        ).add(relocation.va)
+                    self.highlow_relocation_references_by_value = {
+                        value: frozenset(addresses)
+                        for value, addresses in references_by_value.items()
+                    }
+                relocation_references = (
+                    frozenset()
+                    if guard_slot is None
+                    else self.highlow_relocation_references_by_value.get(
+                        guard_slot,
+                        frozenset(),
+                    )
+                )
+                slot_has_only_direct_accesses = bool(
+                    guard_slot is not None
+                    and relocation_references
+                    and not any(
+                        row.va == guard_slot
+                        for row in self.image.exports
+                    )
+                    and all(
+                        (owner := self.byte_owners.get(reference))
+                        is not None
+                        and any(
+                            operand.type == X86_OP_MEM
+                            and self._absolute_memory_operand(operand)
+                            == guard_slot
+                            for operand in self._owned_decoded(
+                                owner
+                            ).operands
+                        )
+                        for reference in relocation_references
+                    )
+                )
+                slot_writer_owners = {
+                    self._registrar_function_entry(owner)
+                    for reference in relocation_references
+                    if (owner := self.byte_owners.get(reference))
+                    is not None
+                    and any(
+                        operand.type == X86_OP_MEM
+                        and operand.access & CS_AC_WRITE
+                        and self._absolute_memory_operand(operand)
+                        == guard_slot
+                        for operand in self._owned_decoded(
+                            owner
+                        ).operands
+                    )
+                }
+                if (
+                    guard_slot is None
+                    or guard_slot != definition_slot
+                    or compared.operands[0].size
+                    != definition.operands[1].size
+                    or any(
+                        (
+                            self._owned_decoded(candidate).group(
+                                CS_GRP_CALL
+                            )
+                            and (
+                                not slot_has_only_direct_accesses
+                                or (
+                                    target
+                                    := self.direct_call_targets_by_source.get(
+                                        candidate
+                                    )
+                                )
+                                is None
+                                or not (
+                                    closure
+                                    := self._direct_function_call_closure(
+                                        target
+                                    )
+                                )
+                                or not closure.isdisjoint(
+                                    slot_writer_owners
+                                )
+                            )
+                        )
+                        or any(
+                            destination.type == X86_OP_MEM
+                            and destination.access & CS_AC_WRITE
+                            and (
+                                write_slot
+                                := self._absolute_memory_operand(
+                                    destination
+                                )
+                            )
+                            is not None
+                            and write_slot
+                            < guard_slot + compared.operands[0].size
+                            and guard_slot
+                            < write_slot + destination.size
+                            for destination in self._owned_decoded(
+                                candidate
+                            ).operands
+                        )
+                        for candidate in (
+                            self._function_instruction_addresses_between(
+                                function_entry,
+                                condition.address + 1,
+                                definition.address,
+                            )
+                        )
+                        if self._reachable_within_function(
+                            condition.address,
+                            candidate,
+                            function_entry,
+                            following_entry,
+                        )
+                        and self._reachable_within_function(
+                            candidate,
+                            definition.address,
+                            function_entry,
+                            following_entry,
+                        )
+                    )
+                ):
+                    continue
+            target = self._direct_target(branch)
+            if target is None:
+                continue
+            fallthrough = branch.address + branch.size
+            bound = compared.operands[1].imm & 0xFFFF_FFFF
+            if branch.mnemonic == "jg":
+                live, _rejected, candidate_lower = (
+                    target,
+                    fallthrough,
+                    bound + 1,
+                )
+            elif branch.mnemonic == "jge":
+                live, _rejected, candidate_lower = target, fallthrough, bound
+            elif branch.mnemonic == "jle":
+                live, _rejected, candidate_lower = (
+                    fallthrough,
+                    target,
+                    bound + 1,
+                )
+            else:
+                live, _rejected, candidate_lower = fallthrough, target, bound
+            if not self._reachable_within_function(
+                    live,
+                    address,
+                    function_entry,
+                    following_entry,
+                ):
+                continue
+            guarded_arms.append(
+                (branch.address, live, candidate_lower)
+            )
+        live_nodes = {
+            live for _branch, live, _lower in guarded_arms
+        }
+        if (
+            not live_nodes
+            or self._reachable_within_function(
+                function_entry,
+                address,
+                function_entry,
+                following_entry,
+                excluded=frozenset(live_nodes),
+            )
+            or any(
+                {
+                    source
+                    for source, _kind in self.incoming_edges.get(
+                        live,
+                        (),
+                    )
+                }
+                - {
+                    branch
+                    for branch, candidate_live, _lower in guarded_arms
+                    if candidate_live == live
+                }
+                for live in live_nodes
+            )
+        ):
+            return None
+        lower = min(
+            candidate_lower
+            for _branch, _live, candidate_lower in guarded_arms
+        )
+        lower += delta
+        upper = 0x7FFF + delta
+        if not 0 <= lower <= upper <= 0x7FFF:
+            return None
+        return (
+            lower,
+            upper,
+            f"guarded-signed-word={definition.address:#x};"
+            f"delta={delta:+#x};bounds={lower:#x}..{upper:#x}",
         )
 
     def _finite_register_values_before(
@@ -36530,6 +38225,200 @@ class _DirectCfgRecovery:
         sp_delta, bp_delta = state
         base_delta = sp_delta if base_family == "esp" else bp_delta
         return None if base_delta is None else base_delta + memory.disp
+
+    def _linear_stack_pointer_operand_offset_before(
+        self,
+        address: int,
+        operand,
+        function_entry: int,
+    ) -> int | None:
+        """Evaluate a straight-line affine stack-address expression."""
+        if operand.type != X86_OP_REG:
+            return None
+        following_entry = self._following_function_entry(function_entry)
+        states = self._function_stack_states(function_entry)
+        if states is None:
+            return None
+        values: dict[str, tuple[int, int]] = {}
+
+        def register_value(register: int) -> tuple[int, int] | None:
+            return values.get(self._register_family(register))
+
+        def scalar_value(candidate) -> tuple[int, int] | None:
+            if candidate.type == X86_OP_IMM:
+                return 0, candidate.imm & 0xFFFF_FFFF
+            if candidate.type == X86_OP_REG:
+                return register_value(candidate.reg)
+            return None
+
+        for row_address in self._function_instruction_addresses_between(
+            function_entry,
+            function_entry,
+            address,
+        ):
+            if row_address == address:
+                break
+            decoded = self._owned_decoded(row_address)
+            if (
+                decoded.group(CS_GRP_CALL)
+                or decoded.group(CS_GRP_JUMP)
+                or decoded.group(CS_GRP_RET)
+            ):
+                return None
+            handled: set[str] = set()
+            operands = decoded.operands
+            if (
+                decoded.id == X86_INS_MOV
+                and len(operands) == 2
+                and operands[0].type == X86_OP_REG
+                and operands[0].size == 4
+            ):
+                family = self._register_family(operands[0].reg)
+                value = scalar_value(operands[1])
+                if value is None:
+                    values.pop(family, None)
+                else:
+                    values[family] = value
+                handled.add(family)
+            elif (
+                decoded.id == X86_INS_LEA
+                and len(operands) == 2
+                and operands[0].type == X86_OP_REG
+                and operands[0].size == 4
+                and operands[1].type == X86_OP_MEM
+                and operands[1].mem.segment == X86_REG_INVALID
+                and operands[1].mem.index == X86_REG_INVALID
+            ):
+                family = self._register_family(operands[0].reg)
+                memory = operands[1]
+                base_family = (
+                    None
+                    if memory.mem.base == X86_REG_INVALID
+                    else self._register_family(memory.mem.base)
+                )
+                if base_family in {"esp", "ebp"}:
+                    logical = self._stack_operand_logical_offset(
+                        row_address,
+                        memory,
+                        function_entry,
+                    )
+                    value = (
+                        None
+                        if logical is None
+                        else (1, logical)
+                    )
+                elif memory.mem.base != X86_REG_INVALID:
+                    base = register_value(memory.mem.base)
+                    value = (
+                        None
+                        if base is None
+                        else (base[0], base[1] + memory.mem.disp)
+                    )
+                else:
+                    value = (0, memory.mem.disp & 0xFFFF_FFFF)
+                if value is None:
+                    values.pop(family, None)
+                else:
+                    values[family] = value
+                handled.add(family)
+            elif (
+                decoded.mnemonic in {"add", "sub"}
+                and len(operands) == 2
+                and operands[0].type == X86_OP_REG
+                and operands[0].size == 4
+            ):
+                family = self._register_family(operands[0].reg)
+                left = values.get(family)
+                right = scalar_value(operands[1])
+                if left is None or right is None:
+                    values.pop(family, None)
+                else:
+                    sign = 1 if decoded.mnemonic == "add" else -1
+                    coefficient = left[0] + sign * right[0]
+                    constant = left[1] + sign * right[1]
+                    if coefficient not in {-1, 0, 1}:
+                        values.pop(family, None)
+                    else:
+                        values[family] = (
+                            coefficient,
+                            (
+                                constant & 0xFFFF_FFFF
+                                if coefficient == 0
+                                else constant
+                            ),
+                        )
+                handled.add(family)
+            elif (
+                decoded.mnemonic in {"and", "shl", "sar"}
+                and len(operands) == 2
+                and operands[0].type == X86_OP_REG
+                and operands[0].size == 4
+                and operands[1].type == X86_OP_IMM
+            ):
+                family = self._register_family(operands[0].reg)
+                prior = values.get(family)
+                if prior is None or prior[0] != 0:
+                    values.pop(family, None)
+                else:
+                    value = prior[1] & 0xFFFF_FFFF
+                    immediate = operands[1].imm & 0x1F
+                    if decoded.mnemonic == "and":
+                        value &= operands[1].imm & 0xFFFF_FFFF
+                    elif decoded.mnemonic == "shl":
+                        value = (value << immediate) & 0xFFFF_FFFF
+                    else:
+                        signed = (
+                            value - 0x1_0000_0000
+                            if value & 0x8000_0000
+                            else value
+                        )
+                        value = (signed >> immediate) & 0xFFFF_FFFF
+                    values[family] = (0, value)
+                handled.add(family)
+            elif decoded.mnemonic == "cdq":
+                eax = values.get("eax")
+                if eax is None or eax[0] != 0:
+                    values.pop("edx", None)
+                else:
+                    values["edx"] = (
+                        0,
+                        (
+                            0xFFFF_FFFF
+                            if eax[1] & 0x8000_0000
+                            else 0
+                        ),
+                    )
+                handled.update({"eax", "edx"})
+
+            written = {
+                self._register_family(register)
+                for register in decoded.regs_write
+                if register != x86_const.X86_REG_EFLAGS
+            } | {
+                self._register_family(candidate.reg)
+                for candidate in operands
+                if (
+                    candidate.type == X86_OP_REG
+                    and candidate.access & CS_AC_WRITE
+                )
+            }
+            for family in written - handled - {"esp"}:
+                values.pop(family, None)
+            if any(
+                successor != row_address + decoded.size
+                for successor in self._summary_successors(
+                    row_address,
+                    function_entry,
+                    following_entry,
+                )
+            ):
+                return None
+        result = register_value(operand.reg)
+        return (
+            result[1]
+            if result is not None and result[0] == 1
+            else None
+        )
 
     def _stack_operand_logical_offset(
         self, address: int, operand, function_entry: int

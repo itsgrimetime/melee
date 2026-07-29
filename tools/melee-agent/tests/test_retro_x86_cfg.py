@@ -3965,6 +3965,130 @@ def late_initialized_stack_slot_allocation_image(
     return image, text_va + movzx_offset, text_va + transfer_offset
 
 
+def paired_global_fresh_publication_image(
+    *,
+    intervening_call=False,
+    append_link=False,
+    guard_before_load=False,
+    guard_intervening_call=False,
+):
+    """Publish one initialized fresh object to two loader-zero globals."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data_va = 0x00403000
+    data = bytearray(0x500)
+    text = memoryview(data)[:0x300]
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (
+            text_va + offset + 5
+        )
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4, "little", signed=True
+        )
+        return offset + 5
+
+    cursor = emit(0, "6a 1a")
+    allocation_call = text_va + cursor
+    cursor = emit_call(cursor, 0x100)
+    cursor = emit(cursor, "59 85 c0 74 00")
+    failure_branch = cursor - 2
+    cursor = emit(cursor, "c6 40 04 29")
+    if append_link:
+        if guard_before_load:
+            cursor = emit(cursor, "83 3d 04 30 40 00 00")
+            zero_branch = cursor
+            cursor = emit(cursor, "74 00")
+            if guard_intervening_call:
+                cursor = emit_call(cursor, 0x180)
+            cursor = emit(cursor, "8b 0d 04 30 40 00 89 01 eb 05")
+        else:
+            cursor = emit(
+                cursor,
+                "8b 0d 04 30 40 00 85 c9 74 04 89 01 eb 05",
+            )
+    first_publication = text_va + cursor
+    if append_link and guard_before_load:
+        text[zero_branch + 1] = (
+            cursor - (zero_branch + 2)
+        ) & 0xFF
+    cursor = emit(cursor, "a3 00 30 40 00")
+    if intervening_call:
+        cursor = emit_call(cursor, 0x180)
+    second_publication = text_va + cursor
+    cursor = emit(cursor, "a3 04 30 40 00 c3")
+    failure = 0x40
+    emit(failure, "eb fe")
+    text[failure_branch + 1] = (
+        failure - (failure_branch + 2)
+    ) & 0xFF
+
+    # Exact owned bump allocator shape with a locally guarded result.
+    cursor = emit(
+        0x100,
+        "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08",
+    )
+    cursor = emit(cursor, "39 1d 20 30 40 00 7d 0d 53")
+    cursor = emit(cursor, "68 28 30 40 00")
+    cursor = emit_call(cursor, 0x160)
+    cursor = emit(cursor, "59 59 29 1d 20 30 40 00")
+    cursor = emit(
+        cursor,
+        "a1 24 30 40 00 01 1d 24 30 40 00 5b c3",
+    )
+    assert cursor < 0x160
+    emit(0x160, "c3")
+    emit(0x180, "c3")
+    struct.pack_into("<I", data, 0x420, 0x1000)
+    struct.pack_into("<I", data, 0x424, data_va + 0x100)
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0x300,
+                0x300,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                0x300,
+                0x200,
+                0x200,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x300),),
+    )
+    return (
+        image,
+        allocation_call,
+        first_publication,
+        second_publication,
+    )
+
+
 def lifecycle_optional_allocation_pointee_image(*, mutation=None):
     """Checked arena session with optional finite list pushes and empty tail."""
     from tools.mwcc_retro import pe as pe_mod
@@ -3987,6 +4111,7 @@ def lifecycle_optional_allocation_pointee_image(*, mutation=None):
         "returning-callback",
         "callback-overwritten",
         "reset-reachable",
+        "second-checked-backend",
         "alternate-backend-entry",
         "allocation-before-init",
         "unknown-initial-head",
@@ -4053,6 +4178,8 @@ def lifecycle_optional_allocation_pointee_image(*, mutation=None):
     setjmp_failure_branch = cursor
     cursor = emit(cursor, "75 00")
     cursor = emit_call(cursor, 0x400)
+    if mutation == "second-checked-backend":
+        cursor = emit_call(cursor, 0x6A0)
     cursor = emit(cursor, "c3")
     failure_offset = cursor
     cursor = emit_call(cursor, 0x580)
@@ -4328,6 +4455,10 @@ def lifecycle_optional_allocation_pointee_image(*, mutation=None):
     emit(0x640, "a1 c8 30 40 00 83 05 c8 30 40 00 40 c3")
     emit(0x660, "8b 44 24 04 c7 00 34 12 00 00 c3")
     emit(0x680, "8b 44 24 04 a3 d0 30 40 00 c3")
+    if mutation == "second-checked-backend":
+        cursor = emit_call(0x6A0, 0x80)
+        cursor = emit_call(cursor, 0x140)
+        emit(cursor, "c3")
 
     for index in range(75):
         struct.pack_into("<I", data, 0x700 + index * 4, text_va + 0x600)
@@ -8142,6 +8273,356 @@ def test_allocator_totality_accepts_reset_outside_closed_lifetime():
 
     assert certificate is not None
     assert certificate.lifetime_roots == lifetime_roots
+
+
+def test_allocator_totality_accepts_two_checked_backend_phases():
+    image, _movzx_address, transfer_address = (
+        lifecycle_optional_allocation_pointee_image(
+            mutation="second-checked-backend"
+        )
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert cfg.jump_table_at(transfer_address).guard_bound == 74
+
+
+def test_fresh_object_allows_paired_active_global_publications():
+    (
+        image,
+        allocation_call,
+        _first_publication,
+        second_publication,
+    ) = paired_global_fresh_publication_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    field_path = (4,)
+    contracts = {
+        (0x00403000, field_path),
+        (0x00403004, field_path),
+    }
+    recovery.global_object_contract_active.update(contracts)
+    try:
+        result = (
+            recovery._finite_fresh_allocation_object_byte_values_before(
+                allocation_call,
+                second_publication,
+                0x00401000,
+                field_path,
+                frozenset(),
+            )
+        )
+    finally:
+        recovery.global_object_contract_active.difference_update(
+            contracts
+        )
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+    assert "closed-active-global-publication" in result[1]
+
+
+def test_fresh_object_allows_active_global_append_link():
+    (
+        image,
+        allocation_call,
+        _first_publication,
+        second_publication,
+    ) = paired_global_fresh_publication_image(append_link=True)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    field_path = (4,)
+    contracts = {
+        (0x00403000, field_path),
+        (0x00403004, field_path),
+    }
+    recovery.global_object_contract_active.update(contracts)
+    try:
+        result = (
+            recovery._finite_fresh_allocation_object_byte_values_before(
+                allocation_call,
+                second_publication,
+                0x00401000,
+                field_path,
+                frozenset(),
+            )
+        )
+    finally:
+        recovery.global_object_contract_active.difference_update(
+            contracts
+        )
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+    assert "closed-active-global-append-link" in result[1]
+    assert "global-append-tail=0x403004" in result[1]
+
+
+def test_fresh_object_allows_global_guard_before_active_append_load():
+    (
+        image,
+        allocation_call,
+        _first_publication,
+        second_publication,
+    ) = paired_global_fresh_publication_image(
+        append_link=True,
+        guard_before_load=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    field_path = (4,)
+    contracts = {
+        (0x00403000, field_path),
+        (0x00403004, field_path),
+    }
+    recovery.global_object_contract_active.update(contracts)
+    try:
+        result = (
+            recovery._finite_fresh_allocation_object_byte_values_before(
+                allocation_call,
+                second_publication,
+                0x00401000,
+                field_path,
+                frozenset(),
+            )
+        )
+    finally:
+        recovery.global_object_contract_active.difference_update(
+            contracts
+        )
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+    assert "closed-active-global-append-link" in result[1]
+    assert "global-append-tail=0x403004" in result[1]
+
+
+def test_fresh_object_allows_active_append_before_return_observation():
+    (
+        image,
+        allocation_call,
+        _first_publication,
+        second_publication,
+    ) = paired_global_fresh_publication_image(
+        append_link=True,
+        guard_before_load=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    field_path = (4,)
+    contracts = {
+        (0x00403000, field_path),
+        (0x00403004, field_path),
+    }
+    recovery.global_object_contract_active.update(contracts)
+    try:
+        result = (
+            recovery._finite_fresh_allocation_object_byte_values_before(
+                allocation_call,
+                second_publication + 5,
+                0x00401000,
+                field_path,
+                frozenset(),
+            )
+        )
+    finally:
+        recovery.global_object_contract_active.difference_update(
+            contracts
+        )
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+    assert "global-append-tail=0x403004" in result[1]
+
+
+def test_fresh_object_rejects_open_global_guard_before_append_load():
+    (
+        image,
+        _allocation_call,
+        _first_publication,
+        _second_publication,
+    ) = paired_global_fresh_publication_image(
+        append_link=True,
+        guard_before_load=True,
+        guard_intervening_call=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    definition_address = next(
+        address
+        for address in recovery.instructions
+        if (
+            (decoded := recovery._owned_decoded(address)).id
+            == capstone.x86_const.X86_INS_MOV
+            and len(decoded.operands) == 2
+            and decoded.operands[0].type
+            == capstone.x86_const.X86_OP_REG
+            and recovery._register_family(decoded.operands[0].reg)
+            == "ecx"
+            and recovery._absolute_memory_operand(
+                decoded.operands[1]
+            )
+            == 0x00403004
+        )
+    )
+    publication_address = next(
+        address
+        for address in recovery.instructions
+        if (
+            (decoded := recovery._owned_decoded(address)).id
+            == capstone.x86_const.X86_INS_MOV
+            and len(decoded.operands) == 2
+            and decoded.operands[0].type
+            == capstone.x86_const.X86_OP_MEM
+            and decoded.operands[0].mem.base
+            != capstone.x86_const.X86_REG_INVALID
+            and recovery._register_family(
+                decoded.operands[0].mem.base
+            )
+            == "ecx"
+            and decoded.operands[0].mem.disp == 0
+        )
+    )
+
+    assert not recovery._global_load_definition_has_closed_nonnull_guard(
+        definition_address,
+        publication_address,
+        0x00401000,
+        "ecx",
+        0x00403004,
+    )
+
+
+def test_object_register_propagates_optional_empty_absolute_load(
+    monkeypatch,
+):
+    (
+        image,
+        _allocation_call,
+        _first_publication,
+        _second_publication,
+    ) = paired_global_fresh_publication_image(append_link=True)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    load_address = next(
+        address
+        for address in recovery.instructions
+        if (
+            (decoded := recovery._owned_decoded(address)).mnemonic
+            == "mov"
+            and len(decoded.operands) == 2
+            and decoded.operands[0].type
+            == capstone.x86_const.X86_OP_REG
+            and recovery._register_family(decoded.operands[0].reg)
+            == "ecx"
+            and recovery._absolute_memory_operand(
+                decoded.operands[1]
+            )
+            == 0x00403004
+        )
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_operand_values_before",
+        lambda *_args, **_kwargs: (
+            frozenset(),
+            "optional-empty-association;test-global",
+        ),
+    )
+
+    result = recovery._finite_object_byte_register_values_before(
+        load_address + recovery.instructions[load_address].size,
+        "ecx",
+        0x00401000,
+        (4,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset()
+    assert "optional-empty-association" in result[1]
+
+
+@pytest.mark.parametrize(
+    (
+        "intervening_call",
+        "include_first_contract",
+        "append_link",
+    ),
+    [
+        (False, False, False),
+        (True, True, False),
+        (True, True, True),
+    ],
+)
+def test_fresh_object_rejects_open_paired_global_publication(
+    intervening_call,
+    include_first_contract,
+    append_link,
+):
+    (
+        image,
+        allocation_call,
+        _first_publication,
+        second_publication,
+    ) = paired_global_fresh_publication_image(
+        intervening_call=intervening_call,
+        append_link=append_link,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    field_path = (4,)
+    contracts = {(0x00403004, field_path)}
+    if include_first_contract:
+        contracts.add((0x00403000, field_path))
+    recovery.global_object_contract_active.update(contracts)
+    try:
+        result = (
+            recovery._finite_fresh_allocation_object_byte_values_before(
+                allocation_call,
+                second_publication,
+                0x00401000,
+                field_path,
+                frozenset(),
+            )
+        )
+    finally:
+        recovery.global_object_contract_active.difference_update(
+            contracts
+        )
+
+    assert result is None
 
 
 def test_lifecycle_optional_certificate_binds_session_and_push_chain(tmp_path):
@@ -13745,6 +14226,160 @@ def fresh_nested_return_allocation_image(
         executable_ranges=((text_va, text_va + 0x200),),
     )
     return image, return_address
+
+
+def returned_fresh_argument_copy_image(
+    *,
+    allocation_size=0x20,
+    overlap_after_copy=False,
+    escape_after_copy=False,
+):
+    """Call a guarded constructor that copies arg0 into fresh field +0x14."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data_va = 0x00403000
+    data = bytearray(0x300)
+    text = memoryview(data)[:0x200]
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (
+            text_va + offset + 5
+        )
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    cursor = emit(0, "6a 34")
+    call_address = text_va + cursor
+    cursor = emit_call(cursor, 0x40)
+    cursor = emit(cursor, "59 0f b6 50 14 c3")
+
+    cursor = emit(0x40, "53")
+    cursor = emit(cursor, f"68 {allocation_size:08x}")
+    # Convert the immediate to little endian after emitting readable hex.
+    text[0x42:0x46] = allocation_size.to_bytes(4, "little")
+    allocation_call = text_va + cursor
+    cursor = emit_call(cursor, 0x100)
+    cursor = emit(cursor, "59 89 c3 85 db")
+    failure_branch = cursor
+    cursor = emit(cursor, "74 00")
+    cursor = emit(cursor, "8b 44 24 08 66 89 43 14")
+    if overlap_after_copy:
+        cursor = emit(cursor, "c6 43 14 00")
+    if escape_after_copy:
+        cursor = emit(cursor, "53")
+        cursor = emit_call(cursor, 0x180)
+        cursor = emit(cursor, "59")
+    cursor = emit(cursor, "89 d8 5b")
+    return_address = text_va + cursor
+    cursor = emit(cursor, "c3")
+    failure = cursor
+    emit(cursor, "eb fe")
+    text[failure_branch + 1] = failure - (failure_branch + 2)
+
+    cursor = emit(
+        0x100,
+        "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08"
+        "39 1d 10 30 40 00 7d 0d 53"
+        "68 18 30 40 00",
+    )
+    cursor = emit_call(cursor, 0x160)
+    cursor = emit(
+        cursor,
+        "59 59 29 1d 10 30 40 00"
+        "a1 14 30 40 00 01 1d 14 30 40 00 5b c3",
+    )
+    emit(0x160, "c3")
+    emit(0x180, "c3")
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0x200,
+                0x200,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                0x200,
+                0x100,
+                0x100,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+    return image, call_address, allocation_call, return_address
+
+
+@pytest.mark.parametrize(
+    ("allocation_size", "overlap", "escape", "expected"),
+    (
+        (0x20, False, False, frozenset({0x34})),
+        (0x14, False, False, None),
+        (0x20, True, False, None),
+        (0x20, False, True, None),
+    ),
+)
+def test_returned_fresh_argument_copy_binds_extent_and_preservation(
+    allocation_size,
+    overlap,
+    escape,
+    expected,
+):
+    image, call_address, _allocation_call, _return_address = (
+        returned_fresh_argument_copy_image(
+            allocation_size=allocation_size,
+            overlap_after_copy=overlap,
+            escape_after_copy=escape,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_returned_fresh_allocation_byte_values(
+        call_address,
+        image.entrypoint + 0x40,
+        image.entrypoint,
+        (0x14,),
+        frozenset(),
+    )
+
+    if expected is None:
+        assert result is None
+    else:
+        assert result is not None
+        assert result[0] == expected
+        assert "extent=0x20..0x20" in result[1]
 
 
 def test_byte_producer_follows_nested_fresh_return_allocations():
