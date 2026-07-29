@@ -2947,6 +2947,7 @@ def dereferenced_object_return_image(mode):
 
     assert mode in {
         "direct",
+        "wide-read",
         "branch-bypass",
         "call-mutate",
         "copy-after-read",
@@ -2964,6 +2965,8 @@ def dereferenced_object_return_image(mode):
 
     if mode == "direct":
         encoded = bytes.fromhex("8b 44 24 04 80 38 00 c3")
+    elif mode == "wide-read":
+        encoded = bytes.fromhex("8b 44 24 04 8b 08 c3")
     elif mode == "copy-after-read":
         encoded = bytes.fromhex("8b 5c 24 04 80 3b 00 89 d8 c3")
     elif mode == "branch-bypass":
@@ -6065,6 +6068,7 @@ def test_parametric_mutual_recursive_object_return_rejects_open_input(kwargs):
     ("mode", "provenance"),
     [
         ("direct", "dominating-readable-object"),
+        ("wide-read", "dominating-readable-object"),
         ("copy-after-read", "readable-pointer-copy"),
         ("reloaded", "reloaded-readable-object"),
         ("reloaded-after-initialize", "reloaded-readable-object"),
@@ -14337,6 +14341,280 @@ def returned_fresh_argument_copy_image(
     return image, call_address, allocation_call, return_address
 
 
+def returned_fresh_two_arm_tail_copy_image(*, mutation=None):
+    """Clone one scalar field, then write an indexed fresh-object tail."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {
+        None,
+        "negative-index",
+        "unknown-index",
+        "overlap",
+        "escape",
+        "saved-result",
+        "saved-result-memset",
+        "saved-result-postwrite-memset",
+        "saved-result-tail-call",
+        "saved-result-tail-call-escape",
+        "saved-result-tail-call-negative-write",
+        "saved-result-tail-call-used-return",
+        "saved-result-wrong-return",
+    }
+    saved_result = mutation in {
+        "saved-result",
+        "saved-result-memset",
+        "saved-result-postwrite-memset",
+        "saved-result-tail-call",
+        "saved-result-tail-call-escape",
+        "saved-result-tail-call-negative-write",
+        "saved-result-tail-call-used-return",
+        "saved-result-wrong-return",
+    }
+    text_va = 0x00401000
+    data_va = 0x00403000
+    data = bytearray(0x300)
+    text = memoryview(data)[:0x200]
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (
+            text_va + offset + 5
+        )
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    cursor = emit(0, "6a 00")
+    call_address = text_va + cursor
+    cursor = emit_call(cursor, 0x40)
+    emit(cursor, "59 c3")
+    clone_offset = 0x40
+    cursor = emit(clone_offset, "8b 6c 24 04 f6 45 16 01")
+    second_arm_branch = cursor
+    cursor = emit(
+        cursor,
+        "74 00 0f bf 45 1a 40 6b c0 0c 83 c0 28 50",
+    )
+    cursor = emit_call(cursor, 0x100)
+    cursor = emit(cursor, "59")
+    if saved_result:
+        cursor = emit(cursor, "89 c6")
+    join_branch = cursor
+    cursor = emit(cursor, "eb 00")
+    second_arm = cursor
+    cursor = emit(
+        cursor,
+        "0f bf 45 1a 6b c0 0c 83 c0 28 50",
+    )
+    cursor = emit_call(cursor, 0x100)
+    cursor = emit(cursor, "59")
+    if saved_result:
+        cursor = emit(cursor, "89 c6")
+    join = cursor
+    text[second_arm_branch + 1] = second_arm - (second_arm_branch + 2)
+    text[join_branch + 1] = join - (join_branch + 2)
+    if mutation == "saved-result-memset":
+        cursor = emit(
+            cursor,
+            "89 f7 b9 28 00 00 00 31 c0 f3 aa",
+        )
+    destination = "4e" if saved_result else "48"
+    cursor = emit(
+        cursor,
+        f"66 8b 4d 14 66 89 {destination} 14",
+    )
+    if mutation == "saved-result-postwrite-memset":
+        cursor = emit(
+            cursor,
+            "89 f7 b9 28 00 00 00 31 c0 f3 aa",
+        )
+    if mutation == "negative-index":
+        cursor = emit(cursor, "bb f0 ff ff ff")
+    elif mutation == "unknown-index":
+        cursor = emit(cursor, "8b 5c 24 08")
+    else:
+        cursor = emit(cursor, "31 db")
+    tail_disp = 0x14 if mutation == "overlap" else 0x1C
+    base = "1e" if saved_result else "18"
+    cursor = emit(cursor, f"8d 7c {base} {tail_disp:02x}")
+    cursor = emit(cursor, "c7 07 00 00 00 00")
+    if mutation in {
+        "saved-result-tail-call",
+        "saved-result-tail-call-escape",
+        "saved-result-tail-call-negative-write",
+        "saved-result-tail-call-used-return",
+    }:
+        cursor = emit(cursor, "57")
+        cursor = emit_call(cursor, 0x180)
+        cursor = emit(cursor, "59")
+        if mutation == "saved-result-tail-call-used-return":
+            cursor = emit(cursor, "c6 40 f8 00")
+    if mutation == "escape":
+        cursor = emit(cursor, "50")
+    if saved_result and mutation != "saved-result-wrong-return":
+        cursor = emit(cursor, "89 f0")
+    elif mutation == "saved-result-wrong-return":
+        cursor = emit(cursor, "31 c0")
+    emit(cursor, "c3")
+
+    cursor = emit(
+        0x100,
+        "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08"
+        "39 1d 10 30 40 00 7d 0d 53"
+        "68 18 30 40 00",
+    )
+    cursor = emit_call(cursor, 0x160)
+    cursor = emit(
+        cursor,
+        "59 59 29 1d 10 30 40 00"
+        "a1 14 30 40 00 01 1d 14 30 40 00 5b c3",
+    )
+    emit(0x160, "c3")
+    if mutation in {
+        "saved-result-tail-call",
+        "saved-result-tail-call-escape",
+        "saved-result-tail-call-negative-write",
+        "saved-result-tail-call-used-return",
+    }:
+        cursor = emit(0x180, "8b 44 24 04")
+        if mutation == "saved-result-tail-call-escape":
+            cursor = emit(cursor, "a3 20 30 40 00")
+        elif mutation == "saved-result-tail-call-negative-write":
+            cursor = emit(cursor, "c6 40 f8 00")
+        else:
+            cursor = emit(cursor, "c6 00 00")
+        emit(cursor, "83 c0 04 c3")
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0x200,
+                0x200,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                0x200,
+                0x100,
+                0x100,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+    return image, text_va + clone_offset, call_address
+
+
+def returned_fresh_variadic_count_image():
+    """Copy one bounded variadic count into fresh field +0x1a."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data_va = 0x00403000
+    data = bytearray(0x300)
+    text = memoryview(data)[:0x200]
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (
+            text_va + offset + 5
+        )
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    cursor = emit(0, "50 6a 34")
+    call_address = text_va + cursor
+    cursor = emit_call(cursor, 0x40)
+    emit(cursor, "59 59 c3")
+
+    cursor = emit(0x40, "8b 54 24 08")
+    count_load = text_va + 0x40
+    cursor = emit(cursor, "6a 40")
+    cursor = emit_call(cursor, 0x100)
+    cursor = emit(cursor, "59 89 c5 8b 44 24 04 66 89 45 14")
+    cursor = emit(cursor, "8b 54 24 08 66 89 55 1a 89 e8 c3")
+
+    cursor = emit(
+        0x100,
+        "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08"
+        "39 1d 10 30 40 00 7d 0d 53"
+        "68 18 30 40 00",
+    )
+    cursor = emit_call(cursor, 0x160)
+    cursor = emit(
+        cursor,
+        "59 59 29 1d 10 30 40 00"
+        "a1 14 30 40 00 01 1d 14 30 40 00 5b c3",
+    )
+    emit(0x160, "c3")
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0x200,
+                0x200,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                0x200,
+                0x100,
+                0x100,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+    return image, call_address, count_load
+
+
 def bounded_global_signed_word_image(*, mutation=None):
     """Load a word closed over copy, selected-loop, and zero writers."""
     from tools.mwcc_retro import pe as pe_mod
@@ -14510,6 +14788,160 @@ def test_returned_fresh_argument_copy_binds_extent_and_preservation(
 @pytest.mark.parametrize(
     ("mutation", "expected"),
     (
+        (None, True),
+        ("negative-index", False),
+        ("unknown-index", False),
+        ("overlap", False),
+        ("escape", False),
+        ("saved-result", True),
+        ("saved-result-memset", True),
+        ("saved-result-postwrite-memset", False),
+        ("saved-result-tail-call", True),
+        ("saved-result-tail-call-escape", False),
+        ("saved-result-tail-call-negative-write", False),
+        ("saved-result-tail-call-used-return", False),
+        ("saved-result-wrong-return", False),
+    ),
+)
+def test_returned_fresh_two_arm_copy_proves_indexed_tail_separation(
+    mutation,
+    expected,
+):
+    image, clone_entry, _call_address = (
+        returned_fresh_two_arm_tail_copy_image(mutation=mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._returned_fresh_allocation_byte_source(
+        clone_entry,
+        (0x14,),
+    )
+
+    assert (result is not None) is expected
+
+
+@pytest.mark.parametrize(
+    ("count_high", "expected"),
+    (
+        (frozenset({0}), frozenset({0x34})),
+        (frozenset({0x80}), None),
+        (None, None),
+    ),
+)
+def test_returned_fresh_two_arm_copy_binds_object_count_extent(
+    monkeypatch,
+    count_high,
+    expected,
+):
+    image, clone_entry, call_address = (
+        returned_fresh_two_arm_tail_copy_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    def finite_object_byte(
+        _address,
+        _operand,
+        _function_entry,
+        field_path,
+        _visited,
+    ):
+        if field_path == (0x14,):
+            return frozenset({0x34}), "test-source-tag"
+        if field_path == (0x1B,) and count_high is not None:
+            return count_high, "test-source-count-high"
+        return None
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_operand_values_before",
+        finite_object_byte,
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_allocator_totality_certificate",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    result = recovery._finite_returned_fresh_allocation_byte_values(
+        call_address,
+        clone_entry,
+        image.entrypoint,
+        (0x14,),
+        frozenset(),
+    )
+
+    if expected is None:
+        assert result is None
+    else:
+        assert result is not None
+        assert result[0] == expected
+        assert "object-signed-word" in result[1]
+
+
+@pytest.mark.parametrize(
+    ("field", "upper", "expected"),
+    (
+        (0x1A, 0x12, frozenset(range(0x13))),
+        (0x1B, 0x12, frozenset({0})),
+        (0x1B, 0x8000, None),
+    ),
+)
+def test_returned_fresh_variadic_count_uses_closed_width_contract(
+    monkeypatch,
+    field,
+    upper,
+    expected,
+):
+    image, call_address, count_load = returned_fresh_variadic_count_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    monkeypatch.setattr(
+        recovery,
+        "_returned_fresh_variadic_extent_contract",
+        lambda *_args, **_kwargs: (
+            ((count_load, 0, upper),),
+            "bounded-test-width",
+        ),
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_allocator_totality_certificate",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    result = recovery._finite_returned_fresh_variadic_count_byte_values(
+        call_address,
+        image.entrypoint + 0x40,
+        image.entrypoint,
+        (field,),
+        frozenset(),
+    )
+
+    if expected is None:
+        assert result is None
+    else:
+        assert result is not None
+        assert result[0] == expected
+        assert "bounded-test-width" in result[1]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
         (None, (0, 0x12)),
         ("cyclic-copy", (0, 0x12)),
         ("unknown-writer", None),
@@ -14583,6 +15015,55 @@ def test_bounded_global_signed_word_closes_every_writer(mutation, expected):
             )
             != prior_fingerprint
         )
+
+
+def test_guarded_signed_word_keeps_tighter_global_upper_bound(
+    tmp_path,
+    monkeypatch,
+):
+    image = load_cfg_program(
+        tmp_path,
+        (
+            "66 83 3d 00 30 40 00 01"
+            "7e 0a"
+            "0f bf 05 00 30 40 00"
+            "48"
+            "50"
+            "c3"
+            "eb fe"
+        ),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        inventory(image),
+        generous_limits(image),
+    )
+    recovery.recover()
+    monkeypatch.setattr(
+        recovery,
+        "_bounded_nonnegative_signed_word_global_slot",
+        lambda slot: (
+            (0, 0x12, f"closed-global={slot:#x}")
+            if slot == 0x00403000
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_same_guard_operand",
+        lambda *_args, **_kwargs: True,
+    )
+    pushed = recovery._owned_decoded(0x0040101C)
+
+    result = recovery._bounded_nonnegative_signed_word_operand_before(
+        pushed.address,
+        pushed.operands[0],
+        image.entrypoint,
+    )
+
+    assert result is not None
+    assert result[:2] == (1, 0x11)
+    assert "closed-global" in result[2]
 
 
 def test_byte_producer_follows_nested_fresh_return_allocations():
@@ -14893,7 +15374,6 @@ def test_forwarded_byte_domain_rejects_prior_finite_dispatch_clobber():
     [
         "unknown_producer_write",
         "alternate_unknown_caller",
-        "unowned_raw_caller",
         "helper_clobbers_byte",
     ],
 )
@@ -14910,6 +15390,43 @@ def test_forwarded_byte_producer_domain_rejects_open_provenance(mutation):
     assert any(
         row.address == transfer_address and row.kind == "computed-flow-blocker"
         for row in cfg.control_targets.unresolved
+    )
+
+
+def test_forwarded_object_byte_defers_unowned_raw_caller_to_residue():
+    image, _movzx_address, transfer_address = (
+        forwarded_movzx_dispatch_image(unowned_raw_caller=True)
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert cfg.jump_table_at(transfer_address).guard_bound == 74
+    assert any(
+        row.address == 0x004011E0
+        and row.kind == "provisional-unowned-raw-caller"
+        for row in cfg.ownership_diagnostics
+    )
+    assert not cfg.provisional_unreachable_residue.accepted
+
+
+def test_promoted_raw_object_caller_reopens_byte_domain():
+    image, _movzx_address, transfer_address = (
+        forwarded_movzx_dispatch_image(unowned_raw_caller=True)
+    )
+    cfg = recover_cfg(
+        image,
+        (image.entrypoint, 0x004011E0),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer_address)
+    assert not any(
+        row.kind == "provisional-unowned-raw-caller"
+        for row in cfg.ownership_diagnostics
     )
 
 

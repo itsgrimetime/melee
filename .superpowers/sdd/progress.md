@@ -199,6 +199,24 @@ candidates partitioned.
   byte `{1}`.  Unknown writers, partial overlaps, and address escapes remain
   blocked.  A dependency-aware cache replays every slot and writer-function
   dependency without rescanning the network for each caller.
+- Returned-fresh clone proof now covers both allocation arms of `0x49d270`,
+  proves the indexed `+0x1c` tail remains disjoint from copied header fields,
+  binds the signed source count to the dynamic allocation extents, and closes
+  the central variadic constructor's copied count bytes.  Negative or unknown
+  indices, high-bit signed counts, overlap, and pointer escape remain blocked.
+- Forwarded object-byte caller closure now applies the existing
+  `provisional-unowned-raw-caller` residue policy consistently with scalar
+  domains.  The two raw `E8` patterns outside current function ownership are
+  deferred to final unreachable-residue reconciliation, while promoting
+  either byte into executable ownership immediately reopens the proof.
+- The next decoded publisher caller at `0x463470` is isolated.  Its
+  three-arm constructor `0x463640` now proves the copied source tag through a
+  saved `ESI` result, dominating whole-object initialization, and the exact
+  nonnegative tail writer `0x4a2290`.  Hostile negative-offset writes,
+  post-copy initialization, pointer publication, and used return aliases are
+  rejected.  The remaining blocker is now only the dynamic allocation extent
+  on two of the constructor's three arms; the third arm already proves
+  `0x28..0xc34`.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published
@@ -264,8 +282,8 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 1,004 passed.
-- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,131 passed.
+- `test_retro_x86_cfg.py`: 1,026 passed.
+- Task 4 backend/struct-map adjacent slice: 830 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
 - Task 8 focused/adjacent suites: 184 / 533 passed.

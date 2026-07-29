@@ -2318,6 +2318,9 @@ class _DirectCfgRecovery:
             bool,
         ] = {}
         self.argument_nested_reference_cache: dict[tuple[Any, ...], bool] = {}
+        self.argument_nonnegative_write_cache: dict[
+            tuple[Any, ...], bool
+        ] = {}
         self.scoped_stack_publication_cache: dict[
             tuple[Any, ...],
             str | None,
@@ -13405,7 +13408,12 @@ class _DirectCfgRecovery:
                     else ""
                 )
             )
-        if not self._incoming_call_domain_is_closed(function_entry):
+        if not (
+            self._incoming_call_domain_is_closed(function_entry)
+            or self._least_reachable_incoming_call_domain_is_closed(
+                function_entry
+            )
+        ):
             return None
         callers = self._incoming_call_sites(function_entry)
         if not callers:
@@ -14559,7 +14567,7 @@ class _DirectCfgRecovery:
             candidate = self._owned_decoded(candidate_address)
             readable = any(
                 operand.type == X86_OP_MEM
-                and operand.size == 1
+                and operand.size > 0
                 and operand.access & CS_AC_READ
                 and operand.mem.segment == X86_REG_INVALID
                 and operand.mem.base != X86_REG_INVALID
@@ -16422,88 +16430,75 @@ class _DirectCfgRecovery:
                     )
                 )
         else:
-            # The multi-allocation form is intentionally a short join tail:
-            # each branch defines EAX, one common writer initializes the byte,
-            # and no alias or call may intervene before the return.
-            if destination_family != "eax":
-                return None
+            # Each branch must join with its own fresh EAX and preserve the
+            # field through the common tail.  The result may first be saved
+            # in a callee-saved register; the per-arm replay proves both that
+            # writer alias and the eventual EAX return alias exactly.
             for return_address in returns:
-                if (
-                    self._register_definitions_across_blocks(
-                        return_address,
-                        "eax",
-                        function_entry,
-                    )
-                    != allocation_calls
-                ):
-                    return None
-                for address in self._function_instruction_addresses(
-                    function_entry
-                ):
-                    if address in allocation_calls or address == writer:
-                        continue
-                    if not (
-                        self._reachable_within_function(
-                            address,
-                            return_address,
+                for allocation_call in allocation_calls:
+                    # Initialization writes that are strictly between this
+                    # allocation arm and the copied field may overlap it:
+                    # the unique copied-field writer subsequently replaces
+                    # them on every route to the return.  Exclude anything
+                    # the writer can reach so loop-carried/post-write stores
+                    # never receive this exemption.
+                    pre_writer_initializers = frozenset(
+                        address
+                        for address in self._function_instruction_addresses_between(
                             function_entry,
-                            following_entry,
+                            allocation_call,
+                            writer,
                         )
-                        and any(
+                        if (
                             self._reachable_within_function(
                                 allocation_call,
                                 address,
                                 function_entry,
                                 following_entry,
                             )
-                            for allocation_call in allocation_calls
+                            and self._reachable_within_function(
+                                address,
+                                writer,
+                                function_entry,
+                                following_entry,
+                            )
+                            and not self._reachable_within_function(
+                                writer,
+                                address,
+                                function_entry,
+                                following_entry,
+                            )
                         )
-                    ):
-                        continue
-                    row = self._owned_decoded(address)
-                    if row.group(CS_GRP_CALL):
+                    )
+                    try:
+                        states = self._fresh_allocation_lower_bound_states(
+                            allocation_call,
+                            return_address,
+                            function_entry,
+                            target_field,
+                            1,
+                            pre_writer_initializers | {writer},
+                        )
+                    except AnalysisLimitError:
                         return None
-                    if any(
-                        operand.type == X86_OP_REG
-                        and operand.access & CS_AC_READ
-                        and self._register_family(operand.reg) == "eax"
-                        for operand in row.operands
+                    writer_state = (
+                        None if states is None else states.get(writer)
+                    )
+                    return_state = (
+                        None
+                        if states is None
+                        else states.get(return_address)
+                    )
+                    if (
+                        writer_state is None
+                        or return_state is None
+                        or writer_state[0][
+                            family_index[destination_family]
+                        ]
+                        != frozenset({0})
+                        or return_state[0][family_index["eax"]]
+                        != frozenset({0})
                     ):
-                        return None
-                    for operand in row.operands:
-                        if (
-                            operand.type == X86_OP_MEM
-                            and operand.mem.base != X86_REG_INVALID
-                            and self._register_family(
-                                operand.mem.base
-                            )
-                            == "eax"
-                            and (
-                                row.id == X86_INS_LEA
-                                or operand.mem.index
-                                != X86_REG_INVALID
-                            )
-                        ):
-                            return None
-                        if (
-                            operand.type == X86_OP_MEM
-                            and operand.access & CS_AC_WRITE
-                            and operand.mem.base != X86_REG_INVALID
-                            and self._register_family(
-                                operand.mem.base
-                            )
-                            == "eax"
-                            and (
-                                operand.mem.index != X86_REG_INVALID
-                                or operand.size <= 0
-                                or (
-                                    operand.mem.disp
-                                    < target_field + 1
-                                    and target_field
-                                    < operand.mem.disp + operand.size
-                                )
-                            )
-                        ):
                             return None
             locally_guarded = False
 
@@ -16893,6 +16888,17 @@ class _DirectCfgRecovery:
         field_path: tuple[int, ...],
         visited: frozenset[tuple[int, str]],
     ) -> tuple[frozenset[int], str] | None:
+        variadic_count = (
+            self._finite_returned_fresh_variadic_count_byte_values(
+                call_address,
+                call_target,
+                caller_entry,
+                field_path,
+                visited,
+            )
+        )
+        if variadic_count is not None:
+            return variadic_count
         key = (
             call_address,
             "returned-fresh-byte:"
@@ -17007,15 +17013,26 @@ class _DirectCfgRecovery:
             if (
                 size is None
                 and interval is None
-                and source_values is not None
                 and not assumptions
             ):
-                contract = self._returned_fresh_variadic_extent_contract(
-                    call_address,
-                    call_target,
-                    caller_entry,
-                    source,
-                    source_values,
+                contract = (
+                    self._returned_fresh_variadic_extent_contract(
+                        call_address,
+                        call_target,
+                        caller_entry,
+                        source,
+                        source_values,
+                    )
+                    if source_values is not None
+                    else self._returned_fresh_object_signed_word_extent_contract(
+                        call_address,
+                        call_target,
+                        caller_entry,
+                        source,
+                        values,
+                        pushed,
+                        next_visited,
+                    )
                 )
                 if contract is not None:
                     assumptions, extent_detail = contract
@@ -17059,6 +17076,468 @@ class _DirectCfgRecovery:
             values,
             f"call={call_address:#x};target={call_target:#x};"
             f"{source.provenance};{extent_detail};{detail}",
+        )
+
+    def _returned_fresh_object_signed_word_extent_contract(
+        self,
+        call_address: int,
+        call_target: int,
+        caller_entry: int,
+        source: _ReturnedFreshByteSource,
+        source_values: frozenset[int],
+        pushed_source,
+        visited: frozenset[tuple[int, str]],
+    ) -> tuple[tuple[tuple[int, int, int], ...], str] | None:
+        """Bind clone allocation sizes to a nonnegative source count word."""
+        if (
+            source.kind != "object-argument"
+            or source.source_field is None
+            or not source_values
+            or not source.allocation_calls
+            or pushed_source[2] != caller_entry
+        ):
+            return None
+        following_entry = self._following_function_entry(call_target)
+        loads = []
+        count_fields = set()
+        for allocation_call in source.allocation_calls:
+            candidates = []
+            for address in self._function_instruction_addresses_between(
+                call_target,
+                call_target,
+                allocation_call,
+            ):
+                row = self._owned_decoded(address)
+                if not (
+                    row.id == x86_const.X86_INS_MOVSX
+                    and len(row.operands) == 2
+                    and row.operands[0].type == X86_OP_REG
+                    and row.operands[0].size == 4
+                    and row.operands[1].type == X86_OP_MEM
+                    and row.operands[1].size == 2
+                    and row.operands[1].mem.segment
+                    == X86_REG_INVALID
+                    and row.operands[1].mem.base
+                    != X86_REG_INVALID
+                    and row.operands[1].mem.index
+                    == X86_REG_INVALID
+                    and self._register_argument_origin_index(
+                        address,
+                        self._register_family(
+                            row.operands[1].mem.base
+                        ),
+                        call_target,
+                    )
+                    == source.argument_index
+                    and self._reachable_within_function(
+                        address,
+                        allocation_call,
+                        call_target,
+                        following_entry,
+                    )
+                    and not self._reachable_within_function(
+                        call_target,
+                        allocation_call,
+                        call_target,
+                        following_entry,
+                        excluded=address,
+                    )
+                ):
+                    continue
+                count_field = row.operands[1].mem.disp
+                if not self._function_argument_preserves_field_before(
+                    address,
+                    call_target,
+                    source.argument_index,
+                    count_field,
+                ):
+                    continue
+                candidates.append((row, count_field))
+            if len(candidates) != 1:
+                return None
+            load, count_field = candidates[0]
+            loads.append(load)
+            count_fields.add(count_field)
+        if len(count_fields) != 1:
+            return None
+        count_field = next(iter(count_fields))
+        if source.source_field == count_field + 1:
+            high_values = source_values
+            high_detail = (
+                f"copied-source-byte={source.source_field:+#x}"
+            )
+        else:
+            high = self._finite_object_byte_operand_values_before(
+                pushed_source[0].address,
+                pushed_source[1],
+                caller_entry,
+                (count_field + 1,),
+                visited,
+            )
+            if high is None:
+                return None
+            high_values, high_detail = high
+        if (
+            not high_values
+            or max(high_values) > 0x7F
+        ):
+            return None
+        assumptions = tuple(
+            (load.address, 0, 0x7FFF)
+            for load in sorted(loads, key=lambda row: row.address)
+        )
+        return (
+            assumptions,
+            f"object-signed-word={count_field:+#x};"
+            f"high-values="
+            + ",".join(
+                f"{value:#x}" for value in sorted(high_values)
+            )
+            + f";{high_detail};call={call_address:#x}",
+        )
+
+    def _finite_returned_fresh_variadic_count_byte_values(
+        self,
+        call_address: int,
+        call_target: int,
+        caller_entry: int,
+        field_path: tuple[int, ...],
+        visited: frozenset[tuple[int, str]],
+    ) -> tuple[frozenset[int], str] | None:
+        """Recover a bounded local variadic count copied into a fresh object."""
+        if (
+            len(field_path) != 1
+            or call_target not in self.function_addresses
+        ):
+            return None
+        key = (
+            call_address,
+            "returned-fresh-variadic-count:"
+            f"{call_target:#x}:{field_path[0]:#x}",
+        )
+        if key in visited:
+            return None
+        target_field = field_path[0]
+        tag_source = self._returned_fresh_allocation_byte_source(
+            call_target,
+            (0x14,),
+        )
+        if (
+            tag_source is None
+            or tag_source.kind != "scalar-argument"
+            or len(tag_source.allocation_calls) != 1
+        ):
+            return None
+        allocation_call = next(iter(tag_source.allocation_calls))
+        following_entry = self._following_function_entry(call_target)
+        returns = tuple(
+            address
+            for address in self._function_instruction_addresses(call_target)
+            if (
+                self._owned_decoded(address).group(CS_GRP_RET)
+                and self._reachable_within_function(
+                    call_target,
+                    address,
+                    call_target,
+                    following_entry,
+                )
+            )
+        )
+        if not returns:
+            return None
+
+        candidates = []
+        for address in self._function_instruction_addresses(call_target):
+            row = self._owned_decoded(address)
+            if (
+                row.id != X86_INS_MOV
+                or len(row.operands) != 2
+                or row.operands[0].type != X86_OP_MEM
+                or row.operands[0].mem.segment != X86_REG_INVALID
+                or row.operands[0].mem.base == X86_REG_INVALID
+                or row.operands[0].mem.index != X86_REG_INVALID
+                or row.operands[0].size <= 0
+                or not row.operands[0].access & CS_AC_WRITE
+                or row.operands[1].type != X86_OP_REG
+            ):
+                continue
+            destination, source_operand = row.operands
+            byte_shift = target_field - destination.mem.disp
+            if not 0 <= byte_shift < destination.size:
+                continue
+            destination_family = self._register_family(
+                destination.mem.base
+            )
+            if (
+                self._fresh_allocation_origin_calls_before(
+                    address,
+                    destination_family,
+                    call_target,
+                )
+                != tag_source.allocation_calls
+            ):
+                continue
+            source_family = self._register_family(source_operand.reg)
+            definitions = self._register_definitions_across_blocks(
+                address,
+                source_family,
+                call_target,
+            )
+            if not definitions or len(definitions) != 1:
+                continue
+            source_definition = self._owned_decoded(
+                next(iter(definitions))
+            )
+            if not (
+                source_definition.id == X86_INS_MOV
+                and len(source_definition.operands) == 2
+                and source_definition.operands[0].type == X86_OP_REG
+                and self._register_family(
+                    source_definition.operands[0].reg
+                )
+                == source_family
+                and source_definition.operands[0].size == 4
+                and source_definition.operands[1].type
+                in {X86_OP_REG, X86_OP_MEM}
+            ):
+                continue
+            candidates.append(
+                (
+                    address,
+                    destination_family,
+                    byte_shift,
+                    source_definition,
+                )
+            )
+        if len(candidates) != 1:
+            return None
+        writer, destination_family, byte_shift, source_definition = (
+            candidates[0]
+        )
+        if any(
+            self._reachable_within_function(
+                call_target,
+                return_address,
+                call_target,
+                following_entry,
+                excluded=writer,
+            )
+            for return_address in returns
+        ):
+            return None
+
+        family_index = {
+            family: index
+            for index, family in enumerate(_REGISTER_FAMILIES)
+        }
+        for return_address in returns:
+            try:
+                states = self._fresh_allocation_lower_bound_states(
+                    allocation_call,
+                    return_address,
+                    call_target,
+                    target_field,
+                    1,
+                    frozenset({writer}),
+                )
+            except AnalysisLimitError:
+                return None
+            writer_state = None if states is None else states.get(writer)
+            return_state = (
+                None
+                if states is None
+                else states.get(return_address)
+            )
+            if (
+                writer_state is None
+                or return_state is None
+                or writer_state[0][family_index[destination_family]]
+                != frozenset({0})
+                or return_state[0][family_index["eax"]]
+                != frozenset({0})
+            ):
+                return None
+
+        if not tag_source.locally_guarded:
+            allocator = self.direct_call_targets_by_source.get(
+                allocation_call
+            )
+            if (
+                allocator is None
+                or self._allocator_totality_certificate(
+                    allocator,
+                    call_target,
+                    lifetime_roots=(
+                        self._producer_allocator_lifetime_context()
+                    ),
+                )
+                is None
+            ):
+                return None
+        pushed_tag = self._pushed_call_argument(
+            call_address,
+            tag_source.argument_index,
+        )
+        if pushed_tag is None or pushed_tag[2] != caller_entry:
+            return None
+        tag_values = self._finite_operand_values_before(
+            pushed_tag[0].address,
+            pushed_tag[1],
+            caller_entry,
+            visited | {key},
+        )
+        if tag_values is None or not tag_values[0]:
+            return None
+        contract = self._returned_fresh_variadic_extent_contract(
+            call_address,
+            call_target,
+            caller_entry,
+            tag_source,
+            tag_values[0],
+        )
+        if contract is None:
+            return None
+        assumptions, contract_detail = contract
+
+        allocator = self.direct_call_targets_by_source.get(allocation_call)
+        size_argument = (
+            None
+            if allocator is None
+            else self._owned_fixed_bump_allocator_size_argument(allocator)
+        )
+        pushed_size = (
+            None
+            if size_argument is None
+            else self._pushed_call_argument(
+                allocation_call,
+                size_argument,
+            )
+        )
+        if pushed_size is None or pushed_size[2] != call_target:
+            return None
+
+        count_source = source_definition.operands[1]
+        if (
+            count_source.type != X86_OP_MEM
+            or count_source.size != 4
+            or count_source.mem.segment != X86_REG_INVALID
+            or count_source.mem.base == X86_REG_INVALID
+            or count_source.mem.index != X86_REG_INVALID
+            or self._register_family(count_source.mem.base) != "esp"
+        ):
+            return None
+        count_slot = self._stack_memory_logical_offset(
+            source_definition.address,
+            count_source.mem,
+            call_target,
+        )
+        if count_slot is None:
+            return None
+        prior_loads = []
+        for address in self._function_instruction_addresses_between(
+            call_target,
+            call_target,
+            pushed_size[0].address + 1,
+        ):
+            row = self._owned_decoded(address)
+            if not (
+                row.id == X86_INS_MOV
+                and len(row.operands) == 2
+                and row.operands[0].type == X86_OP_REG
+                and row.operands[0].size == 4
+                and row.operands[1].type == X86_OP_MEM
+                and row.operands[1].size == 4
+                and self._stack_memory_logical_offset(
+                    address,
+                    row.operands[1].mem,
+                    call_target,
+                )
+                == count_slot
+                and self._reachable_within_function(
+                    address,
+                    source_definition.address,
+                    call_target,
+                    following_entry,
+                )
+                and not self._reachable_within_function(
+                    call_target,
+                    source_definition.address,
+                    call_target,
+                    following_entry,
+                    excluded=address,
+                )
+            ):
+                continue
+            prior_loads.append(row)
+        if len(prior_loads) != 1:
+            return None
+        prior_load = prior_loads[0]
+        for address in self._function_instruction_addresses_between(
+            call_target,
+            prior_load.address + prior_load.size,
+            source_definition.address,
+        ):
+            row = self._owned_decoded(address)
+            for operand in row.operands:
+                if operand.type != X86_OP_MEM:
+                    continue
+                logical = self._stack_memory_logical_offset(
+                    address,
+                    operand.mem,
+                    call_target,
+                )
+                if logical is None:
+                    continue
+                if (
+                    operand.access & CS_AC_WRITE
+                    and operand.size > 0
+                    and logical < count_slot + 4
+                    and count_slot < logical + operand.size
+                ):
+                    return None
+                if (
+                    row.id == X86_INS_LEA
+                    and logical == count_slot
+                ):
+                    return None
+        count_interval = self._bounded_unsigned_operand_interval_before(
+            prior_load.address,
+            prior_load.operands[1],
+            call_target,
+            assumed_memory_intervals=assumptions,
+        )
+        if (
+            count_interval is None
+            or count_interval[1] > 0x7FFF
+        ):
+            return None
+        extent = self._bounded_unsigned_operand_interval_before(
+            pushed_size[0].address,
+            pushed_size[1],
+            call_target,
+            assumed_memory_intervals=assumptions,
+        )
+        if (
+            extent is None
+            or extent[0] < target_field + 1
+            or extent[1] > 0x1000_0000
+        ):
+            return None
+        lower, upper = count_interval[:2]
+        values = frozenset(
+            (value >> (8 * byte_shift)) & 0xFF
+            for value in range(lower, upper + 1)
+        )
+        if not values:
+            return None
+        self._check_count("max_finite_values", len(values))
+        return (
+            values,
+            f"call={call_address:#x};target={call_target:#x};"
+            f"returned-fresh-variadic-count={writer:#x};"
+            f"count={lower:#x}..{upper:#x};"
+            f"extent={extent[0]:#x}..{extent[1]:#x};"
+            f"{contract_detail}",
         )
 
     def _finite_object_byte_call_return_values_before(
@@ -17836,6 +18315,34 @@ class _DirectCfgRecovery:
         family_index = {
             family: index for index, family in enumerate(_REGISTER_FAMILIES)
         }
+        push_consumers: dict[
+            int,
+            list[tuple[int, int, int]],
+        ] = {}
+        for call_address in self._function_instruction_addresses(
+            function_entry
+        ):
+            if not (
+                allocation_call < call_address < observation_address
+                and call_address in reverse_reachable
+            ):
+                continue
+            target = self.direct_call_targets_by_source.get(call_address)
+            if target is None:
+                continue
+            for argument_index in range(8):
+                pushed = self._pushed_call_argument(
+                    call_address,
+                    argument_index,
+                )
+                if pushed is None:
+                    break
+                if pushed[2] != function_entry:
+                    continue
+                push_consumers.setdefault(
+                    pushed[0].address,
+                    [],
+                ).append((call_address, target, argument_index))
         empty = tuple(None for _ in _REGISTER_FAMILIES)
         lower_states: dict[
             int,
@@ -17874,6 +18381,29 @@ class _DirectCfgRecovery:
                 return None
             family = self._register_family(register)
             return family if family in family_index else None
+
+        def bounded_nonnegative_index(
+            address: int,
+            register: int,
+        ) -> tuple[int, int] | None:
+            family = self._register_family(register)
+            finite = self._finite_register_values_before(
+                address,
+                family,
+                function_entry,
+                frozenset(),
+            )
+            if (
+                finite is not None
+                and finite[0]
+                and max(finite[0]) <= 0x1000_0000
+            ):
+                return min(finite[0]), max(finite[0])
+            return self._bounded_signed_word_affine_loop_register_before(
+                address,
+                family,
+                function_entry,
+            )
 
         while pending:
             current = heapq.heappop(pending)
@@ -17932,9 +18462,39 @@ class _DirectCfgRecovery:
             if (
                 decoded.mnemonic == "push"
                 and len(operands) == 1
-                and operand_interval(state, operands[0]) is not None
             ):
-                return None
+                pushed_interval = operand_interval(state, operands[0])
+                if pushed_interval is not None:
+                    consumers = push_consumers.get(current, ())
+                    if len(consumers) != 1:
+                        return None
+                    call_address, target, argument_index = consumers[0]
+                    lower, _upper = pushed_interval
+                    return_is_closed = (
+                        self._function_argument_does_not_escape(
+                            target,
+                            argument_index,
+                        )
+                        or (
+                            self._function_argument_escapes_only_via_return(
+                                target,
+                                argument_index,
+                            )
+                            and self._call_return_is_not_used_as_pointer(
+                                call_address,
+                                function_entry,
+                            )
+                        )
+                    )
+                    if (
+                        lower < target_end
+                        or not return_is_closed
+                        or not self._function_argument_writes_only_nonnegative_offsets(
+                            target,
+                            argument_index,
+                        )
+                    ):
+                        return None
 
             if decoded.group(CS_GRP_CALL):
                 if current == allocation_call:
@@ -17946,6 +18506,11 @@ class _DirectCfgRecovery:
                         return None
                     for family in ("eax", "ecx", "edx"):
                         state[family_index[family]] = None
+            elif decoded.mnemonic == "push":
+                # A tracked push was either rejected or tied to one proven
+                # interior-pointer consumer above.  ESP itself is not a
+                # fresh-object alias in this replay.
+                pass
             elif decoded.id == X86_INS_MOV and len(operands) == 2:
                 destination, source = operands
                 if destination.type == X86_OP_REG:
@@ -17980,15 +18545,25 @@ class _DirectCfgRecovery:
                     return None
                 if base_interval is None:
                     state[destination_index] = None
-                elif source.mem.index != X86_REG_INVALID:
-                    return None
                 else:
+                    scalar_index = (0, 0)
+                    if source.mem.index != X86_REG_INVALID:
+                        scalar_index = bounded_nonnegative_index(
+                            decoded.address,
+                            source.mem.index,
+                        )
+                        if scalar_index is None:
+                            return None
                     lower, upper = base_interval
+                    index_lower = scalar_index[0] * source.mem.scale
+                    index_upper = scalar_index[1] * source.mem.scale
+                    if index_upper > 0x1000_0000:
+                        return None
                     state[destination_index] = (
-                        lower + source.mem.disp,
+                        lower + index_lower + source.mem.disp,
                         None
                         if upper is None
-                        else upper + source.mem.disp,
+                        else upper + index_upper + source.mem.disp,
                     )
             elif (
                 decoded.id == X86_INS_XOR
@@ -18041,6 +18616,43 @@ class _DirectCfgRecovery:
                 state[
                     family_index[self._register_family(operands[0].reg)]
                 ] = None
+            elif (
+                decoded.id
+                in {
+                    x86_const.X86_INS_STOSB,
+                    x86_const.X86_INS_STOSW,
+                    x86_const.X86_INS_STOSD,
+                }
+                and current in allowed_writers
+            ):
+                # A dominating whole-object initializer may advance EDI by
+                # an unknown repeat count.  The stable allocation alias is
+                # tracked independently, so discard only the advanced alias.
+                state[family_index["edi"]] = None
+            elif decoded.mnemonic in {"movsb", "movsw", "movsd"}:
+                if any(
+                    row < current
+                    and self._owned_decoded(row).mnemonic == "std"
+                    for row in self._function_instruction_addresses(
+                        function_entry
+                    )
+                ):
+                    return None
+                step = {
+                    "movsb": 1,
+                    "movsw": 2,
+                    "movsd": 4,
+                }[decoded.mnemonic]
+                for family in ("esi", "edi"):
+                    index = family_index[family]
+                    interval = state[index]
+                    if interval is None:
+                        continue
+                    lower, upper = interval
+                    state[index] = (
+                        lower + step,
+                        None if upper is None else upper + step,
+                    )
             else:
                 alias_read = any(
                     operand.type == X86_OP_REG
@@ -18132,6 +18744,204 @@ class _DirectCfgRecovery:
             )
             for address, interval_state in lower_states.items()
         }
+
+    def _bounded_signed_word_affine_loop_register_before(
+        self,
+        address: int,
+        register_family: str,
+        function_entry: int,
+    ) -> tuple[int, int] | None:
+        """Bound a positive-stride loop index controlled by ``movsx word``."""
+        following_entry = self._following_function_entry(function_entry)
+        candidates = [
+            edge
+            for edge in self.non_call_backedges
+            if (
+                function_entry <= edge.target <= address < edge.source
+                and edge.source < following_entry
+            )
+        ]
+        if len(candidates) != 1:
+            return None
+        backedge = candidates[0]
+        branch = self._owned_decoded(backedge.source)
+        condition = self._previous_instruction(branch.address)
+        if (
+            branch.mnemonic != "jl"
+            or self._direct_target(branch) != backedge.target
+            or condition is None
+            or condition.address + condition.size != branch.address
+        ):
+            return None
+        compared = self._owned_decoded(condition.address)
+        if (
+            compared.mnemonic != "cmp"
+            or len(compared.operands) != 2
+            or any(
+                operand.type != X86_OP_REG
+                for operand in compared.operands
+            )
+        ):
+            return None
+        counter_family = self._register_family(compared.operands[0].reg)
+        bound_family = self._register_family(compared.operands[1].reg)
+        bound_definitions = self._register_definitions_across_blocks(
+            condition.address,
+            bound_family,
+            function_entry,
+        )
+        if not bound_definitions or len(bound_definitions) != 1:
+            return None
+        bound_load = self._owned_decoded(next(iter(bound_definitions)))
+        if not (
+            bound_load.id == x86_const.X86_INS_MOVSX
+            and len(bound_load.operands) == 2
+            and bound_load.operands[0].type == X86_OP_REG
+            and self._register_family(bound_load.operands[0].reg)
+            == bound_family
+            and bound_load.operands[1].type == X86_OP_MEM
+            and bound_load.operands[1].size == 2
+        ):
+            return None
+
+        cycle = tuple(
+            row
+            for row in self._function_instruction_addresses_between(
+                function_entry,
+                backedge.target,
+                backedge.source + 1,
+            )
+            if (
+                self._reachable_within_function(
+                    backedge.target,
+                    row,
+                    function_entry,
+                    following_entry,
+                )
+                and self._reachable_within_function(
+                    row,
+                    backedge.source,
+                    function_entry,
+                    following_entry,
+                )
+            )
+        )
+        stride_writers = []
+        counter_writers = []
+        for row_address in cycle:
+            row = self._owned_decoded(row_address)
+            if row_address != backedge.source and (
+                row.group(CS_GRP_CALL)
+                or row.group(CS_GRP_JUMP)
+                or row.group(CS_GRP_RET)
+            ):
+                return None
+            written_families = {
+                self._register_family(register)
+                for register in row.regs_write
+                if register != x86_const.X86_REG_EFLAGS
+            } | {
+                self._register_family(operand.reg)
+                for operand in row.operands
+                if (
+                    operand.type == X86_OP_REG
+                    and operand.access & CS_AC_WRITE
+                )
+            }
+            if register_family in written_families:
+                stride_writers.append(row)
+            if counter_family in written_families:
+                counter_writers.append(row)
+        if (
+            len(stride_writers) != 1
+            or len(counter_writers) != 1
+        ):
+            return None
+        stride = stride_writers[0]
+        counter = counter_writers[0]
+        if not (
+            stride.mnemonic == "add"
+            and len(stride.operands) == 2
+            and stride.operands[0].type == X86_OP_REG
+            and self._register_family(stride.operands[0].reg)
+            == register_family
+            and stride.operands[1].type == X86_OP_IMM
+            and 0 < stride.operands[1].imm <= 0x1000
+            and address <= stride.address
+            and counter.mnemonic == "inc"
+            and len(counter.operands) == 1
+            and counter.operands[0].type == X86_OP_REG
+            and self._register_family(counter.operands[0].reg)
+            == counter_family
+        ):
+            return None
+
+        condition_block = max(
+            row
+            for row in self.block_starts
+            if function_entry <= row <= condition.address
+        )
+        cycle_rows = set(cycle)
+        preheaders = {
+            source
+            for source, _kind in self.incoming_edges.get(
+                condition_block,
+                (),
+            )
+            if source not in cycle_rows
+        }
+        if len(preheaders) != 1:
+            return None
+        preheader = next(iter(preheaders))
+
+        def is_zero_initializer(family: str) -> bool:
+            definitions = self._register_definitions_across_blocks(
+                preheader,
+                family,
+                function_entry,
+            )
+            if not definitions or len(definitions) != 1:
+                return False
+            initializer = self._owned_decoded(next(iter(definitions)))
+            return bool(
+                (
+                    initializer.id == X86_INS_XOR
+                    and len(initializer.operands) == 2
+                    and all(
+                        operand.type == X86_OP_REG
+                        for operand in initializer.operands
+                    )
+                    and self._register_family(
+                        initializer.operands[0].reg
+                    )
+                    == family
+                    and self._register_family(
+                        initializer.operands[1].reg
+                    )
+                    == family
+                )
+                or (
+                    initializer.id == X86_INS_MOV
+                    and len(initializer.operands) == 2
+                    and initializer.operands[0].type == X86_OP_REG
+                    and self._register_family(
+                        initializer.operands[0].reg
+                    )
+                    == family
+                    and initializer.operands[1].type == X86_OP_IMM
+                    and initializer.operands[1].imm == 0
+                )
+            )
+
+        if not (
+            is_zero_initializer(register_family)
+            and is_zero_initializer(counter_family)
+        ):
+            return None
+        upper = 0x7FFF * stride.operands[1].imm
+        if upper > 0x1000_0000:
+            return None
+        return 0, upper
 
     def _finite_fresh_allocation_scalar_byte_values_lower_bound(
         self,
@@ -25829,6 +26639,8 @@ class _DirectCfgRecovery:
         definition_slot = self._absolute_memory_operand(
             definition.operands[1]
         )
+        global_upper = None
+        global_detail = None
         if definition_slot is not None:
             global_interval = (
                 self._bounded_nonnegative_signed_word_global_slot(
@@ -25838,6 +26650,9 @@ class _DirectCfgRecovery:
             if global_interval is not None:
                 lower = global_interval[0] + delta
                 upper = global_interval[1] + delta
+                if 0 <= upper <= 0x7FFF:
+                    global_upper = upper
+                    global_detail = global_interval[2]
                 if 0 <= lower <= upper <= 0x7FFF:
                     return (
                         lower,
@@ -26090,14 +26905,22 @@ class _DirectCfgRecovery:
             for _branch, _live, candidate_lower in guarded_arms
         )
         lower += delta
-        upper = 0x7FFF + delta
+        upper = min(
+            0x7FFF + delta,
+            0x7FFF if global_upper is None else global_upper,
+        )
         if not 0 <= lower <= upper <= 0x7FFF:
             return None
         return (
             lower,
             upper,
             f"guarded-signed-word={definition.address:#x};"
-            f"delta={delta:+#x};bounds={lower:#x}..{upper:#x}",
+            f"delta={delta:+#x};bounds={lower:#x}..{upper:#x}"
+            + (
+                ""
+                if global_detail is None
+                else f";global-upper={global_detail}"
+            ),
         )
 
     def _finite_register_values_before(
@@ -32319,6 +33142,159 @@ class _DirectCfgRecovery:
             if decoded.group(CS_GRP_JUMP) and not self.non_call_successors.get(address) and any(state[0]):
                 return False
         self.field_preservation_cache[cache_key] = saw_return
+        return saw_return
+
+    def _function_argument_writes_only_nonnegative_offsets(
+        self,
+        function_entry: int,
+        argument_index: int,
+        active: frozenset[tuple[int, int]] = frozenset(),
+    ) -> bool:
+        """Prove every write through an argument stays at/after its base.
+
+        This summary is used when an owned helper receives an interior fresh
+        pointer already beyond a preserved header field.  It is deliberately
+        paired with a separate no-escape/return-only proof at the call site.
+        """
+        key = (function_entry, argument_index)
+        if key in active:
+            # This is a greatest-fixed-point property: recursive re-entry is
+            # provisionally safe while every concrete write, escape, call,
+            # and terminal edge is still inspected by the enclosing scans.
+            return True
+        cache_key = (
+            *key,
+            self._summary_fact_signature(),
+            self.control_flow_revision,
+        )
+        cached = self.argument_nonnegative_write_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        self.argument_nonnegative_write_cache[cache_key] = False
+        states = self._relative_pointer_states(
+            function_entry,
+            argument_index=argument_index,
+            propagate_call_returns=True,
+            allow_partial_taint=True,
+            collapse_nonnegative_offsets=True,
+        )
+        if states is None:
+            return False
+        next_active = active | {key}
+        saw_return = False
+        for address in self._function_instruction_addresses(
+            function_entry
+        ):
+            state = states.get(address)
+            if state is None:
+                continue
+            decoded = self._owned_decoded(address)
+            if decoded.mnemonic == "std" and any(state[0]):
+                return False
+            for operand in decoded.operands:
+                if (
+                    operand.type != X86_OP_MEM
+                    or not operand.access & CS_AC_WRITE
+                ):
+                    continue
+                base_values = (
+                    frozenset()
+                    if operand.mem.base == X86_REG_INVALID
+                    else state[0][
+                        _REGISTER_FAMILIES.index(
+                            self._register_family(
+                                operand.mem.base
+                            )
+                        )
+                    ]
+                )
+                index_values = (
+                    frozenset()
+                    if operand.mem.index == X86_REG_INVALID
+                    else state[0][
+                        _REGISTER_FAMILIES.index(
+                            self._register_family(
+                                operand.mem.index
+                            )
+                        )
+                    ]
+                )
+                if index_values:
+                    return False
+                if not base_values:
+                    continue
+                if (
+                    operand.mem.index != X86_REG_INVALID
+                    or operand.size <= 0
+                    or any(
+                        value + operand.mem.disp < 0
+                        for value in base_values
+                    )
+                ):
+                    return False
+            if decoded.group(CS_GRP_CALL):
+                targets = tuple(
+                    sorted(
+                        self.call_targets_by_source.get(
+                            address,
+                            (),
+                        )
+                    )
+                )
+                ecx_values = state[0][
+                    _REGISTER_FAMILIES.index("ecx")
+                ]
+                if ecx_values and (
+                    not targets
+                    or any(
+                        self._function_reads_incoming_register(
+                            target,
+                            "ecx",
+                        )
+                        for target in targets
+                    )
+                ):
+                    return False
+                for callee_argument in range(8):
+                    pushed = self._pushed_call_argument(
+                        address,
+                        callee_argument,
+                    )
+                    if pushed is None:
+                        break
+                    values = self._relative_operand_offsets(
+                        pushed[0].address,
+                        pushed[1],
+                        function_entry,
+                        argument_index,
+                        states,
+                    )
+                    if not values:
+                        continue
+                    if (
+                        min(values) < 0
+                        or not targets
+                        or not all(
+                            self._function_argument_writes_only_nonnegative_offsets(
+                                target,
+                                callee_argument,
+                                next_active,
+                            )
+                            for target in targets
+                        )
+                    ):
+                        return False
+            if decoded.group(CS_GRP_RET):
+                saw_return = True
+            if (
+                decoded.group(CS_GRP_JUMP)
+                and not self.non_call_successors.get(address)
+                and any(state[0])
+            ):
+                return False
+        self.argument_nonnegative_write_cache[cache_key] = (
+            saw_return
+        )
         return saw_return
 
     def _function_argument_does_not_read_field(
