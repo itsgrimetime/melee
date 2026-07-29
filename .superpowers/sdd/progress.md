@@ -110,6 +110,15 @@ candidates partitioned.
   15.4% cumulatively from the corrected 105.96-second baseline, with identical
   outcomes, about 2.50 GB maximum RSS, and no swap. This closes the bounded
   optimization gate; the active lane returns to exact Task 4 proof closure.
+- Exact hydration demonstrated that the valid `0x54d050` object-callback table
+  hypothesis reproduces by itself and adds 29 function roots without exposing
+  new indirect transfers.  It was nevertheless rejected when replayed in the
+  same trial as 2,250 unvalidated relocated-bootstrap candidates, because the
+  unrelated expansion polluted the reproduction check.  Fixed-point recovery
+  now trials precise object and copied-descriptor hypotheses individually
+  before retaining the existing batched bootstrap trial.  A hostile
+  cross-candidate regression test, the 963-test CFG suite, and the 1,090-test
+  adjacent Task 4 slice are green; a fresh exact compiler replay is next.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published
@@ -175,8 +184,8 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 961 passed.
-- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,088 passed.
+- `test_retro_x86_cfg.py`: 963 passed.
+- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,090 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
 - Task 8 focused/adjacent suites: 184 / 533 passed.

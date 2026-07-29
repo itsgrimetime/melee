@@ -19380,6 +19380,82 @@ def test_hypothesis_replay_reuses_all_reproduced_trial_cfg(tmp_path, monkeypatch
     assert any(row.category == "copied-descriptor-callback-entry" for row in cfg.seed_inventory.records)
 
 
+def test_object_hypothesis_is_not_rejected_with_unvalidated_bootstrap_batch(
+    tmp_path,
+    monkeypatch,
+):
+    image = load_cfg_image(tmp_path)
+    entry = image.entrypoint
+    object_record = SeedRecord(
+        address=entry,
+        category="object-callback-table-entry",
+        provenance_address=0x00402000,
+        provenance_bytes="00104000",
+        detail="synthetic-object-candidate",
+        is_function=True,
+    )
+    bootstrap_record = SeedRecord(
+        address=entry,
+        category="relocated-dispatch-bootstrap-entry",
+        provenance_address=0x00402004,
+        provenance_bytes="00104000",
+        detail="synthetic-bootstrap-candidate",
+        is_function=True,
+    )
+    object_hypothesis = x86_cfg_module._ObjectCallbackTableHypothesis(
+        table_base=0x00402000,
+        store_address=entry,
+        object_field=0x104,
+        receiver_identity=None,
+        consumers=(),
+        records=(object_record,),
+        data_evidence=x86_cfg_module._DataEvidence(
+            start=0x00402000,
+            end=0x00402008,
+            provenance="synthetic-object-candidate",
+        ),
+    )
+    bootstrap_hypothesis = x86_cfg_module._RelocatedDispatchSlotHypothesis(
+        transfer_address=entry,
+        table_base=0x00402004,
+        index=0,
+        slot_address=0x00402004,
+        target=entry,
+        records=(bootstrap_record,),
+    )
+    original = _DirectCfgRecovery.recover
+
+    def simulate_cross_candidate_interference(recovery):
+        cfg = original(recovery)
+        categories = {row.category for row in recovery.seed_records}
+        has_object = "object-callback-table-entry" in categories
+        has_bootstrap = "relocated-dispatch-bootstrap-entry" in categories
+        if not has_bootstrap:
+            recovery.object_callback_table_hypotheses.add(
+                object_hypothesis
+            )
+            recovery.relocated_dispatch_slot_hypotheses.add(
+                bootstrap_hypothesis
+            )
+        return cfg
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "recover",
+        simulate_cross_candidate_interference,
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    categories = {row.category for row in cfg.seed_inventory.records}
+    assert "object-callback-table-entry" in categories
+    assert "relocated-dispatch-bootstrap-entry" not in categories
+
+
 def test_checkpointed_recovery_shares_and_closes_semantic_memo_store(
     tmp_path,
     monkeypatch,

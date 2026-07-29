@@ -42633,21 +42633,18 @@ def _recover_cfg_fixed_point(
                     rejected_object_bases.add(hypothesis.table_base)
             continue
 
-        candidates = (
-            tuple(
-                sorted(
+        candidates = tuple(
+            hypothesis
+            for hypothesis in (
+                *sorted(
                     current_recovery.object_callback_table_hypotheses,
                     key=lambda row: (row.table_base, row.store_address),
-                )
-            )
-            + tuple(
-                sorted(
+                ),
+                *sorted(
                     current_recovery.copied_descriptor_callback_hypotheses,
                     key=lambda row: row.source_bases,
-                )
-            )
-            + tuple(
-                sorted(
+                ),
+                *sorted(
                     current_recovery.relocated_dispatch_slot_hypotheses,
                     key=lambda row: (
                         row.transfer_address,
@@ -42656,14 +42653,28 @@ def _recover_cfg_fixed_point(
                         row.slot_address,
                         row.target,
                     ),
-                )
+                ),
             )
+            if identity(hypothesis) not in accepted
+            and identity(hypothesis) not in rejected_identities
         )
+        object_candidates = tuple(
+            row
+            for row in candidates
+            if isinstance(row, _ObjectCallbackTableHypothesis)
+        )
+        copied_candidates = tuple(
+            row
+            for row in candidates
+            if isinstance(row, _CopiedDescriptorCallbackHypothesis)
+        )
+        if object_candidates:
+            candidates = object_candidates[:1]
+        elif copied_candidates:
+            candidates = copied_candidates[:1]
         new_candidates = {
             identity(hypothesis): hypothesis
             for hypothesis in candidates
-            if identity(hypothesis) not in accepted
-            and identity(hypothesis) not in rejected_identities
         }
         if not new_candidates:
             if producer_certificate_session is not None:
