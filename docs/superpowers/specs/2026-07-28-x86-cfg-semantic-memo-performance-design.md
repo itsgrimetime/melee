@@ -259,6 +259,22 @@ the set once use direct membership for their remaining classifications. The
 cache stores only Capstone's exact group IDs and never infers an instruction
 class.
 
+### Indexed accepted seed provenance
+
+The current whole-PE profile found 452 incoming-call-domain queries spending
+6.32 cumulative seconds rebuilding the accepted relocation-provenance set by
+scanning every seed record. The recovery already maintains an exact,
+revision-keyed seed-record index by target address for producer
+fingerprinting. Incoming-call closure can query that index for the one
+function target and apply the same category filter without changing the
+accepted set.
+
+On the captured 24-transfer exact query batch, this substitution reduced the
+profiled wall time from 105.96 seconds to 99.56 seconds (6.0%) with identical
+resolver results, approximately 2.7 GB maximum RSS, and no swap. A regression
+prewarms the index, forbids iteration over the complete seed set, and requires
+the same incoming-domain result.
+
 ## Correctness Invariants
 
 - Cache-disabled, cold-cache, warm-cache, and evicted-cache runs return equal

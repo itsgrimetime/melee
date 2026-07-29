@@ -94,6 +94,11 @@ candidates partitioned.
   memoizes Capstone's immutable instruction-group set in the eight measured
   hot traversals. Microbenchmarks improved cached decode lookup by 4.0x and a
   cached group query by 2.8x; the 1,075-test adjacent slice remains green.
+- Incoming-call closure now reuses the existing revision-keyed seed-record
+  address index instead of scanning the complete seed set for every target.
+  The identical exact 24-transfer profile improved from 105.96 seconds to
+  99.56 seconds (6.0%) with identical outcomes, about 2.7 GB maximum RSS, and
+  no swap.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published
@@ -159,8 +164,8 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 958 passed.
-- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,085 passed.
+- `test_retro_x86_cfg.py`: 959 passed.
+- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,086 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
 - Task 8 focused/adjacent suites: 184 / 533 passed.

@@ -802,6 +802,12 @@ traversals, covering about 44.6 million of the profile's 50.96 million calls.
 Require a regression proving that multiple group queries materialize
 `decoded.groups` once, then run the complete adjacent Task 4 slice.
 
+The next whole-PE profile found incoming-call closure repeatedly scanning every
+seed record even though the exact revision-keyed per-target seed index already
+exists. Reuse that index and retain the existing accepted-category filter.
+The identical 24-transfer profile improved from 105.96 seconds to 99.56
+seconds (6.0%) with identical outcomes, about 2.7 GB maximum RSS, and no swap.
+
 - [ ] **Step 7: Run exact Task 4 closure twice** (in progress)
 
 Use the ordinary branch-local `probe-backend-map --static-only` workflow and

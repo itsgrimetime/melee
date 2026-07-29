@@ -13026,6 +13026,28 @@ def test_incoming_call_domain_reuses_relocation_reference_index(
     assert len(reads) == len(image.relocations)
 
 
+def test_incoming_call_domain_reuses_seed_record_index(tmp_path):
+    class NoIterationSet(set):
+        def __iter__(self):
+            raise AssertionError(
+                "incoming call-domain query scanned every seed record"
+            )
+
+    image = load_dispatch_image(tmp_path, mode="object-callback-table")
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    target = 0x00401030
+    assert recovery._producer_seed_records_at(target)
+    recovery.seed_records = NoIterationSet(recovery.seed_records)
+    recovery.incoming_call_domain_cache.clear()
+
+    assert recovery._incoming_call_domain_is_closed(target)
+
+
 def test_return_byte_constant_reuses_cached_result(monkeypatch):
     image = recursive_field_preservation_image()
     recovery = _DirectCfgRecovery(

@@ -34578,9 +34578,8 @@ class _DirectCfgRecovery:
 
         accepted_references = {
             row.provenance_address
-            for row in self.seed_records
-            if row.address == function_entry
-            and row.category
+            for row in self._producer_seed_records_at(function_entry)
+            if row.category
             in {
                 "callback-table-entry",
                 "copied-descriptor-callback-entry",
