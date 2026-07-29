@@ -174,6 +174,12 @@ candidates partitioned.
   constructor plus the already rejected `cldr`, `Comp`/`Link`, zero, and null
   alternatives.  The 984-test CFG suite and 1,111-test adjacent Task 4 slice
   are green; a fresh exact replay with this checkpoint is still required.
+- Relocated dispatch bootstrap replay now isolates candidates by transfer
+  table while keeping every slot for one table in the same trial.  Previously
+  all 2,250 tentative slots from 30 independent transfers were seeded
+  together, so one invalid table could suppress otherwise reproducible
+  neighbors.  A hostile two-table regression proves that an invalid first
+  table is rejected cleanly and a valid second table remains accepted.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published
@@ -239,8 +245,8 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 984 passed.
-- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,111 passed.
+- `test_retro_x86_cfg.py`: 985 passed.
+- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,112 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
 - Task 8 focused/adjacent suites: 184 / 533 passed.

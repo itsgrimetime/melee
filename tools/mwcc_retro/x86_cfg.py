@@ -44707,10 +44707,22 @@ def _recover_cfg_fixed_point(
             for row in candidates
             if isinstance(row, _CopiedDescriptorCallbackHypothesis)
         )
+        relocated_candidates = tuple(
+            row
+            for row in candidates
+            if isinstance(row, _RelocatedDispatchSlotHypothesis)
+        )
         if object_candidates:
             candidates = object_candidates[:1]
         elif copied_candidates:
             candidates = copied_candidates[:1]
+        elif relocated_candidates:
+            transfer_address = relocated_candidates[0].transfer_address
+            candidates = tuple(
+                row
+                for row in relocated_candidates
+                if row.transfer_address == transfer_address
+            )
         new_candidates = {
             identity(hypothesis): hypothesis
             for hypothesis in candidates

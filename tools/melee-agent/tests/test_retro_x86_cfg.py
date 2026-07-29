@@ -20423,6 +20423,80 @@ def test_object_hypothesis_is_not_rejected_with_unvalidated_bootstrap_batch(
     assert "relocated-dispatch-bootstrap-entry" not in categories
 
 
+def test_relocated_bootstrap_trials_isolate_transfer_groups(
+    tmp_path,
+    monkeypatch,
+):
+    image = load_cfg_image(tmp_path)
+    entry = image.entrypoint
+    invalid_record = SeedRecord(
+        address=entry,
+        category="relocated-dispatch-bootstrap-entry",
+        provenance_address=0x00402000,
+        provenance_bytes="00104000",
+        detail="synthetic-invalid-bootstrap-candidate",
+        is_function=True,
+    )
+    valid_record = replace(
+        invalid_record,
+        provenance_address=0x00402004,
+        detail="synthetic-valid-bootstrap-candidate",
+    )
+    invalid = x86_cfg_module._RelocatedDispatchSlotHypothesis(
+        transfer_address=entry,
+        table_base=0x00402000,
+        index=0,
+        slot_address=0x00402000,
+        target=entry,
+        records=(invalid_record,),
+    )
+    valid = x86_cfg_module._RelocatedDispatchSlotHypothesis(
+        transfer_address=entry + 1,
+        table_base=0x00402004,
+        index=0,
+        slot_address=0x00402004,
+        target=entry,
+        records=(valid_record,),
+    )
+    recoveries = []
+    original = _DirectCfgRecovery.recover
+
+    def simulate_invalid_group_pollution(recovery):
+        cfg = original(recovery)
+        recoveries.append(recovery)
+        recovery.relocated_dispatch_slot_hypotheses.update((invalid, valid))
+        slots = {
+            row.provenance_address
+            for row in recovery.seed_records
+            if row.category == "relocated-dispatch-bootstrap-entry"
+        }
+        if valid_record.provenance_address in slots and (
+            invalid_record.provenance_address not in slots
+        ):
+            recovery.validated_relocated_dispatch_slot_hypotheses.add(valid)
+        return cfg
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "recover",
+        simulate_invalid_group_pollution,
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    bootstrap_slots = {
+        row.provenance_address
+        for row in cfg.seed_inventory.records
+        if row.category == "relocated-dispatch-bootstrap-entry"
+    }
+    assert bootstrap_slots == {valid_record.provenance_address}
+    assert len(recoveries) == 4
+
+
 def test_object_hypothesis_replay_accepts_expanded_consumer_inventory(
     tmp_path,
     monkeypatch,
