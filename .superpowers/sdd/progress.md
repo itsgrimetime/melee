@@ -180,14 +180,6 @@ candidates partitioned.
   together, so one invalid table could suppress otherwise reproducible
   neighbors.  A hostile two-table regression proves that an invalid first
   table is rejected cleanly and a valid second table remains accepted.
-- Finite zero-domain closure now reuses the existing structural guard proof
-  when the guarded field and eventual indirect-call operand are separate
-  reloads of the same global stack context.  It still requires the guard
-  condition itself to have an exact zero domain and rejects an otherwise
-  identical unguarded memory call.  Hydrated retail evidence closes
-  `0x4d1c74` and `0x4d1cfb`; the other eight zero-domain calls remain open
-  because they have no proved dominating nonzero guard.  The 987-test CFG
-  suite and 1,114-test adjacent Task 4 slice are green.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published
@@ -253,8 +245,8 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 987 passed.
-- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,114 passed.
+- `test_retro_x86_cfg.py`: 985 passed.
+- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,112 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
 - Task 8 focused/adjacent suites: 184 / 533 passed.
