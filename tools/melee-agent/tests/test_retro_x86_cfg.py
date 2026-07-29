@@ -208,6 +208,68 @@ def intrusive_list_count_image(tmp_path, *, mutation=None):
     return load_large_cfg_program(tmp_path, program), base
 
 
+def fresh_intrusive_list_head_image(tmp_path, *, mutation=None):
+    """Build one null-linked node from a fixed bump allocator."""
+    assert mutation in {None, "stack-node", "unknown-link"}
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x100)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        program[offset] = 0xE8
+        displacement = (base + target_offset) - (base + offset + 5)
+        program[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    cursor = emit(0, "53")
+    if mutation == "stack-node":
+        cursor = emit(cursor, "83 ec 20 8d 1c 24")
+    else:
+        cursor = emit(cursor, "6a 1e")
+        cursor = emit_call(cursor, 0x80)
+        cursor = emit(cursor, "89 c3 59 85 db")
+        failure_branch = cursor
+        cursor = emit(cursor, "74 00")
+    cursor = emit(
+        cursor,
+        "89 0b" if mutation == "unknown-link" else "c7 03 00 00 00 00",
+    )
+    cursor = emit(cursor, "c6 43 1c 29")
+    observation = base + cursor
+    cursor = emit(cursor, "89 d8 0f b6 43 1c")
+    if mutation == "stack-node":
+        cursor = emit(cursor, "83 c4 20")
+    cursor = emit(cursor, "5b c3")
+    if mutation != "stack-node":
+        failure = cursor
+        emit(cursor, "eb fe")
+        program[failure_branch + 1] = failure - (failure_branch + 2)
+
+    cursor = emit(
+        0x80,
+        "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08"
+        "39 1d 00 23 40 00 7d 0d 53"
+        "68 08 23 40 00",
+    )
+    cursor = emit_call(cursor, 0xF0)
+    emit(
+        cursor,
+        "59 59 29 1d 00 23 40 00"
+        "a1 04 23 40 00 01 1d 04 23 40 00 5b c3",
+    )
+    emit(0xF0, "c3")
+
+    return load_large_cfg_program(tmp_path, program), base, observation
+
+
 def global_stack_callback_image(
     tmp_path,
     *,
@@ -13928,6 +13990,39 @@ def test_owned_allocator_recognizer_reuses_cached_result(monkeypatch):
     )
 
 
+def test_owned_allocator_normalizes_exact_request_size():
+    image, _return_address = fresh_nested_return_allocation_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._owned_fixed_bump_allocator_normalized_size(
+        0x00401100,
+        0x1A,
+    ) == 0x20
+
+
+def test_owned_allocator_rejects_wrapped_normalized_request_size():
+    image, _return_address = fresh_nested_return_allocation_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert (
+        recovery._owned_fixed_bump_allocator_normalized_size(
+            0x00401100,
+            0xFFFF_FFFF,
+        )
+        is None
+    )
+
+
 def test_global_slot_read_witness_caches_failing_call_suffix(
     monkeypatch,
 ):
@@ -15140,6 +15235,50 @@ def test_intrusive_list_count_shape_bounds_increments_per_node(
     else:
         assert result[:3] == expected
         assert "intrusive-list-count" in result[3]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "minimum_stride", "expected"),
+    (
+        (None, 0x20, 0x0800_0000),
+        (None, 0x40, None),
+        ("stack-node", 0x20, None),
+        ("unknown-link", 0x20, None),
+    ),
+)
+def test_fresh_intrusive_list_bound_requires_closed_arena_nodes(
+    tmp_path,
+    mutation,
+    minimum_stride,
+    expected,
+):
+    image, function_entry, observation = fresh_intrusive_list_head_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    head_operand = recovery._owned_decoded(observation).operands[1]
+
+    result = recovery._fresh_intrusive_list_node_bound_before(
+        observation,
+        head_operand,
+        function_entry,
+        0,
+        0x1C,
+        minimum_stride,
+    )
+
+    if expected is None:
+        assert result is None
+    else:
+        assert result[0] == expected
+        assert "fresh-intrusive-list" in result[1]
+        assert "stride=0x20" in result[1]
 
 
 @pytest.mark.parametrize(

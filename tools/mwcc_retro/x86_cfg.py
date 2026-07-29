@@ -1034,6 +1034,16 @@ class _ObjectByteGuard:
     discriminator_path: tuple[int, ...] = ()
 
 
+@dataclass(slots=True)
+class _FreshObjectRequirement:
+    """Scoped demand that selected object paths originate in fresh arenas."""
+
+    generation: int
+    paths: frozenset[tuple[int, ...]]
+    minimum_stride: int
+    witnesses: set[tuple[int, int, int]] = field(default_factory=set)
+
+
 @dataclass(frozen=True, slots=True)
 class _OwnedBumpAllocatorFact:
     size_argument: int
@@ -2179,6 +2189,10 @@ class _DirectCfgRecovery:
         self.producer_exact_call_contexts: list[tuple[int, int, int]] = []
         self.producer_object_guard_contexts: list[_ObjectByteGuard] = []
         self.producer_allocator_lifetime_contexts: list[frozenset[int]] = []
+        self.producer_fresh_object_requirements: list[
+            _FreshObjectRequirement
+        ] = []
+        self.producer_fresh_object_requirement_generation = 0
         self.exact_argument_discriminator_active: set[tuple[Any, ...]] = set()
         self.finite_control_memo = {} if finite_control_memo is None else finite_control_memo
         self.finite_control_active: set[tuple[Any, ...]] = set()
@@ -2533,6 +2547,29 @@ class _DirectCfgRecovery:
 
     def _producer_object_guard_context_signature(self) -> tuple[_ObjectByteGuard, ...]:
         return tuple(self.producer_object_guard_contexts)
+
+    def _producer_fresh_object_requirement(
+        self,
+        field_path: tuple[int, ...],
+    ) -> _FreshObjectRequirement | None:
+        for requirement in reversed(
+            self.producer_fresh_object_requirements
+        ):
+            if field_path in requirement.paths:
+                return requirement
+        return None
+
+    def _producer_fresh_object_requirement_signature(
+        self,
+    ) -> tuple[int, frozenset[tuple[int, ...]], int] | None:
+        if not self.producer_fresh_object_requirements:
+            return None
+        requirement = self.producer_fresh_object_requirements[-1]
+        return (
+            requirement.generation,
+            requirement.paths,
+            requirement.minimum_stride,
+        )
 
     @staticmethod
     def _object_guard_discriminator_path(
@@ -2930,6 +2967,15 @@ class _DirectCfgRecovery:
         function_entry: int,
         compute,
     ) -> tuple[frozenset[int], str] | None:
+        fresh_requirement = (
+            self._producer_fresh_object_requirement_signature()
+        )
+        if fresh_requirement is not None:
+            query_key = (
+                *query_key,
+                "fresh-object-requirement-v1",
+                fresh_requirement,
+            )
         if self.readable_global_input_contracts or self.readable_function_argument_contracts:
             query_key = (
                 *query_key,
@@ -3705,6 +3751,8 @@ class _DirectCfgRecovery:
         field_path: tuple[int, ...],
         visited: frozenset[tuple[int, str]],
     ) -> tuple[frozenset[int], str] | None:
+        if self._producer_fresh_object_requirement(field_path) is not None:
+            return None
         query_key = (
             "producer-stack-v4",
             address,
@@ -9360,6 +9408,142 @@ class _DirectCfgRecovery:
         unique = tuple(dict.fromkeys(candidates))
         return unique[0] if len(unique) == 1 else None
 
+    def _owned_fixed_bump_allocator_normalized_size(
+        self,
+        function_entry: int,
+        requested_size: int,
+    ) -> int | None:
+        """Evaluate one owned allocator's unavoidable size normalization."""
+        if not 0 <= requested_size <= 0xFFFF_FFFF:
+            return None
+        fact = self._owned_fixed_bump_allocator_fact(function_entry)
+        if fact is None:
+            return None
+        following_entry = self._following_function_entry(function_entry)
+        candidates = []
+        for add_address in self._function_instruction_addresses(function_entry):
+            add = self._owned_decoded(add_address)
+            if (
+                add.mnemonic != "add"
+                or len(add.operands) != 2
+                or self._absolute_memory_operand(add.operands[0])
+                != fact.cursor_slot
+                or add.operands[0].size != 4
+                or add.operands[1].type != X86_OP_REG
+                or add.operands[1].size != 4
+            ):
+                continue
+            size_family = self._register_family(add.operands[1].reg)
+            loads = []
+            for load_address in self._function_instruction_addresses_between(
+                function_entry,
+                function_entry,
+                add_address,
+            ):
+                load = self._owned_decoded(load_address)
+                if (
+                    load.id == X86_INS_MOV
+                    and len(load.operands) == 2
+                    and load.operands[0].type == X86_OP_REG
+                    and load.operands[0].size == 4
+                    and self._register_family(load.operands[0].reg)
+                    == size_family
+                    and self._stack_argument_index_at(
+                        load_address,
+                        load.operands[1],
+                        function_entry,
+                    )
+                    == fact.size_argument
+                ):
+                    loads.append(load)
+            if len(loads) != 1:
+                continue
+            load = loads[0]
+            normalizers = tuple(
+                self._owned_decoded(address)
+                for address in self._function_instruction_addresses_between(
+                    function_entry,
+                    load.address + load.size,
+                    add_address,
+                )
+                if any(
+                    operand.type == X86_OP_REG
+                    and operand.access & CS_AC_WRITE
+                    and self._register_family(operand.reg) == size_family
+                    for operand in self._owned_decoded(address).operands
+                )
+            )
+            if (
+                not normalizers
+                or any(
+                    row.mnemonic not in {"add", "and"}
+                    or len(row.operands) != 2
+                    or row.operands[0].type != X86_OP_REG
+                    or self._register_family(row.operands[0].reg)
+                    != size_family
+                    or row.operands[1].type != X86_OP_IMM
+                    or self._reachable_within_function(
+                        load.address + load.size,
+                        add_address,
+                        function_entry,
+                        following_entry,
+                        excluded=row.address,
+                    )
+                    for row in normalizers
+                )
+            ):
+                continue
+            candidates.append(normalizers)
+        if len(candidates) != 1:
+            return None
+
+        normalized_size = requested_size
+        for row in candidates[0]:
+            immediate = row.operands[1].imm & 0xFFFF_FFFF
+            if row.mnemonic == "and":
+                normalized_size &= immediate
+                continue
+            widened = normalized_size + immediate
+            if widened > 0xFFFF_FFFF:
+                return None
+            normalized_size = widened
+        if normalized_size == 0 or normalized_size < requested_size:
+            return None
+        return normalized_size
+
+    def _record_fresh_object_requirement_witness(
+        self,
+        field_path: tuple[int, ...],
+        allocation_call: int,
+        allocator: int,
+        requested_sizes: frozenset[int],
+    ) -> bool:
+        """Record an allocation only if every exact request has enough stride."""
+        requirement = self._producer_fresh_object_requirement(field_path)
+        if requirement is None:
+            return True
+        normalized_sizes = tuple(
+            self._owned_fixed_bump_allocator_normalized_size(
+                allocator,
+                requested_size,
+            )
+            for requested_size in sorted(requested_sizes)
+        )
+        if (
+            not normalized_sizes
+            or any(size is None for size in normalized_sizes)
+            or min(normalized_sizes) < requirement.minimum_stride
+        ):
+            return False
+        requirement.witnesses.add(
+            (
+                allocation_call,
+                allocator,
+                min(normalized_sizes),
+            )
+        )
+        return True
+
     def _direct_function_call_closure(self, root: int) -> frozenset[int]:
         """Return the finite owned direct-call closure rooted at ``root``."""
         cache_key = (
@@ -12961,7 +13145,7 @@ class _DirectCfgRecovery:
                 contract_path,
                 contract_arguments,
             ) in reversed(self.readable_function_argument_contracts)
-        ):
+        ) and self._producer_fresh_object_requirement(field_path) is None:
             self._note_producer_dependency(function_entry)
             values = frozenset(range(0x100))
             self._check_count("max_finite_values", len(values))
@@ -14543,6 +14727,8 @@ class _DirectCfgRecovery:
         active: frozenset[tuple[int, str]] = frozenset(),
     ) -> tuple[frozenset[int], str] | None:
         """Use one dominating byte read as a local object witness."""
+        if self._producer_fresh_object_requirement(field_path) is not None:
+            return None
         key = (address, register_family)
         if field_path != (0,) or key in active:
             return None
@@ -14738,7 +14924,8 @@ class _DirectCfgRecovery:
     ) -> tuple[frozenset[int], str] | None:
         """Prove a field reload repeats a pointer already dereferenced."""
         if (
-            field_path != (0,)
+            self._producer_fresh_object_requirement(field_path) is not None
+            or field_path != (0,)
             or source.type != X86_OP_MEM
             or source.mem.segment != X86_REG_INVALID
             or source.mem.base == X86_REG_INVALID
@@ -19178,6 +19365,13 @@ class _DirectCfgRecovery:
                 )
                 if totality is None:
                     return None
+            if not self._record_fresh_object_requirement_witness(
+                field_path,
+                allocation_call,
+                allocator,
+                size_result[0],
+            ):
+                return None
             return (
                 values,
                 f"fresh-allocation={allocation_call:#x};"
@@ -19841,6 +20035,13 @@ class _DirectCfgRecovery:
             )
             if totality is None:
                 return None
+        if not self._record_fresh_object_requirement_witness(
+            field_path,
+            allocation_call,
+            allocator,
+            size_result[0],
+        ):
+            return None
         self._check_count("max_finite_values", len(values))
         return (
             frozenset(values),
@@ -22507,7 +22708,14 @@ class _DirectCfgRecovery:
             summary_fact_signature=self._summary_fact_signature(),
             control_flow_revision=self.control_flow_revision,
         )
-        cached = self.readable_global_effect_store.get(cache_key)
+        fresh_requirement_active = (
+            self._producer_fresh_object_requirement_signature() is not None
+        )
+        cached = (
+            None
+            if fresh_requirement_active
+            else self.readable_global_effect_store.get(cache_key)
+        )
         if cached is not None and self._dependency_memo_hit(cached):
             if cached.result is None:
                 return None
@@ -22615,16 +22823,17 @@ class _DirectCfgRecovery:
             summary_fact_signature=self._summary_fact_signature(),
             control_flow_revision=self.control_flow_revision,
         )
-        self.readable_global_effect_store.put(
-            final_cache_key,
-            _DependencyMemoEntry(
-                image_sha256=self.image.sha256,
-                dependencies=self._producer_dependency_snapshot(
-                    dependencies
+        if not fresh_requirement_active:
+            self.readable_global_effect_store.put(
+                final_cache_key,
+                _DependencyMemoEntry(
+                    image_sha256=self.image.sha256,
+                    dependencies=self._producer_dependency_snapshot(
+                        dependencies
+                    ),
+                    result=summary_result,
                 ),
-                result=summary_result,
-            ),
-        )
+            )
         if summary_result is None:
             return None
         detail = (
@@ -34080,6 +34289,102 @@ class _DirectCfgRecovery:
             self.runtime_global_copy_field_active.remove(cache_key)
         self.runtime_global_copy_field_cache[cache_key] = True
         return True
+
+    def _fresh_intrusive_list_node_bound_before(
+        self,
+        address: int,
+        operand,
+        function_entry: int,
+        link_offset: int,
+        probe_offset: int,
+        minimum_stride: int,
+        visited: frozenset[tuple[int, str]] = frozenset(),
+        *,
+        head_path: tuple[int, ...] = (),
+    ) -> tuple[int, str] | None:
+        """Bound a null-terminated list whose nodes are fresh arena generations."""
+        if (
+            any(offset < 0 for offset in head_path)
+            or
+            link_offset < 0
+            or probe_offset < 0
+            or not 0 < minimum_stride <= 0xFFFF_FFFF
+        ):
+            return None
+        self.producer_fresh_object_requirement_generation += 1
+        requirement = _FreshObjectRequirement(
+            self.producer_fresh_object_requirement_generation,
+            frozenset(
+                {
+                    (probe_offset,),
+                    (link_offset, probe_offset),
+                }
+            ),
+            minimum_stride,
+        )
+        self.producer_fresh_object_requirements.append(requirement)
+        try:
+            node = self._finite_object_byte_operand_values_before(
+                address,
+                operand,
+                function_entry,
+                (*head_path, probe_offset),
+                visited,
+            )
+            following = self._finite_object_byte_operand_values_before(
+                address,
+                operand,
+                function_entry,
+                (*head_path, link_offset, probe_offset),
+                visited,
+            )
+        finally:
+            popped = self.producer_fresh_object_requirements.pop()
+            if popped is not requirement:
+                raise AssertionError(
+                    "producer fresh-object requirement stack corrupted"
+                )
+        if node is None or following is None:
+            return None
+        if not requirement.witnesses:
+            if node[0] or following[0] or not all(
+                self._object_result_has_flag(result[1], "optional-empty-association")
+                for result in (node, following)
+            ):
+                return None
+            return 0, "fresh-intrusive-list=empty"
+        allocators = {
+            allocator
+            for _allocation_call, allocator, _stride in requirement.witnesses
+        }
+        if len(allocators) != 1:
+            return None
+        stride = min(
+            stride
+            for _allocation_call, _allocator, stride in requirement.witnesses
+        )
+        if stride < minimum_stride:
+            return None
+        upper = (1 << 32) // stride
+        return (
+            upper,
+            f"fresh-intrusive-list;allocator={next(iter(allocators)):#x};"
+            f"stride={stride:#x};nodes<=0x{upper:x};"
+            "head-path="
+            + (
+                ",".join(f"{offset:+#x}" for offset in head_path)
+                if head_path
+                else "self"
+            )
+            + ";"
+            "allocations="
+            + ",".join(
+                f"{allocation_call:#x}"
+                for allocation_call, _allocator, _stride in sorted(
+                    requirement.witnesses
+                )
+            ),
+        )
 
     def _intrusive_list_count_return_shape(
         self,

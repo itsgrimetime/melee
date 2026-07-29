@@ -292,7 +292,15 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 1,040 passed.
+- Task 4 now has a scoped fresh-intrusive-list bound: it rejects stack or
+  open-link nodes, requires one owned monotonic allocator, evaluates every
+  exact request through the allocator's unavoidable normalization, and bounds
+  a `0x20`-stride arena at `0x08000000` live nodes.  The exact retail tag-16
+  query still closes only through the pre-existing outer-list association
+  induction, so the next repair is to bind the manager's loader-zero scratch
+  root (`0x581c3a`) and its four `0x1e -> 0x20` prepend allocations into that
+  invariant before using the count-helper return interval.
+- `test_retro_x86_cfg.py`: 1,046 passed.
 - Task 4 backend/struct-map adjacent slice: 830 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
