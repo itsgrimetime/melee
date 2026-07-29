@@ -2312,6 +2312,13 @@ class _DirectCfgRecovery:
         self.incoming_call_domain_cache: dict[
             tuple[int, tuple[int, ...], int], bool
         ] = {}
+        self.pushed_call_argument_cache_signature: tuple[int, ...] | None = (
+            None
+        )
+        self.pushed_call_argument_cache: dict[
+            tuple[int, int],
+            tuple[int | None, tuple[Instruction, Any, int] | None],
+        ] = {}
         self.provisional_unowned_raw_callers_by_target: dict[
             int, frozenset[int]
         ] = {}
@@ -34338,20 +34345,45 @@ class _DirectCfgRecovery:
         )
 
     def _pushed_call_argument(self, call_address: int, argument_index: int) -> tuple[Instruction, Any, int] | None:
+        signature = self._summary_fact_signature()
+        if self.pushed_call_argument_cache_signature != signature:
+            self.pushed_call_argument_cache.clear()
+            self.pushed_call_argument_cache_signature = signature
+        cache_key = (call_address, argument_index)
+        if cache_key in self.pushed_call_argument_cache:
+            caller_entry, result = self.pushed_call_argument_cache[cache_key]
+            if caller_entry is not None:
+                self._note_producer_dependency(caller_entry)
+            return result
         caller_entry = self._registrar_function_entry(call_address)
         if caller_entry is None:
+            self.pushed_call_argument_cache[cache_key] = (None, None)
             return None
         self._note_producer_dependency(caller_entry)
         remaining = argument_index
         cursor = call_address
+        cacheable = True
+
+        def finish(
+            result: tuple[Instruction, Any, int] | None,
+        ) -> tuple[Instruction, Any, int] | None:
+            if cacheable:
+                self.pushed_call_argument_cache[cache_key] = (
+                    caller_entry,
+                    result,
+                )
+            return result
+
         for _ in range(64):
             previous = self._previous_instruction(cursor)
             if previous is None:
-                return None
+                return finish(None)
             decoded = self._owned_decoded(previous.address)
             if decoded.mnemonic == "push" and len(decoded.operands) == 1:
                 if remaining == 0:
-                    return previous, decoded.operands[0], caller_entry
+                    return finish(
+                        (previous, decoded.operands[0], caller_entry)
+                    )
                 remaining -= 1
             elif decoded.mnemonic == "pop" and len(decoded.operands) == 1:
                 remaining += 1
@@ -34364,15 +34396,16 @@ class _DirectCfgRecovery:
             ):
                 amount = decoded.operands[1].imm & 0xFFFF_FFFF
                 if amount % 4:
-                    return None
+                    return finish(None)
                 slots = amount // 4
                 if decoded.mnemonic == "add":
                     remaining += slots
                 elif remaining < slots:
-                    return None
+                    return finish(None)
                 else:
                     remaining -= slots
             elif decoded.group(CS_GRP_CALL):
+                cacheable = False
                 cleanup = self._closed_call_stack_cleanup(decoded.address)
                 if cleanup is None or cleanup % 4:
                     return None
@@ -34382,9 +34415,9 @@ class _DirectCfgRecovery:
                 or decoded.group(CS_GRP_RET)
                 or any(self._register_family(row) == "esp" for row in decoded.regs_write)
             ):
-                return None
+                return finish(None)
             cursor = previous.address
-        return None
+        return finish(None)
 
     def _fresh_constructor_receiver(
         self, constructor_call: DirectCall, descriptor_field: int

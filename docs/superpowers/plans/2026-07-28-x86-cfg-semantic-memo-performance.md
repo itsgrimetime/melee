@@ -808,6 +808,13 @@ exists. Reuse that index and retain the existing accepted-category filter.
 The identical 24-transfer profile improved from 105.96 seconds to 99.56
 seconds (6.0%) with identical outcomes, about 2.7 GB maximum RSS, and no swap.
 
+The profile then found 869,166 backward pushed-argument scans. Cache only
+completed call-free scans for the current summary-fact signature, preserve
+producer-dependency collection on hits, and refuse to cache any scan that
+crosses another call. The identical profile improved again from 99.56 seconds
+to 95.19 seconds (4.4%) with unchanged outcomes, about 2.68 GB maximum RSS,
+and no swap.
+
 - [ ] **Step 7: Run exact Task 4 closure twice** (in progress)
 
 Use the ordinary branch-local `probe-backend-map --static-only` workflow and

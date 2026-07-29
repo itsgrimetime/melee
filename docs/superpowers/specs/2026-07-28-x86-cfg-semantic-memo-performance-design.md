@@ -275,6 +275,22 @@ resolver results, approximately 2.7 GB maximum RSS, and no swap. A regression
 prewarms the index, forbids iteration over the complete seed set, and requires
 the same incoming-domain result.
 
+### Call-free pushed-argument cache
+
+The same exact profile made 869,166 calls to the backward pushed-argument
+scanner, primarily while auditing the global intrusive-list producer. A
+successful or terminal scan that encounters no earlier call depends only on
+the immutable owned instruction chain and current function-entry partition.
+Cache those results for the current summary-fact signature, clear the cache
+when that signature changes, and replay producer-dependency collection on
+every hit. Do not cache a traversal that crosses another call, because its
+stack cleanup can depend on evolving call closure.
+
+After the seed-index change, this cache reduced the identical profiled batch
+from 99.56 seconds to 95.19 seconds (4.4%) with identical resolver outcomes,
+approximately 2.68 GB maximum RSS, and no swap. Regressions require reuse of a
+call-free result and explicitly forbid caching across a call cleanup.
+
 ## Correctness Invariants
 
 - Cache-disabled, cold-cache, warm-cache, and evicted-cache runs return equal

@@ -18926,6 +18926,57 @@ def test_direct_call_domain_is_cached_for_unchanged_facts(tmp_path):
     assert recovery._direct_call_domain_is_closed(0x00401000) is first
 
 
+def test_pushed_call_argument_reuses_call_free_result(monkeypatch):
+    image, _call_sites, _callbacks = registered_static_command_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    setter = 0x00401250
+    call_address = next(
+        row.address
+        for row in recovery.direct_calls
+        if row.target == setter
+    )
+    recovery.pushed_call_argument_cache.clear()
+    expected = recovery._pushed_call_argument(call_address, 0)
+    assert expected is not None
+
+    def reject_previous(_address):
+        raise AssertionError(
+            "call-free pushed argument was scanned more than once"
+        )
+
+    monkeypatch.setattr(recovery, "_previous_instruction", reject_previous)
+
+    assert recovery._pushed_call_argument(call_address, 0) == expected
+
+
+def test_pushed_call_argument_does_not_cache_across_call_cleanup():
+    image, _call_sites, _callbacks = registered_static_command_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    wrapper = 0x00401190
+    call_address = next(
+        row.address
+        for row in recovery.direct_calls
+        if row.target == wrapper
+        and recovery._registrar_function_entry(row.address)
+        == image.entrypoint
+    )
+    recovery.pushed_call_argument_cache.clear()
+
+    recovery._pushed_call_argument(call_address, 1)
+
+    assert (call_address, 1) not in recovery.pushed_call_argument_cache
+
+
 def test_incoming_call_sites_use_target_index(tmp_path):
     class NoIterationSet(set):
         def __iter__(self):

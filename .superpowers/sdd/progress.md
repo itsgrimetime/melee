@@ -99,6 +99,11 @@ candidates partitioned.
   The identical exact 24-transfer profile improved from 105.96 seconds to
   99.56 seconds (6.0%) with identical outcomes, about 2.7 GB maximum RSS, and
   no swap.
+- Backward pushed-argument scans now cache only call-free completed results
+  for the current summary-fact signature and preserve dependency collection
+  on hits; traversals crossing another call remain uncached.  The same profile
+  improved again from 99.56 seconds to 95.19 seconds (4.4%), with identical
+  outcomes, about 2.68 GB maximum RSS, and no swap.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published
@@ -164,8 +169,8 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 959 passed.
-- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,086 passed.
+- `test_retro_x86_cfg.py`: 961 passed.
+- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,088 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
 - Task 8 focused/adjacent suites: 184 / 533 passed.
