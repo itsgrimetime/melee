@@ -42532,7 +42532,6 @@ def _recover_cfg_fixed_point(
                 row.store_address,
                 row.object_field,
                 row.receiver_identity,
-                row.consumers,
                 row.data_evidence.start,
                 row.data_evidence.end,
             )
@@ -42612,8 +42611,8 @@ def _recover_cfg_fixed_point(
         else:
             current_recovery, current_cfg = reusable_trial
             reusable_trial = None
-        valid_identities = {
-            identity(row)
+        valid_hypotheses = {
+            identity(row): row
             for row in (
                 *current_recovery.object_callback_table_hypotheses,
                 *current_recovery.validated_copied_descriptor_callback_hypotheses,
@@ -42623,7 +42622,7 @@ def _recover_cfg_fixed_point(
         invalidated = {
             hypothesis_identity: hypothesis
             for hypothesis_identity, hypothesis in accepted.items()
-            if hypothesis_identity not in valid_identities
+            if hypothesis_identity not in valid_hypotheses
         }
         if invalidated:
             for hypothesis_identity, hypothesis in invalidated.items():
@@ -42631,6 +42630,14 @@ def _recover_cfg_fixed_point(
                 rejected_identities.add(hypothesis_identity)
                 if isinstance(hypothesis, _ObjectCallbackTableHypothesis):
                     rejected_object_bases.add(hypothesis.table_base)
+            continue
+        refreshed = {
+            hypothesis_identity: valid_hypotheses[hypothesis_identity]
+            for hypothesis_identity, hypothesis in accepted.items()
+            if valid_hypotheses[hypothesis_identity] != hypothesis
+        }
+        if refreshed:
+            accepted.update(refreshed)
             continue
 
         candidates = tuple(
@@ -42727,22 +42734,30 @@ def _recover_cfg_fixed_point(
             ),
         )
         trial_cfg = trial_recovery.recover()
-        reproduced_identities = {
-            identity(row)
+        reproduced_hypotheses = {
+            identity(row): row
             for row in (
                 *trial_recovery.object_callback_table_hypotheses,
                 *trial_recovery.validated_copied_descriptor_callback_hypotheses,
                 *trial_recovery.validated_relocated_dispatch_slot_hypotheses,
             )
         }
+        reproduced_changed = False
         for hypothesis_identity, hypothesis in new_candidates.items():
-            if hypothesis_identity in reproduced_identities:
-                accepted[hypothesis_identity] = hypothesis
+            if hypothesis_identity in reproduced_hypotheses:
+                reproduced = reproduced_hypotheses[
+                    hypothesis_identity
+                ]
+                accepted[hypothesis_identity] = reproduced
+                reproduced_changed |= reproduced != hypothesis
                 continue
             rejected_identities.add(hypothesis_identity)
             if isinstance(hypothesis, _ObjectCallbackTableHypothesis):
                 rejected_object_bases.add(hypothesis.table_base)
-        if new_candidates.keys() <= reproduced_identities:
+        if (
+            not reproduced_changed
+            and new_candidates.keys() <= reproduced_hypotheses.keys()
+        ):
             reusable_trial = trial_recovery, trial_cfg
 
 

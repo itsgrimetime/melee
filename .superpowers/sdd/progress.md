@@ -119,6 +119,19 @@ candidates partitioned.
   before retaining the existing batched bootstrap trial.  A hostile
   cross-candidate regression test, the 963-test CFG suite, and the 1,090-test
   adjacent Task 4 slice are green; a fresh exact compiler replay is next.
+- The staged exact replay completed in 4,365.81 seconds at 6.42 GB maximum RSS
+  with no process swaps.  All ten implemented local closures survived, reducing
+  the prior 69-address raw-control frontier to 60 addresses.  The replay also
+  exposed one additional constructor obligation at `0x41c098`, but retained
+  the object-table blocker at `0x425a59`.
+- The replay proved that the same object table could acquire additional
+  consumers after graph growth, changing the prior replay identity even though
+  its table/store/field/receiver/record provenance was unchanged.  Object
+  identity is now based only on that stable provenance.  Any changed consumer
+  evidence refreshes the accepted hypothesis and forces a clean rerun before
+  its evidence can be consumed, rather than reusing stale subset evidence.
+  The hostile consumer-expansion regression, the 964-test CFG suite, and the
+  1,091-test adjacent Task 4 slice are green; exact replay remains required.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published
@@ -184,8 +197,8 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 963 passed.
-- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,090 passed.
+- `test_retro_x86_cfg.py`: 964 passed.
+- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,091 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
 - Task 8 focused/adjacent suites: 184 / 533 passed.

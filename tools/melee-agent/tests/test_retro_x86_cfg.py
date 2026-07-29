@@ -19456,6 +19456,84 @@ def test_object_hypothesis_is_not_rejected_with_unvalidated_bootstrap_batch(
     assert "relocated-dispatch-bootstrap-entry" not in categories
 
 
+def test_object_hypothesis_replay_accepts_expanded_consumer_inventory(
+    tmp_path,
+    monkeypatch,
+):
+    image = load_cfg_image(tmp_path)
+    entry = image.entrypoint
+    object_record = SeedRecord(
+        address=entry,
+        category="object-callback-table-entry",
+        provenance_address=0x00402000,
+        provenance_bytes="00104000",
+        detail="synthetic-object-candidate",
+        is_function=True,
+    )
+    first_consumer = x86_cfg_module._ObjectCallbackConsumer(
+        transfer_address=entry,
+        slot_offset=0,
+        target=entry,
+        receiver_argument_index=0,
+    )
+    added_consumer = x86_cfg_module._ObjectCallbackConsumer(
+        transfer_address=entry + 1,
+        slot_offset=4,
+        target=entry,
+        receiver_argument_index=None,
+    )
+    object_hypothesis = x86_cfg_module._ObjectCallbackTableHypothesis(
+        table_base=0x00402000,
+        store_address=entry,
+        object_field=0x104,
+        receiver_identity=None,
+        consumers=(first_consumer,),
+        records=(object_record,),
+        data_evidence=x86_cfg_module._DataEvidence(
+            start=0x00402000,
+            end=0x00402008,
+            provenance="synthetic-object-candidate",
+        ),
+    )
+    expanded_hypothesis = replace(
+        object_hypothesis,
+        consumers=(first_consumer, added_consumer),
+    )
+    recoveries = []
+    original = _DirectCfgRecovery.recover
+
+    def expand_consumers_after_candidate_seed(recovery):
+        cfg = original(recovery)
+        recoveries.append(recovery)
+        categories = {row.category for row in recovery.seed_records}
+        recovery.object_callback_table_hypotheses.add(
+            expanded_hypothesis
+            if "object-callback-table-entry" in categories
+            else object_hypothesis
+        )
+        return cfg
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "recover",
+        expand_consumers_after_candidate_seed,
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert any(
+        row.category == "object-callback-table-entry"
+        for row in cfg.seed_inventory.records
+    )
+    accepted = recoveries[-1].accepted_object_callback_hypotheses
+    assert len(accepted) == 1
+    assert accepted[0].consumers == expanded_hypothesis.consumers
+
+
 def test_checkpointed_recovery_shares_and_closes_semantic_memo_store(
     tmp_path,
     monkeypatch,
