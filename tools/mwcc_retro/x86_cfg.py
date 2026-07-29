@@ -2216,6 +2216,15 @@ class _DirectCfgRecovery:
         self.registry_cursor_domain_cache: dict[
             tuple[Any, ...], tuple[int, int] | None
         ] = {}
+        self.object_field_registry_cache: dict[
+            tuple[Any, ...],
+            tuple[tuple[int, int, int, int, _ClosedObjectOrigin], ...],
+        ] = {}
+        self.object_field_registry_active: set[tuple[Any, ...]] = set()
+        self.registered_object_field_origin_cache: dict[
+            tuple[Any, ...], _ClosedObjectOrigin
+        ] = {}
+        self.registered_object_field_origin_active: set[tuple[Any, ...]] = set()
         self.registered_copy_return_cache: dict[tuple[Any, ...], bool] = {}
         self.copy_return_cache: dict[tuple[int, int, tuple[int, ...], int], bool] = {}
         self.pointer_identity_cache: dict[
@@ -15886,6 +15895,8 @@ class _DirectCfgRecovery:
                 "exact_argument_discriminator_active",
                 "finite_control_active",
                 "global_list_field_active",
+                "object_field_registry_active",
+                "registered_object_field_origin_active",
                 "argument_return_offset_active",
                 "argument_return_offset_stack",
                 "argument_return_offset_pending",
@@ -15906,6 +15917,8 @@ class _DirectCfgRecovery:
                 "readable_global_effect_argument_cache",
                 "finite_control_memo",
                 "global_list_field_cache",
+                "object_field_registry_cache",
+                "registered_object_field_origin_cache",
                 "argument_return_offset_cache",
                 "runtime_global_copy_field_cache",
                 "registered_copy_state_cache",
@@ -31610,6 +31623,453 @@ class _DirectCfgRecovery:
             (head, link) for head, link, _registrar in registries
         }
 
+    def _closed_object_field_registries(
+        self,
+        field: int,
+        constructor_entry: int,
+        descriptor_field: int,
+        validator: tuple[int, int],
+        visited: frozenset[tuple[int, str]],
+    ) -> tuple[tuple[int, int, int, int, _ClosedObjectOrigin], ...]:
+        """Find closed intrusive registries with a proved publication field.
+
+        Each result is ``(head, link, registrar, node argument, origin)``.
+        The proof requires a private loader-zeroed head, an insertion cursor
+        restricted to the head/link chain, a formal node source, and a closed
+        field origin at the publication store.
+        """
+        cache_key = (
+            field,
+            constructor_entry,
+            descriptor_field,
+            validator,
+            self._summary_fact_signature(),
+            self.control_flow_revision,
+        )
+        cached = self.object_field_registry_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        if cache_key in self.object_field_registry_active:
+            return ()
+        self.object_field_registry_active.add(cache_key)
+        try:
+            candidates = []
+            for write in sorted(
+                self.dynamic_field_writes.get(0, ()),
+                key=lambda row: row.instruction_address,
+            ):
+                address = write.instruction_address
+                registrar = self._registrar_function_entry(address)
+                if registrar is None:
+                    continue
+                decoded = self._owned_decoded(address)
+                if not (
+                    decoded.id == X86_INS_MOV
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_MEM
+                    and decoded.operands[0].size == 4
+                    and decoded.operands[0].mem.segment == X86_REG_INVALID
+                    and decoded.operands[0].mem.index == X86_REG_INVALID
+                    and decoded.operands[0].mem.base != X86_REG_INVALID
+                    and decoded.operands[1].type == X86_OP_REG
+                    and decoded.operands[1].size == 4
+                    and self._direct_call_domain_is_closed(registrar)
+                ):
+                    continue
+                source_family = self._register_family(
+                    decoded.operands[1].reg
+                )
+                node_argument = self._register_argument_index_across_blocks(
+                    address,
+                    source_family,
+                    registrar,
+                )
+                if node_argument is None:
+                    continue
+                cursor_family = self._register_family(
+                    decoded.operands[0].mem.base
+                )
+                cursor_domain = self._closed_registry_cursor_domain(
+                    registrar,
+                    address,
+                    cursor_family,
+                )
+                if cursor_domain is None:
+                    continue
+                head, link = cursor_domain
+                try:
+                    initial = int.from_bytes(
+                        _read_loader_initialized(self.image, head, 4),
+                        "little",
+                    )
+                except ValueError:
+                    continue
+                if initial != 0 or any(
+                    row.value != 0
+                    for row in self.global_slot_writes.get(head, ())
+                ):
+                    continue
+                raw_head = head.to_bytes(4, "little")
+                references_are_owned_operands = True
+                for section in self.image.sections:
+                    if not section.is_executable:
+                        continue
+                    blob = self.image.read(section.va, section.raw_size)
+                    offset = blob.find(raw_head)
+                    while offset >= 0:
+                        reference = section.va + offset
+                        owner = self.byte_owners.get(reference)
+                        if owner is None:
+                            references_are_owned_operands = False
+                            break
+                        instruction = self._owned_decoded(owner)
+                        if not any(
+                            (
+                                operand.type == X86_OP_IMM
+                                and operand.imm & 0xFFFF_FFFF == head
+                            )
+                            or (
+                                operand.type == X86_OP_MEM
+                                and operand.mem.base == X86_REG_INVALID
+                                and operand.mem.index == X86_REG_INVALID
+                                and operand.mem.disp & 0xFFFF_FFFF == head
+                            )
+                            for operand in instruction.operands
+                        ):
+                            references_are_owned_operands = False
+                            break
+                        offset = blob.find(raw_head, offset + 1)
+                    if not references_are_owned_operands:
+                        break
+                if not references_are_owned_operands or any(
+                    relocation.type == 3
+                    and not _is_executable_span(
+                        self.image, relocation.va, 1
+                    )
+                    and _is_mapped_span(self.image, relocation.va, 4)
+                    and int.from_bytes(
+                        _read_loader_initialized(
+                            self.image, relocation.va, 4
+                        ),
+                        "little",
+                    )
+                    == head
+                    for relocation in self.image.relocations
+                ):
+                    continue
+                origin = self._closed_object_field_origin(
+                    address,
+                    source_family,
+                    registrar,
+                    field,
+                    constructor_entry,
+                    descriptor_field,
+                    validator,
+                    visited
+                    | {
+                        (
+                            address,
+                            "object-field-registry-publication:"
+                            f"{head:#x}:{field:+#x}",
+                        )
+                    },
+                )
+                if origin is None:
+                    continue
+                candidates.append(
+                    (
+                        head,
+                        link,
+                        registrar,
+                        node_argument,
+                        origin,
+                    )
+                )
+            result = tuple(sorted(set(candidates)))
+            if result:
+                self.object_field_registry_cache[cache_key] = result
+            return result
+        finally:
+            self.object_field_registry_active.remove(cache_key)
+
+    def _closed_registered_object_field_origin(
+        self,
+        address: int,
+        register_family: str,
+        function_entry: int,
+        field: int,
+        constructor_entry: int,
+        descriptor_field: int,
+        validator: tuple[int, int],
+        visited: frozenset[tuple[int, str]],
+    ) -> _ClosedObjectOrigin | None:
+        """Prove a register is null or a node from a closed field registry."""
+        cache_key = (
+            address,
+            register_family,
+            function_entry,
+            field,
+            constructor_entry,
+            descriptor_field,
+            validator,
+            self._summary_fact_signature(),
+            self.control_flow_revision,
+        )
+        cached = self.registered_object_field_origin_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        if cache_key in self.registered_object_field_origin_active:
+            return None
+        self.registered_object_field_origin_active.add(cache_key)
+        try:
+            registries = self._closed_object_field_registries(
+                field,
+                constructor_entry,
+                descriptor_field,
+                validator,
+                visited,
+            )
+            if not registries or function_entry not in self.function_addresses:
+                return None
+            following_entry = min(
+                (
+                    row
+                    for row in self.function_addresses
+                    if row > function_entry
+                ),
+                default=0x1_0000_0000,
+            )
+            if not function_entry <= address < following_entry:
+                return None
+            predecessors: dict[int, set[int]] = {}
+            for candidate in self._function_instruction_addresses(
+                function_entry
+            ):
+                for successor in self._summary_successors(
+                    candidate,
+                    function_entry,
+                    following_entry,
+                ):
+                    if function_entry <= successor < following_entry:
+                        predecessors.setdefault(successor, set()).add(
+                            candidate
+                        )
+            reverse_pending = [address]
+            observation_region = {address}
+            while reverse_pending:
+                current = reverse_pending.pop()
+                for predecessor in predecessors.get(current, ()):
+                    if predecessor in observation_region:
+                        continue
+                    observation_region.add(predecessor)
+                    reverse_pending.append(predecessor)
+            if function_entry not in observation_region:
+                return None
+
+            heads = {row[0] for row in registries}
+            links = {row[1] for row in registries}
+            # Bit domain: 1=null, 2=registered node, 4=unknown.
+            initial = {name: 4 for name in _REGISTER_FAMILIES}
+            states: dict[int, dict[str, int]] = {
+                function_entry: initial
+            }
+            pending = [function_entry]
+            queued = {function_entry}
+            observation_domains = []
+            observed_heads: set[int] = set()
+            iterations = 0
+
+            def operand_domain(
+                current: int,
+                operand,
+                state: dict[str, int],
+            ) -> int:
+                if operand.type == X86_OP_REG:
+                    return state.get(
+                        self._register_family(operand.reg), 4
+                    )
+                if operand.type == X86_OP_IMM:
+                    return (
+                        1
+                        if operand.imm & 0xFFFF_FFFF == 0
+                        else 4
+                    )
+                if operand.type != X86_OP_MEM:
+                    return 4
+                memory = operand.mem
+                if (
+                    memory.segment == X86_REG_INVALID
+                    and memory.base == X86_REG_INVALID
+                    and memory.index == X86_REG_INVALID
+                    and memory.disp & 0xFFFF_FFFF in heads
+                ):
+                    observed_heads.add(
+                        memory.disp & 0xFFFF_FFFF
+                    )
+                    return 3
+                if (
+                    memory.segment == X86_REG_INVALID
+                    and memory.base != X86_REG_INVALID
+                    and memory.index == X86_REG_INVALID
+                    and memory.disp in links
+                    and not state.get(
+                        self._register_family(memory.base), 4
+                    )
+                    & 4
+                    and state.get(
+                        self._register_family(memory.base), 4
+                    )
+                    & 2
+                ):
+                    return 3
+                logical_offset = self._stack_operand_logical_offset(
+                    current,
+                    operand,
+                    function_entry,
+                )
+                if logical_offset is not None:
+                    return state.get(
+                        f"stack:{logical_offset:+#x}", 4
+                    )
+                return 4
+
+            while pending:
+                current = heapq.heappop(pending)
+                queued.remove(current)
+                decoded = self._owned_decoded(current)
+                state = dict(states[current])
+                if current == address:
+                    observation_domains.append(
+                        state.get(register_family, 4)
+                    )
+                    continue
+                if decoded.group(CS_GRP_CALL):
+                    for family in ("eax", "ecx", "edx"):
+                        state[family] = 4
+                elif (
+                    decoded.id == X86_INS_XOR
+                    and len(decoded.operands) == 2
+                    and all(
+                        row.type == X86_OP_REG
+                        for row in decoded.operands
+                    )
+                    and self._register_family(
+                        decoded.operands[0].reg
+                    )
+                    == self._register_family(
+                        decoded.operands[1].reg
+                    )
+                ):
+                    state[
+                        self._register_family(
+                            decoded.operands[0].reg
+                        )
+                    ] = 1
+                elif (
+                    decoded.id == X86_INS_MOV
+                    and len(decoded.operands) == 2
+                ):
+                    destination, source = decoded.operands
+                    value = operand_domain(current, source, state)
+                    if destination.type == X86_OP_REG:
+                        state[
+                            self._register_family(destination.reg)
+                        ] = value
+                    elif destination.type == X86_OP_MEM:
+                        logical_offset = (
+                            self._stack_operand_logical_offset(
+                                current,
+                                destination,
+                                function_entry,
+                            )
+                        )
+                        if logical_offset is not None:
+                            state[
+                                f"stack:{logical_offset:+#x}"
+                            ] = value
+                else:
+                    for register in decoded.regs_write:
+                        state[self._register_family(register)] = 4
+                    for operand in decoded.operands:
+                        if (
+                            operand.type == X86_OP_REG
+                            and operand.access & CS_AC_WRITE
+                        ):
+                            state[
+                                self._register_family(operand.reg)
+                            ] = 4
+                for successor in self._summary_successors(
+                    current,
+                    function_entry,
+                    following_entry,
+                ):
+                    if successor not in observation_region:
+                        continue
+                    prior = states.get(successor)
+                    if prior is None:
+                        joined = dict(state)
+                    else:
+                        keys = (
+                            set(_REGISTER_FAMILIES)
+                            | set(prior)
+                            | set(state)
+                        )
+                        joined = {
+                            family: prior.get(family, 4)
+                            | state.get(family, 4)
+                            for family in keys
+                        }
+                    if prior == joined:
+                        continue
+                    states[successor] = joined
+                    if successor not in queued:
+                        heapq.heappush(pending, successor)
+                        queued.add(successor)
+                iterations += 1
+                self.limits.check(
+                    "max_summary_iterations", iterations
+                )
+            if (
+                not observed_heads
+                or not observation_domains
+                or any(
+                    domain & 4 or not domain & 2
+                    for domain in observation_domains
+                )
+            ):
+                return None
+            origins = [
+                row[4]
+                for row in registries
+                if row[0] in observed_heads
+            ]
+            if not origins:
+                return None
+            result = _ClosedObjectOrigin(
+                any(row.has_target_constructor for row in origins),
+                frozenset().union(
+                    *(row.rejected_tags for row in origins)
+                ),
+                "registered-head="
+                + ",".join(
+                    f"{head:#x}"
+                    for head in sorted(observed_heads)
+                )
+                + ";registered-link="
+                + ",".join(
+                    f"{link:+#x}"
+                    for link in sorted(links)
+                )
+                + ";"
+                + "|".join(row.detail for row in origins),
+            )
+            self.registered_object_field_origin_cache[
+                cache_key
+            ] = result
+            return result
+        finally:
+            self.registered_object_field_origin_active.remove(cache_key)
+
     def _closed_copy_registries(
         self, copy_function: int
     ) -> tuple[tuple[int, int, int], ...]:
@@ -33505,23 +33965,41 @@ class _DirectCfgRecovery:
                 continue
             target = self._direct_target(candidate)
             fallthrough = candidate.address + candidate.size
-            if (
-                candidate.mnemonic in {"je", "jz"}
-                and target is not None
-                and self._reachable_within_function(
-                    fallthrough,
-                    address,
-                    function_entry,
-                    following_entry,
+            if target is not None:
+                live_arm = (
+                    fallthrough
+                    if candidate.mnemonic in {"je", "jz"}
+                    else target
+                    if candidate.mnemonic in {"jne", "jnz"}
+                    else None
                 )
-                and not self._reachable_within_function(
-                    target,
-                    address,
-                    function_entry,
-                    following_entry,
+                null_arm = (
+                    target
+                    if candidate.mnemonic in {"je", "jz"}
+                    else fallthrough
+                    if candidate.mnemonic in {"jne", "jnz"}
+                    else None
                 )
-            ):
-                return _AbstractObjectIdentity("fresh-allocation", call_address)
+                if (
+                    live_arm is not None
+                    and null_arm is not None
+                    and self._reachable_within_function(
+                        live_arm,
+                        address,
+                        function_entry,
+                        following_entry,
+                    )
+                    and not self._reachable_within_function(
+                        null_arm,
+                        address,
+                        function_entry,
+                        following_entry,
+                    )
+                ):
+                    return _AbstractObjectIdentity(
+                        "fresh-allocation",
+                        call_address,
+                    )
             condition = None
         return None
 
@@ -37066,6 +37544,228 @@ class _DirectCfgRecovery:
             "|".join(details),
         )
 
+    def _closed_call_return_object_field_origin(
+        self,
+        call_address: int,
+        call_target: int,
+        caller_entry: int,
+        field: int,
+        constructor_entry: int,
+        descriptor_field: int,
+        validator: tuple[int, int],
+        visited: frozenset[tuple[int, str]],
+    ) -> _ClosedObjectOrigin | None:
+        """Trace a returned object field through every closed EAX return."""
+        self._note_producer_dependency(call_target)
+        key = (
+            call_address,
+            f"call-return-object-field:{call_target:#x}:{field:+#x}",
+        )
+        if key in visited or call_target not in self.function_addresses:
+            return None
+        following_entry = min(
+            (row for row in self.function_addresses if row > call_target),
+            default=0x1_0000_0000,
+        )
+        returns = tuple(
+            address
+            for address in self._function_instruction_addresses(call_target)
+            if self._owned_decoded(address).group(CS_GRP_RET)
+            and self._reachable_within_function(
+                call_target,
+                address,
+                call_target,
+                following_entry,
+            )
+        )
+        if not returns:
+            return None
+        next_visited = visited | {key}
+        origins = []
+        details = []
+        for return_address in returns:
+            definitions = self._register_definitions_across_blocks(
+                return_address,
+                "eax",
+                call_target,
+            )
+            if not definitions:
+                return None
+            return_origins = []
+            for definition_address in sorted(definitions):
+                definition = self._owned_decoded(definition_address)
+                is_zero = (
+                    definition.id == X86_INS_XOR
+                    and len(definition.operands) == 2
+                    and all(
+                        operand.type == X86_OP_REG
+                        and self._register_family(operand.reg) == "eax"
+                        for operand in definition.operands
+                    )
+                ) or (
+                    definition.id == X86_INS_MOV
+                    and len(definition.operands) == 2
+                    and definition.operands[0].type == X86_OP_REG
+                    and self._register_family(definition.operands[0].reg) == "eax"
+                    and definition.operands[1].type == X86_OP_IMM
+                    and definition.operands[1].imm & 0xFFFF_FFFF == 0
+                )
+                if is_zero:
+                    return_origins.append(
+                        _ClosedObjectOrigin(
+                            False,
+                            frozenset(),
+                            f"return={return_address:#x};nullable-zero",
+                        )
+                    )
+                    continue
+                if definition.group(CS_GRP_CALL):
+                    nested_target = self.direct_call_targets_by_source.get(
+                        definition_address
+                    )
+                    nested = (
+                        None
+                        if nested_target is None
+                        else self._closed_call_return_object_field_origin(
+                            definition_address,
+                            nested_target,
+                            call_target,
+                            field,
+                            constructor_entry,
+                            descriptor_field,
+                            validator,
+                            next_visited,
+                        )
+                    )
+                    if nested is None:
+                        return None
+                    return_origins.append(nested)
+                    continue
+                if not (
+                    definition.id == X86_INS_MOV
+                    and len(definition.operands) == 2
+                    and definition.operands[0].type == X86_OP_REG
+                    and self._register_family(definition.operands[0].reg) == "eax"
+                    and definition.operands[1].type == X86_OP_REG
+                ):
+                    return None
+                source_family = self._register_family(
+                    definition.operands[1].reg
+                )
+                source_clobbers = []
+                for candidate_address in self._function_instruction_addresses_between(
+                    call_target,
+                    definition_address + 1,
+                    return_address,
+                ):
+                    candidate = self._owned_decoded(candidate_address)
+                    if not (
+                        self._reachable_within_function(
+                            definition_address,
+                            candidate_address,
+                            call_target,
+                            following_entry,
+                        )
+                        and self._reachable_within_function(
+                            candidate_address,
+                            return_address,
+                            call_target,
+                            following_entry,
+                        )
+                    ):
+                        continue
+                    if (
+                        candidate.group(CS_GRP_CALL)
+                        and source_family in {"eax", "ecx", "edx"}
+                    ) or any(
+                        self._register_family(register) == source_family
+                        for register in candidate.regs_write
+                    ) or any(
+                        operand.type == X86_OP_REG
+                        and operand.access & CS_AC_WRITE
+                        and self._register_family(operand.reg) == source_family
+                        for operand in candidate.operands
+                    ):
+                        source_clobbers.append(candidate_address)
+                field_observation = return_address
+                if source_clobbers:
+                    if len(source_clobbers) != 1:
+                        return None
+                    source_clobber = source_clobbers[0]
+                    clobber = self._owned_decoded(source_clobber)
+                    if (
+                        clobber.group(CS_GRP_CALL)
+                        or any(
+                            operand.type == X86_OP_MEM
+                            and operand.access & CS_AC_WRITE
+                            for operand in clobber.operands
+                        )
+                        or self._reachable_within_function(
+                            definition_address,
+                            return_address,
+                            call_target,
+                            following_entry,
+                            excluded=source_clobber,
+                        )
+                    ):
+                        return None
+                    for tail_address in self._function_instruction_addresses_between(
+                        call_target,
+                        source_clobber + clobber.size,
+                        return_address,
+                    ):
+                        tail = self._owned_decoded(tail_address)
+                        if not (
+                            self._reachable_within_function(
+                                source_clobber,
+                                tail_address,
+                                call_target,
+                                following_entry,
+                            )
+                            and self._reachable_within_function(
+                                tail_address,
+                                return_address,
+                                call_target,
+                                following_entry,
+                            )
+                        ):
+                            continue
+                        if tail.group(CS_GRP_CALL) or any(
+                            operand.type == X86_OP_MEM
+                            and operand.access & CS_AC_WRITE
+                            for operand in tail.operands
+                        ):
+                            return None
+                    field_observation = source_clobber
+                origin = self._closed_object_field_origin(
+                    field_observation,
+                    source_family,
+                    call_target,
+                    field,
+                    constructor_entry,
+                    descriptor_field,
+                    validator,
+                    next_visited,
+                )
+                if origin is None:
+                    return None
+                return_origins.append(origin)
+            origins.extend(return_origins)
+            details.append(
+                f"return={return_address:#x}:"
+                + "|".join(origin.detail for origin in return_origins)
+            )
+        if not origins:
+            return None
+        return _ClosedObjectOrigin(
+            any(origin.has_target_constructor for origin in origins),
+            frozenset().union(
+                *(origin.rejected_tags for origin in origins)
+            ),
+            f"call={call_address:#x};target={call_target:#x};"
+            + "|".join(details),
+        )
+
     def _closed_object_field_origin(
         self,
         address: int,
@@ -37149,6 +37849,66 @@ class _DirectCfgRecovery:
                 f"field={field:+#x};store={dominating_object_write[0]:#x};{dominating_object_write[1].detail}",
             )
 
+        relevant_writes = []
+        if writes:
+            minimum_size = max(4, field + 4)
+            observation_identity = self._abstract_object_identity(
+                address,
+                base_family,
+                function_entry,
+                minimum_size,
+                False,
+                visited | {key},
+            )
+            if observation_identity is None:
+                return None
+            for write_address, origin in writes:
+                write_identity = self._abstract_object_identity(
+                    write_address,
+                    base_family,
+                    function_entry,
+                    minimum_size,
+                    False,
+                    visited | {key},
+                )
+                if write_identity is None:
+                    return None
+                if write_identity == observation_identity:
+                    relevant_writes.append((write_address, origin))
+            covering_addresses = frozenset(
+                write_address for write_address, _origin in relevant_writes
+            )
+            if covering_addresses and not self._reachable_within_function(
+                function_entry,
+                address,
+                function_entry,
+                following_entry,
+                excluded=covering_addresses,
+            ):
+                return _ClosedObjectOrigin(
+                    any(
+                        origin.has_target_constructor
+                        for _write_address, origin in relevant_writes
+                    ),
+                    frozenset().union(
+                        *(
+                            origin.rejected_tags
+                            for _write_address, origin in relevant_writes
+                        )
+                    ),
+                    "field="
+                    f"{field:+#x};branch-covering-writes="
+                    + ",".join(
+                        f"{write_address:#x}"
+                        for write_address, _origin in relevant_writes
+                    )
+                    + ";"
+                    + "|".join(
+                        origin.detail
+                        for _write_address, origin in relevant_writes
+                    ),
+                )
+
         argument_index = self._register_argument_index_across_blocks(
             address, base_family, function_entry
         )
@@ -37180,6 +37940,17 @@ class _DirectCfgRecovery:
                 frozenset().union(*(row.rejected_tags for row in origins)),
                 "|".join(row.detail for row in origins),
             )
+        if incoming is None and argument_index is None:
+            incoming = self._closed_registered_object_field_origin(
+                address,
+                base_family,
+                function_entry,
+                field,
+                constructor_entry,
+                descriptor_field,
+                validator,
+                visited | {key},
+            )
         if incoming is None:
             definitions = self._register_definitions_across_blocks(
                 address, base_family, function_entry
@@ -37189,6 +37960,28 @@ class _DirectCfgRecovery:
             definition_origins = []
             for definition_address in sorted(definitions):
                 definition = self._owned_decoded(definition_address)
+                if definition.group(CS_GRP_CALL) and base_family == "eax":
+                    target = self.direct_call_targets_by_source.get(
+                        definition_address
+                    )
+                    origin = (
+                        None
+                        if target is None
+                        else self._closed_call_return_object_field_origin(
+                            definition_address,
+                            target,
+                            function_entry,
+                            field,
+                            constructor_entry,
+                            descriptor_field,
+                            validator,
+                            visited | {key},
+                        )
+                    )
+                    if origin is None:
+                        return None
+                    definition_origins.append(origin)
+                    continue
                 if (
                     definition.id != X86_INS_MOV
                     or len(definition.operands) != 2
@@ -37213,9 +38006,31 @@ class _DirectCfgRecovery:
                 frozenset().union(*(row.rejected_tags for row in definition_origins)),
                 "|".join(row.detail for row in definition_origins),
             )
-        if any(not origin.has_target_constructor for _, origin in writes) and incoming is None:
+        if incoming is None:
             return None
-        return incoming
+        combined = [incoming] + [
+            origin for _write_address, origin in relevant_writes
+        ]
+        return _ClosedObjectOrigin(
+            any(origin.has_target_constructor for origin in combined),
+            frozenset().union(*(origin.rejected_tags for origin in combined)),
+            incoming.detail
+            + (
+                ""
+                if not relevant_writes
+                else ";field="
+                f"{field:+#x};reaching-writes="
+                + ",".join(
+                    f"{write_address:#x}"
+                    for write_address, _origin in relevant_writes
+                )
+                + ";"
+                + "|".join(
+                    origin.detail
+                    for _write_address, origin in relevant_writes
+                )
+            ),
+        )
 
     def _fixed_constructor_tag(self, function_entry: int, tag_field: int) -> int | None:
         """Return one immediate tag that dominates every constructor return."""

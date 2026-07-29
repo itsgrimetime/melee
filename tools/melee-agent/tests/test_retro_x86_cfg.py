@@ -16792,6 +16792,517 @@ def test_unknown_constructor_field_write_remains_blocking(tmp_path):
     assert any(row.address == 0x0040100B and row.kind == "indirect-flow" for row in cfg.control_targets.unresolved)
 
 
+def _branch_assigned_object_field_recovery(
+    *,
+    bypass_all_writes: bool = False,
+):
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    program = bytes.fromhex(
+        # test eax,eax; je join; [ecx+0xc]=ebx; jmp join;
+        # [ecx+0xc]=edx; esi=[ecx+0xc]; ret
+        "85c0740889590ceb0389510c8b710cc3"
+        if bypass_all_writes
+        else
+        # test eax,eax; je alternate; [ecx+0xc]=ebx; jmp join;
+        # alternate: [ecx+0xc]=edx; esi=[ecx+0xc]; ret
+        "85c0740589590ceb0389510c8b710cc3"
+    )
+    image = pe_mod.Image(
+        data=program,
+        sha256=hashlib.sha256(program).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(program),
+                len(program),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(program)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    return recovery, text_va + 0xC
+
+
+def test_closed_object_field_combines_branch_covering_writes(monkeypatch):
+    recovery, observation = _branch_assigned_object_field_recovery()
+
+    def object_origin(_address, operand, *_args):
+        family = recovery._register_family(operand.reg)
+        if family == "ebx":
+            return x86_cfg_module._ClosedObjectOrigin(
+                True,
+                frozenset(),
+                "target-constructor",
+            )
+        if family == "edx":
+            return x86_cfg_module._ClosedObjectOrigin(
+                False,
+                frozenset({0x436F6D70}),
+                "rejected-constructor",
+            )
+        return None
+
+    monkeypatch.setattr(
+        recovery,
+        "_closed_object_origin_operand",
+        object_origin,
+    )
+
+    result = recovery._closed_object_field_origin(
+        observation,
+        "ecx",
+        0x00401000,
+        0xC,
+        0x00402000,
+        0x134,
+        (0xA0, 0x50617273),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result.has_target_constructor
+    assert result.rejected_tags == frozenset({0x436F6D70})
+    assert "branch-covering-writes=0x401004,0x401009" in result.detail
+
+
+@pytest.mark.parametrize(
+    ("bypass_all_writes", "unknown_alternate"),
+    (
+        (True, False),
+        (False, True),
+    ),
+)
+def test_closed_object_field_rejects_open_branch_domain(
+    monkeypatch,
+    bypass_all_writes,
+    unknown_alternate,
+):
+    recovery, observation = _branch_assigned_object_field_recovery(
+        bypass_all_writes=bypass_all_writes,
+    )
+
+    def object_origin(_address, operand, *_args):
+        family = recovery._register_family(operand.reg)
+        if family == "ebx":
+            return x86_cfg_module._ClosedObjectOrigin(
+                True,
+                frozenset(),
+                "target-constructor",
+            )
+        if family == "edx" and not unknown_alternate:
+            return x86_cfg_module._ClosedObjectOrigin(
+                False,
+                frozenset({0x436F6D70}),
+                "rejected-constructor",
+            )
+        return None
+
+    monkeypatch.setattr(
+        recovery,
+        "_closed_object_origin_operand",
+        object_origin,
+    )
+
+    assert (
+        recovery._closed_object_field_origin(
+            observation,
+            "ecx",
+            0x00401000,
+            0xC,
+            0x00402000,
+            0x134,
+            (0xA0, 0x50617273),
+            frozenset(),
+        )
+        is None
+    )
+
+
+def test_closed_object_field_follows_closed_call_return(monkeypatch):
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    program = (
+        bytes.fromhex("e81b0000008b480cc3")
+        + b"\xCC" * 0x17
+        + b"\xC3"
+    )
+    image = pe_mod.Image(
+        data=program,
+        sha256=hashlib.sha256(program).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(program),
+                len(program),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(program)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    expected = x86_cfg_module._ClosedObjectOrigin(
+        True,
+        frozenset({0x436F6D70}),
+        "closed-call-return",
+    )
+    calls = []
+
+    def call_return_origin(
+        call_address,
+        call_target,
+        caller_entry,
+        field,
+        constructor_entry,
+        descriptor_field,
+        validator,
+        visited,
+    ):
+        calls.append(
+            (
+                call_address,
+                call_target,
+                caller_entry,
+                field,
+                constructor_entry,
+                descriptor_field,
+                validator,
+                visited,
+            )
+        )
+        return expected
+
+    monkeypatch.setattr(
+        recovery,
+        "_closed_call_return_object_field_origin",
+        call_return_origin,
+        raising=False,
+    )
+
+    result = recovery._closed_object_field_origin(
+        text_va + 5,
+        "eax",
+        text_va,
+        0xC,
+        0x00402000,
+        0x134,
+        (0xA0, 0x50617273),
+        frozenset(),
+    )
+
+    assert result == expected
+    assert calls == [
+        (
+            text_va,
+            text_va + 0x20,
+            text_va,
+            0xC,
+            0x00402000,
+            0x134,
+            (0xA0, 0x50617273),
+            frozenset({(text_va + 5, "object-field:eax:+0xc")}),
+        )
+    ]
+
+
+def test_closed_call_return_field_survives_epilogue_restore():
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    program = bytearray(b"\xCC" * 0x81)
+    program[0:6] = bytes.fromhex("e83b000000c3")
+    program[0x40:0x5E] = bytes.fromhex(
+        "556a10e83800000089c55985ed740b"
+        "c7450c0000000089e85dc331c05dc3"
+    )
+    program[0x80] = 0xC3
+    image = pe_mod.Image(
+        data=bytes(program),
+        sha256=hashlib.sha256(program).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(program),
+                len(program),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(program)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._closed_call_return_object_field_origin(
+        text_va,
+        text_va + 0x40,
+        text_va,
+        0xC,
+        0x00402000,
+        0x134,
+        (0xA0, 0x50617273),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert not result.has_target_constructor
+    assert result.rejected_tags == frozenset()
+    assert "branch-covering-writes=0x40104f" in result.detail
+
+
+def _registered_object_field_recovery(*, unknown_alternate=False):
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    head = 0x00402000
+    if unknown_alternate:
+        program = bytes.fromhex(
+            # ebx=[head]; test eax,eax; je observe; ebx=eax;
+            # observe: esi=[ebx+0xc]; ret
+            "8b1d0020400085c0740289c38b730cc3"
+        )
+        observation = text_va + 0xC
+    else:
+        program = bytes.fromhex(
+            # ebx=[head]; test ebx,ebx; je ret; ebp=[ebx+0x10];
+            # ebx=ebp; esi=[ebx+0xc]; ret
+            "8b1d0020400085db74088b6b1089eb8b730cc3"
+        )
+        observation = text_va + 0xF
+    image_bytes = program + b"\0\0\0\0"
+    image = pe_mod.Image(
+        data=image_bytes,
+        sha256=hashlib.sha256(image_bytes).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(program),
+                len(program),
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                head,
+                len(program),
+                4,
+                4,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(program)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    return recovery, observation, head
+
+
+def test_closed_object_field_follows_registered_list_node(monkeypatch):
+    recovery, observation, head = _registered_object_field_recovery()
+    expected = x86_cfg_module._ClosedObjectOrigin(
+        False,
+        frozenset(),
+        "registered-zero-field",
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_closed_object_field_registries",
+        lambda *_args: ((head, 0x10, 0x00403000, 0, expected),),
+    )
+
+    result = recovery._closed_registered_object_field_origin(
+        observation,
+        "ebx",
+        0x00401000,
+        0xC,
+        0x00402000,
+        0x134,
+        (0xA0, 0x50617273),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert not result.has_target_constructor
+    assert result.rejected_tags == frozenset()
+    assert "registered-head=0x402000" in result.detail
+
+
+def test_registered_list_field_rejects_unknown_alternate(monkeypatch):
+    recovery, observation, head = _registered_object_field_recovery(
+        unknown_alternate=True,
+    )
+    origin = x86_cfg_module._ClosedObjectOrigin(
+        False,
+        frozenset(),
+        "registered-zero-field",
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_closed_object_field_registries",
+        lambda *_args: ((head, 0x10, 0x00403000, 0, origin),),
+    )
+
+    assert (
+        recovery._closed_registered_object_field_origin(
+            observation,
+            "ebx",
+            0x00401000,
+            0xC,
+            0x00402000,
+            0x134,
+            (0xA0, 0x50617273),
+            frozenset(),
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("unknown_origin", (False, True))
+def test_closed_object_field_registry_requires_closed_publication(
+    monkeypatch,
+    unknown_origin,
+):
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    head = 0x00402000
+    program = bytes.fromhex(
+        # eax=arg0; esi=head; loop over [esi]+0x10; [esi]=eax; ret
+        "8b442404be00204000eb058b3683c6108b1685d275f58906c3"
+    )
+    image_bytes = program + b"\0\0\0\0"
+    image = pe_mod.Image(
+        data=image_bytes,
+        sha256=hashlib.sha256(image_bytes).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(program),
+                len(program),
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                head,
+                len(program),
+                4,
+                4,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(program)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    expected = x86_cfg_module._ClosedObjectOrigin(
+        False,
+        frozenset(),
+        "published-zero-field",
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_direct_call_domain_is_closed",
+        lambda function_entry: function_entry == text_va,
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_closed_object_field_origin",
+        lambda *_args: None if unknown_origin else expected,
+    )
+
+    result = recovery._closed_object_field_registries(
+        0xC,
+        0x00403000,
+        0x134,
+        (0xA0, 0x50617273),
+        frozenset(),
+    )
+
+    assert result == (
+        ()
+        if unknown_origin
+        else ((head, 0x10, text_va, 0, expected),)
+    )
+
+
 def test_validated_constructor_descriptor_proves_field_callback(tmp_path):
     cfg = dispatch_cfg(tmp_path, mode="validated-constructor-descriptor")
     edge = next(
@@ -19421,6 +19932,60 @@ def test_guarded_fresh_receiver_uses_direct_call_index():
     assert identity == _AbstractObjectIdentity(
         "fresh-allocation",
         image.entrypoint + 8,
+    )
+
+
+def test_guarded_fresh_receiver_accepts_taken_nonzero_arm():
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    program = (
+        bytes.fromhex("6a14e81900000089c585ed597501c3c3")
+        + b"\xCC" * 0x10
+        + b"\xC3"
+    )
+    image = pe_mod.Image(
+        data=program,
+        sha256=hashlib.sha256(program).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(program),
+                len(program),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(program)),),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    identity = recovery._guarded_fresh_receiver_identity(
+        text_va + 0xF,
+        text_va + 7,
+        "ebp",
+        text_va,
+        0x10,
+    )
+
+    assert identity == _AbstractObjectIdentity(
+        "fresh-allocation",
+        text_va + 2,
     )
 
 

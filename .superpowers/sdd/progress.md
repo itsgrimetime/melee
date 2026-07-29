@@ -159,6 +159,21 @@ candidates partitioned.
   974-test x86 CFG suite pass.  A fresh exact replay is still required to bind
   all publisher callers, allocator-session totality, and the two raw call
   sites that become owned only after graph expansion.
+- Constructor-field closure now combines collectively path-covering writes,
+  follows every nullable call-return field origin through a register-only
+  epilogue restore, and recognizes both arms of the retail nonzero allocation
+  guard.  The field proof remains fail-closed when a branch bypasses all
+  writes, a return is unknown, or a guarded arm admits an unknown receiver.
+- The remaining constructor input is now proved through the private
+  loader-zero intrusive registry rooted at `0x57d91c`.  The insertion cursor
+  is restricted to that head and node `+0x10` links, every published node
+  comes from the closed zero-field record constructor, and point-specific
+  nullable-node dataflow rejects an unknown alternate definition.  Hydrated
+  retail diagnostics prove `EBX` at `0x4098f6` has the registered zero-field
+  origin and that the field at `0x417546` has exactly the target `Pars`
+  constructor plus the already rejected `cldr`, `Comp`/`Link`, zero, and null
+  alternatives.  The 984-test CFG suite and 1,111-test adjacent Task 4 slice
+  are green; a fresh exact replay with this checkpoint is still required.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published
@@ -224,8 +239,8 @@ resolution, and final queue refresh.
 
 ## Current verification
 
-- `test_retro_x86_cfg.py`: 974 passed.
-- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,091 passed.
+- `test_retro_x86_cfg.py`: 984 passed.
+- Task 4 performance/CFG/backend/CLI/Ghidra slice: 1,111 passed.
 - Task 5/6 + CFG/PE: 589 passed.
 - Task 7 adjacent proof/runtime/CLI suites: 508 passed.
 - Task 8 focused/adjacent suites: 184 / 533 passed.
