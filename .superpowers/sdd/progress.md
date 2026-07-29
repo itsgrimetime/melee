@@ -6,8 +6,8 @@ Last reconciled: 2026-07-28, replacement root orchestration.
 
 - Tasks 1-3 remain complete at `ea3d1ca65..660606143`.
 - Branch: `codex/issue-1240-retail-pcode-proof`.
-- Current committed foundation: `921a19d7c`, plus the verified
-  finite-control optimization checkpoint.
+- Current committed foundation: `706d09df8`, the verified finite-control
+  optimization checkpoint.
 - The installed `gc_125n.json` PCode instrumentation gate is still disabled and
   the exact proof registry is still empty, as required before promotion.
 
@@ -28,13 +28,21 @@ candidates partitioned.
   checkpointed and the authoritative optimized exact replay is continuing.
 - Remaining families after those two close: global-stack, constructor,
   nested-descriptor, helper-return, and linked-list targets.
-- Full `test_retro_x86_cfg.py`: 945 passed. The adjacent Task 4 performance
-  slice is 1,072 passed with scoped static gates green.
+- Full `test_retro_x86_cfg.py`: 947 passed. The adjacent Task 4 performance
+  slice is now 1,074 passed with scoped static gates green.
 - The fourth exact continuation completed 128 queries in 3,232.45 seconds at
   5.27 GB maximum RSS with no swap, then exposed a further 24-query wave.
 - The retained finite-control indexes advanced the same 420-second profiled
   workload from pass 18 to pass 27. An unsafe partial stack-state cache was
   found by the full suite and removed before checkpointing.
+- The next comparable continuation completed 128 queries in 2,343.54 seconds:
+  888.91 seconds (27.5%) faster, or 1.38x throughput. The following four-query
+  continuation completed in 2,323.89 seconds, establishing a practical
+  current-architecture replay floor of about 38-40 minutes.
+- A clean producer-quiescent replay then reached final publication validation
+  in 2,425.01 seconds. All producer certificates were fresh, but 69 downstream
+  raw control transfers remain fail-closed. An exact diagnostic replay is
+  persisting their current details before the next proof-family repair.
 
 Task 4 is not complete until a fresh exact-hash raw/Ghidra replay has zero
 current blockers, an accepted reconciliation certificate, and a published

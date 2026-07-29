@@ -789,6 +789,13 @@ changes advanced the same 420-second workload from pass 18 to pass 27. A
 smaller attempted partial stack-state cache was removed after the full CFG
 suite exposed a stale semantic-closure result.
 
+The retained profile also showed 27,095,881 audited decoded-instruction
+lookups spending 48.04 cumulative profiled seconds. Trust cache hits that were
+already checked at insertion, while retaining the exact size/byte audit on
+every miss before reinsertion. The focused regression must prove that a hit
+performs no second byte conversion, and the existing eviction regression must
+prove that a miss still re-decodes and audits.
+
 - [ ] **Step 7: Run exact Task 4 closure twice** (in progress)
 
 Use the ordinary branch-local `probe-backend-map --static-only` workflow and

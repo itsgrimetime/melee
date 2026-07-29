@@ -18603,6 +18603,56 @@ def test_owned_instruction_reuses_audited_decode(tmp_path, monkeypatch):
     assert bytes(decoded.bytes).hex() == expected.bytes_hex
 
 
+def test_owned_instruction_trusts_audited_cached_decode(tmp_path):
+    image = load_dispatch_image(tmp_path, mode="copied-descriptor-registered-object")
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    address = 0x00401000
+    cached = recovery.decoded_instruction_cache[address]
+
+    class AuditedDecode:
+        @property
+        def size(self):
+            raise AssertionError("cached decode size was revalidated")
+
+        @property
+        def bytes(self):
+            raise AssertionError("cached decode bytes were revalidated")
+
+    audited = AuditedDecode()
+    recovery.decoded_instruction_cache[address] = audited
+
+    assert recovery._owned_decoded(address) is audited
+    recovery.decoded_instruction_cache[address] = cached
+
+
+def test_owned_instruction_audits_decode_after_eviction(tmp_path, monkeypatch):
+    image = load_dispatch_image(tmp_path, mode="copied-descriptor-registered-object")
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    address = 0x00401000
+    instruction = recovery.instructions[address]
+    recovery.decoded_instruction_cache.pop(address)
+
+    class ChangedDecode:
+        size = instruction.size
+        bytes = b"\0" * instruction.size
+
+    monkeypatch.setattr(recovery, "_decode_one", lambda _address: ChangedDecode())
+
+    with pytest.raises(CfgRecoveryError, match="owned instruction bytes changed"):
+        recovery._owned_decoded(address)
+    assert address not in recovery.decoded_instruction_cache
+
+
 def test_register_family_reuses_capstone_name_lookup(tmp_path, monkeypatch):
     image = load_dispatch_image(tmp_path, mode="copied-descriptor-registered-object")
     recovery = _DirectCfgRecovery(

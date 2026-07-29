@@ -38390,14 +38390,14 @@ class _DirectCfgRecovery:
 
     def _owned_decoded(self, address: int):
         decoded = self.decoded_instruction_cache.get(address)
-        if decoded is None:
-            decoded = self._decode_one(address)
-            self._cache_decoded_instruction(decoded)
-        else:
+        if decoded is not None:
             self.decoded_instruction_cache.move_to_end(address)
+            return decoded
+        decoded = self._decode_one(address)
         instruction = self.instructions[address]
         if decoded.size != instruction.size or bytes(decoded.bytes).hex() != instruction.bytes_hex:
             raise CfgRecoveryError(f"owned instruction bytes changed at {address:#x}")
+        self._cache_decoded_instruction(decoded)
         return decoded
 
     def _cache_decoded_instruction(self, decoded) -> None:

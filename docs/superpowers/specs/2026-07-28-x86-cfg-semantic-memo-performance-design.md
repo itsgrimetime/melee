@@ -231,6 +231,22 @@ was rejected: the complete x86 CFG suite demonstrated that call closure can
 change without the proposed structural cache key changing. The original
 fail-safe behavior remains.
 
+### Audited decoded-instruction cache hits
+
+The retained 420-second profile also recorded 27,095,881 calls to
+`_owned_decoded`, with 48.04 cumulative seconds spent retrieving an
+instruction and rechecking its size and byte string. Every cache entry is
+already checked when it is first claimed from the immutable PE image, or when
+an evicted entry is decoded again. Repeating the same conversion and
+comparison on every hit adds no new evidence.
+
+Trust an instruction while it remains in the private decoded-instruction
+cache. Preserve the full size and byte check on every cache miss before the
+new decode is inserted. A same-process microbenchmark of two million cached
+lookups reduced the best lookup cost from 568.2 ns to 142.9 ns (4.0x). The
+instruction record, image bytes, cache eviction behavior, and all proof
+artifacts remain unchanged.
+
 ## Correctness Invariants
 
 - Cache-disabled, cold-cache, warm-cache, and evicted-cache runs return equal
