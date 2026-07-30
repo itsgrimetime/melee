@@ -440,6 +440,242 @@ def fresh_global_scratch_list_transformer_image(
     return image, observation
 
 
+def heap_context_global_restore_image(*, mutation=None):
+    """Save one global pointer in a fresh node on a closed global list."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {
+        None,
+        "payload-clobber",
+        "node-call-escape",
+        "reader-clobber",
+        "returned-context-helper",
+        "missing-tail",
+        "multiple-node-arms",
+        "multiple-restore-loads",
+        "nullable-node-arm",
+        "optional-restore",
+        "wrong-restore-field",
+    }
+    text_va = 0x00401000
+    data_va = 0x00403000
+    head_slot = data_va
+    tail_slot = data_va + 4
+    current_slot = data_va + 8
+    escape_slot = data_va + 0xC
+    data = bytearray(0x500)
+    text = memoryview(data)[:0x300]
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (
+            text_va + offset + 5
+        )
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    def patch_short(branch, target):
+        displacement = target - (branch + 2)
+        assert -0x80 <= displacement <= 0x7F
+        text[branch + 1] = displacement & 0xFF
+
+    cursor = emit(0, "53 6a 0e")
+    allocation_call = text_va + cursor
+    cursor = emit_call(cursor, 0x180)
+    cursor = emit(cursor, "59 85 c0")
+    failure_branch = cursor
+    cursor = emit(cursor, "74 00")
+    cursor = emit(cursor, "89 c3")
+    second_failure_branch = None
+    if mutation == "multiple-node-arms":
+        cursor = emit(cursor, "83 3d 08 30 40 00 00")
+        keep_first_node = cursor
+        cursor = emit(cursor, "74 00 6a 0e")
+        cursor = emit_call(cursor, 0x180)
+        cursor = emit(cursor, "59 85 c0")
+        second_failure_branch = cursor
+        cursor = emit(cursor, "74 00 89 c3")
+        patch_short(keep_first_node, cursor)
+    cursor = emit(cursor, "83 3d 00 30 40 00 00")
+    empty_branch = cursor
+    cursor = emit(cursor, "74 00")
+    cursor = emit(cursor, "a1 04 30 40 00 89 18")
+    cursor = emit(cursor, "89 1d 04 30 40 00")
+    join_branch = cursor
+    cursor = emit(cursor, "eb 00")
+    empty_publication = cursor
+    cursor = emit(cursor, "89 1d 00 30 40 00")
+    if mutation != "missing-tail":
+        cursor = emit(cursor, "89 1d 04 30 40 00")
+    joined = cursor
+    # A local spill/reload retains the node identity without publishing it.
+    cursor = emit(cursor, "83 ec 04 89 1c 24 8b 14 24 83 c4 04")
+    # The retail publisher reuses the low half of a register that previously
+    # held the node pointer.  The word store cannot publish the full pointer.
+    cursor = emit(cursor, "89 d8 66 a1 10 30 40 00 66 89 43 0c")
+    cursor = emit(cursor, "a1 08 30 40 00 89 43 04")
+    if mutation == "payload-clobber":
+        cursor = emit(cursor, "c7 43 04 00 00 00 00")
+    if mutation == "returned-context-helper":
+        cursor = emit_call(cursor, 0x100)
+        cursor = emit(cursor, "89 d8 5b c3")
+        clean_return = cursor
+        failure = cursor
+        emit(cursor, "eb fe")
+        restore_address = 0
+    else:
+        if mutation == "node-call-escape":
+            cursor = emit(cursor, "53")
+            cursor = emit_call(cursor, 0x140)
+            cursor = emit(cursor, "59")
+        optional_restore_branch = None
+        if mutation == "optional-restore":
+            cursor = emit(cursor, "83 3d 08 30 40 00 00")
+            optional_restore_branch = cursor
+            cursor = emit(cursor, "74 00")
+        nullable_restore_branch = None
+        if mutation == "nullable-node-arm":
+            cursor = emit(cursor, "83 3d 08 30 40 00 00")
+            nonzero_node_branch = cursor
+            cursor = emit(cursor, "75 02 31 db 85 db")
+            patch_short(nonzero_node_branch, nonzero_node_branch + 4)
+            nullable_restore_branch = cursor
+            cursor = emit(cursor, "74 00")
+        restore_load_field = 8 if mutation == "wrong-restore-field" else 4
+        if mutation == "multiple-restore-loads":
+            cursor = emit(cursor, f"8b 43 {restore_load_field:02x}")
+            cursor = emit(cursor, "83 3d 08 30 40 00 00")
+            keep_first_restore = cursor
+            cursor = emit(cursor, f"74 03 8b 42 {restore_load_field:02x}")
+            patch_short(keep_first_restore, cursor)
+        else:
+            restore_base = 0x43 if mutation == "nullable-node-arm" else 0x42
+            cursor = emit(cursor, f"8b {restore_base:02x} {restore_load_field:02x}")
+        restore_address = text_va + cursor
+        cursor = emit(cursor, "a3 08 30 40 00")
+        if optional_restore_branch is not None:
+            patch_short(optional_restore_branch, cursor)
+        if nullable_restore_branch is not None:
+            patch_short(nullable_restore_branch, cursor)
+        cursor = emit_call(cursor, 0x100)
+        clean_return = cursor
+        cursor = emit(cursor, "5b c3")
+        failure = cursor
+        emit(cursor, "eb fe")
+
+    patch_short(failure_branch, failure)
+    if second_failure_branch is not None:
+        patch_short(second_failure_branch, failure)
+    patch_short(empty_branch, empty_publication)
+    patch_short(join_branch, joined)
+
+    # A complete list reader may inspect, but not mutate, the saved field.
+    cursor = emit(0x100, "a1 04 30 40 00 85 c0")
+    reader_empty = cursor
+    cursor = emit(cursor, "74 00")
+    if mutation == "reader-clobber":
+        cursor = emit(cursor, "89 48 04")
+    else:
+        cursor = emit(cursor, "83 78 04 00")
+    reader_return = cursor
+    cursor = emit(cursor, "31 c0 c3")
+    patch_short(reader_empty, reader_return)
+
+    # Hostile sink publishes the fresh node outside the closed list.
+    emit(0x140, "8b 44 24 04 a3 0c 30 40 00 c3")
+
+    # Retail-shaped fixed bump allocator and inert grow helper.
+    cursor = emit(
+        0x180,
+        "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08"
+        "39 1d 20 30 40 00 7d 0d 53"
+        "68 28 30 40 00",
+    )
+    cursor = emit_call(cursor, 0x1F0)
+    emit(
+        cursor,
+        "59 59 29 1d 20 30 40 00"
+        "a1 24 30 40 00 01 1d 24 30 40 00 5b c3",
+    )
+    emit(0x1F0, "c3")
+
+    entrypoint = text_va
+    if mutation == "returned-context-helper":
+        cursor = emit_call(0x220, 0)
+        cursor = emit(cursor, "50")
+        cursor = emit_call(cursor, 0x260)
+        emit(cursor, "59 c3")
+        cursor = emit(0x260, "8b 4c 24 04 8b 41 04")
+        restore_address = text_va + cursor
+        emit(cursor, "a3 08 30 40 00 c3")
+        entrypoint = text_va + 0x220
+
+    struct.pack_into("<I", data, 0x320, 0x1000)
+    struct.pack_into("<I", data, 0x324, data_va + 0x100)
+    relocation_values = {
+        head_slot,
+        tail_slot,
+        current_slot,
+        escape_slot,
+        data_va + 0x10,
+        data_va + 0x20,
+        data_va + 0x24,
+        data_va + 0x28,
+    }
+    relocations = []
+    text_bytes = bytes(text)
+    for value in sorted(relocation_values):
+        needle = struct.pack("<I", value)
+        start = 0
+        while (offset := text_bytes.find(needle, start)) != -1:
+            relocations.append(pe_mod.Relocation(text_va + offset, 3))
+            start = offset + 1
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=entrypoint,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0x300,
+                0x300,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                0x300,
+                0x200,
+                0x200,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(relocations),
+        executable_ranges=((text_va, text_va + 0x300),),
+    )
+    assert clean_return < 0x100
+    return image, allocation_call, restore_address, current_slot
+
+
 def fresh_tail_append_transformer_image(*, mutation=None):
     """Append one fresh node to an argument-owned intrusive list."""
     from tools.mwcc_retro import pe as pe_mod
@@ -3099,6 +3335,81 @@ def guarded_call_return_object_origins_image(
     return image, factory_call, consumer_call, observation
 
 
+def nonnull_filtered_optional_call_return_image(*, mutation=None):
+    """Copy an optional call result through a closed non-null branch."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {None, "intervening-call", "null-arm-reaches-use"}
+    text_va = 0x00401000
+    data = bytearray(0x100)
+    text = memoryview(data)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (text_va + offset + 5)
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    # entry(): initialize a readable stack object, call a helper that may
+    # return it or null, copy EAX to EBX, and use EBX only on the non-null arm.
+    cursor = emit(0, "83 ec 10 c6 04 24 29 8d 04 24 50")
+    cursor = emit_call(cursor, 0x80)
+    cursor = emit(cursor, "89 c3 83 c4 04")
+    if mutation == "intervening-call":
+        cursor = emit_call(cursor, 0xC0)
+    cursor = emit(cursor, "85 db 74 00")
+    branch_offset = cursor - 1
+    observation = text_va + cursor
+    cursor = emit(cursor, "0f b6 03 83 c4 10 c3")
+    failure = cursor
+    emit(cursor, "83 c4 10 c3")
+    branch_target = (
+        observation - text_va
+        if mutation == "null-arm-reaches-use"
+        else failure
+    )
+    text[branch_offset] = (branch_target - (observation - text_va)) & 0xFF
+
+    # optional(arg0): return the exact argument or null on distinct RETs.
+    emit(0x80, "8b 44 24 04 85 c9 74 01 c3 31 c0 c3")
+    emit(0xC0, "c3")
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+    return image, observation
+
+
 def guarded_recursive_call_return_object_image(
     *,
     terminal_tag=4,
@@ -3787,7 +4098,450 @@ def exact_call_global_object_slot_image(mode):
     return image, observation
 
 
-def affine_byte_range_merge_image(*, overwrite_after_load=False):
+def return_filtered_readable_global_effect_image():
+    """Write an open global only on one callee's zero-return arm."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data_va = 0x00403000
+    data = bytearray(0x200)
+    relocation_offsets = []
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        data[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        data[offset] = 0xE8
+        displacement = (text_va + target_offset) - (
+            text_va + offset + 5
+        )
+        data[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    call_address = text_va
+    cursor = emit_call(0, 0x40)
+    cursor = emit(cursor, "85 c0")
+    failure_branch = cursor
+    cursor = emit(cursor, "74 00")
+    observation = text_va + cursor
+    cursor = emit(cursor, "a1 00 30 40 00 c3")
+    relocation_offsets.append(observation - text_va + 1)
+    failure = cursor
+    emit(cursor, "c3")
+    data[failure_branch + 1] = failure - (failure_branch + 2)
+
+    cursor = emit(0x40, "85 c9")
+    zero_branch = cursor
+    cursor = emit(cursor, "74 00")
+    cursor = emit(cursor, "b8 01 00 00 00 c3")
+    zero_arm = cursor
+    cursor = emit(cursor, "89 0d 00 30 40 00 31 c0 c3")
+    relocation_offsets.append(zero_arm + 2)
+    data[zero_branch + 1] = zero_arm - (zero_branch + 2)
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0x100,
+                0x100,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                0x100,
+                0x100,
+                0x100,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(
+            pe_mod.Relocation(text_va + offset, 3)
+            for offset in relocation_offsets
+        ),
+        executable_ranges=((text_va, text_va + 0x100),),
+    )
+    return image, call_address, text_va + 0x40, observation, data_va
+
+
+def forwarded_return_filtered_readable_global_effect_image(
+    mode,
+    *,
+    zero_call_can_succeed=False,
+):
+    """Forward one nested success result through a callee return shape."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mode in {"movzx", "boolean"}
+    text_va = 0x00401000
+    data_va = 0x00403000
+    data = bytearray(0x200)
+    relocation_offsets = []
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        data[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        data[offset] = 0xE8
+        displacement = (text_va + target_offset) - (
+            text_va + offset + 5
+        )
+        data[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    outer_call = text_va
+    emit_call(0, 0x40)
+    emit(5, "c3")
+
+    cursor = 0x40
+    if mode == "boolean":
+        cursor = emit(cursor, "53 31 db")
+    nested_call = text_va + cursor
+    cursor = emit_call(cursor, 0x80)
+    if mode == "movzx":
+        emit(cursor, "0f b6 c0 c3")
+    else:
+        cursor = emit(cursor, "84 c0")
+        zero_branch = cursor
+        cursor = emit(cursor, "74 00")
+        cursor = emit(cursor, "b3 01")
+        if zero_call_can_succeed:
+            tail_jump = cursor
+            cursor = emit(cursor, "eb 00")
+            zero_handler = cursor
+            cursor = emit(cursor, "b3 01")
+            tail = cursor
+            data[zero_branch + 1] = zero_handler - (
+                zero_branch + 2
+            )
+            data[tail_jump + 1] = tail - (tail_jump + 2)
+        else:
+            tail = cursor
+            data[zero_branch + 1] = tail - (zero_branch + 2)
+        cursor = emit(cursor, "31 c0 84 db")
+        return_branch = cursor
+        cursor = emit(cursor, "74 00")
+        cursor = emit(cursor, "40")
+        return_address = cursor
+        emit(cursor, "5b c3")
+        data[return_branch + 1] = return_address - (
+            return_branch + 2
+        )
+
+    cursor = emit(0x80, "85 c9")
+    zero_branch = cursor
+    cursor = emit(cursor, "74 00")
+    cursor = emit(cursor, "b8 01 00 00 00 c3")
+    zero_arm = cursor
+    emit(cursor, "89 0d 00 30 40 00 31 c0 c3")
+    relocation_offsets.append(zero_arm + 2)
+    data[zero_branch + 1] = zero_arm - (zero_branch + 2)
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0x100,
+                0x100,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                0x100,
+                0x100,
+                0x100,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(
+            pe_mod.Relocation(text_va + offset, 3)
+            for offset in relocation_offsets
+        ),
+        executable_ranges=((text_va, text_va + 0x100),),
+    )
+    return image, outer_call, text_va + 0x40, nested_call, data_va
+
+
+def fallback_return_filtered_readable_global_effect_image(
+    *,
+    overwrite_fallback_result=False,
+):
+    """Return either an earlier result or one fallback call's result."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data_va = 0x00403000
+    data = bytearray(0x200)
+    relocation_offsets = []
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        data[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        data[offset] = 0xE8
+        displacement = (text_va + target_offset) - (
+            text_va + offset + 5
+        )
+        data[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    outer_call = text_va
+    emit_call(0, 0x40)
+    emit(5, "c3")
+
+    cursor = emit(0x40, "57")
+    cursor = emit_call(cursor, 0xC0)
+    cursor = emit(cursor, "89 c7 85 ff")
+    success_branch = cursor
+    cursor = emit(cursor, "75 00")
+    fallback_call = text_va + cursor
+    cursor = emit_call(cursor, 0x80)
+    cursor = emit(cursor, "89 c7")
+    cursor = emit(cursor, "85 ff")
+    zero_fallback_branch = cursor
+    cursor = emit(cursor, "74 00")
+    guarded_observation = text_va + cursor
+    cursor = emit(cursor, "85 db 75 02 31 ff")
+    data[zero_fallback_branch + 1] = cursor - (
+        zero_fallback_branch + 2
+    )
+    if overwrite_fallback_result:
+        cursor = emit(cursor, "89 d7")
+    return_move = cursor
+    cursor = emit(cursor, "89 f8 5f c3")
+    data[success_branch + 1] = return_move - (success_branch + 2)
+
+    cursor = emit(0x80, "85 c9")
+    zero_branch = cursor
+    cursor = emit(cursor, "74 00")
+    cursor = emit(cursor, "b8 01 00 00 00 c3")
+    zero_arm = cursor
+    emit(cursor, "89 0d 00 30 40 00 31 c0 c3")
+    relocation_offsets.append(zero_arm + 2)
+    data[zero_branch + 1] = zero_arm - (zero_branch + 2)
+
+    emit(0xC0, "89 c8 c3")
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0x100,
+                0x100,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                0x100,
+                0x100,
+                0x100,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(
+            pe_mod.Relocation(text_va + offset, 3)
+            for offset in relocation_offsets
+        ),
+        executable_ranges=((text_va, text_va + 0x100),),
+    )
+    return (
+        image,
+        outer_call,
+        text_va + 0x40,
+        fallback_call,
+        guarded_observation,
+        text_va + return_move + 3,
+        data_va,
+    )
+
+
+def nested_argument_readable_global_effect_image(
+    *,
+    initialize_nested_byte=True,
+    guarded_nested_read=False,
+    spilled_guard=False,
+    disjoint_nested_mutation=False,
+    affine_disjoint_mutation=False,
+    root_tag=None,
+):
+    """Publish one object reached through a caller argument's pointer field."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data_va = 0x00403000
+    data = bytearray(0x200)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        data[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        data[offset] = 0xE8
+        displacement = (text_va + target_offset) - (
+            text_va + offset + 5
+        )
+        data[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10")
+    if root_tag is not None:
+        cursor = emit(cursor, f"c6 04 24 {root_tag:02x}")
+    if initialize_nested_byte:
+        cursor = emit(cursor, "c6 44 24 0c 2a")
+    cursor = emit(cursor, "8d 44 24 0c 89 44 24 08")
+    cursor = emit(cursor, "8d 04 24 50")
+    outer_call = text_va + cursor
+    cursor = emit_call(cursor, 0x40)
+    cursor = emit(cursor, "59")
+    cursor = emit_call(cursor, 0xE0)
+    emit(cursor, "83 c4 10 c3")
+
+    cursor = emit(0x40, "8b 44 24 04 50")
+    cursor = emit_call(cursor, 0x80)
+    emit(cursor, "59 c3")
+
+    if spilled_guard:
+        cursor = emit(0x80, "83 ec 04 8b 44 24 08")
+        if disjoint_nested_mutation:
+            if affine_disjoint_mutation:
+                cursor = emit(
+                    cursor,
+                    "0f b6 08 83 e9 04 75 07 "
+                    "c7 40 08 00 00 00 00",
+                )
+            else:
+                cursor = emit(
+                    cursor,
+                    "80 38 04 75 07 c7 40 08 00 00 00 00",
+                )
+        cursor = emit(
+            cursor,
+            "8a 10 89 14 24 80 3c 24 43 75 0a",
+        )
+    else:
+        cursor = emit(0x80, "8b 44 24 04")
+    if guarded_nested_read and not spilled_guard:
+        cursor = emit(cursor, "80 38 43 75 0a")
+    cursor = emit(cursor, "8b 40 08 50")
+    nested_call = text_va + cursor
+    cursor = emit_call(cursor, 0xC0)
+    cursor = emit(cursor, "59")
+    if spilled_guard:
+        cursor = emit(cursor, "83 c4 04")
+    emit(cursor, "c3")
+
+    cursor = emit(0xC0, "8b 44 24 04")
+    writer = text_va + cursor
+    emit(cursor, "a3 00 30 40 00 c3")
+
+    cursor = emit(0xE0, "b8 ef be ad de 50")
+    cursor = emit_call(cursor, 0x40)
+    emit(cursor, "59 c3")
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0x100,
+                0x100,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                0x100,
+                0x100,
+                0x100,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(pe_mod.Relocation(writer + 1, 3),),
+        executable_ranges=((text_va, text_va + 0x100),),
+    )
+    return image, outer_call, text_va + 0x40, nested_call, data_va
+
+
+def affine_byte_range_merge_image(
+    *,
+    overwrite_after_load=False,
+    mutate_merged_field=False,
+    relink_merged_pointer=False,
+    return_merged_pointer=False,
+):
     """Route one loaded object tag through merged affine range arms."""
     from tools.mwcc_retro import pe as pe_mod
 
@@ -3800,17 +4554,46 @@ def affine_byte_range_merge_image(*, overwrite_after_load=False):
         text[offset : offset + len(encoded)] = encoded
         return offset + len(encoded)
 
-    cursor = emit(0, "55 8b 6c 24 08 0f b6 45 00")
+    assert not relink_merged_pointer or mutate_merged_field
+    assert not return_merged_pointer or relink_merged_pointer
+    cursor = emit(0, "55 8b 6c 24 08")
+    dispatch = cursor
+    cursor = emit(cursor, "0f b6 45 00")
     if overwrite_after_load:
         cursor = emit(cursor, "c6 45 00 77")
     cursor = emit(cursor, "83 e8 02 83 f8 01 76 00")
     first_range_branch = cursor - 2
     cursor = emit(cursor, "83 e8 1c 83 f8 0b 76 00")
     second_range_branch = cursor - 2
-    default_move = cursor
-    cursor = emit(cursor, "89 e8 c3")
-    merged_move = cursor
-    cursor = emit(cursor, "89 e8 c3")
+    if mutate_merged_field:
+        default_move = cursor
+        cursor = emit(cursor, "eb 00")
+        merged_move = cursor
+        cursor = emit(cursor, "c6 45 08 7f")
+        if relink_merged_pointer:
+            cursor = emit(cursor, "8b 6d 04 e9 00 00 00 00")
+            displacement = dispatch - cursor
+            text[cursor - 4 : cursor] = displacement.to_bytes(
+                4,
+                "little",
+                signed=True,
+            )
+        if return_merged_pointer:
+            default_target = cursor
+            cursor = emit(cursor, "89 e8")
+            observation = cursor
+            cursor = emit(cursor, "c3")
+        else:
+            observation = cursor
+            default_target = observation
+            cursor = emit(cursor, "8a 45 08 c3")
+        text[default_move + 1] = default_target - (default_move + 2)
+    else:
+        default_move = cursor
+        cursor = emit(cursor, "89 e8 c3")
+        merged_move = cursor
+        cursor = emit(cursor, "89 e8 c3")
+        observation = default_move + 2
     for branch in (first_range_branch, second_range_branch):
         text[branch + 1] = merged_move - (branch + 2)
 
@@ -3833,7 +4616,7 @@ def affine_byte_range_merge_image(*, overwrite_after_load=False):
         relocations=(),
         executable_ranges=((text_va, text_va + len(data)),),
     )
-    return image, text_va + default_move + 2, text_va + merged_move + 2
+    return image, text_va + observation, text_va + merged_move + 2
 
 
 def guarded_outparam_object_origins_image(
@@ -4455,6 +5238,8 @@ def paired_global_fresh_publication_image(
     append_link=False,
     guard_before_load=False,
     guard_intervening_call=False,
+    checked_allocation=True,
+    bypass_dereference=False,
 ):
     """Publish one initialized fresh object to two loader-zero globals."""
     from tools.mwcc_retro import pe as pe_mod
@@ -4482,8 +5267,15 @@ def paired_global_fresh_publication_image(
     cursor = emit(0, "6a 1a")
     allocation_call = text_va + cursor
     cursor = emit_call(cursor, 0x100)
-    cursor = emit(cursor, "59 85 c0 74 00")
-    failure_branch = cursor - 2
+    cursor = emit(cursor, "59")
+    failure_branch = None
+    dereference_bypass = None
+    if checked_allocation:
+        cursor = emit(cursor, "85 c0 74 00")
+        failure_branch = cursor - 2
+    elif bypass_dereference:
+        cursor = emit(cursor, "83 3d 08 30 40 00 00 74 00")
+        dereference_bypass = cursor - 2
     cursor = emit(cursor, "c6 40 04 29")
     if append_link:
         if guard_before_load:
@@ -4499,6 +5291,10 @@ def paired_global_fresh_publication_image(
                 "8b 0d 04 30 40 00 85 c9 74 04 89 01 eb 05",
             )
     first_publication = text_va + cursor
+    if dereference_bypass is not None:
+        text[dereference_bypass + 1] = (
+            cursor - (dereference_bypass + 2)
+        ) & 0xFF
     if append_link and guard_before_load:
         text[zero_branch + 1] = (
             cursor - (zero_branch + 2)
@@ -4510,9 +5306,10 @@ def paired_global_fresh_publication_image(
     cursor = emit(cursor, "a3 04 30 40 00 c3")
     failure = 0x40
     emit(failure, "eb fe")
-    text[failure_branch + 1] = (
-        failure - (failure_branch + 2)
-    ) & 0xFF
+    if failure_branch is not None:
+        text[failure_branch + 1] = (
+            failure - (failure_branch + 2)
+        ) & 0xFF
 
     # Exact owned bump allocator shape with a locally guarded result.
     cursor = emit(
@@ -5539,6 +6336,7 @@ def global_append_tail_pointee_image(*, mutation=None):
 
     assert mutation in {
         None,
+        "argument-discriminator",
         "foreign-global-write",
         "out-of-scope-global-write",
         "missing-root-zero",
@@ -5547,12 +6345,24 @@ def global_append_tail_pointee_image(*, mutation=None):
         "unselected-unknown-payload",
         "unknown-payload-overwrite",
         "unknown-payload",
+        "unknown-discriminator",
         "unselected-clone",
         "selected-clone",
+        "selected-clone-finite-payload",
+        "selected-clone-finite-payload-rewrite",
+        "selected-clone-unknown-payload-rewrite",
         "unrelated-root-caller",
         "selected-empty-association",
         "selected-overwritten-empty-association",
         "consumer-post-observation-global-write",
+        "distinct-association-field",
+        "fault-barrier-bypass",
+        "fault-barrier-only",
+        "missing-link-zero",
+        "postpublication-global-reload",
+        "postpublication-global-reload-after-call",
+        "postpublication-global-reload-after-replacement",
+        "relocated-reader-finite-association",
     }
     text_va = 0x00401000
     rdata_va = 0x00402000
@@ -5583,11 +6393,21 @@ def global_append_tail_pointee_image(*, mutation=None):
         cursor = emit(offset, "83 ec 30 8d 44 24 08 50")
         cursor = emit_call(cursor, 0x1C0)
         cursor = emit(cursor, f"83 c4 04 c6 04 24 {tag:02x}")
-        cursor = emit(cursor, "8d 04 24 50")
+        cursor = emit(cursor, "8d 04 24")
+        if mutation == "argument-discriminator":
+            cursor = emit(cursor, f"6a {tag:02x}")
+        cursor = emit(cursor, "50")
         append_target = (
             0x260
             if (
-                mutation in {"unselected-clone", "selected-clone"}
+                mutation
+                in {
+                    "unselected-clone",
+                    "selected-clone",
+                    "selected-clone-finite-payload",
+                    "selected-clone-finite-payload-rewrite",
+                    "selected-clone-unknown-payload-rewrite",
+                }
                 and tag == 74
             )
             or (
@@ -5601,13 +6421,25 @@ def global_append_tail_pointee_image(*, mutation=None):
             else 0x200
         )
         cursor = emit_call(cursor, append_target)
-        cursor = emit(cursor, "83 c4 04")
+        cursor = emit(
+            cursor,
+            (
+                "83 c4 08"
+                if mutation == "argument-discriminator"
+                else "83 c4 04"
+            ),
+        )
         if mutation == "unselected-unknown-payload" and tag == 0:
             cursor = emit(cursor, "52")
             cursor = emit_call(cursor, 0x260)
             cursor = emit(cursor, "59")
         if mutation == "foreign-global-write" and tag == 0:
             cursor = emit_call(cursor, 0x3E0)
+        if (
+            mutation == "relocated-reader-finite-association"
+            and tag == 0
+        ):
+            cursor = emit_call(cursor, 0x3A0)
         cursor = emit(cursor, "8d 44 24 08 50")
         cursor = emit_call(cursor, 0x140)
         return emit(cursor, "83 c4 04 83 c4 30 c3")
@@ -5654,21 +6486,74 @@ def global_append_tail_pointee_image(*, mutation=None):
     # tag, connect the old global tail, advance the tail, and publish payload.
     cursor = emit(0x200, "53 6a 1a")
     cursor = emit_call(cursor, 0x300)
-    cursor = emit(cursor, "59 89 c3 85 db")
-    failure_branch = cursor
-    initial_tag = 6 if mutation in {"unselected-clone", "selected-clone"} else 5
-    cursor = emit(
-        cursor,
-        f"74 00 c7 03 00 00 00 00 c6 43 04 {initial_tag:02x}",
+    cursor = emit(cursor, "59 89 c3")
+    failure_branch = None
+    bypass_dereference_branch = None
+    if mutation == "fault-barrier-bypass":
+        cursor = emit(cursor, "80 3d 00 30 40 00 00")
+        bypass_dereference_branch = cursor
+        cursor = emit(cursor, "74 00")
+    elif mutation != "fault-barrier-only":
+        cursor = emit(cursor, "85 db")
+        failure_branch = cursor
+        cursor = emit(cursor, "74 00")
+    initial_tag = (
+        6
+        if mutation
+        in {
+            "unselected-clone",
+            "selected-clone",
+            "selected-clone-finite-payload",
+            "selected-clone-finite-payload-rewrite",
+            "selected-clone-unknown-payload-rewrite",
+        }
+        else 5
     )
+    if mutation != "missing-link-zero":
+        cursor = emit(cursor, "c7 03 00 00 00 00")
+    if mutation == "argument-discriminator":
+        cursor = emit(cursor, "8b 4c 24 0c 88 4b 04")
+    elif mutation == "unknown-discriminator":
+        cursor = emit(cursor, "88 53 04")
+    else:
+        cursor = emit(cursor, f"c6 43 04 {initial_tag:02x}")
+    if bypass_dereference_branch is not None:
+        text[bypass_dereference_branch + 1] = (
+            cursor - (bypass_dereference_branch + 2)
+        )
     cursor = emit(cursor, "a1 00 30 40 00")
     if mutation != "missing-link":
         cursor = emit(cursor, "89 18")
     cursor = emit(cursor, "89 1d 00 30 40 00")
-    if mutation in {"unknown-payload", "unselected-clone", "selected-clone"}:
+    if mutation in {
+        "postpublication-global-reload",
+        "postpublication-global-reload-after-call",
+        "postpublication-global-reload-after-replacement",
+    }:
+        if mutation == "postpublication-global-reload-after-call":
+            cursor = emit_call(cursor, 0x3C0)
+        elif (
+            mutation
+            == "postpublication-global-reload-after-replacement"
+        ):
+            cursor = emit(cursor, "89 15 00 30 40 00")
+        cursor = emit(
+            cursor,
+            "a1 00 30 40 00 8b 54 24 08 89 50 0a",
+        )
+    elif mutation in {
+        "unknown-payload",
+        "unselected-clone",
+        "selected-clone",
+    }:
         cursor = emit(cursor, "89 53 0a")
     else:
         cursor = emit(cursor, "8b 44 24 08 89 43 0a")
+    if mutation in {
+        "distinct-association-field",
+        "relocated-reader-finite-association",
+    }:
+        cursor = emit(cursor, "8b 44 24 08 89 43 12")
     if mutation == "finite-payload-overwrite":
         cursor = emit(cursor, "85 c0 74 07 8b 44 24 08 89 43 0a")
     elif mutation == "unknown-payload-overwrite":
@@ -5676,23 +6561,50 @@ def global_append_tail_pointee_image(*, mutation=None):
         cursor = emit_call(cursor, 0x3C0)
         cursor = emit(cursor, "89 43 0a")
     clone_failure_branch = None
-    if mutation in {"unselected-clone", "selected-clone"}:
+    if mutation in {
+        "unselected-clone",
+        "selected-clone",
+        "selected-clone-finite-payload",
+        "selected-clone-finite-payload-rewrite",
+        "selected-clone-unknown-payload-rewrite",
+    }:
         cursor = emit(cursor, "c6 43 04 07 6a 1a")
         cursor = emit_call(cursor, 0x300)
         cursor = emit(cursor, "59 89 c2 85 d2")
         clone_failure_branch = cursor
         cursor = emit(cursor, "74 00 8d 33 8d 3a a5 a5 a5 a5 a5 a5 66 a5")
         cursor = emit(cursor, "89 13")
-        clone_tag = 5 if mutation == "selected-clone" else 8
+        clone_tag = (
+            5
+            if mutation
+            in {
+                "selected-clone",
+                "selected-clone-finite-payload",
+                "selected-clone-finite-payload-rewrite",
+                "selected-clone-unknown-payload-rewrite",
+            }
+            else 8
+        )
         cursor = emit(cursor, f"c6 42 04 {clone_tag:02x}")
+        if mutation == "selected-clone-finite-payload-rewrite":
+            cursor = emit(cursor, "8b 44 24 08 89 42 0a")
+        elif mutation == "selected-clone-unknown-payload-rewrite":
+            cursor = emit(cursor, "89 4a 0a")
     cursor = emit(cursor, "5b c3")
     failure = cursor
     emit(cursor, "eb fe")
-    text[failure_branch + 1] = failure - (failure_branch + 2)
+    if failure_branch is not None:
+        text[failure_branch + 1] = failure - (failure_branch + 2)
     if clone_failure_branch is not None:
         text[clone_failure_branch + 1] = failure - (clone_failure_branch + 2)
 
-    if mutation in {"unselected-clone", "selected-clone"}:
+    if mutation in {
+        "unselected-clone",
+        "selected-clone",
+        "selected-clone-finite-payload",
+        "selected-clone-finite-payload-rewrite",
+        "selected-clone-unknown-payload-rewrite",
+    }:
         cursor = emit(0x260, "53 6a 1a")
         cursor = emit_call(cursor, 0x300)
         cursor = emit(cursor, "59 89 c3 85 db")
@@ -5750,8 +6662,24 @@ def global_append_tail_pointee_image(*, mutation=None):
         cursor = emit(0x3A0, "83 ec 08 8d 04 24 50")
         cursor = emit_call(cursor, 0x1C0)
         emit(cursor, "59 83 c4 08 c3")
+    elif mutation == "relocated-reader-finite-association":
+        cursor = emit(0x3A0, "a1 00 30 40 00 50")
+        cursor = emit_call(cursor, 0x3E0)
+        emit(cursor, "59 c3")
     emit(0x3C0, "c3")
-    emit(0x3E0, "89 15 00 30 40 00 c3")
+    if mutation == "relocated-reader-finite-association":
+        cursor = emit(0x3E0, "56 8b 74 24 08 6a 04")
+        cursor = emit_call(cursor, 0x300)
+        cursor = emit(cursor, "59 85 c0")
+        allocation_failure_branch = cursor
+        cursor = emit(cursor, "74 00 c6 00 09 89 46 12 5e c3")
+        allocation_failure = cursor
+        emit(cursor, "eb fe")
+        text[allocation_failure_branch + 1] = (
+            allocation_failure - (allocation_failure_branch + 2)
+        )
+    else:
+        emit(0x3E0, "89 15 00 30 40 00 c3")
 
     for index in range(75):
         struct.pack_into("<I", data, 0x400 + index * 4, text_va + 0x3C0)
@@ -5772,7 +6700,17 @@ def global_append_tail_pointee_image(*, mutation=None):
         ),
         imports=(),
         exports=(),
-        relocations=tuple(pe_mod.Relocation(rdata_va + index * 4, 3) for index in range(75)),
+        relocations=tuple(
+            pe_mod.Relocation(rdata_va + index * 4, 3)
+            for index in range(75)
+        )
+        + (
+            (
+                pe_mod.Relocation(text_va + 0x3A1, 3),
+            )
+            if mutation == "relocated-reader-finite-association"
+            else ()
+        ),
         executable_ranges=((text_va, text_va + 0x400),),
     )
     return image, text_va + movzx_offset, text_va + transfer_offset
@@ -5852,6 +6790,61 @@ def test_global_append_tail_allows_selected_empty_association():
 def test_global_append_tail_returns_direct_scalar_tag():
     image, _movzx_address, _transfer_address = (
         global_append_tail_pointee_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    pointer_slot = 0x00403000
+    root_publication = next(
+        write.instruction_address
+        for write in recovery.global_slot_writes[pointer_slot]
+        if recovery._registrar_function_entry(
+            write.instruction_address
+        )
+        == 0x004011C0
+    )
+
+    effect = recovery._closed_global_append_tail_effect(
+        pointer_slot,
+        root_publication,
+        0,
+        (4,),
+        frozenset(),
+    )
+
+    assert effect is not None
+    assert effect.values == frozenset({5})
+
+
+def test_global_append_tail_does_not_reaudit_relocated_slot_stores_as_loads():
+    image, _movzx_address, _transfer_address = (
+        global_append_tail_pointee_image()
+    )
+    slot_bytes = (0x00403000).to_bytes(4, "little")
+    executable = image.data[:0x400]
+    relocation_offsets = tuple(
+        index
+        for index in range(len(executable) - 3)
+        if executable[index : index + 4] == slot_bytes
+    )
+    assert len(relocation_offsets) >= 3
+    image = replace(
+        image,
+        relocations=tuple(
+            sorted(
+                (
+                    *image.relocations,
+                    *(
+                        pe.Relocation(0x00401000 + offset, 3)
+                        for offset in relocation_offsets
+                    ),
+                ),
+                key=lambda row: (row.va, row.type),
+            )
+        ),
     )
     recovery = _DirectCfgRecovery(
         image,
@@ -6040,6 +7033,392 @@ def test_global_append_tail_rejects_selected_postpublication_clone():
         cfg.jump_table_at(transfer_address)
 
 
+def test_global_append_tail_accepts_selected_clone_of_finite_payload():
+    image, _movzx_address, transfer_address = (
+        global_append_tail_pointee_image(
+            mutation="selected-clone-finite-payload",
+        )
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert cfg.jump_table_at(transfer_address).guard_bound == 74
+
+
+def test_global_append_tail_accepts_selected_clone_finite_payload_rewrite():
+    image, _movzx_address, transfer_address = (
+        global_append_tail_pointee_image(
+            mutation="selected-clone-finite-payload-rewrite",
+        )
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert cfg.jump_table_at(transfer_address).guard_bound == 74
+
+
+def test_global_append_tail_rejects_selected_clone_unknown_payload_rewrite():
+    image, _movzx_address, transfer_address = (
+        global_append_tail_pointee_image(
+            mutation="selected-clone-unknown-payload-rewrite",
+        )
+    )
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer_address)
+
+
+def test_global_append_tail_discovers_link_separately_from_association_field():
+    image, _movzx_address, _transfer_address = (
+        global_append_tail_pointee_image(
+            mutation="distinct-association-field",
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    pointer_slot = 0x00403000
+    publication = next(
+        write.instruction_address
+        for write in recovery.global_slot_writes[pointer_slot]
+        if recovery._registrar_function_entry(
+            write.instruction_address
+        )
+        == 0x00401200
+    )
+
+    result = recovery._global_append_allocation_effect(
+        publication,
+        pointer_slot,
+        0x12,
+        (0, 0),
+        frozenset(),
+    )
+
+    assert result is not None
+    effect, link_load, link_writer, selected = result
+    assert selected
+    assert effect.values == frozenset()
+    assert effect.requires_input
+    assert not effect.may_preserve_empty
+    assert "preserves-input-association" in effect.provenance
+    assert link_load < link_writer < publication
+
+
+def test_global_append_tail_propagates_preserved_input_association():
+    image, _movzx_address, _transfer_address = (
+        global_append_tail_pointee_image(
+            mutation="distinct-association-field",
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    pointer_slot = 0x00403000
+    root_publication = next(
+        write.instruction_address
+        for write in recovery.global_slot_writes[pointer_slot]
+        if recovery._registrar_function_entry(
+            write.instruction_address
+        )
+        == 0x004011C0
+    )
+
+    effect = recovery._closed_global_append_tail_effect(
+        pointer_slot,
+        root_publication,
+        0x12,
+        (0,),
+        frozenset(),
+    )
+
+    assert effect is not None
+    assert effect.values == frozenset()
+    assert effect.requires_input
+    assert not effect.may_preserve_empty
+
+
+def test_global_append_tail_collects_relocated_reader_callee_effect():
+    image, _movzx_address, _transfer_address = (
+        global_append_tail_pointee_image(
+            mutation="relocated-reader-finite-association",
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    pointer_slot = 0x00403000
+    root_publication = next(
+        write.instruction_address
+        for write in recovery.global_slot_writes[pointer_slot]
+        if recovery._registrar_function_entry(
+            write.instruction_address
+        )
+        == 0x004011C0
+    )
+
+    effect = recovery._closed_global_append_tail_effect(
+        pointer_slot,
+        root_publication,
+        0x12,
+        (0,),
+        frozenset(),
+    )
+
+    assert effect is not None
+    assert effect.values == frozenset({9})
+    assert effect.requires_input
+
+
+def test_global_append_tail_rejects_discovered_link_without_zero_initializer():
+    image, _movzx_address, _transfer_address = (
+        global_append_tail_pointee_image(
+            mutation="missing-link-zero",
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    pointer_slot = 0x00403000
+    publication = next(
+        write.instruction_address
+        for write in recovery.global_slot_writes[pointer_slot]
+        if recovery._registrar_function_entry(
+            write.instruction_address
+        )
+        == 0x00401200
+    )
+
+    assert (
+        recovery._global_append_allocation_effect(
+            publication,
+            pointer_slot,
+            0x12,
+            (0, 0),
+            frozenset(),
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("fault-barrier-only", True),
+        ("fault-barrier-bypass", False),
+    ),
+)
+def test_global_append_tail_requires_dominating_null_fault_barrier(
+    mutation,
+    expected,
+):
+    image, _movzx_address, _transfer_address = (
+        global_append_tail_pointee_image(mutation=mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    pointer_slot = 0x00403000
+    publication = next(
+        write.instruction_address
+        for write in recovery.global_slot_writes[pointer_slot]
+        if recovery._registrar_function_entry(
+            write.instruction_address
+        )
+        == 0x00401200
+    )
+
+    result = recovery._global_append_allocation_effect(
+        publication,
+        pointer_slot,
+        0,
+        (10, 0),
+        frozenset(),
+    )
+
+    assert (result is not None) is expected
+    if result is not None:
+        assert "dominating-null-fault-barrier" in result[0].provenance
+
+
+def test_global_append_tail_accepts_exact_finite_argument_discriminator():
+    image, _movzx_address, _transfer_address = (
+        global_append_tail_pointee_image(
+            mutation="argument-discriminator",
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    pointer_slot = 0x00403000
+    append_function = 0x00401200
+    caller = 0x00401040
+    append_call = next(
+        address
+        for address in recovery.direct_call_sources_by_target[
+            append_function
+        ]
+        if recovery._registrar_function_entry(address) == caller
+    )
+    publication = next(
+        write.instruction_address
+        for write in recovery.global_slot_writes[pointer_slot]
+        if recovery._registrar_function_entry(
+            write.instruction_address
+        )
+        == append_function
+    )
+    context = (append_function, append_call, caller)
+    recovery.producer_exact_call_contexts.append(context)
+    try:
+        result = recovery._global_append_allocation_effect(
+            publication,
+            pointer_slot,
+            0,
+            (10, 0),
+            frozenset(),
+            (4, frozenset({0})),
+        )
+    finally:
+        assert recovery.producer_exact_call_contexts.pop() == context
+
+    assert result is not None
+    assert result[0].values == frozenset({0})
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("postpublication-global-reload", True),
+        ("postpublication-global-reload-after-call", False),
+        (
+            "postpublication-global-reload-after-replacement",
+            False,
+        ),
+    ),
+)
+def test_global_append_tail_bounds_postpublication_global_allocation_reload(
+    mutation,
+    expected,
+):
+    image, _movzx_address, _transfer_address = (
+        global_append_tail_pointee_image(
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    pointer_slot = 0x00403000
+    append_function = 0x00401200
+    caller = 0x00401040
+    append_call = next(
+        address
+        for address in recovery.direct_call_sources_by_target[
+            append_function
+        ]
+        if recovery._registrar_function_entry(address) == caller
+    )
+    publication = next(
+        write.instruction_address
+        for write in recovery.global_slot_writes[pointer_slot]
+        if recovery._registrar_function_entry(
+            write.instruction_address
+        )
+        == append_function
+    )
+    context = (append_function, append_call, caller)
+    recovery.producer_exact_call_contexts.append(context)
+    try:
+        result = recovery._global_append_allocation_effect(
+            publication,
+            pointer_slot,
+            0,
+            (10, 0),
+            frozenset(),
+            (4, frozenset({5})),
+        )
+    finally:
+        assert recovery.producer_exact_call_contexts.pop() == context
+
+    if not expected:
+        assert result is None
+    else:
+        assert result is not None
+        assert result[0].values == frozenset({0})
+        assert (
+            "postpublication-global-reload"
+            in result[0].provenance
+        )
+
+
+def test_global_append_tail_rejects_unknown_register_discriminator():
+    image, _movzx_address, _transfer_address = (
+        global_append_tail_pointee_image(
+            mutation="unknown-discriminator",
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    pointer_slot = 0x00403000
+    publication = next(
+        write.instruction_address
+        for write in recovery.global_slot_writes[pointer_slot]
+        if recovery._registrar_function_entry(
+            write.instruction_address
+        )
+        == 0x00401200
+    )
+
+    assert (
+        recovery._global_append_allocation_effect(
+            publication,
+            pointer_slot,
+            0,
+            (10, 0),
+            frozenset(),
+            (4, frozenset({5})),
+        )
+        is None
+    )
+
+
 def test_pushed_call_argument_crosses_long_straight_line_gap():
     """Retail initializers may separate pushes from a call with many stores."""
     text_va = 0x00401000
@@ -6153,6 +7532,7 @@ def test_pushed_call_argument_crosses_balanced_helper_calls():
         "foreign-global-write",
         "missing-root-zero",
         "missing-link",
+        "missing-link-zero",
         "unknown-payload-overwrite",
         "unknown-payload",
     ],
@@ -6224,6 +7604,52 @@ def test_object_guard_answers_local_discriminator_before_recursive_origin():
     assert result is not None
     assert result[0] == frozenset({4})
     assert "dominating-affine-byte-equality" in result[1]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "closed"),
+    [
+        (None, True),
+        ("intervening-call", False),
+        ("null-arm-reaches-use", False),
+    ],
+)
+def test_call_return_optional_object_requires_closed_nonnull_copy(
+    mutation,
+    closed,
+):
+    image, observation = nonnull_filtered_optional_call_return_image(
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_object_byte_register_values_before(
+        observation,
+        "ebx",
+        image.entrypoint,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+    if closed:
+        assert "nonnull-guarded-optional-result" in result[1]
+        assert not recovery._object_result_has_flag(
+            result[1],
+            "optional-empty-association",
+        )
+    else:
+        assert "nonnull-guarded-optional-result" not in result[1]
+        assert recovery._object_result_has_flag(
+            result[1],
+            "optional-empty-association",
+        )
 
 
 def test_guarded_recursive_call_return_closes_from_terminal_base():
@@ -6464,6 +7890,122 @@ def test_recursive_readable_precondition_uses_outer_call_context_snapshot(
     assert result[0] == frozenset(range(0x100))
     assert "recursive-readable-object-domain" in result[1]
     assert recovery.producer_exact_call_contexts == [baseline_context]
+
+
+def test_recursive_readable_precondition_preserves_guard_disjoint_argument(
+    monkeypatch,
+):
+    image, outer_call, _recursive_call, _recursive_return = (
+        no_input_recursive_object_factory_image(scalar_argument=True)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    target = image.entrypoint + 0x40
+    pushed = recovery._pushed_call_argument(outer_call, 0)
+    assert pushed is not None
+    monkeypatch.setattr(
+        recovery,
+        "_recursive_readable_object_argument_indices",
+        lambda _target, _field_path: (0,),
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_operand_values_before",
+        lambda *_args, **_kwargs: (
+            frozenset(),
+            "guard-disjoint;modeled-object-tag",
+        ),
+    )
+
+    result = recovery._recursive_readable_call_precondition(
+        outer_call,
+        target,
+        image.entrypoint,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == (0,)
+    assert "guard-disjoint" in result[1]
+
+
+def test_recursive_readable_call_closes_guard_disjoint_outer_precondition(
+    monkeypatch,
+):
+    image, outer_call, recursive_call, _recursive_return = (
+        no_input_recursive_object_factory_image(scalar_argument=True)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    target = image.entrypoint + 0x40
+    monkeypatch.setattr(
+        recovery,
+        "_recursive_object_inputs_are_closed",
+        lambda _function_entry: False,
+    )
+
+    def modeled_precondition(
+        call_address,
+        _call_target,
+        _caller_entry,
+        _field_path,
+        _visited,
+    ):
+        if call_address == recursive_call:
+            return (0,), "recursive-readable"
+        assert call_address == outer_call
+        return (0,), "guard-disjoint;outer-object-tag"
+
+    monkeypatch.setattr(
+        recovery,
+        "_recursive_readable_call_precondition",
+        modeled_precondition,
+    )
+
+    def modeled_returns(
+        call_address,
+        call_target,
+        caller_entry,
+        field_path,
+        visited,
+    ):
+        if call_address == recursive_call:
+            return None
+        assert call_address == outer_call
+        return recovery._finite_object_byte_call_return_values_before(
+            recursive_call,
+            call_target,
+            call_target,
+            field_path,
+            visited | {(recursive_call, "deeper")},
+        )
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_call_return_values_without_induction",
+        modeled_returns,
+    )
+
+    result = recovery._finite_object_byte_call_return_values_before(
+        outer_call,
+        target,
+        image.entrypoint,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset()
+    assert "guard-disjoint" in result[1]
 
 
 def test_repeated_call_uses_independent_local_return_domain(monkeypatch):
@@ -7118,6 +8660,646 @@ def test_readable_global_call_effect_reuses_callee_summary(monkeypatch):
     assert store.puts > first_puts
 
 
+def test_readable_global_call_effect_retries_blocked_summary(monkeypatch):
+    image, _observation = exact_call_global_object_slot_image(
+        "recursive-preserve"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    call_target = image.entrypoint + 0x80
+    original = recovery._finite_local_global_object_byte_values_before
+    blocked_once = False
+    evaluations = 0
+
+    def transient_block(address, slot, function_entry, *args, **kwargs):
+        nonlocal blocked_once, evaluations
+        if function_entry == call_target:
+            evaluations += 1
+            if not blocked_once:
+                blocked_once = True
+                return None
+        return original(address, slot, function_entry, *args, **kwargs)
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_local_global_object_byte_values_before",
+        transient_block,
+    )
+    arguments = (
+        image.entrypoint + 0x14,
+        call_target,
+        image.entrypoint,
+        0x00403000,
+        (0,),
+        frozenset(),
+    )
+
+    assert (
+        recovery._finite_exact_call_readable_global_object_effect(
+            *arguments
+        )
+        is None
+    )
+    result = recovery._finite_exact_call_readable_global_object_effect(
+        *arguments
+    )
+
+    assert result is not None
+    assert result[0] == frozenset(range(0x100))
+    assert evaluations >= 2
+
+
+def test_readable_global_call_effect_filters_nonzero_return_arm():
+    image, call_address, call_target, _observation, slot = (
+        return_filtered_readable_global_effect_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    arguments = (
+        call_address,
+        call_target,
+        image.entrypoint,
+        slot,
+        (0,),
+        frozenset(),
+    )
+
+    assert (
+        recovery._finite_exact_call_readable_global_object_effect(
+            *arguments
+        )
+        is None
+    )
+    result = recovery._finite_exact_call_readable_global_object_effect(
+        *arguments,
+        require_nonzero_return=True,
+    )
+
+    assert result is not None
+    assert result[0] == frozenset(range(0x100))
+    assert "nonzero-return=True" in result[1]
+
+
+def test_filtered_readable_global_call_uses_unfiltered_induction():
+    image, call_address, call_target, _observation, slot = (
+        return_filtered_readable_global_effect_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    unfiltered_contract = (
+        call_target,
+        slot,
+        (0,),
+        False,
+        False,
+    )
+    recovery.exact_global_call_contract_active.add(
+        unfiltered_contract
+    )
+    try:
+        result = (
+            recovery._finite_exact_call_readable_global_object_effect(
+                call_address,
+                call_target,
+                image.entrypoint,
+                slot,
+                (0,),
+                frozenset(),
+                require_nonzero_return=True,
+            )
+        )
+    finally:
+        recovery.exact_global_call_contract_active.remove(
+            unfiltered_contract
+        )
+
+    assert result is not None
+    assert result[0] == frozenset(range(0x100))
+    assert "readable-global-call-induction" in result[1]
+
+
+@pytest.mark.parametrize("mode", ["movzx", "boolean"])
+def test_readable_global_call_forwards_nonzero_return_filter(mode):
+    image, outer_call, outer_target, _nested_call, slot = (
+        forwarded_return_filtered_readable_global_effect_image(mode)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_exact_call_readable_global_object_effect(
+        outer_call,
+        outer_target,
+        image.entrypoint,
+        slot,
+        (0,),
+        frozenset(),
+        require_nonzero_return=True,
+    )
+
+    assert result is not None
+    assert result[0] == frozenset(range(0x100))
+    assert "nonzero-return=True" in result[1]
+
+
+def test_readable_global_call_rejects_zero_call_that_can_succeed():
+    image, outer_call, outer_target, _nested_call, slot = (
+        forwarded_return_filtered_readable_global_effect_image(
+            "boolean",
+            zero_call_can_succeed=True,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_exact_call_readable_global_object_effect(
+        outer_call,
+        outer_target,
+        image.entrypoint,
+        slot,
+        (0,),
+        frozenset(),
+        require_nonzero_return=True,
+    )
+
+    assert result is None
+
+
+def test_readable_global_call_filters_forwarded_fallback_result():
+    (
+        image,
+        outer_call,
+        outer_target,
+        fallback_call,
+        guarded_observation,
+        return_address,
+        slot,
+    ) = fallback_return_filtered_readable_global_effect_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert not recovery._register_has_exact_call_result_origin(
+        return_address,
+        "eax",
+        outer_target,
+        fallback_call,
+    )
+    assert recovery._call_has_closed_nonzero_success_guard(
+        fallback_call,
+        guarded_observation,
+        outer_target,
+    )
+    result = recovery._finite_exact_call_readable_global_object_effect(
+        outer_call,
+        outer_target,
+        image.entrypoint,
+        slot,
+        (0,),
+        frozenset(),
+        require_nonzero_return=True,
+    )
+
+    assert result is not None
+    assert result[0] == frozenset(range(0x100))
+    assert "nonzero-return=True" in result[1]
+
+
+def test_readable_global_call_rejects_overwritten_fallback_result():
+    (
+        image,
+        outer_call,
+        outer_target,
+        _fallback_call,
+        _guarded_observation,
+        _return,
+        slot,
+    ) = fallback_return_filtered_readable_global_effect_image(
+        overwrite_fallback_result=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_exact_call_readable_global_object_effect(
+        outer_call,
+        outer_target,
+        image.entrypoint,
+        slot,
+        (0,),
+        frozenset(),
+        require_nonzero_return=True,
+    )
+
+    assert result is None
+
+
+def test_readable_global_call_infers_nested_argument_requirement():
+    image, outer_call, outer_target, _nested_call, slot = (
+        nested_argument_readable_global_effect_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_exact_call_readable_global_object_effect(
+        outer_call,
+        outer_target,
+        image.entrypoint,
+        slot,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset(range(0x100))
+    assert "argument=0;field-path=(8, 0)" in result[1]
+
+
+def test_readable_global_call_rejects_unproved_nested_argument_requirement():
+    image, outer_call, outer_target, _nested_call, slot = (
+        nested_argument_readable_global_effect_image(
+            initialize_nested_byte=False,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_exact_call_readable_global_object_effect(
+        outer_call,
+        outer_target,
+        image.entrypoint,
+        slot,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is None
+
+
+def test_readable_global_call_accepts_guard_disjoint_nested_requirement():
+    image, outer_call, outer_target, _nested_call, slot = (
+        nested_argument_readable_global_effect_image(
+            initialize_nested_byte=False,
+            guarded_nested_read=True,
+            spilled_guard=True,
+            root_tag=4,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_exact_call_readable_global_object_effect(
+        outer_call,
+        outer_target,
+        image.entrypoint,
+        slot,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset(range(0x100))
+    assert "guard-disjoint-argument-requirement" in result[1]
+
+
+def test_readable_global_call_rejects_matching_guard_without_nested_byte():
+    image, outer_call, outer_target, _nested_call, slot = (
+        nested_argument_readable_global_effect_image(
+            initialize_nested_byte=False,
+            guarded_nested_read=True,
+            spilled_guard=True,
+            root_tag=0x43,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_exact_call_readable_global_object_effect(
+        outer_call,
+        outer_target,
+        image.entrypoint,
+        slot,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is None
+
+
+def test_readable_global_call_ignores_guard_disjoint_argument_mutation():
+    image, outer_call, outer_target, _nested_call, slot = (
+        nested_argument_readable_global_effect_image(
+            initialize_nested_byte=True,
+            guarded_nested_read=True,
+            spilled_guard=True,
+            disjoint_nested_mutation=True,
+            affine_disjoint_mutation=True,
+            root_tag=0x43,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_exact_call_readable_global_object_effect(
+        outer_call,
+        outer_target,
+        image.entrypoint,
+        slot,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset(range(0x100))
+    assert "guarded-argument-requirement" in result[1]
+
+
+def test_unfiltered_readable_global_call_rejects_filtered_induction(
+    monkeypatch,
+):
+    image, call_address, call_target, _observation, slot = (
+        return_filtered_readable_global_effect_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    filtered_contract = (
+        call_target,
+        slot,
+        (0,),
+        True,
+        False,
+    )
+    recovery.exact_global_call_contract_active.add(filtered_contract)
+    monkeypatch.setattr(
+        recovery,
+        "_finite_local_global_object_byte_values_before",
+        lambda *_args, **_kwargs: None,
+    )
+    try:
+        result = (
+            recovery._finite_exact_call_readable_global_object_effect(
+                call_address,
+                call_target,
+                image.entrypoint,
+                slot,
+                (0,),
+                frozenset(),
+            )
+        )
+    finally:
+        recovery.exact_global_call_contract_active.remove(
+            filtered_contract
+        )
+
+    assert result is None
+
+
+def test_local_readable_global_effect_forwards_nonzero_call_guard():
+    image, _call_address, _call_target, observation, slot = (
+        return_filtered_readable_global_effect_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_local_global_object_byte_values_before(
+        observation,
+        slot,
+        image.entrypoint,
+        (0,),
+        frozenset(),
+        allow_readable_input=True,
+    )
+
+    assert result is not None
+    assert result[0] == frozenset(range(0x100))
+    assert "nonzero-return=True" in result[1]
+
+
+def test_readable_global_call_effect_replays_fresh_witnesses(monkeypatch):
+    image, _observation = exact_call_global_object_slot_image(
+        "recursive-preserve"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    evaluations = []
+    original = recovery._finite_local_global_object_byte_values_before
+
+    def count_summary(address, slot, function_entry, *args, **kwargs):
+        evaluations.append(
+            (
+                address,
+                slot,
+                function_entry,
+                tuple(recovery.producer_exact_call_contexts),
+            )
+        )
+        generation = (
+            recovery.producer_fresh_object_requirements[-1].generation
+        )
+        recovery.producer_fresh_object_requirements[-1].witnesses.add(
+            (
+                image.entrypoint + 0x180 + generation,
+                image.entrypoint + 0x1A0,
+                0x20,
+            )
+        )
+        return original(address, slot, function_entry, *args, **kwargs)
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_local_global_object_byte_values_before",
+        count_summary,
+    )
+    requirement = x86_cfg_module._FreshObjectRequirement(
+        1,
+        frozenset({(0x7F,)}),
+        0x20,
+    )
+    recovery.producer_fresh_object_requirements.append(requirement)
+    arguments = (
+        image.entrypoint + 0x14,
+        image.entrypoint + 0x80,
+        image.entrypoint,
+        0x00403000,
+        (0,),
+        frozenset(),
+    )
+    readable_input_contract = (0x00403000, (0,))
+    readable_argument_contract = (
+        image.entrypoint + 0x80,
+        (0,),
+        frozenset(),
+    )
+    unrelated_argument_contract = (
+        0x7FFF_FFF0,
+        (0,),
+        frozenset({0}),
+    )
+    outer_context_a = (
+        image.entrypoint + 0x180,
+        image.entrypoint + 0x20,
+        image.entrypoint + 0x140,
+    )
+    outer_context_b = (
+        image.entrypoint + 0x1A0,
+        image.entrypoint + 0x40,
+        image.entrypoint + 0x160,
+    )
+    recovery.readable_global_input_contracts.append(
+        readable_input_contract
+    )
+    recovery.readable_function_argument_contracts.append(
+        readable_argument_contract
+    )
+    recovery.producer_exact_call_contexts.append(outer_context_a)
+    try:
+        first = recovery._finite_exact_call_readable_global_object_effect(
+            *arguments
+        )
+        first_evaluations = len(evaluations)
+        requirement.witnesses.clear()
+        assert (
+            recovery.producer_exact_call_contexts.pop()
+            == outer_context_a
+        )
+        recovery.producer_exact_call_contexts.append(outer_context_b)
+        recovery.readable_global_input_contracts.append(
+            readable_input_contract
+        )
+        recovery.readable_function_argument_contracts.append(
+            readable_argument_contract
+        )
+        recovery.readable_function_argument_contracts.append(
+            unrelated_argument_contract
+        )
+        second = recovery._finite_exact_call_readable_global_object_effect(
+            *arguments
+        )
+    finally:
+        assert (
+            recovery.producer_exact_call_contexts.pop()
+            == outer_context_b
+        )
+        assert (
+            recovery.readable_function_argument_contracts.pop()
+            == unrelated_argument_contract
+        )
+        assert (
+            recovery.readable_function_argument_contracts.pop()
+            == readable_argument_contract
+        )
+        assert (
+            recovery.readable_global_input_contracts.pop()
+            == readable_input_contract
+        )
+        assert (
+            recovery.readable_function_argument_contracts.pop()
+            == readable_argument_contract
+        )
+        assert (
+            recovery.readable_global_input_contracts.pop()
+            == readable_input_contract
+        )
+        assert (
+            recovery.producer_fresh_object_requirements.pop()
+            is requirement
+        )
+
+    assert first is not None and second is not None
+    assert first_evaluations
+    assert len(evaluations) == first_evaluations
+    assert all(
+        len(exact_contexts) == 1
+        and outer_context_a not in exact_contexts
+        and outer_context_b not in exact_contexts
+        for _address, _slot, _function, exact_contexts in evaluations
+    )
+    assert requirement.witnesses == {
+        (image.entrypoint + 0x181, image.entrypoint + 0x1A0, 0x20)
+    }
+
+    next_requirement = x86_cfg_module._FreshObjectRequirement(
+        2,
+        frozenset({(0x7F,)}),
+        0x20,
+    )
+    recovery.producer_fresh_object_requirements.append(
+        next_requirement
+    )
+    try:
+        third = recovery._finite_exact_call_readable_global_object_effect(
+            *arguments
+        )
+    finally:
+        assert (
+            recovery.producer_fresh_object_requirements.pop()
+            is next_requirement
+        )
+
+    assert third is not None
+    assert len(evaluations) > first_evaluations
+    assert next_requirement.witnesses == {
+        (image.entrypoint + 0x182, image.entrypoint + 0x1A0, 0x20)
+    }
+
+
 def test_guarded_exact_global_establishment_supports_recursive_induction():
     image, observation = exact_call_global_object_slot_image("valid")
     recovery = _DirectCfgRecovery(
@@ -7693,6 +9875,84 @@ def test_object_guard_filters_disjoint_call_return_origins():
     )
 
 
+def test_object_guard_skips_open_child_of_disjoint_returned_argument(
+    monkeypatch,
+):
+    image, _factory_call, consumer_call, observation = (
+        guarded_call_return_object_origins_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    consumer = image.entrypoint + 0xC0
+    factory = image.entrypoint + 0x80
+    disjoint_return = factory + 13
+    original_guard = recovery._object_byte_case_guard_before
+
+    def merged_local_guard(
+        address,
+        register_family,
+        function_entry,
+        field_path,
+    ):
+        if (
+            address == disjoint_return
+            and register_family == "eax"
+            and function_entry == factory
+            and field_path == (0,)
+        ):
+            return _ObjectByteGuard(
+                factory,
+                disjoint_return,
+                "eax",
+                (0,),
+                0,
+                frozenset({4, 5}),
+                factory + 4,
+                "modeled-merged-cleanup",
+            )
+        return original_guard(
+            address,
+            register_family,
+            function_entry,
+            field_path,
+        )
+
+    monkeypatch.setattr(
+        recovery,
+        "_object_byte_case_guard_before",
+        merged_local_guard,
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_finite_returned_fresh_allocation_byte_values",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError(
+                "fresh-return aggregate cannot cover a returned argument"
+            )
+        ),
+    )
+    context = (consumer, consumer_call, image.entrypoint)
+    recovery.producer_exact_call_contexts.append(context)
+    try:
+        result = recovery._finite_object_byte_register_values_before(
+            observation,
+            "eax",
+            consumer,
+            (0,),
+            frozenset(),
+        )
+    finally:
+        assert recovery.producer_exact_call_contexts.pop() == context
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+    assert "returned-argument-discriminator" in result[1]
+
+
 def test_object_guard_filters_disjoint_normal_callee_effect():
     image, _factory_call, consumer_call, observation = guarded_call_return_object_origins_image(disjoint_mutator=True)
     recovery = _DirectCfgRecovery(
@@ -7802,6 +10062,107 @@ def test_argument_object_byte_cache_is_guard_context_sensitive(monkeypatch):
         frozenset({5}),
     ]
     assert len(evaluations) == 2
+
+
+def test_object_producer_caches_saturate_repeated_exact_call_contexts(
+    monkeypatch,
+):
+    image, _factory_call, consumer_call, observation = (
+        guarded_call_return_object_origins_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    consumer = image.entrypoint + 0xC0
+    context = (consumer, consumer_call, image.entrypoint)
+    argument_evaluations = []
+    register_evaluations = []
+
+    def modeled_argument(*args, **kwargs):
+        argument_evaluations.append(
+            tuple(recovery.producer_exact_call_contexts)
+        )
+        return frozenset({0x29}), "modeled-argument"
+
+    def modeled_register(*args, **kwargs):
+        register_evaluations.append(
+            tuple(recovery.producer_exact_call_contexts)
+        )
+        return frozenset({0x29}), "modeled-register"
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_argument_object_byte_values_before_uncached",
+        modeled_argument,
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_finite_object_byte_register_values_before_uncached",
+        modeled_register,
+    )
+    recovery.producer_exact_call_contexts.extend((context, context))
+    try:
+        first_argument = (
+            recovery._finite_argument_object_byte_values_before(
+                observation,
+                consumer,
+                0,
+                (10, 0),
+                frozenset(),
+            )
+        )
+        first_register = (
+            recovery._finite_object_byte_register_values_before(
+                observation,
+                "eax",
+                consumer,
+                (10, 0),
+                frozenset(),
+            )
+        )
+        recovery.producer_exact_call_contexts.append(context)
+        unrelated_contract = (
+            image.entrypoint + 0x1F0,
+            (10, 0),
+            frozenset({0}),
+        )
+        recovery.readable_function_argument_contracts.append(
+            unrelated_contract
+        )
+        second_argument = (
+            recovery._finite_argument_object_byte_values_before(
+                observation,
+                consumer,
+                0,
+                (10, 0),
+                frozenset(),
+            )
+        )
+        second_register = (
+            recovery._finite_object_byte_register_values_before(
+                observation,
+                "eax",
+                consumer,
+                (10, 0),
+                frozenset(),
+            )
+        )
+    finally:
+        assert (
+            recovery.readable_function_argument_contracts.pop()
+            == unrelated_contract
+        )
+        assert recovery.producer_exact_call_contexts.pop() == context
+        assert recovery.producer_exact_call_contexts.pop() == context
+        assert recovery.producer_exact_call_contexts.pop() == context
+
+    assert first_argument == second_argument
+    assert first_register == second_register
+    assert len(argument_evaluations) == 1
+    assert len(register_evaluations) == 1
 
 
 def test_pointer_origin_shift_replaces_the_unshifted_guard(monkeypatch):
@@ -9046,6 +11407,78 @@ def test_fresh_object_allows_paired_active_global_publications():
     assert "closed-active-global-publication" in result[1]
 
 
+@pytest.mark.parametrize(
+    "bypass_dereference",
+    (False, True),
+)
+def test_allocation_nonnull_guard_rejects_fault_only_paths(
+    bypass_dereference,
+):
+    (
+        image,
+        allocation_call,
+        first_publication,
+        _second_publication,
+    ) = paired_global_fresh_publication_image(
+        checked_allocation=False,
+        bypass_dereference=bypass_dereference,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    states = recovery._relative_pointer_states(
+        image.entrypoint,
+        root_call=allocation_call,
+        propagate_call_returns=False,
+    )
+
+    assert states is not None
+    assert (
+        recovery._allocation_result_has_closed_nonnull_guard(
+            allocation_call,
+            first_publication,
+            image.entrypoint,
+            states,
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    ("bypass_dereference", "expected"),
+    ((False, frozenset({0x29})), (True, None)),
+)
+def test_loader_zero_global_accepts_only_dominating_null_fault_barrier(
+    bypass_dereference,
+    expected,
+):
+    image, _allocation_call, _first_publication, _second_publication = (
+        paired_global_fresh_publication_image(
+            checked_allocation=False,
+            bypass_dereference=bypass_dereference,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._finite_global_object_byte_values(
+        0x00403000,
+        (4,),
+        frozenset(),
+    )
+
+    assert (None if result is None else result[0]) == expected
+    if result is not None:
+        assert "dominating-null-fault-barrier" in result[1]
+
+
 def test_fresh_object_allows_active_global_append_link():
     (
         image,
@@ -9757,6 +12190,45 @@ def callee_return_argument_byte_effect_image(*, unknown_write=False):
     )
 
 
+def callee_return_value_filtered_argument_effect_image(*, zero_write=False):
+    """Give zero and nonzero return arms distinct argument-byte effects."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytes.fromhex(
+        # mov edx, [esp+4]; test ecx, ecx; je zero
+        # mov byte ptr [edx], 0x30; mov eax, 1; ret
+        "8b 54 24 04 85 c9 74 09 c6 02 30 b8 01 00 00 00 c3 "
+        # zero: optionally write 0x31; xor eax, eax; ret
+        + ("c6 02 31 " if zero_write else "")
+        + "31 c0 c3"
+    )
+    return pe_mod.Image(
+        data=data,
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+
+
 def callee_intermediate_argument_byte_effect_image():
     """One optional finite writer reconverges before a non-RET observation."""
     from tools.mwcc_retro import pe as pe_mod
@@ -9982,6 +12454,133 @@ def test_callee_argument_byte_effect_rejects_open_linked_list_filter(hostile):
     )
 
 
+def callee_guarded_list_publication_effect_image(
+    *,
+    missing_inequality_guard=False,
+    mutate_reloaded_alias=False,
+):
+    """Publish arg1 into arg0 only while the two pointers are unequal."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytearray(b"\x90" * 0xA0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        data[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    # callee(cursor, node): node->byte0 = 9; *cursor = node
+    cursor = emit(
+        0,
+        "53 56 8b 74 24 0c 8b 5c 24 10 c6 03 09",
+    )
+    if not missing_inequality_guard:
+        cursor = emit(cursor, "39 de")
+        skip_publication_branch = cursor
+        cursor = emit(cursor, "74 00")
+    cursor = emit(cursor, "89 1e")
+    if not missing_inequality_guard:
+        data[skip_publication_branch + 1] = (
+            cursor - (skip_publication_branch + 2)
+        ) & 0xFF
+    if mutate_reloaded_alias:
+        cursor = emit(cursor, "8b 06 88 10")
+    cursor = emit(cursor, "31 c0 5e 5b c3")
+
+    # caller(cursor, node): callee(cursor, node); discard EAX
+    wrapper = 0x80
+    cursor = emit(wrapper, "ff 74 24 08 ff 74 24 08")
+    displacement = text_va - (text_va + cursor + 5)
+    cursor = emit(cursor, "e8" + struct.pack("<i", displacement).hex())
+    emit(cursor, "83 c4 08 31 c0 c3")
+
+    encoded = bytes(data)
+    return pe_mod.Image(
+        data=encoded,
+        sha256=hashlib.sha256(encoded).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va + wrapper,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(encoded),
+                len(encoded),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(encoded)),),
+    )
+
+
+def test_callee_argument_effect_accepts_guarded_list_publication():
+    image = callee_guarded_list_publication_effect_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(
+            image,
+            (
+                audit_anchor(image, 0x00401000),
+                audit_anchor(image, 0x00401080),
+            ),
+        ),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._callee_argument_byte_effect(
+        0x00401000,
+        1,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset({9})
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    ["missing-inequality-guard", "mutate-reloaded-alias"],
+)
+def test_callee_argument_effect_rejects_open_list_publication(hostile):
+    image = callee_guarded_list_publication_effect_image(
+        missing_inequality_guard=hostile == "missing-inequality-guard",
+        mutate_reloaded_alias=hostile == "mutate-reloaded-alias",
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(
+            image,
+            (
+                audit_anchor(image, 0x00401000),
+                audit_anchor(image, 0x00401080),
+            ),
+        ),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert (
+        recovery._callee_argument_byte_effect(
+            0x00401000,
+            1,
+            (0,),
+            frozenset(),
+        )
+        is None
+    )
+
+
 def test_callee_argument_byte_effect_stops_at_exact_observation():
     image, observation = callee_intermediate_argument_byte_effect_image()
     recovery = _DirectCfgRecovery(
@@ -10060,6 +12659,59 @@ def test_callee_argument_byte_effect_records_optional_preservation():
     assert result is not None
     assert result[0] == frozenset({0x30})
     assert "optional-preserve" in result[1]
+
+
+@pytest.mark.parametrize(
+    ("zero_write", "expected"),
+    [(False, frozenset()), (True, frozenset({0x31}))],
+)
+def test_callee_argument_byte_effect_filters_zero_return_arms(
+    zero_write,
+    expected,
+):
+    image = callee_return_value_filtered_argument_effect_image(
+        zero_write=zero_write,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._callee_argument_byte_effect(
+        image.entrypoint,
+        0,
+        (0,),
+        frozenset(),
+        require_zero_return=True,
+    )
+
+    assert result is not None
+    assert result[0] == expected
+
+
+def test_callee_argument_byte_effect_marks_conflicting_return_filters_disjoint():
+    image = callee_return_value_filtered_argument_effect_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._callee_argument_byte_effect(
+        image.entrypoint,
+        0,
+        (0,),
+        frozenset(),
+        require_nonzero_return=True,
+        require_zero_return=True,
+    )
+
+    assert result is not None
+    assert result[0] == frozenset()
+    assert recovery._callee_effect_has_flag(result[1], "guard-disjoint")
 
 
 def nested_guard_disjoint_pointer_write_image():
@@ -10563,14 +13215,20 @@ def stack_zeroed_global_alias_image(mode):
     """Zero a stack object, publish it, and exercise the live global alias."""
     from tools.mwcc_retro import pe as pe_mod
 
-    assert mode in {"preserve", "mutate", "replace-then-mutate"}
+    assert mode in {
+        "preserve",
+        "formal-preserve",
+        "formal-nested-mutate",
+        "mutate",
+        "replace-then-mutate",
+    }
     text_va = 0x00401000
     constructor = 0x00401040
     zero_fill = 0x00401080
     mutator = 0x004010A0
     replacer = 0x004010C0
     global_slot = 0x00403000
-    text = bytearray(b"\x90" * 0x100)
+    text = bytearray(b"\x90" * 0x140)
 
     def emit(address, encoded):
         encoded = bytes.fromhex(encoded)
@@ -10588,6 +13246,10 @@ def stack_zeroed_global_alias_image(mode):
     cursor = emit(text_va, "83 ec 20 8d 44 24 04 50")
     cursor = emit_call(cursor, constructor)
     cursor = emit(cursor, "59")
+    if mode in {"formal-preserve", "formal-nested-mutate"}:
+        cursor = emit(cursor, "8d 44 24 04 50")
+        cursor = emit_call(cursor, 0x004010E0)
+        cursor = emit(cursor, "59")
     if mode == "replace-then-mutate":
         cursor = emit_call(cursor, replacer)
     if mode in {"mutate", "replace-then-mutate"}:
@@ -10607,6 +13269,16 @@ def stack_zeroed_global_alias_image(mode):
     )
     emit(mutator, "a1 00 30 40 00 c6 40 12 7f c3")
     emit(replacer, "c7 05 00 30 40 00 00 00 00 00 c3")
+    if mode == "formal-nested-mutate":
+        cursor = emit(0x004010E0, "8b 44 24 04 50")
+        cursor = emit_call(cursor, 0x00401120)
+        emit(cursor, "59 c3")
+        emit(0x00401120, "8b 44 24 04 c6 40 12 7f c3")
+    else:
+        emit(
+            0x004010E0,
+            "8b 44 24 04 80 78 12 00 c3",
+        )
 
     data = bytes(text) + bytes(0x20)
     image = pe_mod.Image(
@@ -11294,8 +13966,10 @@ def test_callee_argument_effect_records_zero_fill_with_global_publication():
     ("mode", "expected"),
     (
         ("preserve", frozenset({0})),
+        ("formal-preserve", frozenset({0})),
+        ("formal-nested-mutate", frozenset({0, 0x7F})),
         ("replace-then-mutate", frozenset({0})),
-        ("mutate", None),
+        ("mutate", frozenset({0, 0x7F})),
     ),
 )
 def test_stack_object_tracks_zeroing_callee_global_alias_until_observation(
@@ -11324,6 +13998,137 @@ def test_stack_object_tracks_zeroing_callee_global_alias_until_observation(
         assert result is not None
         assert result[0] == expected
         assert "closed-stack-global-alias" in result[1]
+
+
+def test_stack_object_reconciles_global_alias_with_exact_formal(
+    monkeypatch,
+):
+    image, observation = stack_zeroed_global_alias_image(
+        "formal-preserve"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    helper = image.entrypoint + 0xE0
+    global_slot = 0x00403000
+    original = recovery._callee_argument_byte_effect
+
+    def require_formal_alias(
+        function_entry,
+        argument_index,
+        field_path,
+        visited,
+        **kwargs,
+    ):
+        if (
+            function_entry == helper
+            and kwargs.get("global_alias_slots")
+            == frozenset({global_slot})
+        ):
+            if (
+                argument_index
+                == x86_cfg_module._GLOBAL_ALIAS_ARGUMENT_INDEX
+            ):
+                return None
+            if argument_index == 0:
+                return (
+                    frozenset(),
+                    "formal-global-alias-preserved",
+                )
+        return original(
+            function_entry,
+            argument_index,
+            field_path,
+            visited,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        recovery,
+        "_callee_argument_byte_effect",
+        require_formal_alias,
+    )
+
+    result = recovery._finite_stack_object_byte_values_before(
+        observation,
+        -0x1C,
+        image.entrypoint,
+        (0x12,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset({0})
+    assert "formal-global-alias-accounted" in result[1]
+
+
+@pytest.mark.parametrize(
+    ("formal_values", "expected"),
+    (
+        (frozenset(range(0x100)), frozenset(range(0x100))),
+        (frozenset({0x7F}), None),
+    ),
+)
+def test_stack_object_only_closes_failed_hidden_alias_when_formal_byte_is_saturated(
+    monkeypatch,
+    formal_values,
+    expected,
+):
+    image, observation = stack_zeroed_global_alias_image(
+        "formal-preserve"
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    helper = image.entrypoint + 0xE0
+    global_slot = 0x00403000
+    original = recovery._callee_argument_byte_effect
+
+    def saturate_formal_alias(
+        function_entry,
+        argument_index,
+        field_path,
+        visited,
+        **kwargs,
+    ):
+        if function_entry == helper and argument_index == 0:
+            if kwargs.get("global_alias_slots"):
+                return None
+            return formal_values, "optional-preserve;formal-byte-domain"
+        return original(
+            function_entry,
+            argument_index,
+            field_path,
+            visited,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        recovery,
+        "_callee_argument_byte_effect",
+        saturate_formal_alias,
+    )
+
+    result = recovery._finite_stack_object_byte_values_before(
+        observation,
+        -0x1C,
+        image.entrypoint,
+        (0x12,),
+        frozenset(),
+    )
+
+    if expected is None:
+        assert result is None
+    else:
+        assert result is not None
+        assert result[0] == expected
+        assert "formal-global-alias-byte-saturated" in result[1]
 
 
 def test_callee_argument_effect_allows_terminal_indirect_pointer_publication():
@@ -14960,6 +17765,45 @@ def test_stack_slot_pointer_ignores_superseded_unknown_outparam():
     assert result[0] == frozenset({0x29})
 
 
+def test_object_byte_operand_follows_pointer_read_directly_from_stack_slot(
+    tmp_path,
+):
+    image = load_cfg_program(
+        tmp_path,
+        (
+            "83 ec 08"  # sub esp, 8
+            "c6 44 24 04 29"  # mov byte ptr [esp + 4], 0x29
+            "8d 44 24 04"  # lea eax, [esp + 4]
+            "89 04 24"  # mov dword ptr [esp], eax
+            "ff 34 24"  # push dword ptr [esp]
+            "58"  # pop eax
+            "c3"  # ret
+        ),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        inventory(image),
+        generous_limits(image),
+    )
+    recovery.recover()
+    function_entry = 0x0040100A
+    recovery.function_addresses.add(function_entry)
+    observation = function_entry + 15
+    operand = recovery._owned_decoded(observation).operands[0]
+
+    result = recovery._finite_object_byte_operand_values_before(
+        observation,
+        operand,
+        function_entry,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset({0x29})
+    assert "stack-slot-pointer" in result[1]
+
+
 def test_stack_slot_pointer_rejects_outparam_bypassing_exact_writer():
     image, observation = superseded_outparam_stack_slot_image(
         branch_bypasses_writer=True
@@ -16081,6 +18925,54 @@ def test_fresh_intrusive_list_bound_follows_global_scratch_transformer(
         assert result is not None
         assert result[0] == expected
         assert "allocator=0x401180" in result[1]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("payload-clobber", False),
+        ("node-call-escape", False),
+        ("reader-clobber", False),
+        ("returned-context-helper", True),
+        ("missing-tail", False),
+        ("multiple-node-arms", True),
+        ("multiple-restore-loads", True),
+        ("nullable-node-arm", True),
+        ("optional-restore", True),
+        ("wrong-restore-field", False),
+    ),
+)
+def test_heap_context_global_restore_requires_closed_identity(
+    mutation,
+    expected,
+):
+    image, _allocation_call, restore_address, current_slot = (
+        heap_context_global_restore_image(mutation=mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._heap_context_global_restore_is_closed(
+        restore_address,
+        current_slot,
+    )
+
+    assert (result is not None) is expected
+    if expected:
+        assert "heap-context-save-restore" in result
+        global_values = recovery._finite_global_object_byte_values(
+            current_slot,
+            (0,),
+            frozenset(),
+        )
+        assert global_values is not None
+        assert global_values[0] == frozenset()
+        assert "heap-context-save-restore" in global_values[1]
 
 
 @pytest.mark.parametrize(
@@ -17722,7 +20614,7 @@ def test_byte_producer_checkpoint_requires_durable_resume(tmp_path):
     assert len(certificates) == 1
     certificate = json.loads(certificates[0].read_bytes())
     assert certificate["compiler_sha256"] == image.sha256
-    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == ("movzx-producer-analysis-v24")
+    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == ("movzx-producer-analysis-v25")
     assert certificate["query"]["analysis_semantics"] == (_MOVZX_PRODUCER_ANALYSIS_SEMANTICS)
     assert certificate["query"]["movzx_address"] == 0x00401044
     assert certificate["result"] == {
@@ -20684,7 +23576,13 @@ def test_relocated_static_global_zeroer_proves_exact_forward_zero_fill(
     assert _has_global_pointer_back_reference_origin(recovery) is expected
 
 
-def _global_pointer_consumer_recovery(tmp_path, code: bytes, *, keep_slot_relocation: bool = True):
+def _global_pointer_consumer_recovery(
+    tmp_path,
+    code: bytes,
+    *,
+    callee: bytes | None = None,
+    keep_slot_relocation: bool = True,
+):
     image = load_dispatch_image(
         tmp_path,
         mode=("copied-descriptor-registered-object-global-pointer-back-reference"),
@@ -20694,10 +23592,20 @@ def _global_pointer_consumer_recovery(tmp_path, code: bytes, *, keep_slot_reloca
     assert offset is not None
     data[offset : offset + 0x40] = b"\xcc" * 0x40
     data[offset : offset + len(code)] = code
+    if callee is not None:
+        callee_offset = image.va_to_offset(0x004011D0)
+        assert callee_offset is not None
+        data[callee_offset : callee_offset + 0x30] = b"\xcc" * 0x30
+        data[callee_offset : callee_offset + len(callee)] = callee
     image = replace(
         image,
         data=bytes(data),
-        relocations=tuple(row for row in image.relocations if keep_slot_relocation or row.va != 0x00401191),
+        relocations=tuple(
+            row
+            for row in image.relocations
+            if (keep_slot_relocation or row.va != 0x00401191)
+            and (callee is None or not 0x004011D0 <= row.va < 0x00401200)
+        ),
     )
     recovery = _DirectCfgRecovery(
         image,
@@ -20763,6 +23671,94 @@ def test_global_pointer_field_requires_exact_boolean_canonicalization(tmp_path, 
     )
 
     assert recovery._pointer_definition_preserves_field_without_escape(0x00401190, 0x00401190, 0) is canonical_setcc
+
+
+@pytest.mark.parametrize("hostile", (False, True))
+def test_global_pointer_field_tracks_private_stack_spill_at_call(tmp_path, hostile):
+    callee = (
+        bytes.fromhex("8b 44 24 04 c7 00 01 00 00 00 31 c0 c3")
+        if hostile
+        else bytes.fromhex("8b 44 24 04 8b 48 04 31 c0 c3")
+    )
+    recovery = _global_pointer_consumer_recovery(
+        tmp_path,
+        bytes.fromhex(
+            "a1 00 2a 40 00 83 ec 04 89 04 24 ff 34 24 "
+            "e8 2d 00 00 00 59 83 c4 04 31 c0 c3"
+        ),
+        callee=callee,
+    )
+
+    assert (
+        recovery._pointer_definition_preserves_field_without_escape(
+            0x00401190,
+            0x00401190,
+            0,
+        )
+        is not hostile
+    )
+
+
+def test_global_pointer_field_normalizes_negative_add_stack_spill(tmp_path):
+    recovery = _global_pointer_consumer_recovery(
+        tmp_path,
+        bytes.fromhex(
+            "a1 00 2a 40 00 83 c4 fc 89 04 24 ff 34 24 "
+            "e8 2d 00 00 00 59 83 c4 04 31 c0 c3"
+        ),
+        callee=bytes.fromhex("8b 44 24 04 8b 48 04 31 c0 c3"),
+    )
+
+    assert recovery._pointer_definition_preserves_field_without_escape(
+        0x00401190,
+        0x00401190,
+        0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("callee", "expected_values"),
+    (
+        (
+            bytes.fromhex(
+                "8b 44 24 04 c6 40 12 09 31 c0 c3"
+            ),
+            frozenset({9}),
+        ),
+        (
+            bytes.fromhex(
+                "8b 44 24 04 88 48 12 31 c0 c3"
+            ),
+            None,
+        ),
+    ),
+)
+def test_global_pointer_definition_collects_finite_callee_effect(
+    tmp_path,
+    callee,
+    expected_values,
+):
+    recovery = _global_pointer_consumer_recovery(
+        tmp_path,
+        bytes.fromhex(
+            "a1 00 2a 40 00 50 e8 35 00 00 00 "
+            "59 31 c0 c3"
+        ),
+        callee=callee,
+    )
+
+    effect = recovery._pointer_definition_byte_effect(
+        0x00401190,
+        0x00401190,
+        (0x12,),
+        frozenset(),
+    )
+
+    if expected_values is None:
+        assert effect is None
+    else:
+        assert effect is not None
+        assert effect[0] == expected_values
 
 
 @pytest.mark.parametrize("hostile", (False, True))
@@ -21668,6 +24664,331 @@ def test_fresh_allocation_lifetime_rejects_backedge_publication():
     )
 
 
+def post_publication_fresh_argument_image(
+    *,
+    early_return=False,
+    observer_call=False,
+    reread_mutation=False,
+    unknown_initializer=False,
+):
+    """Publish a fresh node through an argument before initializing it."""
+    text_va = 0x00401000
+    data_va = 0x00403000
+    data = bytearray(0x400)
+    text = memoryview(data)[:0x200]
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (
+            text_va + offset + 5
+        )
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    def patch_short_branch(branch_offset, target_offset):
+        displacement = target_offset - (branch_offset + 2)
+        assert -0x80 <= displacement <= 0x7F
+        text[branch_offset + 1] = displacement & 0xFF
+
+    cursor = emit(0, "53 8b 5c 24 08 6a 1a")
+    allocation_call = text_va + cursor
+    cursor = emit_call(cursor, 0x100)
+    cursor = emit(cursor, "59 85 c0")
+    failure_branch = cursor
+    cursor = emit(cursor, "74 00 89 03")
+    publication = text_va + cursor - 2
+    early_branch = None
+    if early_return:
+        cursor = emit(cursor, "80 7b 08 00")
+        early_branch = cursor
+        cursor = emit(cursor, "74 00")
+    if observer_call:
+        cursor = emit(cursor, "53")
+        cursor = emit_call(cursor, 0x180)
+        cursor = emit(cursor, "59")
+    cursor = emit(
+        cursor,
+        "88 50 04" if unknown_initializer else "c6 40 04 35",
+    )
+    if reread_mutation:
+        cursor = emit(cursor, "8b 0b c6 41 04 36")
+    cursor = emit(cursor, "5b c3")
+    early_return_address = cursor
+    if early_return:
+        cursor = emit(cursor, "5b c3")
+        patch_short_branch(early_branch, early_return_address)
+    failure = cursor
+    emit(cursor, "eb fe")
+    patch_short_branch(failure_branch, failure)
+
+    cursor = emit(
+        0x100,
+        "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08",
+    )
+    cursor = emit(cursor, "39 1d 10 30 40 00 7d 0d 53")
+    cursor = emit(cursor, "68 18 30 40 00")
+    cursor = emit_call(cursor, 0x1C0)
+    cursor = emit(cursor, "59 59 29 1d 10 30 40 00")
+    emit(
+        cursor,
+        "a1 14 30 40 00 01 1d 14 30 40 00 5b c3",
+    )
+    emit(
+        0x180,
+        "8b 44 24 04 8b 00 8a 40 04 c3",
+    )
+    emit(0x1C0, "c3")
+
+    image = pe.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe.Section(
+                ".text",
+                text_va,
+                0,
+                0x200,
+                0x200,
+                0x60000020,
+            ),
+            pe.Section(
+                ".data",
+                data_va,
+                0x200,
+                0x200,
+                0x200,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+    return image, allocation_call, publication
+
+
+def test_callee_argument_effect_accepts_closed_post_publication_initializer():
+    image, _allocation_call, _publication = (
+        post_publication_fresh_argument_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._callee_argument_byte_effect(
+        image.entrypoint,
+        0,
+        (0, 4),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset({0x35})
+    assert "closed-post-publication-initializer" in result[1]
+
+
+def test_callee_argument_effect_bounds_fresh_pointer_publication_byte():
+    image, _allocation_call, _publication = (
+        post_publication_fresh_argument_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._callee_argument_byte_effect(
+        image.entrypoint,
+        0,
+        (0,),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset(range(0x100))
+    assert "fresh-allocation-pointer-byte" in result[1]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "early-return",
+        "observer-call",
+        "reread-mutation",
+        "unknown-initializer",
+    ),
+)
+def test_callee_argument_effect_rejects_open_post_publication_initializer(
+    mutation,
+):
+    image, _allocation_call, _publication = (
+        post_publication_fresh_argument_image(
+            early_return=mutation == "early-return",
+            observer_call=mutation == "observer-call",
+            reread_mutation=mutation == "reread-mutation",
+            unknown_initializer=mutation == "unknown-initializer",
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert (
+        recovery._callee_argument_byte_effect(
+            image.entrypoint,
+            0,
+            (0, 4),
+            frozenset(),
+        )
+        is None
+    )
+
+
+def nested_exact_post_publication_image():
+    """Forward an argument through one exact constructor call."""
+    text_va = 0x00401000
+    data_va = 0x00403000
+    data = bytearray(0x400)
+    text = memoryview(data)[:0x200]
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        displacement = (text_va + target_offset) - (
+            text_va + offset + 5
+        )
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    def patch_short_branch(branch_offset, target_offset):
+        displacement = target_offset - (branch_offset + 2)
+        assert -0x80 <= displacement <= 0x7F
+        text[branch_offset + 1] = displacement & 0xFF
+
+    cursor = emit(0, "53 8b 5c 24 08 53 6a 35")
+    exact_call = text_va + cursor
+    cursor = emit_call(cursor, 0x40)
+    cursor = emit(cursor, "59 59")
+    cursor = emit_call(cursor, 0xC0)
+    emit(cursor, "5b c3")
+
+    cursor = emit(0x40, "53 8b 5c 24 0c 6a 1a")
+    cursor = emit_call(cursor, 0x100)
+    cursor = emit(cursor, "59 85 c0")
+    failure_branch = cursor
+    cursor = emit(cursor, "74 00 89 03 8a 54 24 08 88 50 04 5b c3")
+    failure = cursor
+    emit(cursor, "eb fe")
+    patch_short_branch(failure_branch, failure)
+
+    cursor = emit(0xC0, "51 52")
+    unknown_call = text_va + cursor
+    cursor = emit_call(cursor, 0x40)
+    emit(cursor, "59 59 c3")
+
+    cursor = emit(
+        0x100,
+        "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08",
+    )
+    cursor = emit(cursor, "39 1d 10 30 40 00 7d 0d 53")
+    cursor = emit(cursor, "68 18 30 40 00")
+    cursor = emit_call(cursor, 0x1C0)
+    cursor = emit(cursor, "59 59 29 1d 10 30 40 00")
+    emit(
+        cursor,
+        "a1 14 30 40 00 01 1d 14 30 40 00 5b c3",
+    )
+    emit(0x1C0, "c3")
+
+    image = pe.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe.Section(
+                ".text",
+                text_va,
+                0,
+                0x200,
+                0x200,
+                0x60000020,
+            ),
+            pe.Section(
+                ".data",
+                data_va,
+                0x200,
+                0x200,
+                0x200,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+    return image, exact_call, unknown_call
+
+
+def test_callee_argument_effect_forwards_nested_exact_call_context():
+    image, exact_call, _unknown_call = (
+        nested_exact_post_publication_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    result = recovery._callee_argument_byte_effect(
+        image.entrypoint,
+        0,
+        (0, 4),
+        frozenset(),
+    )
+
+    assert result is not None
+    assert result[0] == frozenset({0x35})
+    assert f"exact-caller={exact_call:#x}" in result[1]
+
+
 def test_pointer_states_discard_unknown_scalar_only_call_return(monkeypatch):
     image = unknown_argument_return_use_image()
     recovery = _DirectCfgRecovery(
@@ -22170,6 +25491,154 @@ def test_argument_guard_excludes_incompatible_branch_arm(tmp_path):
         0,
         guard,
     )
+
+
+def test_argument_guard_excludes_incompatible_affine_branch_arm():
+    image, default_return, merged_return = affine_byte_range_merge_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    guard = _ObjectByteGuard(
+        image.entrypoint,
+        merged_return - 2,
+        "ebp",
+        (0,),
+        0,
+        frozenset({4}),
+        image.entrypoint,
+        "synthetic-input-tag",
+        (0,),
+    )
+
+    assert recovery._argument_guard_excludes_address(
+        merged_return - 2,
+        image.entrypoint,
+        0,
+        guard,
+    )
+    assert (
+        recovery._argument_guard_excludes_address(
+            default_return - 2,
+            image.entrypoint,
+            0,
+            guard,
+        )
+        is None
+    )
+
+
+def test_argument_guard_scopes_field_preservation_to_compatible_affine_arms():
+    image, observation, _merged_return = affine_byte_range_merge_image(
+        mutate_merged_field=True,
+        relink_merged_pointer=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    guard = _ObjectByteGuard(
+        image.entrypoint,
+        observation,
+        "ebp",
+        (8, 0),
+        0,
+        frozenset({4}),
+        image.entrypoint,
+        "synthetic-input-tag",
+        (0,),
+    )
+
+    assert not recovery._function_argument_preserves_field_before(
+        observation,
+        image.entrypoint,
+        0,
+        8,
+    )
+    assert (
+        recovery._register_argument_origin_index(
+            observation,
+            "ebp",
+            image.entrypoint,
+        )
+        is None
+    )
+    exclusions, _details = (
+        recovery._guard_scoped_argument_exclusions_before(
+            observation,
+            image.entrypoint,
+            0,
+            guard,
+        )
+    )
+    assert exclusions
+    assert recovery._function_argument_preserves_field_before(
+        observation,
+        image.entrypoint,
+        0,
+        8,
+        excluded_addresses=exclusions,
+    )
+
+
+def test_guarded_return_recovers_loop_carried_argument_origin(monkeypatch):
+    image, return_address, _merged_return = affine_byte_range_merge_image(
+        mutate_merged_field=True,
+        relink_merged_pointer=True,
+        return_merged_pointer=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    guard = _ObjectByteGuard(
+        image.entrypoint,
+        return_address,
+        "eax",
+        (8, 0),
+        0,
+        frozenset({5}),
+        image.entrypoint,
+        "synthetic-downstream-tag",
+        (0,),
+    )
+
+    monkeypatch.setattr(
+        recovery,
+        "_finite_argument_object_byte_values_before",
+        lambda *_args, **_kwargs: (
+            frozenset({4}),
+            "synthetic-exact-caller-tag",
+        ),
+    )
+
+    assert (
+        recovery._register_argument_origin_index(
+            return_address,
+            "eax",
+            image.entrypoint,
+        )
+        is None
+    )
+    result = (
+        recovery._guarded_returned_argument_discriminator_before(
+            return_address,
+            image.entrypoint,
+            guard,
+            frozenset(),
+        )
+    )
+
+    assert result is not None
+    assert result[0] == 0
+    assert result[1][0] == frozenset({4})
+    assert "guarded-returned-argument-origin" in result[1][1]
 
 
 def test_field_summary_accepts_all_finite_indirect_targets():

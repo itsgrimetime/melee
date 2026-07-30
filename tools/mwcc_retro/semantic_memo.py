@@ -42,6 +42,8 @@ class ReadableGlobalEffectKey:
     exact_call_contexts: tuple[tuple[int, int, int], ...]
     summary_fact_signature: tuple[int, ...]
     control_flow_revision: int
+    require_nonzero_return: bool = False
+    require_zero_return: bool = False
     analysis_semantics: str = READABLE_GLOBAL_EFFECT_SEMANTICS
 
 
@@ -192,6 +194,13 @@ def _key_payload(key: ReadableGlobalEffectKey) -> dict[str, Any]:
         raise SemanticMemoStoreError(
             "readable-global memo key contains an invalid scalar"
         )
+    if not isinstance(
+        key.require_nonzero_return,
+        bool,
+    ) or not isinstance(key.require_zero_return, bool):
+        raise SemanticMemoStoreError(
+            "readable-global memo key contains an invalid return filter"
+        )
     if (
         not isinstance(key.field_path, tuple)
         or any(
@@ -218,7 +227,7 @@ def _key_payload(key: ReadableGlobalEffectKey) -> dict[str, Any]:
         raise SemanticMemoStoreError(
             "readable-global memo key contains an invalid sequence"
         )
-    return {
+    payload = {
         "analysis_semantics": key.analysis_semantics,
         "call_target": key.call_target,
         "slot": key.slot,
@@ -229,6 +238,13 @@ def _key_payload(key: ReadableGlobalEffectKey) -> dict[str, Any]:
         "summary_fact_signature": list(key.summary_fact_signature),
         "control_flow_revision": key.control_flow_revision,
     }
+    # Keep the original unfiltered payload stable so existing exact-replay
+    # checkpoints remain reusable. Filtered summaries occupy distinct hashes.
+    if key.require_nonzero_return:
+        payload["require_nonzero_return"] = True
+    if key.require_zero_return:
+        payload["require_zero_return"] = True
+    return payload
 
 
 def _dependency_payload(

@@ -58,6 +58,32 @@ def test_equal_dependency_tuples_are_interned():
     assert len(store.dependency_pool) == 1
 
 
+def test_return_filters_are_distinct_memo_keys():
+    store = InMemoryReadableGlobalEffectMemoStore()
+    unfiltered = readable_key()
+    nonzero = ReadableGlobalEffectKey(
+        call_target=unfiltered.call_target,
+        slot=unfiltered.slot,
+        field_path=unfiltered.field_path,
+        exact_call_contexts=unfiltered.exact_call_contexts,
+        summary_fact_signature=unfiltered.summary_fact_signature,
+        control_flow_revision=unfiltered.control_flow_revision,
+        require_nonzero_return=True,
+    )
+    store.put(unfiltered, finite_entry())
+    store.put(
+        nonzero,
+        DependencyMemoEntry(
+            "b" * 64,
+            finite_entry().dependencies,
+            (frozenset({2}), "nonzero"),
+        ),
+    )
+
+    assert store.get(unfiltered) != store.get(nonzero)
+    assert len(store) == 2
+
+
 def test_unequal_dependency_tuples_remain_distinct():
     store = InMemoryReadableGlobalEffectMemoStore()
     store.put(
