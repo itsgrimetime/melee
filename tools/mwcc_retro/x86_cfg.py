@@ -56944,14 +56944,35 @@ def _recover_cfg_fixed_point(
             ),
         )
 
+    def hypothesis_kind(row) -> str:
+        if isinstance(row, _ObjectCallbackTableHypothesis):
+            return "object-callback-table"
+        if isinstance(row, _CopiedDescriptorCallbackHypothesis):
+            return "copied-descriptor-callback-table"
+        return "relocated-dispatch-slot"
+
+    def report_hypothesis_progress(message: str) -> None:
+        session = producer_certificate_session
+        if session is not None and session.progress_callback is not None:
+            session.progress_callback(message)
+
     accepted: dict[tuple, Any] = {}
     rejected_identities: set[tuple] = set()
     rejected_object_bases: set[int] = set()
     producer_domain_memo: dict[tuple[Any, ...], _ProducerDomainMemoEntry] = {}
     finite_control_memo: dict[tuple[Any, ...], _ProducerDomainMemoEntry] = {}
     reusable_trial: tuple[_DirectCfgRecovery, RawCfg] | None = None
+    iteration = 0
+    trial_count = 0
     while True:
+        iteration += 1
         if reusable_trial is None:
+            report_hypothesis_progress(
+                "hypothesis replay baseline-start: "
+                f"iteration={iteration};accepted={len(accepted)};"
+                f"rejected={len(rejected_identities)};"
+                f"rejected_object_bases={len(rejected_object_bases)}"
+            )
             current_inventory = SeedInventory(
                 (
                     *seed_inventory.records,
@@ -56990,9 +57011,24 @@ def _recover_cfg_fixed_point(
                 ),
             )
             current_cfg = current_recovery.recover()
+            report_hypothesis_progress(
+                "hypothesis replay baseline-complete: "
+                f"iteration={iteration};instructions="
+                f"{len(current_cfg.instructions)};blocks="
+                f"{len(current_cfg.blocks)};edges={len(current_cfg.edges)};"
+                f"tables={len(current_cfg.jump_tables)}"
+            )
         else:
             current_recovery, current_cfg = reusable_trial
             reusable_trial = None
+            report_hypothesis_progress(
+                "hypothesis replay baseline-reused-trial: "
+                f"iteration={iteration};accepted={len(accepted)};"
+                f"rejected={len(rejected_identities)};instructions="
+                f"{len(current_cfg.instructions)};blocks="
+                f"{len(current_cfg.blocks)};edges={len(current_cfg.edges)};"
+                f"tables={len(current_cfg.jump_tables)}"
+            )
         valid_hypotheses = {
             identity(row): row
             for row in (
@@ -57012,6 +57048,12 @@ def _recover_cfg_fixed_point(
                 rejected_identities.add(hypothesis_identity)
                 if isinstance(hypothesis, _ObjectCallbackTableHypothesis):
                     rejected_object_bases.add(hypothesis.table_base)
+            report_hypothesis_progress(
+                "hypothesis replay accepted-invalidated: "
+                f"iteration={iteration};count={len(invalidated)};"
+                f"accepted={len(accepted)};"
+                f"rejected={len(rejected_identities)}"
+            )
             continue
         refreshed = {
             hypothesis_identity: valid_hypotheses[hypothesis_identity]
@@ -57020,6 +57062,12 @@ def _recover_cfg_fixed_point(
         }
         if refreshed:
             accepted.update(refreshed)
+            report_hypothesis_progress(
+                "hypothesis replay accepted-refreshed: "
+                f"iteration={iteration};count={len(refreshed)};"
+                f"accepted={len(accepted)};"
+                f"rejected={len(rejected_identities)}"
+            )
             continue
 
         candidates = tuple(
@@ -57062,6 +57110,7 @@ def _recover_cfg_fixed_point(
             for row in candidates
             if isinstance(row, _RelocatedDispatchSlotHypothesis)
         )
+        available_count = len(candidates)
         if object_candidates:
             candidates = object_candidates[:1]
         elif copied_candidates:
@@ -57073,11 +57122,45 @@ def _recover_cfg_fixed_point(
                 for row in relocated_candidates
                 if row.transfer_address == transfer_address
             )
+        selected_kind = (
+            hypothesis_kind(candidates[0]) if candidates else "none"
+        )
+        selected_transfer = (
+            candidates[0].transfer_address
+            if candidates
+            and isinstance(
+                candidates[0],
+                _RelocatedDispatchSlotHypothesis,
+            )
+            else None
+        )
+        selected_transfer_text = (
+            f"{selected_transfer:#x}"
+            if selected_transfer is not None
+            else "none"
+        )
+        report_hypothesis_progress(
+            "hypothesis replay candidate-selection: "
+            f"iteration={iteration};valid={len(valid_hypotheses)};"
+            f"available={available_count};"
+            f"object={len(object_candidates)};"
+            f"copied={len(copied_candidates)};"
+            f"relocated={len(relocated_candidates)};"
+            f"selected={len(candidates)};"
+            f"selected_kind={selected_kind};"
+            f"selected_transfer={selected_transfer_text}"
+        )
         new_candidates = {
             identity(hypothesis): hypothesis
             for hypothesis in candidates
         }
         if not new_candidates:
+            report_hypothesis_progress(
+                "hypothesis replay complete: "
+                f"iteration={iteration};trials={trial_count};"
+                f"accepted={len(accepted)};"
+                f"rejected={len(rejected_identities)}"
+            )
             if producer_certificate_session is not None:
                 producer_certificate_session.require_fresh_resume(
                     current_recovery.producer_query_ids
@@ -57096,6 +57179,14 @@ def _recover_cfg_fixed_point(
                     for record in hypothesis.records
                 ),
             )
+        )
+        trial_count += 1
+        report_hypothesis_progress(
+            "hypothesis replay trial-start: "
+            f"iteration={iteration};trial={trial_count};"
+            f"selected={len(new_candidates)};"
+            f"selected_kind={selected_kind};"
+            f"selected_transfer={selected_transfer_text}"
         )
         trial_recovery = _DirectCfgRecovery(
             image,
@@ -57136,6 +57227,20 @@ def _recover_cfg_fixed_point(
                 *trial_recovery.validated_relocated_dispatch_slot_hypotheses,
             )
         }
+        reproduced_selected = sum(
+            hypothesis_identity in reproduced_hypotheses
+            for hypothesis_identity in new_candidates
+        )
+        report_hypothesis_progress(
+            "hypothesis replay trial-complete: "
+            f"iteration={iteration};trial={trial_count};"
+            f"selected={len(new_candidates)};"
+            f"reproduced={reproduced_selected};"
+            f"reported={len(reproduced_hypotheses)};instructions="
+            f"{len(trial_cfg.instructions)};blocks="
+            f"{len(trial_cfg.blocks)};edges={len(trial_cfg.edges)};"
+            f"tables={len(trial_cfg.jump_tables)}"
+        )
         reproduced_changed = False
         for hypothesis_identity, hypothesis in new_candidates.items():
             if hypothesis_identity in reproduced_hypotheses:
@@ -57148,6 +57253,13 @@ def _recover_cfg_fixed_point(
             rejected_identities.add(hypothesis_identity)
             if isinstance(hypothesis, _ObjectCallbackTableHypothesis):
                 rejected_object_bases.add(hypothesis.table_base)
+        report_hypothesis_progress(
+            "hypothesis replay trial-outcome: "
+            f"iteration={iteration};trial={trial_count};"
+            f"accepted={len(accepted)};"
+            f"rejected={len(rejected_identities)};"
+            f"reproduced_changed={int(reproduced_changed)}"
+        )
         if (
             not reproduced_changed
             and new_candidates.keys() <= reproduced_hypotheses.keys()

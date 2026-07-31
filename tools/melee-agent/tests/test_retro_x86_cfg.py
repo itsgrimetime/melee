@@ -26643,6 +26643,80 @@ def test_relocated_bootstrap_trials_isolate_transfer_groups(
     assert len(recoveries) == 4
 
 
+def test_hypothesis_replay_reports_outer_progress(
+    tmp_path,
+    monkeypatch,
+):
+    image = load_dispatch_image(
+        tmp_path,
+        mode="copied-descriptor-slot-zero-hypothesis",
+    )
+    recoveries = []
+    progress = []
+    original = _DirectCfgRecovery.recover
+
+    def reject_trial_candidate(recovery):
+        cfg = original(recovery)
+        recoveries.append(recovery)
+        if len(recoveries) == 2:
+            recovery.validated_copied_descriptor_callback_hypotheses.clear()
+        return cfg
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "recover",
+        reject_trial_candidate,
+    )
+
+    recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+        producer_checkpoint_dir=tmp_path / "producer-checkpoints",
+        producer_query_budget=0,
+        producer_progress_callback=progress.append,
+    )
+
+    outer = [
+        row
+        for row in progress
+        if row.startswith("hypothesis replay ")
+    ]
+    assert any(
+        row.startswith(
+            "hypothesis replay baseline-start: iteration=1;"
+        )
+        for row in outer
+    )
+    assert any(
+        "candidate-selection: iteration=1;" in row
+        and "selected_kind=copied-descriptor-callback-table" in row
+        for row in outer
+    )
+    assert any(
+        row.startswith(
+            "hypothesis replay trial-start: iteration=1;trial=1;"
+        )
+        for row in outer
+    )
+    assert any(
+        row.startswith(
+            "hypothesis replay trial-complete: iteration=1;trial=1;"
+        )
+        and "reproduced=0" in row
+        for row in outer
+    )
+    assert any(
+        row.startswith(
+            "hypothesis replay baseline-start: iteration=2;"
+        )
+        for row in outer
+    )
+    assert outer[-1].startswith(
+        "hypothesis replay complete: iteration=2;trials=1;"
+    )
+
+
 def test_object_hypothesis_replay_accepts_expanded_consumer_inventory(
     tmp_path,
     monkeypatch,
