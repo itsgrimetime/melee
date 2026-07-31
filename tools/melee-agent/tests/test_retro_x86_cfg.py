@@ -20610,6 +20610,13 @@ def test_byte_producer_checkpoint_requires_durable_resume(tmp_path):
         "ordinary closure block-scan-complete",
         "ordinary closure producer-phase-start",
     } <= {row.split(":", 1)[0] for row in progress}
+    assert any(
+        row.startswith(
+            "hypothesis replay checkpoint-budget-exhausted: "
+            "phase=baseline;"
+        )
+        for row in progress
+    )
     certificates = tuple(checkpoint_dir.glob("*.json"))
     assert len(certificates) == 1
     certificate = json.loads(certificates[0].read_bytes())
@@ -26700,10 +26707,72 @@ def test_rejected_relocated_trial_rebuilds_after_producer_checkpoint(
             build_seed_inventory(image, ()),
             generous_limits(image),
             producer_checkpoint_dir=tmp_path / "producer-checkpoints",
-            producer_query_budget=0,
+            producer_query_budget=1,
         )
 
     assert len(recoveries) == 3
+
+
+def test_hypothesis_replay_stops_when_checkpoint_budget_is_exhausted(
+    tmp_path,
+    monkeypatch,
+):
+    image = load_cfg_image(tmp_path)
+    entry = image.entrypoint
+    record = SeedRecord(
+        address=entry,
+        category="relocated-dispatch-bootstrap-entry",
+        provenance_address=0x00402000,
+        provenance_bytes="00104000",
+        detail="synthetic-invalid-bootstrap-candidate",
+        is_function=True,
+    )
+    invalid = x86_cfg_module._RelocatedDispatchSlotHypothesis(
+        transfer_address=entry,
+        table_base=0x00402000,
+        index=0,
+        slot_address=0x00402000,
+        target=entry,
+        records=(record,),
+    )
+    recoveries = []
+    progress = []
+    original = _DirectCfgRecovery.recover
+
+    def exhaust_checkpoint_budget_during_trial(recovery):
+        cfg = original(recovery)
+        recoveries.append(recovery)
+        recovery.relocated_dispatch_slot_hypotheses.add(invalid)
+        if len(recoveries) == 2:
+            session = recovery.producer_certificate_session
+            assert session is not None
+            session.completed_this_run += 1
+        return cfg
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "recover",
+        exhaust_checkpoint_budget_during_trial,
+    )
+
+    with pytest.raises(ProducerCheckpointIncomplete):
+        recover_cfg(
+            image,
+            build_seed_inventory(image, ()),
+            generous_limits(image),
+            producer_checkpoint_dir=tmp_path / "producer-checkpoints",
+            producer_query_budget=0,
+            producer_progress_callback=progress.append,
+        )
+
+    assert len(recoveries) == 2
+    assert any(
+        row.startswith(
+            "hypothesis replay checkpoint-budget-exhausted: "
+            "phase=trial;"
+        )
+        for row in progress
+    )
 
 
 def test_hypothesis_replay_reports_outer_progress(

@@ -56956,6 +56956,25 @@ def _recover_cfg_fixed_point(
         if session is not None and session.progress_callback is not None:
             session.progress_callback(message)
 
+    def require_checkpoint_resume_if_budget_exhausted(
+        phase: str,
+        recovery: _DirectCfgRecovery,
+    ) -> None:
+        session = producer_certificate_session
+        if (
+            session is None
+            or session.completed_this_run == 0
+            or session.remaining_budget != 0
+        ):
+            return
+        report_hypothesis_progress(
+            "hypothesis replay checkpoint-budget-exhausted: "
+            f"phase={phase};completed_this_run="
+            f"{session.completed_this_run};"
+            f"discovered={len(recovery.producer_query_ids)}"
+        )
+        session.require_fresh_resume(recovery.producer_query_ids)
+
     accepted: dict[tuple, Any] = {}
     rejected_identities: set[tuple] = set()
     rejected_object_bases: set[int] = set()
@@ -57012,6 +57031,10 @@ def _recover_cfg_fixed_point(
                 ),
             )
             current_cfg = current_recovery.recover()
+            require_checkpoint_resume_if_budget_exhausted(
+                "baseline",
+                current_recovery,
+            )
             report_hypothesis_progress(
                 "hypothesis replay baseline-complete: "
                 f"iteration={iteration};instructions="
@@ -57238,6 +57261,10 @@ def _recover_cfg_fixed_point(
             ),
         )
         trial_cfg = trial_recovery.recover()
+        require_checkpoint_resume_if_budget_exhausted(
+            "trial",
+            trial_recovery,
+        )
         reproduced_hypotheses = {
             identity(row): row
             for row in (
