@@ -30,7 +30,7 @@ from tools.mwcc_retro import (
 from src.mwcc_debug.diff_capture import _run_with_process_group_timeout  # noqa: E402
 
 RETRO_DUMP_TIMEOUT_SECONDS = 600
-_STATIC_BACKEND_PRODUCER_QUERY_BUDGET = 1024
+_STATIC_BACKEND_PRODUCER_QUERY_BUDGET = 2048
 
 
 def setup_mwcc_ghidra(**kwargs):
