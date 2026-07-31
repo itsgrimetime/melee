@@ -56962,11 +56962,12 @@ def _recover_cfg_fixed_point(
     producer_domain_memo: dict[tuple[Any, ...], _ProducerDomainMemoEntry] = {}
     finite_control_memo: dict[tuple[Any, ...], _ProducerDomainMemoEntry] = {}
     reusable_trial: tuple[_DirectCfgRecovery, RawCfg] | None = None
+    reusable_baseline: tuple[_DirectCfgRecovery, RawCfg] | None = None
     iteration = 0
     trial_count = 0
     while True:
         iteration += 1
-        if reusable_trial is None:
+        if reusable_trial is None and reusable_baseline is None:
             report_hypothesis_progress(
                 "hypothesis replay baseline-start: "
                 f"iteration={iteration};accepted={len(accepted)};"
@@ -57018,11 +57019,24 @@ def _recover_cfg_fixed_point(
                 f"{len(current_cfg.blocks)};edges={len(current_cfg.edges)};"
                 f"tables={len(current_cfg.jump_tables)}"
             )
-        else:
+        elif reusable_trial is not None:
             current_recovery, current_cfg = reusable_trial
             reusable_trial = None
             report_hypothesis_progress(
                 "hypothesis replay baseline-reused-trial: "
+                f"iteration={iteration};accepted={len(accepted)};"
+                f"rejected={len(rejected_identities)};instructions="
+                f"{len(current_cfg.instructions)};blocks="
+                f"{len(current_cfg.blocks)};edges={len(current_cfg.edges)};"
+                f"tables={len(current_cfg.jump_tables)}"
+            )
+        else:
+            if reusable_baseline is None:
+                raise AssertionError("reusable baseline is missing")
+            current_recovery, current_cfg = reusable_baseline
+            reusable_baseline = None
+            report_hypothesis_progress(
+                "hypothesis replay baseline-reused-clean: "
                 f"iteration={iteration};accepted={len(accepted)};"
                 f"rejected={len(rejected_identities)};instructions="
                 f"{len(current_cfg.instructions)};blocks="
@@ -57188,6 +57202,11 @@ def _recover_cfg_fixed_point(
             f"selected_kind={selected_kind};"
             f"selected_transfer={selected_transfer_text}"
         )
+        completed_before_trial = (
+            producer_certificate_session.completed_this_run
+            if producer_certificate_session is not None
+            else 0
+        )
         trial_recovery = _DirectCfgRecovery(
             image,
             trial_inventory,
@@ -57260,6 +57279,22 @@ def _recover_cfg_fixed_point(
             f"rejected={len(rejected_identities)};"
             f"reproduced_changed={int(reproduced_changed)}"
         )
+        producer_checkpoint_created = (
+            producer_certificate_session is not None
+            and producer_certificate_session.completed_this_run
+            != completed_before_trial
+        )
+        if (
+            reproduced_selected == 0
+            and selected_kind == "relocated-dispatch-slot"
+            and not producer_checkpoint_created
+        ):
+            reusable_baseline = current_recovery, current_cfg
+            report_hypothesis_progress(
+                "hypothesis replay baseline-retained: "
+                f"iteration={iteration};trial={trial_count};"
+                "reason=relocated-batch-rejected"
+            )
         if (
             not reproduced_changed
             and new_candidates.keys() <= reproduced_hypotheses.keys()

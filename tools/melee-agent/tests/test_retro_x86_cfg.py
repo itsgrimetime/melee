@@ -26605,6 +26605,7 @@ def test_relocated_bootstrap_trials_isolate_transfer_groups(
         records=(valid_record,),
     )
     recoveries = []
+    progress = []
     original = _DirectCfgRecovery.recover
 
     def simulate_invalid_group_pollution(recovery):
@@ -26632,6 +26633,9 @@ def test_relocated_bootstrap_trials_isolate_transfer_groups(
         image,
         build_seed_inventory(image, ()),
         generous_limits(image),
+        producer_checkpoint_dir=tmp_path / "producer-checkpoints",
+        producer_query_budget=0,
+        producer_progress_callback=progress.append,
     )
 
     bootstrap_slots = {
@@ -26640,7 +26644,66 @@ def test_relocated_bootstrap_trials_isolate_transfer_groups(
         if row.category == "relocated-dispatch-bootstrap-entry"
     }
     assert bootstrap_slots == {valid_record.provenance_address}
-    assert len(recoveries) == 4
+    assert len(recoveries) == 3
+    assert any(
+        row.startswith("hypothesis replay baseline-retained:")
+        for row in progress
+    )
+    assert any(
+        row.startswith("hypothesis replay baseline-reused-clean:")
+        for row in progress
+    )
+
+
+def test_rejected_relocated_trial_rebuilds_after_producer_checkpoint(
+    tmp_path,
+    monkeypatch,
+):
+    image = load_cfg_image(tmp_path)
+    entry = image.entrypoint
+    record = SeedRecord(
+        address=entry,
+        category="relocated-dispatch-bootstrap-entry",
+        provenance_address=0x00402000,
+        provenance_bytes="00104000",
+        detail="synthetic-invalid-bootstrap-candidate",
+        is_function=True,
+    )
+    invalid = x86_cfg_module._RelocatedDispatchSlotHypothesis(
+        transfer_address=entry,
+        table_base=0x00402000,
+        index=0,
+        slot_address=0x00402000,
+        target=entry,
+        records=(record,),
+    )
+    recoveries = []
+    original = _DirectCfgRecovery.recover
+
+    def checkpoint_during_rejected_trial(recovery):
+        cfg = original(recovery)
+        recoveries.append(recovery)
+        recovery.relocated_dispatch_slot_hypotheses.add(invalid)
+        if len(recoveries) == 2:
+            recovery.producer_certificate_session.completed_this_run += 1
+        return cfg
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "recover",
+        checkpoint_during_rejected_trial,
+    )
+
+    with pytest.raises(ProducerCheckpointIncomplete):
+        recover_cfg(
+            image,
+            build_seed_inventory(image, ()),
+            generous_limits(image),
+            producer_checkpoint_dir=tmp_path / "producer-checkpoints",
+            producer_query_budget=0,
+        )
+
+    assert len(recoveries) == 3
 
 
 def test_hypothesis_replay_reports_outer_progress(
