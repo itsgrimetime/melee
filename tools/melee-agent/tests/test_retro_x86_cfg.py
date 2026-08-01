@@ -26481,6 +26481,40 @@ def test_hypothesis_replay_discovers_second_order_object_table(tmp_path):
     assert not any(row.address == 0x00401058 for row in cfg.control_targets.unresolved)
 
 
+def test_object_callback_replay_is_never_suppressed_by_relocated_ledger(tmp_path):
+    image = load_dispatch_image(
+        tmp_path, mode="copied-descriptor-object-hypothesis-chain"
+    )
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    first_progress = []
+    first = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+        producer_checkpoint_dir=checkpoint_dir,
+        producer_query_budget=0,
+        producer_progress_callback=first_progress.append,
+    )
+    second_progress = []
+    second = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+        producer_checkpoint_dir=checkpoint_dir,
+        producer_query_budget=0,
+        producer_progress_callback=second_progress.append,
+    )
+
+    assert canonical_jsonl_bytes(second) == canonical_jsonl_bytes(first)
+    for progress in (first_progress, second_progress):
+        assert any("selected_kind=object-callback-table" in row for row in progress)
+        assert any("trial-start:" in row for row in progress)
+        assert not any(
+            "rejection-ledger-hit:" in row or "rejection-ledger-skip:" in row
+            for row in progress
+        )
+
+
 def test_hypothesis_replay_reuses_all_reproduced_trial_cfg(tmp_path, monkeypatch):
     image = load_dispatch_image(tmp_path, mode="copied-descriptor-slot-zero-hypothesis")
     recoveries = []
