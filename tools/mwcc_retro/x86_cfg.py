@@ -2238,6 +2238,14 @@ class _DirectCfgRecovery:
         self.highlow_relocation_references_by_value: (
             dict[int, frozenset[int]] | None
         ) = None
+        self.absolute_memory_write_fingerprint_index_version: (
+            tuple[int, int, int] | None
+        ) = None
+        self.absolute_memory_write_fingerprint_entries: tuple[
+            tuple[int, int, int, int], ...
+        ] = ()
+        self.absolute_memory_write_fingerprint_starts: tuple[int, ...] = ()
+        self.absolute_memory_write_fingerprint_prefix_ends: tuple[int, ...] = ()
         self.bounded_signed_word_global_slot_cache: dict[
             tuple[Any, ...],
             tuple[
@@ -3346,23 +3354,9 @@ class _DirectCfgRecovery:
             ]
             rows.extend(
                 f"absolute={write_start:#x}:{writer:#x}:"
-                f"{self.instructions[writer].bytes_hex}:"
-                f"width={destination.size}"
-                for write_start, writers in sorted(
-                    self.absolute_memory_writes.items()
-                )
-                for writer in sorted(writers)
-                for destination in self._owned_decoded(writer).operands
-                if (
-                    destination.type == X86_OP_MEM
-                    and destination.access & CS_AC_WRITE
-                    and destination.size > 0
-                    and self._absolute_memory_operand(destination)
-                    == write_start
-                    and write_start < identifier + 4
-                    and identifier
-                    < write_start + destination.size
-                )
+                f"{self.instructions[writer].bytes_hex}:width={width}"
+                for write_start, _end, writer, width in
+                self._absolute_memory_write_fingerprint_overlaps(identifier)
             )
             digest = hashlib.sha256(
                 "\n".join(rows).encode("utf-8")
@@ -3409,6 +3403,63 @@ class _DirectCfgRecovery:
             )
             return digest
         raise CfgRecoveryError(f"unknown producer dependency kind: {dependency_kind}")
+
+    def _absolute_memory_write_fingerprint_overlaps(
+        self, identifier: int
+    ) -> tuple[tuple[int, int, int, int], ...]:
+        """Return canonical exact absolute writes overlapping four bytes."""
+        version = (
+            self.global_slot_write_count,
+            len(self.absolute_memory_writes),
+            self.absolute_memory_write_count,
+        )
+        if self.absolute_memory_write_fingerprint_index_version != version:
+            entries = []
+            for write_start, writers in sorted(self.absolute_memory_writes.items()):
+                for writer in sorted(writers):
+                    for destination in self._owned_decoded(writer).operands:
+                        if (
+                            destination.type == X86_OP_MEM
+                            and destination.access & CS_AC_WRITE
+                            and destination.size > 0
+                            and self._absolute_memory_operand(destination)
+                            == write_start
+                        ):
+                            entries.append(
+                                (
+                                    write_start,
+                                    write_start + destination.size,
+                                    writer,
+                                    destination.size,
+                                )
+                            )
+            entries.sort(key=lambda row: (row[0], row[2]))
+            starts = tuple(row[0] for row in entries)
+            prefix_ends = []
+            maximum_end = -1
+            for _start, end, _writer, _width in entries:
+                maximum_end = max(maximum_end, end)
+                prefix_ends.append(maximum_end)
+            self.absolute_memory_write_fingerprint_index_version = version
+            self.absolute_memory_write_fingerprint_entries = tuple(entries)
+            self.absolute_memory_write_fingerprint_starts = starts
+            self.absolute_memory_write_fingerprint_prefix_ends = tuple(prefix_ends)
+
+        right = bisect_right(
+            self.absolute_memory_write_fingerprint_starts, identifier + 3
+        )
+        left = right
+        while (
+            left > 0
+            and self.absolute_memory_write_fingerprint_prefix_ends[left - 1]
+            > identifier
+        ):
+            left -= 1
+        return tuple(
+            row
+            for row in self.absolute_memory_write_fingerprint_entries[left:right]
+            if row[0] < identifier + 4 and identifier < row[1]
+        )
 
     def _producer_dependency_snapshot(
         self, dependencies: set[tuple[str, int]]

@@ -19794,6 +19794,38 @@ def test_global_slot_dependency_fingerprint_reuses_unchanged_writer_inventory(
     assert writes.iterations == 2
 
 
+def test_global_slot_dependency_fingerprint_indexes_absolute_writes_once_per_revision(
+    tmp_path,
+):
+    class CountingWrites(dict):
+        item_iterations = 0
+
+        def items(self):
+            self.item_iterations += 1
+            return super().items()
+
+    image = load_cfg_image(tmp_path)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    writer = min(recovery.instructions)
+    recovery.absolute_memory_writes = CountingWrites(
+        {
+            0x00410000 + offset * 4: {writer}
+            for offset in range(256)
+        }
+    )
+    recovery.absolute_memory_write_count += 1
+
+    recovery._producer_dependency_fingerprint("global-slot", 0x00410000)
+    recovery._producer_dependency_fingerprint("global-slot", 0x004103FC)
+
+    assert recovery.absolute_memory_writes.item_iterations == 1
+
+
 def test_byte_producer_memo_is_seed_order_independent():
     image = movzx_dispatch_image(
         closed_producer_bound=74,
