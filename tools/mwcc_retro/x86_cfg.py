@@ -2238,9 +2238,7 @@ class _DirectCfgRecovery:
         self.highlow_relocation_references_by_value: (
             dict[int, frozenset[int]] | None
         ) = None
-        self.absolute_memory_write_fingerprint_index_version: (
-            tuple[int, int, int] | None
-        ) = None
+        self.absolute_memory_write_fingerprint_index_version: int | None = None
         self.absolute_memory_write_fingerprint_entries: tuple[
             tuple[int, int, int, int], ...
         ] = ()
@@ -2283,6 +2281,7 @@ class _DirectCfgRecovery:
         self.global_slot_write_count = 0
         self.absolute_memory_writes: dict[int, set[int]] = {}
         self.absolute_memory_write_count = 0
+        self.absolute_memory_write_revision = 0
         self.dynamic_field_writes: dict[int, set[_DynamicFieldWrite]] = {}
         self.dynamic_field_write_count = 0
         self.dynamic_field_cache: dict[
@@ -3408,11 +3407,7 @@ class _DirectCfgRecovery:
         self, identifier: int
     ) -> tuple[tuple[int, int, int, int], ...]:
         """Return canonical exact absolute writes overlapping four bytes."""
-        version = (
-            self.global_slot_write_count,
-            len(self.absolute_memory_writes),
-            self.absolute_memory_write_count,
-        )
+        version = self.absolute_memory_write_revision
         if self.absolute_memory_write_fingerprint_index_version != version:
             entries = []
             for write_start, writers in sorted(self.absolute_memory_writes.items()):
@@ -3795,17 +3790,24 @@ class _DirectCfgRecovery:
         for operand in decoded.operands:
             absolute = self._absolute_memory_operand(operand)
             if absolute is not None and operand.access & CS_AC_WRITE:
-                writers = self.absolute_memory_writes.setdefault(
-                    absolute,
-                    set(),
-                )
-                before = len(writers)
-                writers.add(address)
-                self.absolute_memory_write_count += len(writers) - before
+                self._record_absolute_memory_write(absolute, address)
         for byte_address in range(address, end):
             self.byte_owners[byte_address] = address
         self._check_count("max_instructions", len(self.instructions))
         return instruction
+
+    def _record_absolute_memory_write(self, address: int, writer: int) -> None:
+        """Record one new absolute write and invalidate dependent indexes."""
+        writers = self.absolute_memory_writes.setdefault(address, set())
+        if writer in writers:
+            return
+        writers.add(writer)
+        self.absolute_memory_write_count += 1
+        self._invalidate_absolute_memory_write_index()
+
+    def _invalidate_absolute_memory_write_index(self) -> None:
+        """Advance the exact revision after any supported write mutation."""
+        self.absolute_memory_write_revision += 1
 
     @staticmethod
     def _direct_target(decoded) -> int | None:

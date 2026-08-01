@@ -5,6 +5,7 @@ import sys
 from collections import Counter
 from dataclasses import asdict, fields, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import capstone
 import pytest
@@ -19222,6 +19223,7 @@ def test_bounded_global_signed_word_closes_every_writer(mutation, expected):
             bytes_hex=instruction.bytes_hex + "00",
         )
         recovery.absolute_memory_write_count += 1
+        recovery._invalidate_absolute_memory_write_index()
         assert (
             recovery._producer_dependency_fingerprint(
                 "global-slot",
@@ -19824,6 +19826,128 @@ def test_global_slot_dependency_fingerprint_indexes_absolute_writes_once_per_rev
     recovery._producer_dependency_fingerprint("global-slot", 0x004103FC)
 
     assert recovery.absolute_memory_writes.item_iterations == 1
+
+
+def test_absolute_write_fingerprint_index_matches_legacy_overlap_rows(tmp_path):
+    image = load_cfg_image(tmp_path)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    def destination(address, width):
+        return SimpleNamespace(
+            type=capstone.x86_const.X86_OP_MEM,
+            access=capstone.CS_AC_WRITE,
+            size=width,
+            absolute=address,
+        )
+
+    operands = {
+        0x10: (destination(0xFE, 8),),
+        0x20: (destination(0x100, 1), destination(0x100, 2)),
+        0x30: (destination(0x100, 4),),
+        0x40: (destination(0x104, 8),),
+        0x50: (destination(0x108, 1),),
+    }
+    recovery.absolute_memory_writes = {
+        0xFE: {0x10},
+        0x100: {0x20, 0x30},
+        0x104: {0x40},
+        0x108: {0x50},
+    }
+    recovery._owned_decoded = lambda writer: SimpleNamespace(
+        operands=operands[writer]
+    )
+    recovery._absolute_memory_operand = lambda operand: operand.absolute
+    recovery.instructions = {
+        writer: SimpleNamespace(bytes_hex=f"writer-{writer:#x}")
+        for writer in operands
+    }
+    recovery.global_slot_writes = {
+        0x100: {
+            _GlobalSlotWrite(0x200, 0, "first"),
+            _GlobalSlotWrite(0x204, None, "second"),
+        }
+    }
+    recovery.global_slot_write_count = 2
+
+    def legacy(identifier):
+        return tuple(
+            (write_start, write_start + destination.size, writer, destination.size)
+            for write_start, writers in sorted(
+                recovery.absolute_memory_writes.items()
+            )
+            for writer in sorted(writers)
+            for destination in recovery._owned_decoded(writer).operands
+            if (
+                destination.type == capstone.x86_const.X86_OP_MEM
+                and destination.access & capstone.CS_AC_WRITE
+                and destination.size > 0
+                and recovery._absolute_memory_operand(destination) == write_start
+                and write_start < identifier + 4
+                and identifier < write_start + destination.size
+            )
+        )
+
+    def legacy_fingerprint(identifier):
+        rows = [
+            f"{row.instruction_address:#x}:"
+            f"{row.value if row.value is not None else 'unknown'}:"
+            f"{row.provenance}"
+            for row in sorted(
+                recovery.global_slot_writes.get(identifier, ()),
+                key=lambda row: (
+                    row.instruction_address,
+                    row.value if row.value is not None else -1,
+                    row.provenance,
+                ),
+            )
+        ]
+        rows.extend(
+            f"absolute={write_start:#x}:{writer:#x}:"
+            f"{recovery.instructions[writer].bytes_hex}:width={width}"
+            for write_start, _end, writer, width in legacy(identifier)
+        )
+        return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
+
+    for identifier in (0xFA, 0xFC, 0x100, 0x103, 0x104, 0x108):
+        assert recovery._absolute_memory_write_fingerprint_overlaps(identifier) == legacy(
+            identifier
+        )
+        assert (
+            recovery._producer_dependency_fingerprint("global-slot", identifier)
+            == legacy_fingerprint(identifier)
+        )
+
+
+def test_absolute_write_fingerprint_index_rebuilds_on_dedicated_revision(tmp_path):
+    image = load_cfg_image(tmp_path)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    def write(address, width):
+        return SimpleNamespace(
+            type=capstone.x86_const.X86_OP_MEM,
+            access=capstone.CS_AC_WRITE,
+            size=width,
+            absolute=address,
+        )
+    recovery.absolute_memory_writes = {0x00402300: {0x10}}
+    recovery._owned_decoded = lambda writer: SimpleNamespace(
+        operands=(write(0x00402300, 4 if writer == 0x10 else 8),)
+    )
+    recovery._absolute_memory_operand = lambda operand: operand.absolute
+    before = recovery.absolute_memory_write_revision
+    first = recovery._absolute_memory_write_fingerprint_overlaps(0x00402300)
+
+    recovery._record_absolute_memory_write(0x00402300, 0x20)
+
+    assert recovery.absolute_memory_write_revision == before + 1
+    assert recovery._absolute_memory_write_fingerprint_overlaps(0x00402300) != first
 
 
 def test_byte_producer_memo_is_seed_order_independent():
