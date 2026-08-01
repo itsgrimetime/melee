@@ -26713,6 +26713,70 @@ def test_rejected_relocated_trial_rebuilds_after_producer_checkpoint(
     assert len(recoveries) == 3
 
 
+def test_rejected_relocated_batch_is_durably_skipped_on_identical_resume(
+    tmp_path,
+    monkeypatch,
+):
+    image = load_cfg_image(tmp_path)
+    entry = image.entrypoint
+    record = SeedRecord(
+        address=entry,
+        category="relocated-dispatch-bootstrap-entry",
+        provenance_address=0x00402000,
+        provenance_bytes="00104000",
+        detail="synthetic-durable-rejection",
+        is_function=True,
+    )
+    rejected = x86_cfg_module._RelocatedDispatchSlotHypothesis(
+        transfer_address=entry,
+        table_base=0x00402000,
+        index=0,
+        slot_address=0x00402000,
+        target=entry,
+        records=(record,),
+    )
+    original = _DirectCfgRecovery.recover
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+
+    def reject_relocated_trial(recovery):
+        cfg = original(recovery)
+        recovery.relocated_dispatch_slot_hypotheses.add(rejected)
+        if any(
+            row.category == "relocated-dispatch-bootstrap-entry"
+            for row in recovery.seed_records
+        ):
+            recovery.validated_relocated_dispatch_slot_hypotheses.clear()
+        return cfg
+
+    monkeypatch.setattr(_DirectCfgRecovery, "recover", reject_relocated_trial)
+
+    first_progress = []
+    first = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+        producer_checkpoint_dir=checkpoint_dir,
+        producer_query_budget=0,
+        producer_progress_callback=first_progress.append,
+    )
+    second_progress = []
+    second = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+        producer_checkpoint_dir=checkpoint_dir,
+        producer_query_budget=0,
+        producer_progress_callback=second_progress.append,
+    )
+
+    assert second.instructions == first.instructions
+    assert second.edges == first.edges
+    assert second.seed_inventory == first.seed_inventory
+    assert any("rejection-ledger-write:" in row for row in first_progress)
+    assert any("rejection-ledger-hit:" in row for row in second_progress)
+    assert not any("trial-start:" in row for row in second_progress)
+
+
 def test_hypothesis_replay_stops_when_checkpoint_budget_is_exhausted(
     tmp_path,
     monkeypatch,
