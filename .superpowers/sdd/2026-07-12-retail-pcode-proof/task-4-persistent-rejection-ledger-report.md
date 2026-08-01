@@ -45,3 +45,11 @@ RED: `python -m pytest -o addopts='' tools/melee-agent/tests/test_retro_x86_cfg.
 GREEN: `python -m pytest -o addopts='' tools/melee-agent/tests/test_retro_x86_cfg.py -k 'durably_skipped_on_identical_resume or relocated_rejection_ledger_contract_mutation_replays or relocated_bootstrap_trials_isolate_transfer_groups or rejected_relocated_trial_rebuilds_after_producer_checkpoint' -q` reported 4 passed; `python -m py_compile tools/mwcc_retro/x86_cfg.py`, scoped Ruff, and `git diff --check` passed.
 
 Soundness: a hostile changed contract is bound to a different expected payload and cannot yield a hit; a checksum-valid contract mutation at the original path is rejected as invalid. Accepted and non-relocated paths remain outside the ledger. The broader hostile matrix and multi-batch counting coverage remain follow-up work.
+
+## Round 2 fix
+
+Rejected identities now use explicit recursive structured JSON, never `repr()`, and are sorted by canonical bytes. The exact contract retains accepted state, rejected identities, and rejected object bases. A two-transfer integration replay proves both persisted relocated batches hit/skip after one clean baseline with no trial recovery, while complete canonical JSONL remains equal.
+
+RED/GREEN commands: `python -m pytest -o addopts='' tools/melee-agent/tests/test_retro_x86_cfg.py -k relocated_rejection_ledger_skips_two_batches_with_one_baseline -q`; then `python -m pytest -o addopts='' tools/melee-agent/tests/test_retro_x86_cfg.py -k 'durably_skipped_on_identical_resume or relocated_rejection_ledger_contract_mutation_replays or relocated_rejection_ledger_skips_two_batches_with_one_baseline' -q`, `python -m py_compile tools/mwcc_retro/x86_cfg.py`, scoped Ruff, and `git diff --check`. GREEN result: 3 passed, 1157 deselected; static checks passed.
+
+Soundness: each subsequent batch key includes the rejected prefix state; reused clean baselines therefore cannot apply a decision under a different candidate-selection state. No exact artifacts were accessed.

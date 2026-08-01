@@ -12,7 +12,7 @@ import tempfile
 import time
 from bisect import bisect_left, bisect_right
 from collections import OrderedDict
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -57069,6 +57069,25 @@ def _recover_cfg_fixed_point(
         return {"kind": hypothesis_kind(row), "hypothesis": asdict(row)}
 
     def rejection_contract() -> dict[str, Any]:
+        def canonical_identity(value: Any) -> Any:
+            if is_dataclass(value):
+                return {
+                    "type": type(value).__qualname__,
+                    "fields": canonical_identity(asdict(value)),
+                }
+            if isinstance(value, tuple | list):
+                return [canonical_identity(row) for row in value]
+            if isinstance(value, dict):
+                return {
+                    str(key): canonical_identity(row)
+                    for key, row in sorted(value.items())
+                }
+            if value is None or isinstance(value, str | int | bool):
+                return value
+            raise CfgRecoveryError(
+                "rejected hypothesis identity is not canonical JSON data"
+            )
+
         return {
             "compiler_sha256": image.sha256,
             "analysis_semantics": _RELOCATED_REJECTION_ANALYSIS_SEMANTICS,
@@ -57079,7 +57098,8 @@ def _recover_cfg_fixed_point(
                 key=_canonical_json_bytes,
             ),
             "rejected_identities": sorted(
-                (repr(row) for row in rejected_identities),
+                (canonical_identity(row) for row in rejected_identities),
+                key=_canonical_json_bytes,
             ),
             "rejected_object_bases": sorted(rejected_object_bases),
         }

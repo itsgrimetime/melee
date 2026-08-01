@@ -26808,6 +26808,56 @@ def test_relocated_rejection_ledger_contract_mutation_replays(tmp_path, monkeypa
     assert any("trial-start:" in row for row in progress)
 
 
+def test_relocated_rejection_ledger_skips_two_batches_with_one_baseline(
+    tmp_path, monkeypatch
+):
+    image = load_cfg_image(tmp_path)
+    entry = image.entrypoint
+    rows = tuple(
+        x86_cfg_module._RelocatedDispatchSlotHypothesis(
+            entry + offset,
+            0x00402000 + offset * 4,
+            0,
+            0x00402000 + offset * 4,
+            entry,
+            (
+                SeedRecord(
+                    entry,
+                    "relocated-dispatch-bootstrap-entry",
+                    0x00402000 + offset * 4,
+                    "00104000",
+                    f"synthetic-two-batch-{offset}",
+                    True,
+                ),
+            ),
+        )
+        for offset in (0, 1)
+    )
+    original = _DirectCfgRecovery.recover
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    recoveries = []
+
+    def reject_each_relocated_trial(recovery):
+        cfg = original(recovery)
+        recoveries.append(recovery)
+        recovery.relocated_dispatch_slot_hypotheses.update(rows)
+        if any(row.category == "relocated-dispatch-bootstrap-entry" for row in recovery.seed_records):
+            recovery.validated_relocated_dispatch_slot_hypotheses.clear()
+        return cfg
+
+    monkeypatch.setattr(_DirectCfgRecovery, "recover", reject_each_relocated_trial)
+    first = recover_cfg(image, build_seed_inventory(image, ()), generous_limits(image), producer_checkpoint_dir=checkpoint_dir, producer_query_budget=0)
+    recoveries.clear()
+    progress = []
+    second = recover_cfg(image, build_seed_inventory(image, ()), generous_limits(image), producer_checkpoint_dir=checkpoint_dir, producer_query_budget=0, producer_progress_callback=progress.append)
+
+    assert len(recoveries) == 1
+    assert canonical_jsonl_bytes(second) == canonical_jsonl_bytes(first)
+    assert sum("rejection-ledger-hit:" in row for row in progress) == 2
+    assert sum("rejection-ledger-skip:" in row for row in progress) == 2
+    assert not any("trial-start:" in row for row in progress)
+
+
 def test_hypothesis_replay_stops_when_checkpoint_budget_is_exhausted(
     tmp_path,
     monkeypatch,
