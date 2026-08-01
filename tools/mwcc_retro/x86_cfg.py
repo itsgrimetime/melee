@@ -197,6 +197,7 @@ class AnalysisLimits:
 _PRODUCER_CERTIFICATE_SCHEMA = "mwcc-retro-x86-producer-certificate-v1"
 _MOVZX_PRODUCER_ANALYSIS_SEMANTICS = "movzx-producer-analysis-v25"
 _RELOCATED_REJECTION_LEDGER_SCHEMA = "mwcc-retro-relocated-rejection-ledger-v1"
+_RELOCATED_REJECTION_ANALYSIS_SEMANTICS = "relocated-rejection-analysis-v1"
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -1671,8 +1672,18 @@ class _RelocatedRejectionLedger:
     def _path(self, digest: str) -> Path:
         return self.directory / f"{digest}.json"
 
-    def contains(self, contract: dict[str, Any], batch: list[dict[str, Any]]) -> dict[str, int] | None:
-        payload = json.loads(_canonical_json_bytes({"schema": _RELOCATED_REJECTION_LEDGER_SCHEMA, "contract": contract, "batch": batch}))
+    def contains(
+        self, contract: dict[str, Any], batch: list[dict[str, Any]]
+    ) -> dict[str, int] | None:
+        payload = json.loads(
+            _canonical_json_bytes(
+                {
+                    "schema": _RELOCATED_REJECTION_LEDGER_SCHEMA,
+                    "contract": contract,
+                    "batch": batch,
+                }
+            )
+        )
         digest = hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
         path = self._path(digest)
         if not path.exists():
@@ -1680,7 +1691,9 @@ class _RelocatedRejectionLedger:
             return None
         try:
             value = _strict_json_object(path.read_bytes(), path=path)
-            if set(value) != {"schema", "contract", "batch", "high_water_marks", "sha256"}:
+            if set(value) != {
+                "schema", "contract", "batch", "high_water_marks", "sha256"
+            }:
                 raise ProducerCertificateError("rejection ledger schema mismatch")
             unsigned = {key: value[key] for key in ("schema", "contract", "batch", "high_water_marks")}
             if (
@@ -1689,7 +1702,15 @@ class _RelocatedRejectionLedger:
                 or hashlib.sha256(_canonical_json_bytes(unsigned)).hexdigest() != value["sha256"]
                 or {key: unsigned[key] for key in ("schema", "contract", "batch")} != payload
                 or not isinstance(value["high_water_marks"], dict)
-                or any(isinstance(row, bool) or not isinstance(row, int) or row < 0 for row in value["high_water_marks"].values())
+                or set(value["high_water_marks"])
+                != set(contract["limits"])
+                or any(
+                    isinstance(row, bool)
+                    or not isinstance(row, int)
+                    or row < 0
+                    or row >= contract["limits"][name]
+                    for name, row in value["high_water_marks"].items()
+                )
             ):
                 raise ProducerCertificateError("rejection ledger binding mismatch")
         except (OSError, ProducerCertificateError, ValueError):
@@ -1698,16 +1719,35 @@ class _RelocatedRejectionLedger:
         self._report("hit", digest)
         return value["high_water_marks"]
 
-    def publish(self, contract: dict[str, Any], batch: list[dict[str, Any]], recovery: _DirectCfgRecovery) -> None:
-        payload = json.loads(_canonical_json_bytes({"schema": _RELOCATED_REJECTION_LEDGER_SCHEMA, "contract": contract, "batch": batch}))
+    def publish(
+        self, contract: dict[str, Any], batch: list[dict[str, Any]], cfg: RawCfg
+    ) -> None:
+        payload = json.loads(
+            _canonical_json_bytes(
+                {
+                    "schema": _RELOCATED_REJECTION_LEDGER_SCHEMA,
+                    "contract": contract,
+                    "batch": batch,
+                }
+            )
+        )
         digest = hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
         path = self._path(digest)
         value = {
             **payload,
-            "high_water_marks": recovery.high_water,
+            "high_water_marks": {
+                row.limit_name: row.observed for row in cfg.high_water_marks
+            },
         }
         value["sha256"] = hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+        directory_existed = self.directory.exists()
         self.directory.mkdir(parents=True, exist_ok=True)
+        if not directory_existed:
+            parent_fd = os.open(self.directory.parent, os.O_RDONLY)
+            try:
+                os.fsync(parent_fd)
+            finally:
+                os.close(parent_fd)
         temporary_path: Path | None = None
         try:
             with tempfile.NamedTemporaryFile(mode="wb", dir=self.directory, prefix=f".{digest}.", suffix=".tmp", delete=False) as temporary:
@@ -57031,13 +57071,17 @@ def _recover_cfg_fixed_point(
     def rejection_contract() -> dict[str, Any]:
         return {
             "compiler_sha256": image.sha256,
-            "analysis_semantics": _RELOCATED_REJECTION_LEDGER_SCHEMA,
+            "analysis_semantics": _RELOCATED_REJECTION_ANALYSIS_SEMANTICS,
             "limits": asdict(limits),
             "authoritative_seed_inventory": seed_inventory.to_dict(),
             "accepted_hypotheses": sorted(
                 (hypothesis_payload(row) for row in accepted.values()),
                 key=_canonical_json_bytes,
             ),
+            "rejected_identities": sorted(
+                (repr(row) for row in rejected_identities),
+            ),
+            "rejected_object_bases": sorted(rejected_object_bases),
         }
 
     def report_hypothesis_progress(message: str) -> None:
@@ -57294,17 +57338,21 @@ def _recover_cfg_fixed_point(
                 rejection_contract(), selected_batch
             )
             if recorded_high_water is not None:
-                for name, observed in recorded_high_water.items():
-                    if name in current_recovery.high_water:
-                        current_recovery.high_water[name] = max(
-                            current_recovery.high_water[name], observed
-                        )
+                current_cfg = replace(
+                    current_cfg,
+                    high_water_marks=tuple(
+                        AnalysisHighWater(name, recorded_high_water[name])
+                        for name in current_recovery.limits.__dataclass_fields__
+                    ),
+                )
                 rejected_identities.update(identity(row) for row in candidates)
                 report_hypothesis_progress(
                     "hypothesis replay rejection-ledger-skip: "
                     f"iteration={iteration};selected={len(candidates)}"
                 )
+                reusable_baseline = current_recovery, current_cfg
                 continue
+        selected_rejection_contract = rejection_contract()
         new_candidates = {
             identity(hypothesis): hypothesis
             for hypothesis in candidates
@@ -57436,9 +57484,9 @@ def _recover_cfg_fixed_point(
         ):
             if rejection_ledger is not None:
                 rejection_ledger.publish(
-                    rejection_contract(),
+                    selected_rejection_contract,
                     [hypothesis_payload(row) for row in candidates],
-                    current_recovery,
+                    current_cfg,
                 )
             reusable_baseline = current_recovery, current_cfg
             report_hypothesis_progress(
