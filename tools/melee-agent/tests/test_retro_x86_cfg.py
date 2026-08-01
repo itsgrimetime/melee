@@ -19950,6 +19950,40 @@ def test_absolute_write_fingerprint_index_rebuilds_on_dedicated_revision(tmp_pat
     assert recovery._absolute_memory_write_fingerprint_overlaps(0x00402300) != first
 
 
+def test_global_slot_fingerprint_rechecks_dedicated_absolute_write_revision(
+    tmp_path,
+):
+    image = load_cfg_image(tmp_path)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    destination = SimpleNamespace(
+        type=capstone.x86_const.X86_OP_MEM,
+        access=capstone.CS_AC_WRITE,
+        size=4,
+        absolute=0x00402300,
+    )
+    recovery.absolute_memory_writes = {0x00402300: {0x10}}
+    recovery._owned_decoded = lambda _writer: SimpleNamespace(
+        operands=(destination,)
+    )
+    recovery._absolute_memory_operand = lambda operand: operand.absolute
+    recovery.instructions = {0x10: SimpleNamespace(bytes_hex="before")}
+
+    first = recovery._producer_dependency_fingerprint("global-slot", 0x00402300)
+    recovery.instructions[0x10] = SimpleNamespace(bytes_hex="after")
+    recovery._invalidate_absolute_memory_write_index()
+    changed = recovery._producer_dependency_fingerprint("global-slot", 0x00402300)
+    expected = hashlib.sha256(
+        b"absolute=0x402300:0x10:after:width=4"
+    ).hexdigest()
+
+    assert changed != first
+    assert changed == expected
+
+
 def test_byte_producer_memo_is_seed_order_independent():
     image = movzx_dispatch_image(
         closed_producer_bound=74,

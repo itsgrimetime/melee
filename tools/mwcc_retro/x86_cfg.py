@@ -3331,8 +3331,7 @@ class _DirectCfgRecovery:
             cache_key = (dependency_kind, identifier)
             version = (
                 self.global_slot_write_count,
-                len(self.absolute_memory_writes),
-                self.absolute_memory_write_count,
+                self.absolute_memory_write_revision,
             )
             cached = self.producer_dependency_fingerprint_cache.get(cache_key)
             if (
