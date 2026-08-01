@@ -3,7 +3,7 @@ import json
 import struct
 import sys
 from collections import Counter
-from dataclasses import fields, replace
+from dataclasses import asdict, fields, replace
 from pathlib import Path
 
 import capstone
@@ -26858,6 +26858,87 @@ def test_relocated_rejection_ledger_skips_two_batches_with_one_baseline(
     assert not any("trial-start:" in row for row in progress)
 
 
+def _ledger_boundary(tmp_path):
+    limits = generous_limits(load_cfg_image(tmp_path))
+    contract = {
+        "compiler_sha256": "a" * 64,
+        "analysis_semantics": "relocated-rejection-analysis-v1",
+        "limits": asdict(limits),
+        "authoritative_seed_inventory": {"records": []},
+        "accepted_hypotheses": [],
+        "rejected_identities": [],
+        "rejected_object_bases": [],
+    }
+    batch = [{"kind": "relocated-dispatch-slot", "hypothesis": {"target": 1, "records": []}}]
+    ledger = x86_cfg_module._RelocatedRejectionLedger(tmp_path)
+    payload = {"schema": x86_cfg_module._RELOCATED_REJECTION_LEDGER_SCHEMA, "contract": contract, "batch": batch}
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    value = {**payload, "high_water_marks": {name: 0 for name in contract["limits"]}}
+    value["sha256"] = hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    ledger.directory.mkdir()
+    path = ledger._path(digest)
+    path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")))
+    return ledger, contract, batch, path, value
+
+
+@pytest.mark.parametrize("field", [
+    "compiler_sha256", "analysis_semantics", "limits", "authoritative_seed_inventory",
+    "accepted_hypotheses", "rejected_identities", "rejected_object_bases",
+])
+def test_relocated_rejection_ledger_changed_contract_input_misses(tmp_path, field):
+    ledger, contract, batch, _path, _value = _ledger_boundary(tmp_path)
+    changed = json.loads(json.dumps(contract))
+    changed[field] = "changed" if field in {"compiler_sha256", "analysis_semantics"} else ["changed"]
+    assert ledger.contains(changed, batch) is None
+
+
+@pytest.mark.parametrize("field, value", [("target", 2), ("records", [{"provenance": "changed"}])])
+def test_relocated_rejection_ledger_changed_batch_input_misses(tmp_path, field, value):
+    ledger, contract, batch, _path, _value = _ledger_boundary(tmp_path)
+    changed = json.loads(json.dumps(batch))
+    changed[0]["hypothesis"][field] = value
+    assert ledger.contains(contract, changed) is None
+
+
+@pytest.mark.parametrize("mutation", [
+    "malformed", "missing", "extra", "bad-hash", "changed-contract", "changed-batch",
+    "high-water-missing", "high-water-extra", "high-water-bool", "high-water-negative",
+    "high-water-at-limit",
+])
+def test_relocated_rejection_ledger_hostile_record_is_invalid(tmp_path, mutation):
+    ledger, contract, batch, path, value = _ledger_boundary(tmp_path)
+    if mutation == "malformed":
+        path.write_text("{")
+    elif mutation == "missing":
+        value.pop("batch")
+        path.write_text(json.dumps(value))
+    elif mutation == "extra":
+        value["extra"] = True
+        path.write_text(json.dumps(value))
+    elif mutation == "bad-hash":
+        value["sha256"] = "0" * 64
+        path.write_text(json.dumps(value))
+    else:
+        if mutation == "changed-contract":
+            value["contract"]["compiler_sha256"] = "b" * 64
+        elif mutation == "changed-batch":
+            value["batch"][0]["hypothesis"]["target"] = 2
+        elif mutation == "high-water-missing":
+            value["high_water_marks"].pop(next(iter(value["high_water_marks"])))
+        elif mutation == "high-water-extra":
+            value["high_water_marks"]["extra"] = 0
+        elif mutation == "high-water-bool":
+            value["high_water_marks"]["max_instructions"] = True
+        elif mutation == "high-water-negative":
+            value["high_water_marks"]["max_instructions"] = -1
+        else:
+            value["high_water_marks"]["max_instructions"] = contract["limits"]["max_instructions"]
+        unsigned = {key: value[key] for key in ("schema", "contract", "batch", "high_water_marks")}
+        value["sha256"] = hashlib.sha256(json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        path.write_text(json.dumps(value))
+    assert ledger.contains(contract, batch) is None
+
+
 def test_hypothesis_replay_stops_when_checkpoint_budget_is_exhausted(
     tmp_path,
     monkeypatch,
@@ -26992,6 +27073,7 @@ def test_hypothesis_replay_reports_outer_progress(
     assert outer[-1].startswith(
         "hypothesis replay complete: iteration=2;trials=1;"
     )
+    assert not any("rejection-ledger-hit:" in row or "rejection-ledger-skip:" in row for row in outer)
 
 
 def test_object_hypothesis_replay_accepts_expanded_consumer_inventory(
