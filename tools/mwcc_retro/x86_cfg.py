@@ -200,7 +200,7 @@ _OBJECT_TAG_LIFECYCLE_CERTIFICATE_SCHEMA = (
     "mwcc-retro-x86-object-tag-lifecycle-certificate-v1"
 )
 _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS = (
-    "object-tag-lifecycle-analysis-v1"
+    "object-tag-lifecycle-analysis-v2"
 )
 _RELOCATED_REJECTION_LEDGER_SCHEMA = "mwcc-retro-relocated-rejection-ledger-v1"
 _RELOCATED_REJECTION_ANALYSIS_SEMANTICS = "relocated-rejection-analysis-v1"
@@ -4437,19 +4437,27 @@ class _DirectCfgRecovery:
                     function_entry,
                 )
             if not same_receiver:
-                source_stack_slot = self._stack_value_logical_offset(
+                source_stack_value = self._stack_value_origin(
                     movzx.address,
                     source_register,
                     function_entry,
                 )
-                pushed_stack_slot = self._stack_value_logical_offset(
+                pushed_stack_value = self._stack_value_origin(
                     pushed[0].address,
                     pushed[1],
                     function_entry,
                 )
                 same_receiver = (
-                    source_stack_slot is not None
-                    and source_stack_slot == pushed_stack_slot
+                    source_stack_value is not None
+                    and pushed_stack_value is not None
+                    and source_stack_value[1:] == pushed_stack_value[1:]
+                    and self._stack_slot_value_is_unchanged(
+                        source_stack_value[0],
+                        pushed_stack_value[0],
+                        source_stack_value[1],
+                        source_stack_value[2],
+                        function_entry,
+                    )
                 )
             if (
                 not same_receiver
@@ -4544,7 +4552,30 @@ class _DirectCfgRecovery:
                 if register != x86_const.X86_REG_EFLAGS
             ):
                 return False
-        return left_operand.mem.disp == stack_delta + right_operand.mem.disp
+        left_slot = self._stack_operand_logical_offset(
+            left_address,
+            left_operand,
+            function_entry,
+        )
+        right_slot = self._stack_operand_logical_offset(
+            right_address,
+            right_operand,
+            function_entry,
+        )
+        return (
+            left_operand.size == right_operand.size == 4
+            and left_operand.mem.disp
+            == stack_delta + right_operand.mem.disp
+            and left_slot is not None
+            and left_slot == right_slot
+            and self._stack_slot_value_is_unchanged(
+                left_address,
+                right_address,
+                left_slot,
+                left_operand.size,
+                function_entry,
+            )
+        )
 
     def _object_tag_lifecycle_stack_slot_values_before(
         self,
@@ -4689,7 +4720,27 @@ class _DirectCfgRecovery:
                         function_entry,
                     )
                 if forwarded_argument == argument_index:
-                    recursive_forwarding_calls.add(call.address)
+                    other_formals_preserve = True
+                    for callee_argument in range(8):
+                        other = self._pushed_call_argument(
+                            call.address,
+                            callee_argument,
+                        )
+                        if other is None:
+                            break
+                        if callee_argument == argument_index:
+                            continue
+                        if not self._function_argument_preserves_field_before(
+                            address,
+                            function_entry,
+                            callee_argument,
+                            field_path[0],
+                            reject_pointer_publication=True,
+                        ):
+                            other_formals_preserve = False
+                            break
+                    if other_formals_preserve:
+                        recursive_forwarding_calls.add(call.address)
             if not self._function_argument_preserves_field_before(
                 address,
                 function_entry,
@@ -4698,6 +4749,7 @@ class _DirectCfgRecovery:
                 assumed_preserving_calls=frozenset(
                     recursive_forwarding_calls
                 ),
+                reject_pointer_publication=True,
             ):
                 return None
             return self._object_tag_lifecycle_argument_values(
@@ -4790,6 +4842,7 @@ class _DirectCfgRecovery:
                 function_entry,
                 argument_index,
                 field_path[0],
+                reject_pointer_publication=True,
             ):
                 return None
             return self._object_tag_lifecycle_argument_values(
@@ -4811,6 +4864,7 @@ class _DirectCfgRecovery:
                     function_entry,
                     argument_index,
                     field_path[0],
+                    reject_pointer_publication=True,
                 ):
                     return None
                 return self._object_tag_lifecycle_argument_values(
@@ -4864,12 +4918,24 @@ class _DirectCfgRecovery:
     ) -> tuple[frozenset[int], str] | None:
         """Compute a least fixed point over closed argument forwarding."""
         self._note_producer_dependency(function_entry)
-        node = (function_entry, argument_index)
+        node = (
+            "lifecycle-argument",
+            function_entry,
+            argument_index,
+            field_path,
+        )
         if node in active_values:
             return (
                 frozenset(),
                 f"lifecycle-scc-backedge={function_entry:#x}:{argument_index}",
             )
+        if any(
+            len(active) == 4
+            and active[0] == "lifecycle-argument"
+            and active[1:3] == node[1:3]
+            for active in active_values
+        ):
+            return None
         if not self._incoming_call_domain_is_closed(function_entry):
             return None
         calls = self._incoming_call_sites(function_entry)
@@ -4938,6 +5004,9 @@ class _DirectCfgRecovery:
         )
 
         def compute_domain():
+            self._note_producer_dynamic_field_dependency(
+                query.field_path[-1]
+            )
             values: set[int] = set()
             details = []
             for binding in bindings:
@@ -27309,10 +27378,6 @@ class _DirectCfgRecovery:
         if (
             self._allow_movzx_producer_domains
             and operator in {"movzx", "movzx-producer-domain"}
-            and any(
-                relocation_types.get(base + index * entry_width) != 3
-                for index in range(index_min, index_max + 1)
-            )
         ):
             lifecycle = self._object_tag_lifecycle_guard_for_index(
                 instruction.address,
@@ -42284,6 +42349,7 @@ class _DirectCfgRecovery:
         *,
         excluded_addresses: frozenset[int] = frozenset(),
         assumed_preserving_calls: frozenset[int] = frozenset(),
+        reject_pointer_publication: bool = False,
     ) -> bool:
         """Prove an argument field survives every path to one observation.
 
@@ -42302,6 +42368,7 @@ class _DirectCfgRecovery:
             field,
             tuple(sorted(excluded_addresses)),
             tuple(sorted(assumed_preserving_calls)),
+            reject_pointer_publication,
         )
         if key in active:
             return False
@@ -42366,6 +42433,25 @@ class _DirectCfgRecovery:
                     value + operand.mem.disp < field + 4
                     and field < value + operand.mem.disp + operand.size
                     for value in base_values
+                ):
+                    return False
+            if decoded.id == X86_INS_MOV and len(decoded.operands) == 2:
+                destination, source = decoded.operands
+                if (
+                    reject_pointer_publication
+                    and destination.type == X86_OP_MEM
+                    and not self._is_stack_backed_memory(
+                        address,
+                        destination,
+                        function_entry,
+                    )
+                    and self._relative_operand_offsets(
+                        address,
+                        source,
+                        function_entry,
+                        argument_index,
+                        states,
+                    )
                 ):
                     return False
             if not decoded.group(CS_GRP_CALL):
@@ -49863,10 +49949,17 @@ class _DirectCfgRecovery:
         delta = sp_delta if family == "esp" else bp_delta
         return None if delta is None else delta + operand.mem.disp
 
-    def _stack_value_logical_offset(self, address: int, operand, function_entry: int) -> int | None:
+    def _stack_value_origin(
+        self,
+        address: int,
+        operand,
+        function_entry: int,
+    ) -> tuple[int, int, int] | None:
         direct = self._stack_operand_logical_offset(address, operand, function_entry)
-        if direct is not None or operand.type != X86_OP_REG:
-            return direct
+        if direct is not None:
+            return address, direct, operand.size
+        if operand.type != X86_OP_REG:
+            return None
         definitions = self._register_definitions_across_blocks(
             address,
             self._register_family(operand.reg),
@@ -49877,9 +49970,93 @@ class _DirectCfgRecovery:
         definition = self._owned_decoded(next(iter(definitions)))
         if definition.id != X86_INS_MOV or len(definition.operands) != 2 or definition.operands[1].type != X86_OP_MEM:
             return None
-        return self._stack_operand_logical_offset(
+        source = definition.operands[1]
+        offset = self._stack_operand_logical_offset(
             definition.address, definition.operands[1], function_entry
         )
+        return (
+            None
+            if offset is None
+            else (definition.address, offset, source.size)
+        )
+
+    def _stack_slot_value_is_unchanged(
+        self,
+        left_address: int,
+        right_address: int,
+        slot_offset: int,
+        width: int,
+        function_entry: int,
+    ) -> bool:
+        """Prove one logical stack slot has no overlapping intervening write."""
+        if width <= 0:
+            return False
+        start, end = sorted((left_address, right_address))
+        if start == end:
+            return True
+        following_entry = self._following_function_entry(function_entry)
+        if not self._reachable_within_function(
+            start,
+            end,
+            function_entry,
+            following_entry,
+        ):
+            return False
+        for address in self._function_instruction_addresses_between(
+            function_entry,
+            start + self.instructions[start].size,
+            end,
+        ):
+            if not (
+                self._reachable_within_function(
+                    start,
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+                and self._reachable_within_function(
+                    address,
+                    end,
+                    function_entry,
+                    following_entry,
+                )
+            ):
+                continue
+            decoded = self._owned_decoded(address)
+            for destination in decoded.operands:
+                if (
+                    destination.type != X86_OP_MEM
+                    or not destination.access & CS_AC_WRITE
+                    or destination.size <= 0
+                ):
+                    continue
+                write_offset = self._stack_operand_logical_offset(
+                    address,
+                    destination,
+                    function_entry,
+                )
+                if write_offset is None:
+                    if self._is_stack_backed_memory(
+                        address,
+                        destination,
+                        function_entry,
+                    ):
+                        return False
+                    continue
+                if (
+                    write_offset < slot_offset + width
+                    and slot_offset < write_offset + destination.size
+                ):
+                    return False
+        return True
+
+    def _stack_value_logical_offset(self, address: int, operand, function_entry: int) -> int | None:
+        origin = self._stack_value_origin(
+            address,
+            operand,
+            function_entry,
+        )
+        return None if origin is None else origin[1]
 
     def _same_closed_caller_value(
         self,

@@ -45,7 +45,6 @@ from tools.mwcc_retro.x86_cfg import (  # noqa: E402
     _materialize_function_entries,
     _MovzxProducerQuery,
     _ObjectByteGuard,
-    _ObjectTagLifecycleQuery,
     _producer_certificate_digest,
     _ProducerCertificateSession,
     build_seed_inventory,
@@ -3226,13 +3225,19 @@ def lifecycle_movzx_dispatch_image(
     recursive_argument_mismatch=False,
     recursive_tag_write=False,
     recursive_tag_write_after=False,
+    recursive_nested_association=False,
+    recursive_cross_formal_alias_write=False,
+    receiver_escape_alias_mutation=False,
     second_argument_mismatch=False,
     second_stack_receiver=False,
+    second_stack_receiver_overwrite=False,
     second_nested_receiver=False,
     nested_tag_write=False,
     open_caller=False,
     unrelocated_index=None,
     non_executable_index=None,
+    all_entries_relocated=False,
+    latent_tag_writer=False,
 ):
     """Cross-function object-tag lifecycle with a recursive forwarding SCC."""
     from tools.mwcc_retro import pe as pe_mod
@@ -3273,11 +3278,23 @@ def lifecycle_movzx_dispatch_image(
         cursor = emit(cursor, "59 85 c0")
         allocation_failure_branches.append(cursor)
         cursor = emit(cursor, f"74 00 89 c6 c6 06 {tag:02x}")
+        if recursive_nested_association and consumer == consumer_a:
+            cursor = emit(cursor, "c7 46 0a 00 31 40 00")
         if unknown_tag_write and tag == tag_high:
             cursor = emit(cursor, "88 16")
-        cursor = emit(cursor, "56")
+        cursor = emit(
+            cursor,
+            "56 56"
+            if recursive_cross_formal_alias_write and consumer == consumer_a
+            else "56",
+        )
         cursor = emit_call(cursor, consumer)
-        return emit(cursor, "59")
+        return emit(
+            cursor,
+            "83 c4 08"
+            if recursive_cross_formal_alias_write and consumer == consumer_a
+            else "59",
+        )
 
     cursor = emit_object(cursor, 0x10, 0, consumer_a)
     cursor = emit_object(cursor, 0x1A, tag_high, consumer_a)
@@ -3311,18 +3328,39 @@ def lifecycle_movzx_dispatch_image(
     # consumer_a(arg0): dispatch, then recursively forward exactly arg0.  The
     # recursive call makes pointwise top-byte induction insufficient while the
     # least lifecycle fixed point remains rooted by entry().
-    cursor = emit(consumer_a, "56 8b 74 24 08")
+    cursor = emit(
+        consumer_a,
+        (
+            "57 56 8b 74 24 0c 8b 7c 24 10 c6 07 c8"
+            if recursive_cross_formal_alias_write
+            else "56 8b 74 24 08"
+        ),
+    )
+    if receiver_escape_alias_mutation:
+        cursor = emit(cursor, "89 35 00 31 40 00")
+        cursor = emit_call(cursor, 0x1C0)
     if recursive_tag_write:
         cursor = emit(cursor, "88 0e")
-    cursor = emit(cursor, "51" if recursive_argument_mismatch else "56")
+    if recursive_cross_formal_alias_write:
+        cursor = emit(cursor, "57 56")
+    elif recursive_nested_association:
+        cursor = emit(cursor, "ff 76 0a")
+    else:
+        cursor = emit(cursor, "51" if recursive_argument_mismatch else "56")
     cursor = emit_call(cursor, consumer_a)
-    cursor = emit(cursor, "59")
+    cursor = emit(
+        cursor,
+        "83 c4 08" if recursive_cross_formal_alias_write else "59",
+    )
     if recursive_tag_write_after:
         cursor = emit(cursor, "88 0e")
     cursor = emit(cursor, "56 0f b6 1e")
     transfer_a = text_va + cursor
     cursor = emit(cursor, "ff 14 9d 00 20 40 00")
-    emit(cursor, "59 5e c3")
+    emit(
+        cursor,
+        "59 5e 5f c3" if recursive_cross_formal_alias_write else "59 5e c3",
+    )
     assert cursor < consumer_b
 
     # consumer_b(arg0): a second table consumer shares the lifecycle proof but
@@ -3336,7 +3374,10 @@ def lifecycle_movzx_dispatch_image(
             cursor = emit(cursor, "88 08")
         cursor = emit(cursor, "50 0f b6 18")
     elif second_stack_receiver:
-        cursor = emit(cursor, "83 ec 04 89 34 24 8b 04 24 0f b6 18 ff 34 24")
+        cursor = emit(cursor, "83 ec 04 89 34 24 8b 04 24 0f b6 18")
+        if second_stack_receiver_overwrite:
+            cursor = emit(cursor, "89 0c 24")
+        cursor = emit(cursor, "ff 34 24")
     else:
         cursor = emit(cursor, "51" if second_argument_mismatch else "56")
         cursor = emit(cursor, "0f b6 1e")
@@ -3360,6 +3401,10 @@ def lifecycle_movzx_dispatch_image(
         "a1 04 30 40 00 01 1d 04 30 40 00 5b c3",
     )
     emit(grow, "c3")
+    if receiver_escape_alias_mutation:
+        emit(0x1C0, "a1 00 31 40 00 c6 00 c8 c3")
+    elif latent_tag_writer:
+        emit(0x1C0, "c7 00 c8 00 00 00 c3")
 
     for index in range(75):
         if index == unrelocated_index:
@@ -3371,10 +3416,13 @@ def lifecycle_movzx_dispatch_image(
         struct.pack_into("<I", data, 0x200 + index * 4, value)
     struct.pack_into("<I", data, 0x600, 0x1000)
     struct.pack_into("<I", data, 0x604, data_va + 0x100)
+    if recursive_nested_association:
+        data[0x700] = 200
 
+    relocation_count = 256 if all_entries_relocated else 75
     relocations = tuple(
         pe_mod.Relocation(rdata_va + index * 4, 3)
-        for index in range(75)
+        for index in range(relocation_count)
         if index != unrelocated_index
     )
     image = pe_mod.Image(
@@ -7800,6 +7848,68 @@ def test_object_tag_lifecycle_binds_stack_reloaded_receiver():
     } == {"movzx-lifecycle-domain"}
 
 
+def test_object_tag_lifecycle_rejects_overwritten_stack_receiver():
+    image, (_valid_transfer, overwritten_transfer) = (
+        lifecycle_movzx_dispatch_image(
+            second_stack_receiver=True,
+            second_stack_receiver_overwrite=True,
+        )
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(overwritten_transfer)
+
+
+def test_linear_stack_receiver_comparison_rejects_overlapping_write():
+    image, _transfers = lifecycle_movzx_dispatch_image(
+        second_stack_receiver=True,
+        second_stack_receiver_overwrite=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    function_entry = 0x004010B0
+    rows = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(
+            function_entry
+        )
+    )
+    load = next(
+        row
+        for row in rows
+        if row.mnemonic == "mov"
+        and row.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(row.operands[0].reg) == "eax"
+        and row.operands[1].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(row.operands[1].mem.base) == "esp"
+    )
+    push = next(
+        row
+        for row in rows
+        if row.mnemonic == "push"
+        and row.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(row.operands[0].mem.base) == "esp"
+    )
+
+    assert not recovery._same_linear_stack_slot_value(
+        load.address,
+        load.operands[1],
+        push.address,
+        push.operands[0],
+        function_entry,
+    )
+
+
 def test_object_tag_lifecycle_follows_nested_receiver_association():
     image, transfers = lifecycle_movzx_dispatch_image(
         second_nested_receiver=True
@@ -7861,6 +7971,60 @@ def test_object_tag_lifecycle_rejects_mutation_before_recursive_edge():
 def test_object_tag_lifecycle_rejects_mutation_after_recursive_edge():
     image, transfers = lifecycle_movzx_dispatch_image(
         recursive_tag_write_after=True
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert not any(
+        table.address in transfers
+        and table.guard_operator == "movzx-lifecycle-domain"
+        for table in cfg.jump_tables
+    )
+
+
+def test_object_tag_lifecycle_rejects_nonidentity_recursive_association():
+    image, transfers = lifecycle_movzx_dispatch_image(
+        recursive_nested_association=True,
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert not any(
+        table.address in transfers
+        and table.guard_operator == "movzx-lifecycle-domain"
+        for table in cfg.jump_tables
+    )
+
+
+def test_object_tag_lifecycle_rejects_cross_formal_recursive_alias_write():
+    image, transfers = lifecycle_movzx_dispatch_image(
+        recursive_cross_formal_alias_write=True,
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert not any(
+        table.address in transfers
+        and table.guard_operator == "movzx-lifecycle-domain"
+        for table in cfg.jump_tables
+    )
+
+
+def test_object_tag_lifecycle_rejects_receiver_escape_alias_mutation():
+    image, transfers = lifecycle_movzx_dispatch_image(
+        receiver_escape_alias_mutation=True,
     )
 
     cfg = recover_cfg(
@@ -7963,6 +8127,22 @@ def test_object_tag_lifecycle_keeps_table_integrity_checks(
     }
 
 
+def test_object_tag_lifecycle_runs_when_every_raw_slot_is_relocated():
+    image, transfers = lifecycle_movzx_dispatch_image(
+        all_entries_relocated=True,
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    assert {
+        cfg.jump_table_at(transfer).guard_operator for transfer in transfers
+    } == {"movzx-lifecycle-domain"}
+
+
 def test_object_tag_lifecycle_checkpoint_is_separate_from_v25(
     tmp_path,
 ):
@@ -7992,7 +8172,7 @@ def test_object_tag_lifecycle_checkpoint_is_separate_from_v25(
         payload
         for payload in payloads
         if payload["query"]["analysis_semantics"]
-        == "object-tag-lifecycle-analysis-v1"
+        == "object-tag-lifecycle-analysis-v2"
     ]
     assert len(lifecycle) == 1
     assert lifecycle[0]["schema"] == (
@@ -8000,92 +8180,57 @@ def test_object_tag_lifecycle_checkpoint_is_separate_from_v25(
     )
     assert len(lifecycle[0]["query"]["consumer_bindings"]) == 2
     assert {
+        (dependency["kind"], dependency["identifier"])
+        for dependency in lifecycle[0]["dependencies"]
+    } >= {("dynamic-field", 0)}
+    assert {
         cfg.jump_table_at(transfer).guard_operator for transfer in transfers
     } == {"movzx-lifecycle-domain"}
 
 
-def test_object_tag_lifecycle_checkpoint_invalidates_changed_dependency(
+def test_object_tag_lifecycle_checkpoint_invalidates_dynamic_writer_growth(
     tmp_path,
-    monkeypatch,
 ):
-    image, _transfers = lifecycle_movzx_dispatch_image()
+    image, _transfers = lifecycle_movzx_dispatch_image(
+        latent_tag_writer=True,
+    )
     inventory = build_seed_inventory(image, ())
     limits = generous_limits(image)
     checkpoint_dir = tmp_path / "producer-checkpoints"
 
-    finite_recovery = _DirectCfgRecovery(image, inventory, limits)
-    finite_recovery.recover()
-    bindings = finite_recovery._object_tag_lifecycle_consumer_bindings(
-        0x00402000,
-        4,
+    with pytest.raises(ProducerCheckpointIncomplete):
+        recover_cfg(
+            image,
+            inventory,
+            limits,
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=100,
+        )
+
+    helper = 0x004011C0
+    expanded_inventory = x86_cfg_module.SeedInventory(
+        (
+            *inventory.records,
+            SeedRecord(
+                address=helper,
+                category="explicit-test-seed",
+                provenance_address=helper,
+                provenance_bytes=image.read(helper, 6).hex(),
+                detail="latent dynamic-field writer",
+                is_function=True,
+            ),
+        )
     )
-    query = _ObjectTagLifecycleQuery(
-        function_entry=min(binding[0] for binding in bindings),
-        table_base=0x00402000,
-        entry_width=4,
-        field_path=(0,),
-        source_width=1,
-        consumer_bindings=bindings,
-    )
-    finite_session = _ProducerCertificateSession(
-        image_sha256=image.sha256,
-        limits=limits,
-        checkpoint_dir=checkpoint_dir,
-        query_budget=1,
-    )
+    with pytest.raises(ProducerCheckpointIncomplete) as stale:
+        recover_cfg(
+            image,
+            expanded_inventory,
+            limits,
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=0,
+        )
 
-    def finite_domain():
-        finite_recovery._note_producer_dependency(query.function_entry)
-        return frozenset({0, 74}), "closed-lifecycle-domain"
-
-    assert finite_session.evaluate(
-        recovery=finite_recovery,
-        query=query,
-        compute=finite_domain,
-    ) == (frozenset({0, 74}), "closed-lifecycle-domain")
-
-    blocked_recovery = _DirectCfgRecovery(image, inventory, limits)
-    blocked_recovery.recover()
-    original_fingerprint = blocked_recovery._producer_dependency_fingerprint
-
-    def changed_fingerprint(dependency_kind, identifier):
-        if dependency_kind == "function" and identifier == query.function_entry:
-            return "f" * 64
-        return original_fingerprint(dependency_kind, identifier)
-
-    monkeypatch.setattr(
-        blocked_recovery,
-        "_producer_dependency_fingerprint",
-        changed_fingerprint,
-    )
-    blocked_session = _ProducerCertificateSession(
-        image_sha256=image.sha256,
-        limits=limits,
-        checkpoint_dir=checkpoint_dir,
-        query_budget=1,
-    )
-
-    def blocked_domain():
-        blocked_recovery._note_producer_dependency(query.function_entry)
-        return None
-
-    assert blocked_session.evaluate(
-        recovery=blocked_recovery,
-        query=query,
-        compute=blocked_domain,
-    ) is None
-    assert blocked_session.completed_this_run == 1
-    payloads = [
-        json.loads(path.read_bytes())
-        for path in checkpoint_dir.glob("*.json")
-    ]
-    assert {payload["schema"] for payload in payloads} == {
-        "mwcc-retro-x86-object-tag-lifecycle-certificate-v1"
-    }
-    assert {payload["result"]["status"] for payload in payloads} == {
-        "finite",
-        "blocked",
-    }
+    assert stale.value.pending_queries >= 1
 
 
 def test_object_guard_answers_local_discriminator_before_recursive_origin():
