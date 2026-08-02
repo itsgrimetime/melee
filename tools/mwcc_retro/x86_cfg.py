@@ -196,6 +196,12 @@ class AnalysisLimits:
 
 _PRODUCER_CERTIFICATE_SCHEMA = "mwcc-retro-x86-producer-certificate-v1"
 _MOVZX_PRODUCER_ANALYSIS_SEMANTICS = "movzx-producer-analysis-v25"
+_OBJECT_TAG_LIFECYCLE_CERTIFICATE_SCHEMA = (
+    "mwcc-retro-x86-object-tag-lifecycle-certificate-v1"
+)
+_OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS = (
+    "object-tag-lifecycle-analysis-v1"
+)
 _RELOCATED_REJECTION_LEDGER_SCHEMA = "mwcc-retro-relocated-rejection-ledger-v1"
 _RELOCATED_REJECTION_ANALYSIS_SEMANTICS = "relocated-rejection-analysis-v1"
 
@@ -1178,6 +1184,45 @@ class _MovzxProducerQuery:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class _ObjectTagLifecycleQuery:
+    """Canonical shared proof for one structural object-tag dispatch family."""
+
+    function_entry: int
+    table_base: int
+    entry_width: int
+    field_path: tuple[int, ...]
+    source_width: int
+    consumer_bindings: tuple[
+        tuple[int, int, str, int, str, str, str, int, str], ...
+    ]
+    analysis_semantics: str = _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(_canonical_json_bytes(self.to_dict())).hexdigest()
+
+    @property
+    def movzx_address(self) -> int:
+        return self.consumer_bindings[0][1]
+
+    @property
+    def memo_key(self) -> tuple[Any, ...]:
+        return (
+            "object-tag-lifecycle-certificate",
+            self.analysis_semantics,
+            self.function_entry,
+            self.table_base,
+            self.entry_width,
+            self.field_path,
+            self.source_width,
+            self.consumer_bindings,
+        )
+
+
 def _strict_json_object(raw: bytes, *, path: Path) -> dict[str, Any]:
     def reject_duplicates(pairs):
         value = {}
@@ -1234,6 +1279,17 @@ class _ProducerCertificateSession:
             "source_width",
         }
     )
+    _LIFECYCLE_QUERY_KEYS = frozenset(
+        {
+            "analysis_semantics",
+            "function_entry",
+            "table_base",
+            "entry_width",
+            "field_path",
+            "source_width",
+            "consumer_bindings",
+        }
+    )
     _DEPENDENCY_KEYS = frozenset({"kind", "identifier", "fingerprint"})
     _RESULT_KEYS = frozenset({"status", "values", "provenance"})
 
@@ -1262,10 +1318,16 @@ class _ProducerCertificateSession:
                 len(tuple(self.checkpoint_dir.glob("*.json"))),
             )
 
-    def _paths(self, query: _MovzxProducerQuery) -> tuple[Path, ...]:
+    def _paths(
+        self, query: _MovzxProducerQuery | _ObjectTagLifecycleQuery
+    ) -> tuple[Path, ...]:
         return tuple(sorted(self.checkpoint_dir.glob(f"{query.sha256}-*.json")))
 
-    def _path(self, query: _MovzxProducerQuery, dependency_sha256: str) -> Path:
+    def _path(
+        self,
+        query: _MovzxProducerQuery | _ObjectTagLifecycleQuery,
+        dependency_sha256: str,
+    ) -> Path:
         return self.checkpoint_dir / (f"{query.sha256}-{dependency_sha256}.json")
 
     def _dependency_payload(
@@ -1299,13 +1361,17 @@ class _ProducerCertificateSession:
     def _certificate_payload(
         self,
         *,
-        query: _MovzxProducerQuery,
+        query: _MovzxProducerQuery | _ObjectTagLifecycleQuery,
         entry: _ProducerDomainMemoEntry,
         recovery: _DirectCfgRecovery,
     ) -> dict[str, Any]:
         dependencies = self._dependency_payload(entry.dependencies)
         payload: dict[str, Any] = {
-            "schema": _PRODUCER_CERTIFICATE_SCHEMA,
+            "schema": (
+                _OBJECT_TAG_LIFECYCLE_CERTIFICATE_SCHEMA
+                if isinstance(query, _ObjectTagLifecycleQuery)
+                else _PRODUCER_CERTIFICATE_SCHEMA
+            ),
             "compiler_sha256": self.image_sha256,
             "query": query.to_dict(),
             "query_sha256": query.sha256,
@@ -1364,10 +1430,78 @@ class _ProducerCertificateSession:
                 f"producer certificate {label} schema mismatch: {path}"
             )
 
-    def _decode_query(self, value: Any, *, path: Path) -> _MovzxProducerQuery:
+    def _decode_query(
+        self, value: Any, *, path: Path
+    ) -> _MovzxProducerQuery | _ObjectTagLifecycleQuery:
         if not isinstance(value, dict):
             raise ProducerCertificateError(
                 f"producer certificate query must be an object: {path}"
+            )
+        semantics = value.get("analysis_semantics")
+        if semantics == _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS:
+            self._require_exact_keys(
+                value,
+                self._LIFECYCLE_QUERY_KEYS,
+                label="query",
+                path=path,
+            )
+            field_path = value["field_path"]
+            bindings = value["consumer_bindings"]
+            if (
+                any(
+                    isinstance(value[name], bool)
+                    or not isinstance(value[name], int)
+                    for name in (
+                        "function_entry",
+                        "table_base",
+                        "entry_width",
+                        "source_width",
+                    )
+                )
+                or value["entry_width"] <= 0
+                or value["source_width"] != 1
+                or field_path != [0]
+                or not isinstance(bindings, list)
+                or not bindings
+            ):
+                raise ProducerCertificateError(
+                    f"producer certificate lifecycle query is malformed: {path}"
+                )
+            decoded_bindings = []
+            for binding in bindings:
+                if (
+                    not isinstance(binding, list)
+                    or len(binding) != 9
+                    or any(
+                        isinstance(binding[index], bool)
+                        or not isinstance(binding[index], int)
+                        for index in (0, 1, 3, 7)
+                    )
+                    or any(
+                        not isinstance(binding[index], str)
+                        or not binding[index]
+                        for index in (2, 4, 5, 6, 8)
+                    )
+                ):
+                    raise ProducerCertificateError(
+                        "producer certificate lifecycle consumer binding is "
+                        f"malformed: {path}"
+                    )
+                decoded_bindings.append(tuple(binding))
+            consumer_bindings = tuple(decoded_bindings)
+            if consumer_bindings != tuple(sorted(set(consumer_bindings))):
+                raise ProducerCertificateError(
+                    "producer certificate lifecycle consumer bindings are not "
+                    f"canonical: {path}"
+                )
+            return _ObjectTagLifecycleQuery(
+                function_entry=value["function_entry"],
+                table_base=value["table_base"],
+                entry_width=value["entry_width"],
+                field_path=tuple(field_path),
+                source_width=value["source_width"],
+                consumer_bindings=consumer_bindings,
+                analysis_semantics=semantics,
             )
         self._require_exact_keys(value, self._QUERY_KEYS, label="query", path=path)
         field_path = value["field_path"]
@@ -1397,8 +1531,8 @@ class _ProducerCertificateSession:
                 f"producer certificate query is malformed: {path}"
             )
         if (
-            not isinstance(value["analysis_semantics"], str)
-            or value["analysis_semantics"] != _MOVZX_PRODUCER_ANALYSIS_SEMANTICS
+            not isinstance(semantics, str)
+            or semantics != _MOVZX_PRODUCER_ANALYSIS_SEMANTICS
         ):
             raise ProducerCertificateError(
                 f"producer certificate analysis semantics mismatch: {path}"
@@ -1411,7 +1545,7 @@ class _ProducerCertificateSession:
             source_base_register=value["source_base_register"],
             field_path=tuple(field_path),
             source_width=value["source_width"],
-            analysis_semantics=value["analysis_semantics"],
+            analysis_semantics=semantics,
         )
 
     def _decode_dependencies(
@@ -1501,7 +1635,7 @@ class _ProducerCertificateSession:
         self,
         *,
         path: Path,
-        expected_query: _MovzxProducerQuery,
+        expected_query: _MovzxProducerQuery | _ObjectTagLifecycleQuery,
         recovery: _DirectCfgRecovery,
     ) -> _ProducerDomainMemoEntry | None:
         payload = _strict_json_object(path.read_bytes(), path=path)
@@ -1513,7 +1647,12 @@ class _ProducerCertificateSession:
             raise ProducerCertificateError(
                 f"producer certificate digest mismatch: {path}"
             )
-        if payload["schema"] != _PRODUCER_CERTIFICATE_SCHEMA:
+        expected_schema = (
+            _OBJECT_TAG_LIFECYCLE_CERTIFICATE_SCHEMA
+            if isinstance(expected_query, _ObjectTagLifecycleQuery)
+            else _PRODUCER_CERTIFICATE_SCHEMA
+        )
+        if payload["schema"] != expected_schema:
             raise ProducerCertificateError(
                 f"producer certificate schema mismatch: {path}"
             )
@@ -1585,7 +1724,7 @@ class _ProducerCertificateSession:
         self,
         *,
         recovery: _DirectCfgRecovery,
-        query: _MovzxProducerQuery,
+        query: _MovzxProducerQuery | _ObjectTagLifecycleQuery,
         compute,
     ) -> tuple[frozenset[int], str] | None:
         query_id = query.sha256
@@ -4214,6 +4353,638 @@ class _DirectCfgRecovery:
             return decoded, "movzx", bound, 0, bound
 
         return None
+
+    def _object_tag_lifecycle_consumer_bindings(
+        self,
+        table_base: int,
+        entry_width: int,
+    ) -> tuple[tuple[int, int, str, int, str, str, str, int, str], ...]:
+        """Collect consumers that bind byte-zero index and argument zero."""
+        bindings = []
+        for transfer_address, (flow_kind, is_far) in sorted(
+            self.indirect_candidates.items()
+        ):
+            if flow_kind != "call" or is_far:
+                continue
+            transfer = self._owned_decoded(transfer_address)
+            if (
+                len(transfer.operands) != 1
+                or transfer.operands[0].type != X86_OP_MEM
+            ):
+                continue
+            target = transfer.operands[0].mem
+            if (
+                target.segment != X86_REG_INVALID
+                or target.base != X86_REG_INVALID
+                or target.index == X86_REG_INVALID
+                or target.scale != entry_width
+                or target.disp & 0xFFFF_FFFF != table_base
+            ):
+                continue
+            narrowed = self._movzx_guard_for_index(
+                transfer_address,
+                target.index,
+                producer_domain=False,
+            )
+            if narrowed is None:
+                continue
+            movzx = self._owned_decoded(narrowed[0].address)
+            source = movzx.operands[1]
+            if (
+                source.type != X86_OP_MEM
+                or source.size != 1
+                or source.mem.segment != X86_REG_INVALID
+                or source.mem.base == X86_REG_INVALID
+                or source.mem.index != X86_REG_INVALID
+                or source.mem.disp != 0
+            ):
+                continue
+            pushed = self._pushed_call_argument(transfer_address, 0)
+            function_entry = self._registrar_function_entry(transfer_address)
+            if (
+                pushed is None
+                or function_entry is None
+                or pushed[2] != function_entry
+            ):
+                continue
+            source_family = self._register_family(source.mem.base)
+            source_definitions = self._register_definitions_across_blocks(
+                movzx.address,
+                source_family,
+                function_entry,
+            )
+            if not source_definitions:
+                continue
+            source_register = self._owned_decoded(
+                min(source_definitions)
+            ).operands[0]
+            same_receiver = (
+                pushed[1].type == X86_OP_REG
+                and self._register_family(pushed[1].reg) == source_family
+                and self._register_definitions_across_blocks(
+                    pushed[0].address,
+                    source_family,
+                    function_entry,
+                )
+                == source_definitions
+            )
+            if not same_receiver:
+                same_receiver = self._same_closed_caller_value(
+                    movzx.address,
+                    source_register,
+                    pushed[0].address,
+                    pushed[1],
+                    function_entry,
+                )
+            if not same_receiver:
+                source_stack_slot = self._stack_value_logical_offset(
+                    movzx.address,
+                    source_register,
+                    function_entry,
+                )
+                pushed_stack_slot = self._stack_value_logical_offset(
+                    pushed[0].address,
+                    pushed[1],
+                    function_entry,
+                )
+                same_receiver = (
+                    source_stack_slot is not None
+                    and source_stack_slot == pushed_stack_slot
+                )
+            if (
+                not same_receiver
+                and len(source_definitions) == 1
+                and pushed[1].type == X86_OP_MEM
+            ):
+                source_definition = self._owned_decoded(
+                    next(iter(source_definitions))
+                )
+                same_receiver = (
+                    source_definition.id == X86_INS_MOV
+                    and len(source_definition.operands) == 2
+                    and source_definition.operands[1].type == X86_OP_MEM
+                    and self._same_linear_stack_slot_value(
+                        source_definition.address,
+                        source_definition.operands[1],
+                        pushed[0].address,
+                        pushed[1],
+                        function_entry,
+                    )
+                )
+            if not same_receiver:
+                continue
+            bindings.append(
+                (
+                    function_entry,
+                    movzx.address,
+                    bytes(movzx.bytes).hex(),
+                    transfer_address,
+                    bytes(transfer.bytes).hex(),
+                    self._register_family(movzx.operands[0].reg),
+                    source_family,
+                    pushed[0].address,
+                    self.instructions[pushed[0].address].bytes_hex,
+                )
+            )
+        return tuple(sorted(set(bindings)))
+
+    def _same_linear_stack_slot_value(
+        self,
+        left_address: int,
+        left_operand,
+        right_address: int,
+        right_operand,
+        function_entry: int,
+    ) -> bool:
+        """Compare ESP slots across one straight-line balanced fragment."""
+        if not (
+            left_address < right_address
+            and left_operand.type == X86_OP_MEM
+            and right_operand.type == X86_OP_MEM
+            and left_operand.mem.segment == X86_REG_INVALID
+            and right_operand.mem.segment == X86_REG_INVALID
+            and left_operand.mem.index == X86_REG_INVALID
+            and right_operand.mem.index == X86_REG_INVALID
+            and left_operand.mem.base != X86_REG_INVALID
+            and right_operand.mem.base != X86_REG_INVALID
+            and self._register_family(left_operand.mem.base) == "esp"
+            and self._register_family(right_operand.mem.base) == "esp"
+        ):
+            return False
+        stack_delta = 0
+        for address in self._function_instruction_addresses_between(
+            function_entry,
+            left_address + self.instructions[left_address].size,
+            right_address,
+        ):
+            decoded = self._owned_decoded(address)
+            if decoded.group(CS_GRP_CALL) or decoded.group(CS_GRP_JUMP):
+                return False
+            if decoded.mnemonic == "push":
+                stack_delta -= 4
+                continue
+            if decoded.mnemonic == "pop":
+                stack_delta += 4
+                continue
+            if (
+                decoded.mnemonic in {"add", "sub"}
+                and len(decoded.operands) == 2
+                and decoded.operands[0].type == X86_OP_REG
+                and self._register_family(decoded.operands[0].reg) == "esp"
+                and decoded.operands[1].type == X86_OP_IMM
+            ):
+                immediate = decoded.operands[1].imm & 0xFFFF_FFFF
+                stack_delta += (
+                    immediate if decoded.mnemonic == "add" else -immediate
+                )
+                continue
+            if any(
+                self._register_family(register) == "esp"
+                for register in decoded.regs_write
+                if register != x86_const.X86_REG_EFLAGS
+            ):
+                return False
+        return left_operand.mem.disp == stack_delta + right_operand.mem.disp
+
+    def _object_tag_lifecycle_stack_slot_values_before(
+        self,
+        address: int,
+        slot_offset: int,
+        function_entry: int,
+        field_path: tuple[int, ...],
+        active_values: frozenset[tuple[Any, ...]],
+    ) -> tuple[frozenset[int], str] | None:
+        """Trace one exact private stack pointer slot to closed writers."""
+        node = ("stack-slot", function_entry, slot_offset, field_path)
+        if node in active_values:
+            return None
+        following_entry = min(
+            (row for row in self.function_addresses if row > function_entry),
+            default=0x1_0000_0000,
+        )
+        values: set[int] = set()
+        details = []
+        writers = set()
+        next_active = active_values | {node}
+        self._note_stack_call_dependencies_before(address, function_entry)
+        for candidate_address in self._function_instruction_addresses(
+            function_entry
+        ):
+            if candidate_address >= address or not (
+                self._reachable_within_function(
+                    function_entry,
+                    candidate_address,
+                    function_entry,
+                    following_entry,
+                )
+                and self._reachable_within_function(
+                    candidate_address,
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+            ):
+                continue
+            candidate = self._owned_decoded(candidate_address)
+            if candidate.group(CS_GRP_CALL):
+                matched, result = self._finite_call_output_object_to_stack(
+                    candidate_address,
+                    address,
+                    slot_offset,
+                    function_entry,
+                    field_path,
+                    frozenset(),
+                )
+                if matched:
+                    if result is None:
+                        return None
+                    writers.add(candidate_address)
+                    values.update(result[0])
+                    details.append(result[1])
+            for operand_index, destination in enumerate(candidate.operands):
+                if (
+                    destination.type != X86_OP_MEM
+                    or not destination.access & CS_AC_WRITE
+                    or destination.size <= 0
+                ):
+                    continue
+                write_offset = self._stack_operand_logical_offset(
+                    candidate_address,
+                    destination,
+                    function_entry,
+                )
+                if write_offset is None or not (
+                    write_offset < slot_offset + 4
+                    and slot_offset < write_offset + destination.size
+                ):
+                    continue
+                if (
+                    candidate.id != X86_INS_MOV
+                    or len(candidate.operands) != 2
+                    or operand_index != 0
+                    or destination.size != 4
+                    or write_offset != slot_offset
+                ):
+                    return None
+                result = self._object_tag_lifecycle_operand_values_before(
+                    candidate_address,
+                    candidate.operands[1],
+                    function_entry,
+                    field_path,
+                    next_active,
+                )
+                if result is None:
+                    return None
+                writers.add(candidate_address)
+                values.update(result[0])
+                details.append(f"writer={candidate_address:#x};{result[1]}")
+        if not values or self._reachable_within_function(
+            function_entry,
+            address,
+            function_entry,
+            following_entry,
+            excluded=frozenset(writers),
+        ):
+            return None
+        self._check_count("max_finite_values", len(values))
+        return (
+            frozenset(values),
+            f"lifecycle-stack-slot={slot_offset:+#x};" + "|".join(details),
+        )
+
+    def _object_tag_lifecycle_register_values_before(
+        self,
+        address: int,
+        register_family: str,
+        function_entry: int,
+        field_path: tuple[int, ...],
+        active_values: frozenset[tuple[Any, ...]],
+    ) -> tuple[frozenset[int], str] | None:
+        """Trace one register-held lifecycle input to a root or SCC edge."""
+        argument_index = self._register_argument_origin_index(
+            address,
+            register_family,
+            function_entry,
+        )
+        if argument_index is not None:
+            recursive_forwarding_calls = set()
+            for call in self._function_direct_calls(function_entry):
+                if call.target != function_entry:
+                    continue
+                pushed = self._pushed_call_argument(
+                    call.address,
+                    argument_index,
+                )
+                if pushed is None:
+                    continue
+                forwarded_argument = self._stack_argument_index_at(
+                    pushed[0].address,
+                    pushed[1],
+                    function_entry,
+                )
+                if forwarded_argument is None and pushed[1].type == X86_OP_REG:
+                    forwarded_argument = self._register_argument_origin_index(
+                        pushed[0].address,
+                        self._register_family(pushed[1].reg),
+                        function_entry,
+                    )
+                if forwarded_argument == argument_index:
+                    recursive_forwarding_calls.add(call.address)
+            if not self._function_argument_preserves_field_before(
+                address,
+                function_entry,
+                argument_index,
+                field_path[0],
+                assumed_preserving_calls=frozenset(
+                    recursive_forwarding_calls
+                ),
+            ):
+                return None
+            return self._object_tag_lifecycle_argument_values(
+                function_entry,
+                argument_index,
+                field_path,
+                active_values,
+            )
+        allocation_origins = self._fresh_allocation_origin_calls_before(
+            address,
+            register_family,
+            function_entry,
+        )
+        if allocation_origins:
+            values: set[int] = set()
+            details = []
+            for allocation_call in sorted(allocation_origins):
+                result = self._finite_fresh_allocation_object_byte_values_before(
+                    allocation_call,
+                    address,
+                    function_entry,
+                    field_path,
+                    frozenset(),
+                )
+                if result is None:
+                    return None
+                values.update(result[0])
+                details.append(result[1])
+            if not values:
+                return None
+            self._check_count("max_finite_values", len(values))
+            return (
+                frozenset(values),
+                "lifecycle-fresh-roots=" + "|".join(details),
+            )
+        definitions = self._register_definitions_across_blocks(
+            address,
+            register_family,
+            function_entry,
+        )
+        if not definitions:
+            return None
+        values: set[int] = set()
+        details = []
+        for definition_address in sorted(definitions):
+            definition = self._owned_decoded(definition_address)
+            if (
+                definition.id != X86_INS_MOV
+                or len(definition.operands) != 2
+                or definition.operands[0].type != X86_OP_REG
+            ):
+                return None
+            if not self._pointer_definition_preserves_field_before(
+                definition_address,
+                function_entry,
+                field_path[0],
+                address,
+            ):
+                return None
+            result = self._object_tag_lifecycle_operand_values_before(
+                definition_address,
+                definition.operands[1],
+                function_entry,
+                field_path,
+                active_values,
+            )
+            if result is None:
+                return None
+            values.update(result[0])
+            details.append(
+                f"definition={definition_address:#x};{result[1]}"
+            )
+        return frozenset(values), "|".join(details)
+
+    def _object_tag_lifecycle_operand_values_before(
+        self,
+        address: int,
+        operand,
+        function_entry: int,
+        field_path: tuple[int, ...],
+        active_values: frozenset[tuple[Any, ...]],
+    ) -> tuple[frozenset[int], str] | None:
+        """Trace one lifecycle input to a fresh root or SCC argument edge."""
+        argument_index = self._stack_argument_index_at(
+            address, operand, function_entry
+        )
+        if argument_index is not None:
+            if not self._function_argument_preserves_field_before(
+                address,
+                function_entry,
+                argument_index,
+                field_path[0],
+            ):
+                return None
+            return self._object_tag_lifecycle_argument_values(
+                function_entry,
+                argument_index,
+                field_path,
+                active_values,
+            )
+        if operand.type == X86_OP_REG:
+            register_family = self._register_family(operand.reg)
+            argument_index = self._register_argument_origin_index(
+                address,
+                register_family,
+                function_entry,
+            )
+            if argument_index is not None:
+                if not self._function_argument_preserves_field_before(
+                    address,
+                    function_entry,
+                    argument_index,
+                    field_path[0],
+                ):
+                    return None
+                return self._object_tag_lifecycle_argument_values(
+                    function_entry,
+                    argument_index,
+                    field_path,
+                    active_values,
+                )
+            return self._object_tag_lifecycle_register_values_before(
+                address,
+                register_family,
+                function_entry,
+                field_path,
+                active_values,
+            )
+        if operand.type != X86_OP_MEM or operand.size != 4:
+            return None
+        stack_slot = self._stack_operand_logical_offset(
+            address,
+            operand,
+            function_entry,
+        )
+        if stack_slot is not None:
+            return self._object_tag_lifecycle_stack_slot_values_before(
+                address,
+                stack_slot,
+                function_entry,
+                field_path,
+                active_values,
+            )
+        if (
+            operand.mem.segment != X86_REG_INVALID
+            or operand.mem.base == X86_REG_INVALID
+            or operand.mem.index != X86_REG_INVALID
+        ):
+            return None
+        return self._object_tag_lifecycle_register_values_before(
+            address,
+            self._register_family(operand.mem.base),
+            function_entry,
+            (operand.mem.disp, *field_path),
+            active_values,
+        )
+
+    def _object_tag_lifecycle_argument_values(
+        self,
+        function_entry: int,
+        argument_index: int,
+        field_path: tuple[int, ...],
+        active_values: frozenset[tuple[Any, ...]],
+    ) -> tuple[frozenset[int], str] | None:
+        """Compute a least fixed point over closed argument forwarding."""
+        self._note_producer_dependency(function_entry)
+        node = (function_entry, argument_index)
+        if node in active_values:
+            return (
+                frozenset(),
+                f"lifecycle-scc-backedge={function_entry:#x}:{argument_index}",
+            )
+        if not self._incoming_call_domain_is_closed(function_entry):
+            return None
+        calls = self._incoming_call_sites(function_entry)
+        if not calls:
+            return None
+        values: set[int] = set()
+        details = []
+        next_active = active_values | {node}
+        for call_address in calls:
+            pushed = self._pushed_call_argument(call_address, argument_index)
+            if pushed is None:
+                return None
+            result = self._object_tag_lifecycle_operand_values_before(
+                pushed[0].address,
+                pushed[1],
+                pushed[2],
+                field_path,
+                next_active,
+            )
+            if result is None:
+                return None
+            values.update(result[0])
+            details.append(f"call={call_address:#x};{result[1]}")
+        if not values:
+            return None
+        self._check_count("max_finite_values", len(values))
+        return (
+            frozenset(values),
+            f"lifecycle-argument={function_entry:#x}:{argument_index};"
+            + "|".join(details),
+        )
+
+    def _object_tag_lifecycle_guard_for_index(
+        self,
+        transfer_address: int,
+        index_register: int,
+        table_base: int,
+        entry_width: int,
+    ) -> tuple[Instruction, str, int, int, int] | None:
+        """Prove a shared byte-zero object-tag domain independently of slots."""
+        narrowed = self._movzx_guard_for_index(
+            transfer_address,
+            index_register,
+            producer_domain=False,
+        )
+        if narrowed is None:
+            return None
+        movzx = self._owned_decoded(narrowed[0].address)
+        bindings = self._object_tag_lifecycle_consumer_bindings(
+            table_base,
+            entry_width,
+        )
+        current = next(
+            (binding for binding in bindings if binding[3] == transfer_address),
+            None,
+        )
+        if current is None:
+            return None
+        query = _ObjectTagLifecycleQuery(
+            function_entry=min(binding[0] for binding in bindings),
+            table_base=table_base,
+            entry_width=entry_width,
+            field_path=(0,),
+            source_width=1,
+            consumer_bindings=bindings,
+        )
+
+        def compute_domain():
+            values: set[int] = set()
+            details = []
+            for binding in bindings:
+                result = self._object_tag_lifecycle_register_values_before(
+                    binding[1],
+                    binding[6],
+                    binding[0],
+                    query.field_path,
+                    frozenset(),
+                )
+                if result is None:
+                    return None
+                values.update(result[0])
+                details.append(
+                    f"consumer={binding[3]:#x};{result[1]}"
+                )
+            if not values:
+                return None
+            self._check_count("max_finite_values", len(values))
+            return (
+                frozenset(values),
+                f"object-tag-lifecycle-table={table_base:#x};"
+                + "|".join(details),
+            )
+
+        if self.producer_certificate_session is None:
+            domain = self._producer_domain_cached(
+                query.memo_key,
+                query.function_entry,
+                compute_domain,
+            )
+        else:
+            domain = self.producer_certificate_session.evaluate(
+                recovery=self,
+                query=query,
+                compute=compute_domain,
+            )
+        if domain is None or not domain[0]:
+            return None
+        values = domain[0]
+        return (
+            movzx,
+            "movzx-lifecycle-domain",
+            max(values),
+            min(values),
+            max(values),
+        )
 
     def _finite_byte_store_values(
         self,
@@ -26535,6 +27306,22 @@ class _DirectCfgRecovery:
             )
             if narrowed is not None and narrowed[1] == "movzx-producer-domain":
                 compare, operator, bound, index_min, index_max = narrowed
+        if (
+            self._allow_movzx_producer_domains
+            and operator in {"movzx", "movzx-producer-domain"}
+            and any(
+                relocation_types.get(base + index * entry_width) != 3
+                for index in range(index_min, index_max + 1)
+            )
+        ):
+            lifecycle = self._object_tag_lifecycle_guard_for_index(
+                instruction.address,
+                memory.index,
+                base,
+                entry_width,
+            )
+            if lifecycle is not None:
+                compare, operator, bound, index_min, index_max = lifecycle
 
         entry_count = index_max - index_min + 1
         last_entry = base + index_max * entry_width
@@ -26555,6 +27342,7 @@ class _DirectCfgRecovery:
             "signed-memory-range",
             "movzx",
             "movzx-producer-domain",
+            "movzx-lifecycle-domain",
         }
         for index in range(index_min, index_max + 1):
             entry_address = base + index * entry_width
@@ -41495,6 +42283,7 @@ class _DirectCfgRecovery:
         active: frozenset[tuple[int, int, int, int]] = frozenset(),
         *,
         excluded_addresses: frozenset[int] = frozenset(),
+        assumed_preserving_calls: frozenset[int] = frozenset(),
     ) -> bool:
         """Prove an argument field survives every path to one observation.
 
@@ -41512,6 +42301,7 @@ class _DirectCfgRecovery:
             argument_index,
             field,
             tuple(sorted(excluded_addresses)),
+            tuple(sorted(assumed_preserving_calls)),
         )
         if key in active:
             return False
@@ -41579,6 +42369,8 @@ class _DirectCfgRecovery:
                 ):
                     return False
             if not decoded.group(CS_GRP_CALL):
+                continue
+            if address in assumed_preserving_calls:
                 continue
             targets = tuple(sorted(self.call_targets_by_source.get(address, ())))
             ecx_values = state[0][_REGISTER_FAMILIES.index("ecx")]
