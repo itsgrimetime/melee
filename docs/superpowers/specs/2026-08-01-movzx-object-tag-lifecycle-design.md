@@ -17,10 +17,13 @@ come from the same receiver.
 
 The lifecycle analysis scans every owned write overlapping the requested object
 byte. It accepts only exact immediate-byte initialization on a fresh allocation,
-finite forwarding through closed callers, and recursive identity/association
-edges whose terminating origins are all closed. It computes the least finite
-domain from those lifecycle roots. Unknown, overlapping, uninitialized,
-escaping, or open-caller paths return bottom.
+finite forwarding through closed callers, nonrecursive field associations, and
+recursive identity edges whose terminating origins are all closed. The least
+fixed point is intentionally identity-only: revisiting the same recursive
+formal at a different field path returns bottom. It computes the least finite
+domain from the remaining lifecycle roots. Unknown, overlapping,
+uninitialized, escaping, non-private local-stack aliases, nonidentity recursive
+associations, or open-caller paths return bottom.
 
 The resulting `movzx-lifecycle-domain` guard is passed to the existing indexed
 table recovery. Existing type-3 relocation and executable-target requirements

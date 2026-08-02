@@ -18,6 +18,8 @@ validator consumes the bound.
 - Do not derive a bound from relocation length.
 - Keep type-3 relocation and executable-target validation unchanged.
 - Fail closed on every open origin, writer, caller, alias, or consumer binding.
+- Admit recursive SCC edges only for exact same-formal, same-field forwarding;
+  nonidentity recursive field associations remain bottom.
 - Use no retail-address allowlist.
 
 ---

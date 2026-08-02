@@ -200,7 +200,7 @@ _OBJECT_TAG_LIFECYCLE_CERTIFICATE_SCHEMA = (
     "mwcc-retro-x86-object-tag-lifecycle-certificate-v1"
 )
 _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS = (
-    "object-tag-lifecycle-analysis-v2"
+    "object-tag-lifecycle-analysis-v3"
 )
 _RELOCATED_REJECTION_LEDGER_SCHEMA = "mwcc-retro-relocated-rejection-ledger-v1"
 _RELOCATED_REJECTION_ANALYSIS_SEMANTICS = "relocated-rejection-analysis-v1"
@@ -4657,6 +4657,15 @@ class _DirectCfgRecovery:
                     or write_offset != slot_offset
                 ):
                     return None
+                if not self._private_stack_pointer_slot_preserves_field_before(
+                    candidate_address,
+                    slot_offset,
+                    destination.size,
+                    function_entry,
+                    field_path[0],
+                    address,
+                ):
+                    return None
                 result = self._object_tag_lifecycle_operand_values_before(
                     candidate_address,
                     candidate.operands[1],
@@ -4720,6 +4729,24 @@ class _DirectCfgRecovery:
                         function_entry,
                     )
                 if forwarded_argument == argument_index:
+                    receiver_states = self._relative_pointer_states(
+                        function_entry,
+                        argument_index=argument_index,
+                        propagate_call_returns=False,
+                        collapse_nonnegative_offsets=False,
+                        stop_address=call.address,
+                    )
+                    if receiver_states is None:
+                        continue
+                    forwarded_offsets = self._relative_operand_offsets(
+                        pushed[0].address,
+                        pushed[1],
+                        function_entry,
+                        argument_index,
+                        receiver_states,
+                    )
+                    if forwarded_offsets != frozenset({0}):
+                        continue
                     other_formals_preserve = True
                     for callee_argument in range(8):
                         other = self._pushed_call_argument(
@@ -4730,6 +4757,25 @@ class _DirectCfgRecovery:
                             break
                         if callee_argument == argument_index:
                             continue
+                        actual_offsets = self._relative_operand_offsets(
+                            other[0].address,
+                            other[1],
+                            function_entry,
+                            argument_index,
+                            receiver_states,
+                        )
+                        if any(
+                            not self._function_argument_preserves_field_before(
+                                address,
+                                function_entry,
+                                callee_argument,
+                                field_path[0] - actual_offset,
+                                reject_pointer_publication=True,
+                            )
+                            for actual_offset in actual_offsets
+                        ):
+                            other_formals_preserve = False
+                            break
                         if not self._function_argument_preserves_field_before(
                             address,
                             function_entry,
@@ -4832,7 +4878,7 @@ class _DirectCfgRecovery:
         field_path: tuple[int, ...],
         active_values: frozenset[tuple[Any, ...]],
     ) -> tuple[frozenset[int], str] | None:
-        """Trace one lifecycle input to a fresh root or SCC argument edge."""
+        """Trace one lifecycle input to a fresh root or identity SCC edge."""
         argument_index = self._stack_argument_index_at(
             address, operand, function_entry
         )
@@ -4916,7 +4962,12 @@ class _DirectCfgRecovery:
         field_path: tuple[int, ...],
         active_values: frozenset[tuple[Any, ...]],
     ) -> tuple[frozenset[int], str] | None:
-        """Compute a least fixed point over closed argument forwarding."""
+        """Compute a least fixed point over closed identity forwarding.
+
+        A recursive revisit of the same formal at another field path is not an
+        identity edge and therefore remains bottom.  Nonrecursive association
+        paths are supported independently by the operand tracer.
+        """
         self._note_producer_dependency(function_entry)
         node = (
             "lifecycle-argument",
@@ -27377,7 +27428,7 @@ class _DirectCfgRecovery:
                 compare, operator, bound, index_min, index_max = narrowed
         if (
             self._allow_movzx_producer_domains
-            and operator in {"movzx", "movzx-producer-domain"}
+            and operator == "movzx"
         ):
             lifecycle = self._object_tag_lifecycle_guard_for_index(
                 instruction.address,
@@ -42387,15 +42438,30 @@ class _DirectCfgRecovery:
         )
         if not function_entry <= end_address < following_entry:
             return False
-        states = self._relative_pointer_states(
-            function_entry,
-            argument_index=argument_index,
-            propagate_call_returns=True,
-            allow_partial_taint=True,
-            collapse_nonnegative_offsets=field + 4 <= 0,
-            stop_address=end_address,
-            excluded_addresses=excluded_addresses,
-        )
+        local_stack_aliases: frozenset[tuple[int, int]] = frozenset()
+        if reject_pointer_publication:
+            tracked = self._relative_argument_pointer_states_with_local_aliases(
+                function_entry,
+                argument_index,
+                propagate_call_returns=True,
+                allow_partial_taint=True,
+                collapse_nonnegative_offsets=field + 4 <= 0,
+                stop_address=end_address,
+                excluded_addresses=excluded_addresses,
+            )
+            if tracked is None:
+                return False
+            states, local_stack_aliases = tracked
+        else:
+            states = self._relative_pointer_states(
+                function_entry,
+                argument_index=argument_index,
+                propagate_call_returns=True,
+                allow_partial_taint=True,
+                collapse_nonnegative_offsets=field + 4 <= 0,
+                stop_address=end_address,
+                excluded_addresses=excluded_addresses,
+            )
         if states is None or end_address not in states:
             return False
         for address in self._function_instruction_addresses(function_entry):
@@ -42440,11 +42506,6 @@ class _DirectCfgRecovery:
                 if (
                     reject_pointer_publication
                     and destination.type == X86_OP_MEM
-                    and not self._is_stack_backed_memory(
-                        address,
-                        destination,
-                        function_entry,
-                    )
                     and self._relative_operand_offsets(
                         address,
                         source,
@@ -42453,7 +42514,19 @@ class _DirectCfgRecovery:
                         states,
                     )
                 ):
-                    return False
+                    if not self._is_stack_backed_memory(
+                        address,
+                        destination,
+                        function_entry,
+                    ):
+                        return False
+                    stack_offset = self._stack_operand_logical_offset(
+                        address,
+                        destination,
+                        function_entry,
+                    )
+                    if (address, stack_offset) not in local_stack_aliases:
+                        return False
             if not decoded.group(CS_GRP_CALL):
                 continue
             if address in assumed_preserving_calls:
@@ -42479,6 +42552,13 @@ class _DirectCfgRecovery:
                     argument_index,
                     states,
                 )
+                if not values and self._operand_loads_live_local_pointer_alias(
+                    function_entry,
+                    pushed[0].address,
+                    pushed[1],
+                    tuple(local_stack_aliases),
+                ):
+                    values = frozenset({0})
                 for value in values:
                     preserved = (
                         self._external_call_argument_preserves_field(
@@ -50046,6 +50126,86 @@ class _DirectCfgRecovery:
                 if (
                     write_offset < slot_offset + width
                     and slot_offset < write_offset + destination.size
+                ):
+                    return False
+        return True
+
+    def _private_stack_pointer_slot_preserves_field_before(
+        self,
+        publication_address: int,
+        slot_offset: int,
+        width: int,
+        function_entry: int,
+        field: int,
+        end_address: int,
+    ) -> bool:
+        """Prove a private pointer spill stays closed until one observation."""
+        if (
+            width != 4
+            or not publication_address < end_address
+            or not self._stack_slot_value_is_unchanged(
+                publication_address,
+                end_address,
+                slot_offset,
+                width,
+                function_entry,
+            )
+        ):
+            return False
+        following_entry = self._following_function_entry(function_entry)
+        for address in self._function_instruction_addresses_between(
+            function_entry,
+            publication_address + self.instructions[publication_address].size,
+            end_address,
+        ):
+            if not (
+                self._reachable_within_function(
+                    publication_address,
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+                and self._reachable_within_function(
+                    address,
+                    end_address,
+                    function_entry,
+                    following_entry,
+                )
+            ):
+                continue
+            decoded = self._owned_decoded(address)
+            for operand_index, operand in enumerate(decoded.operands):
+                if operand.type != X86_OP_MEM:
+                    continue
+                operand_offset = self._stack_operand_logical_offset(
+                    address,
+                    operand,
+                    function_entry,
+                )
+                if operand_offset is None or operand.size <= 0 or not (
+                    operand_offset < slot_offset + width
+                    and slot_offset < operand_offset + operand.size
+                ):
+                    continue
+                if decoded.id == X86_INS_LEA:
+                    return False
+                if operand.access & CS_AC_WRITE:
+                    return False
+                if not operand.access & CS_AC_READ:
+                    continue
+                if not (
+                    decoded.id == X86_INS_MOV
+                    and len(decoded.operands) == 2
+                    and operand_index == 1
+                    and decoded.operands[0].type == X86_OP_REG
+                    and decoded.operands[0].size == operand.size == width
+                    and operand_offset == slot_offset
+                    and self._pointer_definition_preserves_field_before(
+                        address,
+                        function_entry,
+                        field,
+                        end_address,
+                    )
                 ):
                     return False
         return True
