@@ -3233,6 +3233,8 @@ def lifecycle_movzx_dispatch_image(
     second_stack_receiver=False,
     second_stack_receiver_overwrite=False,
     second_stack_receiver_helper_mutation=False,
+    second_stack_receiver_register_alias_mutation=False,
+    second_stack_receiver_preallocated_argument_mutation=False,
     second_nested_receiver=False,
     nested_tag_write=False,
     open_caller=False,
@@ -3397,7 +3399,11 @@ def lifecycle_movzx_dispatch_image(
     # consumer_b(arg0): a second table consumer shares the lifecycle proof but
     # has its own receiver/argument-zero binding obligation.
     cursor = emit(consumer_b, "56 8b 74 24 08")
-    if not second_stack_receiver_helper_mutation:
+    if not (
+        second_stack_receiver_helper_mutation
+        or second_stack_receiver_register_alias_mutation
+        or second_stack_receiver_preallocated_argument_mutation
+    ):
         cursor = emit(cursor, "56")
         cursor = emit_call(cursor, consumer_b)
         cursor = emit(cursor, "59")
@@ -3412,6 +3418,12 @@ def lifecycle_movzx_dispatch_image(
             cursor = emit(cursor, "ff 34 24")
             cursor = emit_call(cursor, 0x1C0)
             cursor = emit(cursor, "59")
+        elif second_stack_receiver_register_alias_mutation:
+            cursor = emit(cursor, "56")
+            cursor = emit_call(cursor, 0x1C0)
+            cursor = emit(cursor, "59")
+        elif second_stack_receiver_preallocated_argument_mutation:
+            cursor = emit_call(cursor, 0x1C0)
         cursor = emit(cursor, "8b 04 24 0f b6 18")
         if second_stack_receiver_overwrite:
             cursor = emit(cursor, "89 0c 24")
@@ -3439,12 +3451,21 @@ def lifecycle_movzx_dispatch_image(
         "a1 04 30 40 00 01 1d 04 30 40 00 5b c3",
     )
     emit(grow, "c3")
-    if second_stack_receiver_helper_mutation:
+    if (
+        second_stack_receiver_helper_mutation
+        or second_stack_receiver_register_alias_mutation
+        or second_stack_receiver_preallocated_argument_mutation
+    ):
         emit(0x1C0, "8b 44 24 04 c6 00 c8 c3")
     elif receiver_escape_alias_mutation:
         emit(0x1C0, "a1 00 31 40 00 c6 00 c8 c3")
     elif latent_tag_writer:
         emit(0x1C0, "c7 00 c8 00 00 00 c3")
+    if (
+        second_stack_receiver_register_alias_mutation
+        or second_stack_receiver_preallocated_argument_mutation
+    ):
+        emit(0x1D0, "c3")
 
     for index in range(75):
         if index == unrelocated_index:
@@ -3454,6 +3475,11 @@ def lifecycle_movzx_dispatch_image(
         else:
             value = 0x1000 + callback
         struct.pack_into("<I", data, 0x200 + index * 4, value)
+    if (
+        second_stack_receiver_register_alias_mutation
+        or second_stack_receiver_preallocated_argument_mutation
+    ):
+        struct.pack_into("<I", data, 0x200 + 200 * 4, 0x11D0)
     struct.pack_into("<I", data, 0x600, 0x1000)
     struct.pack_into("<I", data, 0x604, data_va + 0x100)
     if recursive_nested_association:
@@ -7925,6 +7951,97 @@ def test_object_tag_lifecycle_rejects_stack_receiver_forwarded_to_mutator():
         cfg.jump_table_at(mutated_transfer)
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"second_stack_receiver_register_alias_mutation": True},
+        {"second_stack_receiver_preallocated_argument_mutation": True},
+    ],
+    ids=("register-alias", "preallocated-argument"),
+)
+def test_object_tag_lifecycle_rejects_hidden_stack_receiver_aliases(mutation):
+    image, (_valid_transfer, mutated_transfer) = (
+        lifecycle_movzx_dispatch_image(
+            second_stack_receiver=True,
+            all_entries_relocated=True,
+            **mutation,
+        )
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(mutated_transfer)
+    assert 0x004011D0 not in cfg.instructions
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"second_stack_receiver_register_alias_mutation": True},
+        {"second_stack_receiver_preallocated_argument_mutation": True},
+    ],
+    ids=("register-alias", "preallocated-argument"),
+)
+def test_private_stack_pointer_rejects_hidden_call_aliases(mutation):
+    image, _transfers = lifecycle_movzx_dispatch_image(
+        second_stack_receiver=True,
+        all_entries_relocated=True,
+        **mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    function_entry = 0x004010B0
+    rows = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(
+            function_entry
+        )
+    )
+    publication = next(
+        row
+        for row in rows
+        if row.mnemonic == "mov"
+        and row.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(row.operands[0].mem.base) == "esp"
+        and row.operands[1].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(row.operands[1].reg) == "esi"
+    )
+    observation = next(
+        row
+        for row in rows
+        if row.address > publication.address
+        and row.mnemonic == "mov"
+        and row.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(row.operands[0].reg) == "eax"
+        and row.operands[1].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(row.operands[1].mem.base) == "esp"
+    )
+    slot_offset = recovery._stack_operand_logical_offset(
+        publication.address,
+        publication.operands[0],
+        function_entry,
+    )
+
+    assert slot_offset is not None
+    assert not recovery._private_stack_pointer_slot_preserves_field_before(
+        publication.address,
+        slot_offset,
+        4,
+        function_entry,
+        0,
+        observation.address,
+    )
+
+
 def test_linear_stack_receiver_comparison_rejects_overlapping_write():
     image, _transfers = lifecycle_movzx_dispatch_image(
         second_stack_receiver=True,
@@ -8221,6 +8338,7 @@ def test_object_tag_lifecycle_runs_when_every_raw_slot_is_relocated():
 def test_object_tag_lifecycle_does_not_widen_narrower_producer_domain():
     image, (zero_transfer, shared_transfer) = lifecycle_movzx_dispatch_image(
         first_consumer_zero_only=True,
+        all_entries_relocated=True,
     )
 
     cfg = recover_cfg(

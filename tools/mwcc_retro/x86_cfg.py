@@ -19356,6 +19356,19 @@ class _DirectCfgRecovery:
                             + "|".join(allocation_details),
                         )
                 else:
+                    if not self._private_stack_pointer_slot_preserves_field_before(
+                        candidate_address,
+                        slot_offset,
+                        destination.size,
+                        function_entry,
+                        field_path[0],
+                        address,
+                    ):
+                        if is_postdominated_by_exact_slot_writer(
+                            candidate_address
+                        ):
+                            continue
+                        return None
                     result = self._finite_object_byte_operand_values_before(
                         candidate_address,
                         source,
@@ -27414,10 +27427,6 @@ class _DirectCfgRecovery:
         if (
             self._allow_movzx_producer_domains
             and operator == "movzx"
-            and any(
-                relocation_types.get(base + index * entry_width) != 3
-                for index in range(index_min, index_max + 1)
-            )
         ):
             narrowed = self._movzx_guard_for_index(
                 instruction.address,
@@ -50174,6 +50183,82 @@ class _DirectCfgRecovery:
             ):
                 continue
             decoded = self._owned_decoded(address)
+            if decoded.group(CS_GRP_CALL):
+                targets = tuple(
+                    sorted(self.call_targets_by_source.get(address, ()))
+                )
+                publication = self._owned_decoded(publication_address)
+                source = (
+                    publication.operands[1]
+                    if publication.id == X86_INS_MOV
+                    and len(publication.operands) == 2
+                    else None
+                )
+
+                def call_argument_is_closed(argument_index: int) -> bool:
+                    return bool(targets) and all(
+                        self._function_argument_preserves_field(
+                            target,
+                            argument_index,
+                            field,
+                        )
+                        and self._function_argument_does_not_escape(
+                            target,
+                            argument_index,
+                        )
+                        for target in targets
+                    )
+
+                # Spilling the pointer does not kill its original register
+                # identity.  Close any explicit argument that still carries
+                # that value through the same callee summaries used by the
+                # general pointer-preservation proof.
+                for argument_index in range(8):
+                    pushed = self._pushed_call_argument(
+                        address,
+                        argument_index,
+                    )
+                    if pushed is None:
+                        break
+                    if (
+                        source is not None
+                        and self._same_closed_caller_value(
+                            publication_address,
+                            source,
+                            pushed[0].address,
+                            pushed[1],
+                            function_entry,
+                        )
+                        and not call_argument_is_closed(argument_index)
+                    ):
+                        return False
+
+                # A compiler may reserve outgoing cdecl arguments with
+                # ``sub esp`` and write them using MOV.  In that shape the
+                # private spill itself is an implicit argument even though no
+                # PUSH operand mentions it.
+                stack_states = self._function_stack_states(function_entry)
+                stack_state = (
+                    None
+                    if stack_states is None
+                    else stack_states.get(address)
+                )
+                if stack_state is None:
+                    stack_state = self._linear_stack_state_before(
+                        address,
+                        function_entry,
+                    )
+                stack_delta = (
+                    None if stack_state is None else stack_state[0]
+                )
+                if (
+                    stack_delta is not None
+                    and slot_offset >= stack_delta
+                    and (slot_offset - stack_delta) % 4 == 0
+                ):
+                    argument_index = (slot_offset - stack_delta) // 4
+                    if not call_argument_is_closed(argument_index):
+                        return False
             for operand_index, operand in enumerate(decoded.operands):
                 if operand.type != X86_OP_MEM:
                     continue
