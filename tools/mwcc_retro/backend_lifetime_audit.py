@@ -33,6 +33,8 @@ from tools.mwcc_retro.x86_cfg import (
     RawCfg,
     RawE8Candidate,
     UnreachableExecutableResidue,
+    _publication_obligation_set_sha256,
+    _PublicationProvisionalExecutableSource,
 )
 
 INVENTORY_SCHEMA = "mwcc-ghidra-raw-crosscheck.v1"
@@ -191,6 +193,17 @@ class ResidueDisposition:
 
 
 @dataclass(frozen=True, slots=True)
+class PublicationReferenceReconciliation:
+    certificate_sha256: str
+    reference_start: int
+    reference_end: int
+    bytes_hex: str
+    target_slot: int
+    status: str
+    evidence: str
+
+
+@dataclass(frozen=True, slots=True)
 class HistoricalControlDisposition:
     address: int
     historical_kind: str
@@ -241,6 +254,10 @@ class CrosscheckReport:
     ownership_mismatches: tuple[OwnershipMismatch, ...]
     residue_conflicts: tuple[ResidueConflict, ...]
     residue_dispositions: tuple[ResidueDisposition, ...]
+    publication_obligation_set_sha256: str
+    publication_reference_reconciliations: tuple[
+        PublicationReferenceReconciliation, ...
+    ]
     residue_reconciliation_sha256: str | None
     unresolved_raw_addresses: tuple[int, ...]
     retained_regression_assertions: tuple[RegressionAssertion, ...]
@@ -309,6 +326,20 @@ class CrosscheckReport:
             raise GhidraInventoryError(
                 "Ghidra fact intersects provisional residue without "
                 f"independent provenance: {rendered}"
+            )
+        failed_publication_references = tuple(
+            row
+            for row in self.publication_reference_reconciliations
+            if row.status != "passed"
+        )
+        if failed_publication_references:
+            rendered = ",".join(
+                f"{row.reference_start:#x}:{row.status}"
+                for row in failed_publication_references
+            )
+            raise GhidraInventoryError(
+                "publication reference obligation reconciliation failed: "
+                + rendered
             )
         if self.residue_reconciliation_sha256 is None:
             raise GhidraInventoryError(
@@ -977,6 +1008,199 @@ def compare_ghidra_inventory(
                         "bytes and an independently decoded boundary",
                     )
                 )
+
+    obligations = tuple(
+        sorted(
+            cfg.publication_reference_obligations,
+            key=lambda row: (
+                row.reference.reference_start,
+                row.reference.reference_end,
+                row.reference.target_slot,
+                row.certificate_sha256,
+            ),
+        )
+    )
+    publication_obligation_set_sha256 = (
+        _publication_obligation_set_sha256(obligations)
+    )
+    duplicate_obligations = len(set(obligations)) != len(obligations)
+    expected_obligation_keys = {
+        (
+            certificate.sha256,
+            reference,
+            reference.source.current_ownership_sha256,
+        )
+        for certificate in cfg.publication_noninterference_certificates
+        for reference in certificate.reference_inventory.rows
+        if isinstance(
+            reference.source,
+            _PublicationProvisionalExecutableSource,
+        )
+    }
+    actual_obligation_keys = {
+        (
+            obligation.certificate_sha256,
+            obligation.reference,
+            obligation.fixed_point_ownership_sha256,
+        )
+        for obligation in obligations
+    }
+    ghidra_data_references = {
+        (row.address, row.target) for row in inventory.data_references
+    }
+    publication_reference_reconciliations = []
+    passed_publication_reference_pairs: set[tuple[int, int]] = set()
+    for obligation in obligations:
+        reference = obligation.reference
+        source = reference.source
+        status = "passed"
+        evidence = "exact provisional row and Ghidra data reference agree"
+        if duplicate_obligations:
+            status = "duplicate-obligation"
+            evidence = "the canonical obligation union contains duplicates"
+        elif (
+            cfg.publication_noninterference_certificates
+            and (
+                obligation.certificate_sha256,
+                obligation.reference,
+                obligation.fixed_point_ownership_sha256,
+            )
+            not in expected_obligation_keys
+        ):
+            status = "extra-obligation"
+            evidence = "obligation is absent from definitive certificates"
+        elif not isinstance(
+            source, _PublicationProvisionalExecutableSource
+        ):
+            status = "nonprovisional-source"
+            evidence = "only provisional executable sources require reconciliation"
+        elif (
+            obligation.fixed_point_ownership_sha256
+            != source.current_ownership_sha256
+        ):
+            status = "stale-ownership-digest"
+            evidence = "obligation ownership digest differs from its typed source"
+        else:
+            containing = tuple(
+                row
+                for row in residue.intervals
+                if row.start == source.interval_start
+                and row.end == source.interval_end
+                and row.bytes_sha256 == source.bytes_sha256
+                and row.start <= reference.reference_start
+                and reference.reference_end <= row.end
+            )
+            raw = _residue_bytes(
+                residue,
+                reference.reference_start,
+                reference.reference_end - reference.reference_start,
+            )
+            if len(containing) != 1:
+                status = "stale-provisional-interval"
+                evidence = "no exact residue interval matches the typed source"
+            elif raw is None or raw.hex() != reference.bytes_hex:
+                status = "reference-bytes-differ"
+                evidence = "current residue bytes differ from the obligation"
+            elif (
+                reference.reference_start,
+                reference.target_slot,
+            ) not in ghidra_data_references:
+                status = "missing-ghidra-reference"
+                evidence = "Ghidra omitted the exact data-reference row"
+            elif any(
+                row.address < reference.reference_end
+                and reference.reference_start <= row.end
+                for row in inventory.body_ranges
+            ) or any(
+                row.address < reference.reference_end
+                and reference.reference_start < row.address + row.size
+                for row in inventory.instructions
+            ):
+                status = "overlapping-ghidra-ownership"
+                evidence = "Ghidra claims code ownership overlapping the reference span"
+        reconciliation = PublicationReferenceReconciliation(
+            certificate_sha256=obligation.certificate_sha256,
+            reference_start=reference.reference_start,
+            reference_end=reference.reference_end,
+            bytes_hex=reference.bytes_hex,
+            target_slot=reference.target_slot,
+            status=status,
+            evidence=evidence,
+        )
+        publication_reference_reconciliations.append(reconciliation)
+        if status == "passed":
+            passed_publication_reference_pairs.add(
+                (reference.reference_start, reference.target_slot)
+            )
+            dispositions.add(
+                ResidueDisposition(
+                    reference.reference_start,
+                    "publication-reference",
+                    f"target={reference.target_slot:#x}",
+                    "reconciled-publication-reference",
+                    evidence,
+                )
+            )
+    if cfg.publication_noninterference_certificates:
+        for certificate_sha256, reference, ownership_sha256 in sorted(
+            expected_obligation_keys - actual_obligation_keys,
+            key=lambda row: (
+                row[1].reference_start,
+                row[1].reference_end,
+                row[0],
+            ),
+        ):
+            publication_reference_reconciliations.append(
+                PublicationReferenceReconciliation(
+                    certificate_sha256=certificate_sha256,
+                    reference_start=reference.reference_start,
+                    reference_end=reference.reference_end,
+                    bytes_hex=reference.bytes_hex,
+                    target_slot=reference.target_slot,
+                    status="missing-obligation",
+                    evidence=(
+                        "definitive certificate provisional row is absent "
+                        "from the obligation union;ownership="
+                        + ownership_sha256
+                    ),
+                )
+            )
+    protected_slots = {
+        obligation.reference.target_slot for obligation in obligations
+    } | {
+        certificate.publication_slot
+        for certificate in cfg.publication_noninterference_certificates
+    }
+    known_reference_pairs = {
+        (reference.reference_start, reference.target_slot)
+        for certificate in cfg.publication_noninterference_certificates
+        for reference in certificate.reference_inventory.rows
+    } | {
+        (
+            obligation.reference.reference_start,
+            obligation.reference.target_slot,
+        )
+        for obligation in obligations
+    }
+    for address, target in sorted(ghidra_data_references):
+        if (
+            target in protected_slots
+            and (address, target) not in known_reference_pairs
+        ):
+            publication_reference_reconciliations.append(
+                PublicationReferenceReconciliation(
+                    certificate_sha256="",
+                    reference_start=address,
+                    reference_end=address,
+                    bytes_hex="",
+                    target_slot=target,
+                    status="extra-ghidra-reference",
+                    evidence=(
+                        "Ghidra reported a protected-slot reference absent "
+                        "from the exact internal inventory"
+                    ),
+                )
+            )
     semantic_rows = (
         *(('call', row.address, row.target) for row in inventory.calls),
         *(("typed-flow", row.address, row.target) for row in inventory.typed_flows),
@@ -997,6 +1221,12 @@ def compare_ghidra_inventory(
         source_in_residue = residue.contains(address)
         target_in_residue = bool(target and residue.contains(target))
         if source_in_residue:
+            if (
+                fact_kind == "data-reference"
+                and (address, target)
+                in passed_publication_reference_pairs
+            ):
+                continue
             if address not in verified_residue_instructions:
                 conflicts.add(
                     ResidueConflict(
@@ -1194,11 +1424,16 @@ def compare_ghidra_inventory(
         row.side == "ghidra-only" for row in flow_mismatches
     )
     reconciliation_sha256 = None
+    publication_reconciled = all(
+        row.status == "passed"
+        for row in publication_reference_reconciliations
+    )
     if (
         not unresolved
         and not residue_conflicts
         and not byte_mismatches
         and not blocking_ghidra_only
+        and publication_reconciled
     ):
         reconciliation_sha256 = hashlib.sha256(
             _canonical_json(
@@ -1210,6 +1445,13 @@ def compare_ghidra_inventory(
                     "reachable_ownership_sha256": (
                         residue.reachable_ownership_sha256
                     ),
+                    "publication_obligation_set_sha256": (
+                        publication_obligation_set_sha256
+                    ),
+                    "publication_reference_reconciliations": [
+                        asdict(row)
+                        for row in publication_reference_reconciliations
+                    ],
                     "residue_dispositions": [
                         asdict(row) for row in residue_dispositions
                     ],
@@ -1226,6 +1468,12 @@ def compare_ghidra_inventory(
         ownership_mismatches=ownership_mismatches,
         residue_conflicts=residue_conflicts,
         residue_dispositions=residue_dispositions,
+        publication_obligation_set_sha256=(
+            publication_obligation_set_sha256
+        ),
+        publication_reference_reconciliations=tuple(
+            publication_reference_reconciliations
+        ),
         residue_reconciliation_sha256=reconciliation_sha256,
         unresolved_raw_addresses=unresolved,
         retained_regression_assertions=retained,
@@ -1238,6 +1486,13 @@ def accept_reconciled_residue(
 ) -> RawCfg:
     """Return the immutable CFG with only the reconciled residue accepted."""
     report.require_publishable()
+    current_obligation_sha256 = _publication_obligation_set_sha256(
+        cfg.publication_reference_obligations
+    )
+    if current_obligation_sha256 != report.publication_obligation_set_sha256:
+        raise GhidraInventoryError(
+            "publication reference obligation set changed after crosscheck"
+        )
     digest = report.residue_reconciliation_sha256
     if digest is None:
         raise GhidraInventoryError(

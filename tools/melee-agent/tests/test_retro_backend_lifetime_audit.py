@@ -32,6 +32,11 @@ from tools.mwcc_retro.x86_cfg import (  # noqa: E402
     TerminalExternalEdge,
     UnreachableExecutableResidue,
     UnresolvedControlTarget,
+    _PublicationProvisionalExecutableSource,
+    _PublicationReferenceReconciliationObligation,
+    _PublicationReferenceRow,
+    build_seed_inventory,
+    canonical_jsonl_bytes,
     recover_cfg,
 )
 
@@ -410,6 +415,226 @@ def _with_fixture_residue(cfg, *, start=0x00401100, payload=b"\x90\xc3"):
             executable_partition_sha256="2" * 64,
         ),
     )
+
+
+def _with_publication_reference_obligation(cfg):
+    reference_start = 0x00401100
+    publication_slot = 0x00403000
+    payload = publication_slot.to_bytes(4, "little")
+    cfg = _with_fixture_residue(
+        cfg,
+        start=reference_start,
+        payload=payload,
+    )
+    source = _PublicationProvisionalExecutableSource(
+        kind="provisional-unowned-executable",
+        interval_start=reference_start,
+        interval_end=reference_start + len(payload),
+        bytes_sha256=hashlib.sha256(payload).hexdigest(),
+        current_ownership_sha256="3" * 64,
+    )
+    reference = _PublicationReferenceRow(
+        reference_start=reference_start,
+        reference_end=reference_start + len(payload),
+        bytes_hex=payload.hex(),
+        relocation_type=3,
+        reference_class="type-3-relocation",
+        source=source,
+        target_slot=publication_slot,
+    )
+    obligation = _PublicationReferenceReconciliationObligation(
+        certificate_sha256="4" * 64,
+        reference=reference,
+        fixed_point_ownership_sha256=source.current_ownership_sha256,
+    )
+    return replace(
+        cfg,
+        publication_reference_obligations=(obligation,),
+    ), obligation
+
+
+def test_publication_reference_obligation_reconciles_exact_provisional_row(
+    tmp_path,
+):
+    cfg, obligation = _with_publication_reference_obligation(
+        raw_cfg(tmp_path)
+    )
+    path = tmp_path / "inventory.jsonl"
+    write_inventory(
+        path,
+        cfg,
+        extra_rows=(
+            {
+                "record_kind": "data-reference",
+                "address": obligation.reference.reference_start,
+                "target": obligation.reference.target_slot,
+            },
+        ),
+    )
+    inventory = load_ghidra_inventory(path, expected_sha256="a" * 64)
+
+    report = compare_ghidra_inventory(cfg, inventory)
+
+    assert len(report.publication_reference_reconciliations) == 1
+    assert report.publication_reference_reconciliations[0].status == "passed"
+    assert report.publication_obligation_set_sha256 is not None
+    report.require_publishable()
+    accepted = audit.accept_reconciled_residue(cfg, report)
+    assert accepted.provisional_unreachable_residue.accepted
+
+
+def test_publication_reference_obligation_accepts_final_certificate_audit(
+    tmp_path,
+):
+    from test_retro_x86_cfg import (
+        generous_limits,
+        return_path_publication_lifecycle_image,
+    )
+
+    fixture = return_path_publication_lifecycle_image(
+        mutation="outside-residue-slot-reference"
+    )
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    path = tmp_path / "inventory.jsonl"
+    write_inventory(
+        path,
+        cfg,
+        compiler_sha256=fixture.image.sha256,
+        extra_rows=tuple(
+            {
+                "record_kind": "data-reference",
+                "address": obligation.reference.reference_start,
+                "target": obligation.reference.target_slot,
+            }
+            for obligation in cfg.publication_reference_obligations
+        ),
+    )
+    inventory = load_ghidra_inventory(
+        path,
+        expected_sha256=fixture.image.sha256,
+    )
+
+    report = compare_ghidra_inventory(cfg, inventory)
+    accepted = audit.accept_reconciled_residue(cfg, report)
+    publication_rows = [
+        json.loads(line)
+        for line in canonical_jsonl_bytes(accepted).splitlines()
+        if json.loads(line)["record_kind"]
+        == "return-path-publication-noninterference"
+    ]
+
+    assert len(publication_rows) == 1
+    assert publication_rows[0]["obligation_set_sha256"] == (
+        report.publication_obligation_set_sha256
+    )
+    assert publication_rows[0]["external_reconciliation_sha256"] == (
+        report.residue_reconciliation_sha256
+    )
+
+
+def test_definitive_publication_certificate_requires_exact_obligation_union(
+    tmp_path,
+):
+    from test_retro_x86_cfg import (
+        generous_limits,
+        return_path_publication_lifecycle_image,
+    )
+
+    fixture = return_path_publication_lifecycle_image(
+        mutation="outside-residue-slot-reference"
+    )
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    missing = replace(cfg, publication_reference_obligations=())
+    path = tmp_path / "inventory.jsonl"
+    write_inventory(
+        path,
+        missing,
+        compiler_sha256=fixture.image.sha256,
+    )
+    inventory = load_ghidra_inventory(
+        path,
+        expected_sha256=fixture.image.sha256,
+    )
+
+    report = compare_ghidra_inventory(missing, inventory)
+
+    assert any(
+        row.status == "missing-obligation"
+        for row in report.publication_reference_reconciliations
+    )
+    with pytest.raises(
+        GhidraInventoryError,
+        match="publication reference obligation",
+    ):
+        report.require_publishable()
+
+
+@pytest.mark.parametrize(
+    "mutation", ("missing", "extra", "overlapping-ownership")
+)
+def test_publication_reference_obligation_blocks_final_reconciliation_failure(
+    tmp_path,
+    mutation,
+):
+    cfg, obligation = _with_publication_reference_obligation(
+        raw_cfg(tmp_path)
+    )
+    extra_rows = []
+    if mutation == "overlapping-ownership":
+        extra_rows.extend(
+            (
+                {
+                    "record_kind": "function",
+                    "address": obligation.reference.reference_start,
+                    "name": "claimed_publication_reference",
+                },
+                {
+                    "record_kind": "function-body-range",
+                    "address": obligation.reference.reference_start,
+                    "function_entry": obligation.reference.reference_start,
+                    "end": obligation.reference.reference_end - 1,
+                },
+            )
+        )
+    if mutation != "missing":
+        extra_rows.append(
+            {
+                "record_kind": "data-reference",
+                "address": obligation.reference.reference_start,
+                "target": obligation.reference.target_slot,
+            }
+        )
+    if mutation == "extra":
+        extra_rows.append(
+            {
+                "record_kind": "data-reference",
+                "address": obligation.reference.reference_start + 1,
+                "target": obligation.reference.target_slot,
+            }
+        )
+    path = tmp_path / "inventory.jsonl"
+    write_inventory(path, cfg, extra_rows=tuple(extra_rows))
+    inventory = load_ghidra_inventory(path, expected_sha256="a" * 64)
+
+    report = compare_ghidra_inventory(cfg, inventory)
+
+    assert any(
+        row.status != "passed"
+        for row in report.publication_reference_reconciliations
+    )
+    with pytest.raises(
+        GhidraInventoryError,
+        match="publication reference obligation|provisional residue",
+    ):
+        report.require_publishable()
 
 
 def test_exact_decoded_residue_is_reported_and_reconciled(tmp_path):

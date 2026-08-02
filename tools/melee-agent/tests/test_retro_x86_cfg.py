@@ -3255,6 +3255,17 @@ _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
         "extra-finite-returning-target",
         "closure-slot-read",
         "closure-slot-materialization",
+        "closure-slot-finite-materialization",
+        "closure-slot-unknown-mapped-global",
+        "closure-disjoint-finite-materialization",
+        "closure-absolute-overlap-at-slot-plus-one",
+        "closure-absolute-overlap-from-left",
+        "closure-absolute-boundary-left",
+        "closure-absolute-boundary-right",
+        "closure-segmented-absolute",
+        "imported-last-error-return-dereference",
+        "unsupported-address-lineage-dereference",
+        "fresh-allocation-return-dereference",
         "root-actual",
         "child-actual",
         "slot-address-actual",
@@ -3262,6 +3273,11 @@ _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
         "opaque-actual-mutation",
         "opaque-actual-unknown-forward",
         "opaque-multihop-reload-dereference",
+        "opaque-branch-bypass-register-clear-dereference",
+        "opaque-branch-bypass-storage-clear-dereference",
+        "opaque-stack-multihop-copy",
+        "opaque-object-field-multihop-copy",
+        "opaque-scalar-operations",
         "wrong-import-dll",
         "wrong-import-symbol",
         "wrong-import-lookup-mode",
@@ -3269,6 +3285,10 @@ _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
         "unlisted-import",
         "extra-tainted-import-argument",
         "sync-handle-alias",
+        "sync-handle-overlap-left",
+        "sync-handle-overlap-right",
+        "sync-handle-boundary-left",
+        "sync-handle-boundary-right",
         "returning-failure-callback",
         "callback-slot-overwrite",
         "partial-callback-slot-overwrite",
@@ -3304,7 +3324,7 @@ def return_path_publication_lifecycle_image(
     session_root = 0x00401500
     initializer = 0x00401600
     helper_target = 0x00401800
-    helper_forwarder = 0x00401840
+    helper_forwarder = 0x00401880
     allocator = 0x00401900
     grow_target = 0x00401980
     context_save = 0x00401A80
@@ -3562,6 +3582,35 @@ def return_path_publication_lifecycle_image(
         cursor = emit_abs(cursor, "a1", publication_slot)
     elif mutation == "closure-slot-materialization":
         cursor = emit_abs(cursor, "b8", publication_slot)
+    elif mutation == "closure-slot-finite-materialization":
+        cursor = emit(cursor, "8b 44 24 04")
+        cursor = emit_abs(cursor, "bb", publication_slot - 4)
+        cursor = emit(cursor, "83 c3 04")
+    elif mutation == "closure-slot-unknown-mapped-global":
+        cursor = emit(cursor, "8b 44 24 04")
+        cursor = emit_abs(cursor, "89 15", opaque_copy_slot)
+        cursor = emit_abs(cursor, "8b 1d", opaque_copy_slot)
+    elif mutation == "closure-disjoint-finite-materialization":
+        cursor = emit(cursor, "8b 44 24 04")
+        cursor = emit_abs(cursor, "bb", publication_slot - 8)
+        cursor = emit(cursor, "83 c3 04")
+    elif mutation in {
+        "closure-absolute-overlap-at-slot-plus-one",
+        "closure-absolute-overlap-from-left",
+        "closure-absolute-boundary-left",
+        "closure-absolute-boundary-right",
+    }:
+        absolute_address = {
+            "closure-absolute-overlap-at-slot-plus-one": publication_slot + 1,
+            "closure-absolute-overlap-from-left": publication_slot - 3,
+            "closure-absolute-boundary-left": publication_slot - 4,
+            "closure-absolute-boundary-right": publication_slot + 4,
+        }[mutation]
+        cursor = emit(cursor, "8b 44 24 04")
+        cursor = emit_abs(cursor, "8b 1d", absolute_address)
+    elif mutation == "closure-segmented-absolute":
+        cursor = emit(cursor, "8b 44 24 04")
+        cursor = emit_abs(cursor, "64 8b 1d", opaque_copy_slot)
     elif mutation == "opaque-actual-dereference":
         cursor = emit(cursor, "8b 44 24 04 8b 00")
     elif mutation == "opaque-actual-mutation":
@@ -3575,13 +3624,43 @@ def return_path_publication_lifecycle_image(
         cursor = emit_abs(cursor, "a3", opaque_copy_slot)
         cursor = emit_abs(cursor, "a1", opaque_copy_slot)
         cursor = emit(cursor, "8b 00")
+    elif mutation == "opaque-branch-bypass-register-clear-dereference":
+        cursor = emit(cursor, "8b 44 24 04")
+        cursor = emit_abs(cursor, "a3", opaque_copy_slot)
+        cursor = emit(cursor, "85 d2 74 05 b8 00 00 00 00 8b 00")
+    elif mutation == "opaque-branch-bypass-storage-clear-dereference":
+        cursor = emit(cursor, "8b 44 24 04 83 ec 04 89 04 24")
+        cursor = emit(cursor, "85 d2 74 07 c7 04 24 00 00 00 00")
+        cursor = emit(cursor, "8b 04 24 83 c4 04 8b 00")
+    elif mutation == "opaque-stack-multihop-copy":
+        cursor = emit(
+            cursor,
+            "8b 44 24 04 83 ec 04 89 04 24 8b 04 24 83 c4 04",
+        )
+    elif mutation == "opaque-object-field-multihop-copy":
+        cursor = emit(
+            cursor,
+            "8b 44 24 04 83 ec 08 8d 0c 24 89 41 04 8b 41 04 83 c4 08",
+        )
+    elif mutation == "opaque-scalar-operations":
+        cursor = emit(cursor, "8b 44 24 04 85 c0 25 ff 00 00 00 83 f8 4a")
+    elif mutation == "unsupported-address-lineage-dereference":
+        cursor = emit(cursor, "8b 44 24 04")
+        cursor = emit_abs(cursor, "a3", opaque_copy_slot)
+        cursor = emit(cursor, "8b 02")
     else:
         cursor = emit(cursor, "8b 44 24 04")
     cursor = emit_abs(cursor, "a3", opaque_copy_slot)
 
     sync_actual = "ff 74 24 04" if mutation == "sync-handle-alias" else None
+    sync_pointer = {
+        "sync-handle-overlap-left": publication_slot - 23,
+        "sync-handle-overlap-right": publication_slot + 1,
+        "sync-handle-boundary-left": publication_slot - 24,
+        "sync-handle-boundary-right": publication_slot + 4,
+    }.get(mutation, sync_handle)
     if sync_actual is None:
-        cursor = emit_abs(cursor, "68", sync_handle)
+        cursor = emit_abs(cursor, "68", sync_pointer)
     else:
         cursor = emit(cursor, sync_actual)
     cursor = emit_abs(
@@ -3602,9 +3681,13 @@ def return_path_publication_lifecycle_image(
         cursor,
         "83 c4 0c" if mutation == "extra-tainted-import-argument" else "59 59",
     )
+    if mutation == "fresh-allocation-return-dereference":
+        cursor = emit(cursor, "8b 10")
     cursor = emit_abs(cursor, "ff 15", iat_vas["GetLastError"])
+    if mutation == "imported-last-error-return-dereference":
+        cursor = emit(cursor, "8b 00")
     if sync_actual is None:
-        cursor = emit_abs(cursor, "68", sync_handle)
+        cursor = emit_abs(cursor, "68", sync_pointer)
     else:
         cursor = emit(cursor, sync_actual)
     cursor = emit_abs(
@@ -3659,11 +3742,13 @@ def return_path_publication_lifecycle_image(
         reference = {
             "unreconciled-slot-reference": 0x00401740,
             "outside-residue-slot-reference": 0x00401760,
-            "overlapping-residue-slot-reference": helper_target + 1,
+            "overlapping-residue-slot-reference": helper_forwarder - 4,
             "ownership-growth-into-returning-closure": default_callback + 1,
         }[mutation]
         offset = text_offset(reference)
         text[offset : offset + 4] = publication_slot.to_bytes(4, "little")
+        if mutation != "unreconciled-slot-reference":
+            relocation_vas.add(reference)
     if mutation == "unreconciled-address-taken-caller":
         struct.pack_into("<I", data, 0xC00 + 0x54, publishing_consumer)
 
@@ -8991,10 +9076,14 @@ def test_publication_certificate_binds_exact_slice_and_consumer():
         and death.proof_kind == "scope-ended"
         for death in certificate.republish_cuts[0].alias_deaths
     )
-    assert certificate.returning_bodies == ()
-    assert certificate.call_edges == ()
-    assert certificate.candidate_targets == frozenset()
-    assert certificate.reference_inventory.rows == ()
+    assert {row.function_entry for row in certificate.returning_bodies} == {
+        fixture.helper_target
+    }
+    assert certificate.call_edges
+    assert fixture.helper_target in certificate.candidate_targets
+    assert certificate.reference_inventory.rows
+    assert certificate.imports
+    assert certificate.opaque_copy_destinations
     matching_entries = tuple(
         (lookup_key, memo_entry)
         for lookup_key, memo_entry in (
@@ -9204,6 +9293,615 @@ def test_publication_certificate_rejects_cmpxchg_alias_store():
     assert memory.access & capstone.CS_AC_READ
     assert not memory.access & capstone.CS_AC_WRITE
     assert result.certificate is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "returning-unresolved-indirect",
+        "extra-finite-returning-target",
+        "closure-slot-read",
+        "closure-slot-materialization",
+        "closure-slot-finite-materialization",
+        "closure-slot-unknown-mapped-global",
+        "unreconciled-slot-reference",
+        "overlapping-residue-slot-reference",
+        "ownership-growth-into-returning-closure",
+        "imported-last-error-return-dereference",
+        "unsupported-address-lineage-dereference",
+        "closure-absolute-overlap-at-slot-plus-one",
+        "closure-absolute-overlap-from-left",
+        "closure-segmented-absolute",
+    ),
+)
+def test_return_path_publication_rejects_hostile_returning_closure(
+    mutation,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert set(fixture.transfers) <= {
+        row.address
+        for row in cfg.control_targets.unresolved
+        if row.kind == "computed-flow-blocker"
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "root-actual",
+        "child-actual",
+        "slot-address-actual",
+        "opaque-actual-dereference",
+        "opaque-actual-mutation",
+        "opaque-actual-unknown-forward",
+        "opaque-multihop-reload-dereference",
+        "opaque-branch-bypass-register-clear-dereference",
+        "opaque-branch-bypass-storage-clear-dereference",
+    ),
+)
+def test_return_path_publication_rejects_hostile_actual_effect(mutation):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert not any(
+        table.address in fixture.transfers
+        and table.guard_operator == "movzx-lifecycle-domain"
+        for table in cfg.jump_tables
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "wrong-import-dll",
+        "wrong-import-symbol",
+        "wrong-import-lookup-mode",
+        "changed-import-iat",
+        "unlisted-import",
+        "extra-tainted-import-argument",
+        "sync-handle-alias",
+        "sync-handle-overlap-left",
+        "sync-handle-overlap-right",
+    ),
+)
+def test_return_path_publication_rejects_exact_import_boundary(mutation):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert not any(
+        table.address in fixture.transfers
+        and table.guard_operator == "movzx-lifecycle-domain"
+        for table in cfg.jump_tables
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("sync-handle-boundary-left", "sync-handle-boundary-right"),
+)
+def test_return_path_publication_accepts_disjoint_sync_span_boundary(
+    mutation,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert cfg.publication_noninterference_certificates[0].imports
+
+
+def test_return_path_publication_records_closed_effect_evidence():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="outside-residue-slot-reference"
+    )
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert {
+        cfg.jump_table_at(transfer).guard_operator
+        for transfer in fixture.transfers
+    } == {"movzx-lifecycle-domain"}
+    certificate = cfg.publication_noninterference_certificates[0]
+    assert fixture.helper_target in {
+        row.function_entry for row in certificate.returning_bodies
+    }
+    assert certificate.call_edges
+    assert {
+        row.name for row in certificate.imports if row.name is not None
+    } == {
+        "EnterCriticalSection",
+        "LeaveCriticalSection",
+        "GlobalAlloc",
+        "GetLastError",
+        "GlobalFlags",
+    }
+    assert certificate.opaque_copy_destinations
+    assert all(
+        "no-escape" not in repr(row)
+        and "does-not-escape" not in repr(row)
+        for row in certificate.opaque_copy_destinations
+    )
+    provisional = tuple(
+        row
+        for row in certificate.reference_inventory.rows
+        if isinstance(
+            row.source,
+            x86_cfg_module._PublicationProvisionalExecutableSource,
+        )
+    )
+    assert provisional
+    assert {
+        witness.reference for witness in certificate.reference_disjointness
+    } >= set(provisional)
+    assert {
+        obligation.reference for obligation in cfg.publication_reference_obligations
+    } == set(provisional)
+
+
+def test_return_path_publication_records_disjoint_body_address_domain():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="closure-disjoint-finite-materialization"
+    )
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    certificate = cfg.publication_noninterference_certificates[0]
+    witness = next(
+        row
+        for row in certificate.body_address_domains
+        if isinstance(
+            row.output_domain,
+            x86_cfg_module._PublicationFiniteAddressDomain,
+        )
+        and fixture.publication_slot - 4 in row.output_domain.values
+    )
+    assert len(witness.instruction_addresses) >= 2
+    assert witness.protected_slot_relation == "disjoint"
+    assert witness.function_dependency[0] == "function"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_address"),
+    (
+        ("closure-absolute-boundary-left", -4),
+        ("closure-absolute-boundary-right", 4),
+    ),
+)
+def test_return_path_publication_records_disjoint_absolute_memory_boundary(
+    mutation,
+    expected_address,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    expected_address += fixture.publication_slot
+    certificate = cfg.publication_noninterference_certificates[0]
+    witness = next(
+        row
+        for row in certificate.body_address_domains
+        if isinstance(
+            row.output_domain,
+            x86_cfg_module._PublicationFiniteAddressDomain,
+        )
+        and row.output_domain.values == frozenset({expected_address})
+    )
+    assert witness.input_domain == witness.output_domain
+    assert witness.protected_slot_relation == "disjoint"
+
+
+def test_return_path_publication_records_fresh_allocation_address_domain():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="fresh-allocation-return-dereference"
+    )
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    certificate = cfg.publication_noninterference_certificates[0]
+    witness = next(
+        row
+        for row in certificate.body_address_domains
+        if row.output_domain.kind == "fresh-allocation"
+    )
+    assert len(witness.instruction_addresses) >= 2
+    assert witness.protected_slot_relation == "disjoint"
+
+
+def test_return_path_publication_records_stack_multihop_opaque_copy():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="opaque-stack-multihop-copy"
+    )
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    certificate = cfg.publication_noninterference_certificates[0]
+    assert any(
+        row.operation == "store" and row.destination.kind == "stack"
+        for row in certificate.taint_flows
+    )
+    assert any(
+        row.operation == "reload" and row.source.kind == "stack"
+        for row in certificate.taint_flows
+    )
+    assert certificate.opaque_copy_destinations
+
+
+def test_return_path_publication_records_object_field_multihop_opaque_copy():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="opaque-object-field-multihop-copy"
+    )
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    certificate = cfg.publication_noninterference_certificates[0]
+    assert any(
+        row.operation == "store"
+        and row.destination.kind == "object-field"
+        for row in certificate.taint_flows
+    )
+    assert any(
+        row.operation == "reload" and row.source.kind == "object-field"
+        for row in certificate.taint_flows
+    )
+
+
+def test_return_path_publication_records_permitted_opaque_scalar_operations():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="opaque-scalar-operations"
+    )
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    operations = {
+        row.operation
+        for row in cfg.publication_noninterference_certificates[0].taint_flows
+    }
+    assert {"compare", "mask", "test"} <= operations
+
+
+def test_publication_memos_stay_private_for_later_object_trial(monkeypatch):
+    fixture = return_path_publication_lifecycle_image()
+    recoveries = []
+    original = _DirectCfgRecovery.recover
+
+    def inject_followup_object_hypothesis(recovery):
+        cfg = original(recovery)
+        publication_hypotheses = tuple(recovery.publication_table_hypotheses)
+        if publication_hypotheses:
+            publication = publication_hypotheses[0]
+            target_record = replace(
+                publication.target_records[0],
+                category="object-callback-table-entry",
+                detail="synthetic post-publication object candidate",
+            )
+            recovery.object_callback_table_hypotheses.add(
+                x86_cfg_module._ObjectCallbackTableHypothesis(
+                    table_base=publication.table_base,
+                    store_address=fixture.publication,
+                    object_field=4,
+                    receiver_identity=None,
+                    consumers=(),
+                    records=(target_record,),
+                    data_evidence=x86_cfg_module._DataEvidence(
+                        start=publication.table_base,
+                        end=publication.table_base + 4,
+                        provenance="synthetic post-publication object candidate",
+                    ),
+                )
+            )
+        recoveries.append(recovery)
+        return cfg
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "recover",
+        inject_followup_object_hypothesis,
+    )
+
+    recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert len(recoveries) == 3
+    shared_producer_memo = recoveries[0].producer_domain_memo
+    shared_finite_memo = recoveries[0].finite_control_memo
+    publication_trial, object_trial = recoveries[1:]
+    assert publication_trial.accepted_publication_table_hypotheses
+    assert object_trial.accepted_publication_table_hypotheses
+    assert object_trial.accepted_object_callback_hypotheses
+    assert object_trial.producer_domain_memo is not shared_producer_memo
+    assert object_trial.finite_control_memo is not shared_finite_memo
+
+
+def test_rejected_publication_baseline_rebuild_discards_private_memos(
+    monkeypatch,
+):
+    fixture = return_path_publication_lifecycle_image()
+    recoveries = []
+    original = _DirectCfgRecovery.recover
+    poisoned_key = ("failed-publication-baseline",)
+
+    def force_rejected_publication_baseline(recovery):
+        recoveries.append(recovery)
+        if len(recoveries) == 3:
+            accepted = recovery.accepted_publication_table_hypotheses
+            assert accepted
+            recovery.producer_domain_memo[poisoned_key] = (
+                x86_cfg_module._ProducerDomainMemoEntry(
+                    image_sha256=fixture.image.sha256,
+                    dependencies=(),
+                    result=None,
+                )
+            )
+            recovery.finite_control_memo[poisoned_key] = (
+                x86_cfg_module._ProducerDomainMemoEntry(
+                    image_sha256=fixture.image.sha256,
+                    dependencies=(),
+                    result=None,
+                )
+            )
+            raise x86_cfg_module._PublicationCandidateTrialRejected(
+                tuple(row.candidate_identity for row in accepted),
+                "forced baseline reconstruction rejection",
+            )
+
+        cfg = original(recovery)
+        if len(recoveries) == 2:
+            reproduced = tuple(
+                recovery.reproduced_publication_table_hypotheses
+            )
+            assert reproduced
+            row = reproduced[0]
+            changed_hypothesis = replace(
+                row.hypothesis,
+                target_records=tuple(
+                    replace(record, detail=f"{record.detail};refreshed")
+                    for record in row.hypothesis.target_records
+                ),
+            )
+            recovery.reproduced_publication_table_hypotheses = [
+                replace(row, hypothesis=changed_hypothesis)
+            ]
+        return cfg
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "recover",
+        force_rejected_publication_baseline,
+    )
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert len(recoveries) >= 4
+    shared_producer_memo = recoveries[0].producer_domain_memo
+    shared_finite_memo = recoveries[0].finite_control_memo
+    rejected_baseline = recoveries[2]
+    rebuilt_baseline = recoveries[3]
+    assert rejected_baseline.producer_domain_memo is not shared_producer_memo
+    assert rejected_baseline.finite_control_memo is not shared_finite_memo
+    assert not rebuilt_baseline.accepted_publication_table_hypotheses
+    assert rebuilt_baseline.producer_domain_memo is shared_producer_memo
+    assert rebuilt_baseline.finite_control_memo is shared_finite_memo
+    assert poisoned_key not in shared_producer_memo
+    assert poisoned_key not in shared_finite_memo
+    assert all(
+        poisoned_key not in recovery.producer_domain_memo
+        and poisoned_key not in recovery.finite_control_memo
+        for recovery in recoveries[3:]
+    )
+    assert cfg.instructions
+
+
+def test_return_path_publication_serializes_one_accepted_audit_row():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="outside-residue-slot-reference"
+    )
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    assert not any(
+        json.loads(line)["record_kind"]
+        == "return-path-publication-noninterference"
+        for line in canonical_jsonl_bytes(cfg).splitlines()
+    )
+    reconciliation_sha256 = "5" * 64
+    accepted = replace(
+        cfg,
+        provisional_unreachable_residue=replace(
+            cfg.provisional_unreachable_residue,
+            accepted=True,
+            reconciliation_sha256=reconciliation_sha256,
+        ),
+    )
+
+    rows = [
+        json.loads(line)
+        for line in canonical_jsonl_bytes(accepted).splitlines()
+        if json.loads(line)["record_kind"]
+        == "return-path-publication-noninterference"
+    ]
+
+    assert len(rows) == 1
+    row = rows[0]
+    certificate = cfg.publication_noninterference_certificates[0]
+    assert row["certificate_sha256"] == certificate.sha256
+    assert row["publication_address"] == fixture.publication
+    assert row["observation_address"] == fixture.observation
+    assert row["returning_body_entries"]
+    assert {entry["name"] for entry in row["import_identities"]} == {
+        "EnterCriticalSection",
+        "LeaveCriticalSection",
+        "GlobalAlloc",
+        "GetLastError",
+        "GlobalFlags",
+    }
+    assert len(row["reference_inventory_sha256"]) == 64
+    assert len(row["obligation_set_sha256"]) == 64
+    assert row["external_reconciliation_sha256"] == reconciliation_sha256
+    provisional = [
+        reference
+        for reference in row["reference_inventory"]
+        if reference["source_kind"]
+        == "provisional-unowned-executable"
+    ]
+    assert provisional
+    assert all(
+        reference["source_evidence"]["interval_start"]
+        <= reference["reference_start"]
+        < reference["reference_end"]
+        <= reference["source_evidence"]["interval_end"]
+        and reference["residue_reconciliation_sha256"]
+        == reconciliation_sha256
+        for reference in provisional
+    )
+
+
+def test_return_path_publication_checkpoint_rehydrates_tentative_evidence(
+    tmp_path,
+):
+    fixture = return_path_publication_lifecycle_image(
+        mutation="outside-residue-slot-reference"
+    )
+    inventory = build_seed_inventory(fixture.image, ())
+    limits = generous_limits(fixture.image)
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    with pytest.raises(ProducerCheckpointIncomplete):
+        recover_cfg(
+            fixture.image,
+            inventory,
+            limits,
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=100,
+        )
+
+    cfg = None
+    for _attempt in range(8):
+        try:
+            cfg = recover_cfg(
+                fixture.image,
+                inventory,
+                limits,
+                producer_checkpoint_dir=checkpoint_dir,
+                producer_query_budget=100,
+            )
+            break
+        except ProducerCheckpointIncomplete:
+            continue
+    assert cfg is not None
+
+    assert {
+        cfg.jump_table_at(transfer).guard_operator
+        for transfer in fixture.transfers
+    } == {"movzx-lifecycle-domain"}
+    lifecycle_payloads = [
+        json.loads(path.read_bytes())
+        for path in checkpoint_dir.glob("*.json")
+        if json.loads(path.read_bytes())["query"]["analysis_semantics"]
+        == _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
+    ]
+    assert lifecycle_payloads
+    assert any(
+        dependency["kind"] == "absolute-reference"
+        and dependency["identifier"] == fixture.publication_slot
+        for payload in lifecycle_payloads
+        for dependency in payload["dependencies"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("missing-obligation", "duplicate-obligation", "missing-reconciliation"),
+)
+def test_return_path_publication_refuses_inconsistent_accepted_audit(
+    mutation,
+):
+    fixture = return_path_publication_lifecycle_image(
+        mutation="outside-residue-slot-reference"
+    )
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    obligations = cfg.publication_reference_obligations
+    accepted = replace(
+        cfg,
+        publication_reference_obligations=(
+            ()
+            if mutation == "missing-obligation"
+            else (
+                (*obligations, obligations[0])
+                if mutation == "duplicate-obligation"
+                else obligations
+            )
+        ),
+        provisional_unreachable_residue=replace(
+            cfg.provisional_unreachable_residue,
+            accepted=True,
+            reconciliation_sha256=(
+                None if mutation == "missing-reconciliation" else "6" * 64
+            ),
+        ),
+    )
+
+    with pytest.raises(CfgRecoveryError, match="accepted publication"):
+        canonical_jsonl_bytes(accepted)
 
 
 def test_object_tag_lifecycle_binds_stack_reloaded_receiver():
@@ -10023,6 +10721,86 @@ def test_object_tag_lifecycle_checkpoint_is_separate_from_v27(
     assert {
         cfg.jump_table_at(transfer).guard_operator for transfer in transfers
     } == {"movzx-lifecycle-domain"}
+
+
+def test_absolute_reference_checkpoint_dependency_is_lifecycle_v6_only(
+    tmp_path,
+):
+    image, _transfers = lifecycle_movzx_dispatch_image()
+    limits = generous_limits(image)
+    session = _ProducerCertificateSession(
+        image_sha256=image.sha256,
+        limits=limits,
+        checkpoint_dir=tmp_path,
+        query_budget=0,
+    )
+    lifecycle_query = x86_cfg_module._ObjectTagLifecycleQuery(
+        function_entry=0x00401000,
+        table_base=0x00402000,
+        entry_width=4,
+        field_path=(0,),
+        source_width=1,
+        consumer_bindings=(
+            (
+                0x00401000,
+                0x00401010,
+                "0fb618",
+                0x00401013,
+                "ff149d00204000",
+                "ebx",
+                "eax",
+                0x0040100F,
+                "50",
+            ),
+        ),
+    )
+    producer_query = _MovzxProducerQuery(
+        function_entry=0x00401000,
+        movzx_address=0x00401010,
+        movzx_bytes_hex="0fb618",
+        destination_register="ebx",
+        source_base_register="eax",
+        field_path=(0,),
+        source_width=1,
+    )
+    rows = [
+        {
+            "kind": "absolute-reference",
+            "identifier": 0x00403000,
+            "fingerprint": "1" * 64,
+        },
+        {
+            "kind": "function",
+            "identifier": lifecycle_query.function_entry,
+            "fingerprint": "2" * 64,
+        },
+    ]
+
+    assert session._decode_dependencies(
+        rows,
+        expected_query=lifecycle_query,
+        path=tmp_path / "lifecycle.json",
+    )[0][:2] == ("absolute-reference", 0x00403000)
+    with pytest.raises(ProducerCertificateError, match="malformed"):
+        session._decode_dependencies(
+            rows,
+            expected_query=producer_query,
+            path=tmp_path / "producer.json",
+        )
+    with pytest.raises(ProducerCertificateError, match="not canonical"):
+        session._decode_dependencies(
+            list(reversed(rows)),
+            expected_query=lifecycle_query,
+            path=tmp_path / "noncanonical.json",
+        )
+    malformed = [dict(row) for row in rows]
+    malformed[0]["fingerprint"] = "not-a-sha256"
+    with pytest.raises(ProducerCertificateError, match="malformed"):
+        session._decode_dependencies(
+            malformed,
+            expected_query=lifecycle_query,
+            path=tmp_path / "malformed.json",
+        )
 
 
 def test_object_tag_lifecycle_checkpoint_does_not_reuse_v5_certificate(
