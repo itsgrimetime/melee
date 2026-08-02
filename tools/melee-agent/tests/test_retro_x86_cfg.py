@@ -6681,6 +6681,7 @@ def lifecycle_optional_allocation_pointee_image(*, mutation=None):
         "one-arena-null-path",
         "returning-callback",
         "callback-overwritten",
+        "callback-overwritten-partial-overlap",
         "reset-reachable",
         "second-checked-backend",
         "alternate-backend-entry",
@@ -6852,7 +6853,10 @@ def lifecycle_optional_allocation_pointee_image(*, mutation=None):
     cursor = 0x400
     if mutation == "reset-reachable":
         cursor = emit_call(cursor, 0x580)
-    if mutation == "callback-overwritten":
+    if mutation in {
+        "callback-overwritten",
+        "callback-overwritten-partial-overlap",
+    }:
         cursor = emit_call(cursor, 0x620)
     cursor = emit_call(cursor, 0x80)
     cursor = emit_call(cursor, 0x140)
@@ -7023,6 +7027,8 @@ def lifecycle_optional_allocation_pointee_image(*, mutation=None):
     emit(0x600, "c3")
     if mutation == "callback-overwritten":
         emit(0x620, "c7 05 80 30 40 00 00 00 00 00 c3")
+    elif mutation == "callback-overwritten-partial-overlap":
+        emit(0x620, "66 c7 05 81 30 40 00 00 00 c3")
     emit(0x640, "a1 c8 30 40 00 83 05 c8 30 40 00 40 c3")
     emit(0x660, "8b 44 24 04 c7 00 34 12 00 00 c3")
     emit(0x680, "8b 44 24 04 a3 d0 30 40 00 c3")
@@ -7061,7 +7067,11 @@ def lifecycle_optional_allocation_pointee_image(*, mutation=None):
                 pe_mod.Export("arena_reset", 2, text_va + 0x580, None),
                 *(
                     [pe_mod.Export("callback_writer", 3, text_va + 0x620, None)]
-                    if mutation == "callback-overwritten"
+                    if mutation
+                    in {
+                        "callback-overwritten",
+                        "callback-overwritten-partial-overlap",
+                    }
                     else []
                 ),
             ]
@@ -14689,6 +14699,215 @@ def test_lifecycle_flag_preserving_cleanup_between_test_and_branch():
     table = cfg.jump_table_at(transfer_address)
     assert table.guard_operator == "movzx-producer-domain"
     assert table.guard_bound == 74
+
+
+def test_allocator_totality_cache_hit_replays_all_dependencies():
+    image, _movzx_address, _transfer_address = (
+        lifecycle_optional_allocation_pointee_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    lifetime_roots = frozenset({0x00401080, 0x00401140})
+
+    fresh: set[tuple[str, int]] = set()
+    recovery.producer_dependency_collectors.append(fresh)
+    try:
+        first = recovery._allocator_totality_certificate(
+            0x00401380,
+            0x00401300,
+            lifetime_roots=lifetime_roots,
+        )
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is fresh
+
+    replayed: set[tuple[str, int]] = set()
+    recovery.producer_dependency_collectors.append(replayed)
+    try:
+        second = recovery._allocator_totality_certificate(
+            0x00401380,
+            0x00401300,
+            lifetime_roots=lifetime_roots,
+        )
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is replayed
+
+    expected = {
+        ("function", 0x00401000),  # checked session
+        ("function", 0x00401080),  # lifetime producer A
+        ("function", 0x00401140),  # lifetime producer B
+        ("function", 0x00401200),  # consumer
+        ("function", 0x00401240),  # list wrapper
+        ("function", 0x00401300),  # allocation caller
+        ("function", 0x00401380),  # owned allocator
+        ("function", 0x00401400),  # backend root
+        ("function", 0x00401440),  # grow helper
+        ("function", 0x004014A0),  # checked initializer
+        ("function", 0x00401520),  # setjmp-like save
+        ("function", 0x00401540),  # longjmp-like restore
+        ("function", 0x00401560),  # installed callback candidate
+        ("function", 0x00401580),  # reset target
+        ("function", 0x004015A0),  # system allocator
+        ("function", 0x004015C0),  # backend/lifetime memset
+        ("global-slot", 0x00403080),
+    }
+    assert first is not None and second == first
+    assert fresh == expected
+    assert replayed == fresh
+    assert first.callback_candidate_targets == frozenset({0x00401560})
+
+
+def test_allocator_totality_cache_invalidates_changed_backend_function():
+    image, _movzx_address, _transfer_address = (
+        lifecycle_optional_allocation_pointee_image()
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    lifetime_roots = frozenset({0x00401080, 0x00401140})
+    certificate = recovery._allocator_totality_certificate(
+        0x00401380,
+        0x00401300,
+        lifetime_roots=lifetime_roots,
+    )
+    assert certificate is not None
+    entry = next(
+        row
+        for row in recovery.allocator_totality_cache.values()
+        if row is not None and row.result == certificate
+    )
+
+    function_entry = 0x00401080
+    instruction_address = recovery._function_instruction_addresses(
+        function_entry
+    )[0]
+    instruction = recovery.instructions[instruction_address]
+    changed = bytearray.fromhex(instruction.bytes_hex)
+    changed[-1] ^= 1
+    recovery.instructions[instruction_address] = replace(
+        instruction,
+        bytes_hex=changed.hex(),
+    )
+    recovery.producer_function_fingerprint_cache.pop(function_entry, None)
+
+    assert not recovery._dependency_memo_hit(entry)
+    recomputed = recovery._allocator_totality_certificate(
+        0x00401380,
+        0x00401300,
+        lifetime_roots=lifetime_roots,
+    )
+    assert recomputed == certificate
+    replacement_entry = next(
+        row
+        for row in recovery.allocator_totality_cache.values()
+        if row is not None and row.result == recomputed
+    )
+    assert replacement_entry is not entry
+    assert recovery._dependency_memo_hit(replacement_entry)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "callback-overwritten",
+        "callback-overwritten-partial-overlap",
+    ),
+)
+def test_allocator_totality_cache_invalidates_callback_slot_overwrite(
+    mutation,
+):
+    baseline_image, _movzx_address, _transfer_address = (
+        lifecycle_optional_allocation_pointee_image()
+    )
+    baseline = _DirectCfgRecovery(
+        baseline_image,
+        build_seed_inventory(baseline_image, ()),
+        generous_limits(baseline_image),
+    )
+    baseline.recover()
+    lifetime_roots = frozenset({0x00401080, 0x00401140})
+    certificate = baseline._allocator_totality_certificate(
+        0x00401380,
+        0x00401300,
+        lifetime_roots=lifetime_roots,
+    )
+    assert certificate is not None
+    entry = next(
+        row
+        for row in baseline.allocator_totality_cache.values()
+        if row is not None and row.result == certificate
+    )
+
+    changed_image, _movzx_address, _transfer_address = (
+        lifecycle_optional_allocation_pointee_image(mutation=mutation)
+    )
+    changed_image = replace(
+        changed_image,
+        sha256=baseline_image.sha256,
+    )
+    changed = _DirectCfgRecovery(
+        changed_image,
+        build_seed_inventory(changed_image, ()),
+        generous_limits(changed_image),
+    )
+    changed.recover()
+    stale_entry = replace(
+        entry,
+        dependencies=tuple(
+            (
+                dependency_kind,
+                identifier,
+                (
+                    fingerprint
+                    if dependency_kind == "global-slot"
+                    else changed._producer_dependency_fingerprint(
+                        dependency_kind,
+                        identifier,
+                    )
+                ),
+            )
+            for dependency_kind, identifier, fingerprint in entry.dependencies
+        ),
+    )
+    stale_rows = tuple(
+        (dependency_kind, identifier)
+        for dependency_kind, identifier, fingerprint in stale_entry.dependencies
+        if changed._producer_dependency_fingerprint(
+            dependency_kind,
+            identifier,
+        )
+        != fingerprint
+    )
+    assert stale_rows == (("global-slot", 0x00403080),)
+    assert not changed._dependency_memo_hit(stale_entry)
+
+    cache_key = (
+        0x00401380,
+        0x00401300,
+        lifetime_roots,
+        changed._summary_fact_signature(),
+        changed.control_flow_revision,
+    )
+    changed.allocator_totality_cache[cache_key] = stale_entry
+    recomputed = changed._allocator_totality_certificate(
+        0x00401380,
+        0x00401300,
+        lifetime_roots=lifetime_roots,
+    )
+    replacement_entry = changed.allocator_totality_cache[cache_key]
+    if recomputed is None:
+        assert replacement_entry is None
+    else:
+        assert replacement_entry is not None
+        assert replacement_entry is not stale_entry
+        assert replacement_entry.result == recomputed
+        assert changed._dependency_memo_hit(replacement_entry)
 
 
 def test_allocator_totality_accepts_reset_outside_closed_lifetime():

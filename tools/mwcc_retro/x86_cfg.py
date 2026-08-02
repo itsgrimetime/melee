@@ -1113,6 +1113,7 @@ class _AllocatorTotalityCertificate:
     system_allocators: frozenset[int]
     callback_slot: int
     callback_target: int
+    callback_candidate_targets: frozenset[int]
     setjmp_target: int
     longjmp_target: int
     reset_targets: frozenset[int]
@@ -3163,7 +3164,7 @@ class _DirectCfgRecovery:
         self.zero_fill_function_cache: dict[tuple[Any, ...], bool] = {}
         self.relative_pointer_state_cache: dict[tuple[Any, ...], Any] = {}
         self.allocator_totality_cache: dict[
-            tuple[Any, ...], _AllocatorTotalityCertificate | None
+            tuple[Any, ...], _DependencyMemoEntry | None
         ] = {}
         self.direct_function_call_closure_cache: dict[
             tuple[Any, ...], frozenset[int]
@@ -14405,7 +14406,19 @@ class _DirectCfgRecovery:
             self.control_flow_revision,
         )
         if cache_key in self.allocator_totality_cache:
-            return self.allocator_totality_cache[cache_key]
+            cached = self.allocator_totality_cache[cache_key]
+            if cached is None:
+                return None
+            if self._dependency_memo_hit(cached):
+                return (
+                    cached.result
+                    if isinstance(
+                        cached.result,
+                        _AllocatorTotalityCertificate,
+                    )
+                    else None
+                )
+            del self.allocator_totality_cache[cache_key]
         self.allocator_totality_cache[cache_key] = None
         fact = self._owned_fixed_bump_allocator_fact(allocator)
         if fact is None or fact.grow_target not in self.function_addresses:
@@ -14416,6 +14429,11 @@ class _DirectCfgRecovery:
             return None
         system_allocators = grow_shape.system_allocators
         callback_slot = grow_shape.callback_slot
+        callback_candidate_targets = frozenset(
+            self.call_targets_by_source.get(grow_shape.callback_call, ())
+        )
+        if not callback_candidate_targets:
+            return None
 
         # Bind checked initialization for every descriptor grown while the
         # callback slot is zero, followed by installation from argument 0.
@@ -14618,7 +14636,10 @@ class _DirectCfgRecovery:
                 longjmp_target = self._callback_nonreturns_via_context_restore(
                     callback_target, context
                 )
-                if longjmp_target is None:
+                if (
+                    longjmp_target is None
+                    or callback_target not in callback_candidate_targets
+                ):
                     continue
                 for backend_call in later_calls:
                     if backend_call.address <= setjmp_call.address:
@@ -14687,6 +14708,9 @@ class _DirectCfgRecovery:
                             system_allocators=system_allocators,
                             callback_slot=callback_slot,
                             callback_target=callback_target,
+                            callback_candidate_targets=(
+                                callback_candidate_targets
+                            ),
                             setjmp_target=setjmp_call.target,
                             longjmp_target=longjmp_target,
                             reset_targets=reset_targets,
@@ -14724,6 +14748,7 @@ class _DirectCfgRecovery:
                 candidate.system_allocators,
                 candidate.callback_slot,
                 candidate.callback_target,
+                candidate.callback_candidate_targets,
                 candidate.setjmp_target,
                 candidate.longjmp_target,
                 candidate.reset_targets,
@@ -14747,6 +14772,9 @@ class _DirectCfgRecovery:
             system_allocators=template.system_allocators,
             callback_slot=template.callback_slot,
             callback_target=template.callback_target,
+            callback_candidate_targets=(
+                template.callback_candidate_targets
+            ),
             setjmp_target=template.setjmp_target,
             longjmp_target=template.longjmp_target,
             reset_targets=template.reset_targets,
@@ -14754,7 +14782,27 @@ class _DirectCfgRecovery:
             finalizer_targets=template.finalizer_targets,
             lifetime_roots=template.lifetime_roots,
         )
-        for dependency in {
+        dependencies = self._allocator_totality_dependencies(
+            allocator,
+            allocation_caller,
+            certificate,
+        )
+        entry = _DependencyMemoEntry(
+            image_sha256=self.image.sha256,
+            dependencies=self._producer_dependency_snapshot(dependencies),
+            result=certificate,
+        )
+        self._propagate_producer_dependencies(dependencies)
+        self.allocator_totality_cache[cache_key] = entry
+        return certificate
+
+    def _allocator_totality_dependencies(
+        self,
+        allocator: int,
+        allocation_caller: int,
+        certificate: _AllocatorTotalityCertificate,
+    ) -> set[tuple[str, int]]:
+        function_dependencies = {
             allocator,
             allocation_caller,
             certificate.session_root,
@@ -14766,19 +14814,21 @@ class _DirectCfgRecovery:
             *certificate.backend_roots,
             *certificate.lifetime_roots,
             *certificate.system_allocators,
+            *certificate.callback_candidate_targets,
             *certificate.finalizer_targets,
             *certificate.reset_targets,
-            *frozenset().union(
-                *(
-                    self._direct_function_call_closure(root)
-                    for root in certificate.backend_roots
-                )
-            ),
-        }:
-            self._note_producer_dependency(dependency)
-        self._note_producer_global_slot_dependency(certificate.callback_slot)
-        self.allocator_totality_cache[cache_key] = certificate
-        return certificate
+        }
+        for root in (
+            *certificate.backend_roots,
+            *certificate.lifetime_roots,
+        ):
+            function_dependencies.update(
+                self._direct_function_call_closure(root)
+            )
+        return {
+            *(('function', dependency) for dependency in function_dependencies),
+            ("global-slot", certificate.callback_slot),
+        }
 
     def _allocation_result_has_closed_nonnull_guard(
         self,
