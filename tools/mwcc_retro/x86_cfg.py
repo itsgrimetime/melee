@@ -50161,6 +50161,14 @@ class _DirectCfgRecovery:
             )
         ):
             return False
+        publication = self._owned_decoded(publication_address)
+        if not (
+            publication.id == X86_INS_MOV
+            and len(publication.operands) == 2
+            and publication.operands[1].size == width
+        ):
+            return False
+        source = publication.operands[1]
         following_entry = self._following_function_entry(function_entry)
         for address in self._function_instruction_addresses_between(
             function_entry,
@@ -50183,16 +50191,30 @@ class _DirectCfgRecovery:
             ):
                 continue
             decoded = self._owned_decoded(address)
+            if decoded.id == X86_INS_MOV and len(decoded.operands) == 2:
+                destination, stored = decoded.operands
+                if (
+                    destination.type == X86_OP_MEM
+                    and self._closed_caller_value_alias_relation(
+                        publication_address,
+                        source,
+                        address,
+                        stored,
+                        function_entry,
+                        private_stack_alias=(
+                            publication_address,
+                            slot_offset,
+                        ),
+                    )
+                    != "none"
+                ):
+                    # A second local slot, global, or arbitrary memory
+                    # publication creates an alias outside this exact private
+                    # spill certificate.
+                    return False
             if decoded.group(CS_GRP_CALL):
                 targets = tuple(
                     sorted(self.call_targets_by_source.get(address, ()))
-                )
-                publication = self._owned_decoded(publication_address)
-                source = (
-                    publication.operands[1]
-                    if publication.id == X86_INS_MOV
-                    and len(publication.operands) == 2
-                    else None
                 )
 
                 def call_argument_is_closed(argument_index: int) -> bool:
@@ -50220,15 +50242,19 @@ class _DirectCfgRecovery:
                     )
                     if pushed is None:
                         break
-                    if (
-                        source is not None
-                        and self._same_closed_caller_value(
+                    relation = self._closed_caller_value_alias_relation(
+                        publication_address,
+                        source,
+                        pushed[0].address,
+                        pushed[1],
+                        function_entry,
+                        private_stack_alias=(
                             publication_address,
-                            source,
-                            pushed[0].address,
-                            pushed[1],
-                            function_entry,
-                        )
+                            slot_offset,
+                        ),
+                    )
+                    if relation == "may" or (
+                        relation == "must"
                         and not call_argument_is_closed(argument_index)
                     ):
                         return False
@@ -50311,37 +50337,276 @@ class _DirectCfgRecovery:
         right_operand,
         function_entry: int,
     ) -> bool:
-        def argument_index(address: int, operand) -> int | None:
+        """Return whether every reaching definition has the same identity."""
+        return self._closed_caller_value_alias_relation(
+            left_address,
+            left_operand,
+            right_address,
+            right_operand,
+            function_entry,
+        ) == "must"
+
+    def _closed_caller_value_alias_relation(
+        self,
+        left_address: int,
+        left_operand,
+        right_address: int,
+        right_operand,
+        function_entry: int,
+        *,
+        private_stack_alias: tuple[int, int] | None = None,
+    ) -> str:
+        """Classify one operand as a must/may/non-alias of a closed value.
+
+        Supported must-alias transports are exact arguments, unchanged
+        registers, full-width MOV chains, all-arms same-identity merges, and
+        reloads of ``private_stack_alias``.  Unsupported transformations are
+        ``may`` when they consume an alias so callers can fail closed.
+        """
+
+        def argument_index(
+            address: int,
+            operand,
+            active: frozenset[tuple[int, str]] = frozenset(),
+        ) -> int | None:
             if operand.type == X86_OP_REG:
-                return self._register_argument_index_across_blocks(
+                if operand.size != 4:
+                    return None
+                family = self._register_family(operand.reg)
+                key = (address, family)
+                if key in active:
+                    return None
+                direct = self._register_argument_index_across_blocks(
+                    address, family, function_entry
+                )
+                if direct is not None:
+                    return direct
+                definitions = self._register_definitions_across_blocks(
                     address,
-                    self._register_family(operand.reg),
+                    family,
                     function_entry,
                 )
-            return self._stack_argument_index_at(address, operand, function_entry)
+                if not definitions:
+                    return None
+                origins = set()
+                for definition_address in definitions:
+                    definition = self._owned_decoded(definition_address)
+                    if not (
+                        definition.id == X86_INS_MOV
+                        and len(definition.operands) == 2
+                        and definition.operands[0].type == X86_OP_REG
+                        and definition.operands[0].size == 4
+                        and definition.operands[1].size == 4
+                    ):
+                        return None
+                    origin = argument_index(
+                        definition_address,
+                        definition.operands[1],
+                        active | {key},
+                    )
+                    if origin is None:
+                        return None
+                    origins.add(origin)
+                return (
+                    next(iter(origins)) if len(origins) == 1 else None
+                )
+            if operand.type != X86_OP_MEM or operand.size != 4:
+                return None
+            return self._stack_argument_index_at(
+                address,
+                operand,
+                function_entry,
+            )
 
         left_argument = argument_index(left_address, left_operand)
-        right_argument = argument_index(right_address, right_operand)
-        if left_argument is not None or right_argument is not None:
-            return left_argument is not None and left_argument == right_argument
-        if left_operand.type != X86_OP_REG or right_operand.type != X86_OP_REG:
-            return False
-        left_family = self._register_family(left_operand.reg)
-        right_family = self._register_family(right_operand.reg)
-        if left_family != right_family or left_family not in {
-            "ebx",
-            "esi",
-            "edi",
-            "ebp",
-        }:
-            return False
-        left_definitions = self._register_definitions_across_blocks(
-            left_address, left_family, function_entry
+        left_family = (
+            self._register_family(left_operand.reg)
+            if left_operand.type == X86_OP_REG and left_operand.size == 4
+            else None
         )
-        right_definitions = self._register_definitions_across_blocks(
-            right_address, right_family, function_entry
+        left_definitions = (
+            self._register_definitions_across_blocks(
+                left_address,
+                left_family,
+                function_entry,
+            )
+            if left_family is not None
+            else frozenset()
         )
-        return bool(left_definitions) and left_definitions == right_definitions
+        memo: dict[tuple[int, str], str] = {}
+
+        def combine(relations: list[str]) -> str:
+            if relations and all(row == "must" for row in relations):
+                return "must"
+            if all(row == "none" for row in relations):
+                return "none"
+            return "may"
+
+        def private_spill_load(address: int, operand) -> bool:
+            if private_stack_alias is None or operand.type != X86_OP_MEM:
+                return False
+            publication_address, slot_offset = private_stack_alias
+            return (
+                operand.size == 4
+                and publication_address < address
+                and self._stack_operand_logical_offset(
+                    address,
+                    operand,
+                    function_entry,
+                )
+                == slot_offset
+                and self._stack_slot_value_is_unchanged(
+                    publication_address,
+                    address,
+                    slot_offset,
+                    4,
+                    function_entry,
+                )
+            )
+
+        def register_relation(
+            address: int,
+            family: str,
+            active: frozenset[tuple[int, str]],
+        ) -> str:
+            key = (address, family)
+            if key in memo:
+                return memo[key]
+            if key in active:
+                return "may"
+            if left_family == family and left_definitions:
+                definitions = self._register_definitions_across_blocks(
+                    address,
+                    family,
+                    function_entry,
+                )
+                if definitions == left_definitions:
+                    memo[key] = "must"
+                    return "must"
+            definitions = self._register_definitions_across_blocks(
+                address,
+                family,
+                function_entry,
+            )
+            if definitions is None:
+                memo[key] = "may"
+                return "may"
+            if not definitions:
+                memo[key] = "none"
+                return "none"
+            next_active = active | {key}
+            relations = []
+            for definition_address in definitions:
+                definition = self._owned_decoded(definition_address)
+                if (
+                    definition.id == X86_INS_MOV
+                    and len(definition.operands) == 2
+                    and definition.operands[0].type == X86_OP_REG
+                    and definition.operands[0].size == 4
+                    and definition.operands[1].size == 4
+                ):
+                    relations.append(
+                        operand_relation(
+                            definition_address,
+                            definition.operands[1],
+                            next_active,
+                        )
+                    )
+                    continue
+                if (
+                    definition.id == X86_INS_XOR
+                    and len(definition.operands) == 2
+                    and all(
+                        operand.type == X86_OP_REG
+                        and operand.size == 4
+                        and self._register_family(operand.reg) == family
+                        for operand in definition.operands
+                    )
+                ):
+                    relations.append("none")
+                    continue
+                consumed = []
+                for operand in definition.operands:
+                    if operand.type == X86_OP_REG:
+                        operand_family = self._register_family(operand.reg)
+                        if (
+                            operand.access & CS_AC_READ
+                            or (
+                                operand_family == family
+                                and operand.size < 4
+                            )
+                        ):
+                            consumed.append(
+                                register_relation(
+                                    definition_address,
+                                    operand_family,
+                                    next_active,
+                                )
+                            )
+                    elif operand.type == X86_OP_MEM:
+                        for register in (
+                            operand.mem.base,
+                            operand.mem.index,
+                        ):
+                            if register != X86_REG_INVALID:
+                                consumed.append(
+                                    register_relation(
+                                        definition_address,
+                                        self._register_family(register),
+                                        next_active,
+                                    )
+                                )
+                if definition.group(CS_GRP_CALL):
+                    for argument in range(8):
+                        pushed = self._pushed_call_argument(
+                            definition_address,
+                            argument,
+                        )
+                        if pushed is None:
+                            break
+                        consumed.append(
+                            operand_relation(
+                                pushed[0].address,
+                                pushed[1],
+                                next_active,
+                            )
+                        )
+                relations.append(
+                    "may"
+                    if any(row != "none" for row in consumed)
+                    else "none"
+                )
+            result = combine(relations)
+            memo[key] = result
+            return result
+
+        def operand_relation(
+            address: int,
+            operand,
+            active: frozenset[tuple[int, str]],
+        ) -> str:
+            if private_spill_load(address, operand):
+                return "must"
+            candidate_argument = argument_index(address, operand)
+            if left_argument is not None and candidate_argument is not None:
+                return (
+                    "must"
+                    if left_argument == candidate_argument
+                    else "none"
+                )
+            if operand.type == X86_OP_REG and operand.size == 4:
+                return register_relation(
+                    address,
+                    self._register_family(operand.reg),
+                    active,
+                )
+            return "none"
+
+        return operand_relation(
+            right_address,
+            right_operand,
+            frozenset(),
+        )
 
     def _register_argument_origin_index(
         self,

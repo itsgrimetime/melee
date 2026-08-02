@@ -3234,7 +3234,9 @@ def lifecycle_movzx_dispatch_image(
     second_stack_receiver_overwrite=False,
     second_stack_receiver_helper_mutation=False,
     second_stack_receiver_register_alias_mutation=False,
+    second_stack_receiver_register_copy_alias_mutation=False,
     second_stack_receiver_preallocated_argument_mutation=False,
+    second_stack_receiver_alias_transport=None,
     second_nested_receiver=False,
     nested_tag_write=False,
     open_caller=False,
@@ -3402,7 +3404,9 @@ def lifecycle_movzx_dispatch_image(
     if not (
         second_stack_receiver_helper_mutation
         or second_stack_receiver_register_alias_mutation
+        or second_stack_receiver_register_copy_alias_mutation
         or second_stack_receiver_preallocated_argument_mutation
+        or second_stack_receiver_alias_transport is not None
     ):
         cursor = emit(cursor, "56")
         cursor = emit_call(cursor, consumer_b)
@@ -3422,8 +3426,49 @@ def lifecycle_movzx_dispatch_image(
             cursor = emit(cursor, "56")
             cursor = emit_call(cursor, 0x1C0)
             cursor = emit(cursor, "59")
+        elif second_stack_receiver_register_copy_alias_mutation:
+            cursor = emit(cursor, "89 f7 57")
+            cursor = emit_call(cursor, 0x1C0)
+            cursor = emit(cursor, "59")
         elif second_stack_receiver_preallocated_argument_mutation:
             cursor = emit_call(cursor, 0x1C0)
+        elif second_stack_receiver_alias_transport == "copy-chain":
+            cursor = emit(cursor, "89 f7 89 fb 53")
+            cursor = emit_call(cursor, 0x1C0)
+            cursor = emit(cursor, "59")
+        elif second_stack_receiver_alias_transport == "spill-reload":
+            cursor = emit(cursor, "8b 3c 24 57")
+            cursor = emit_call(cursor, 0x1C0)
+            cursor = emit(cursor, "59")
+        elif second_stack_receiver_alias_transport in {
+            "same-identity-merge",
+            "mixed-identity-merge",
+        }:
+            cursor = emit(cursor, "e3 04 89 f7 eb 02")
+            cursor = emit(
+                cursor,
+                "89 f7"
+                if second_stack_receiver_alias_transport
+                == "same-identity-merge"
+                else "31 ff",
+            )
+            cursor = emit(cursor, "57")
+            cursor = emit_call(cursor, 0x1C0)
+            cursor = emit(cursor, "59")
+        elif second_stack_receiver_alias_transport == "interior-lea":
+            cursor = emit(cursor, "8d 7e 04 57")
+            cursor = emit_call(cursor, 0x1C0)
+            cursor = emit(cursor, "59")
+        elif second_stack_receiver_alias_transport == "arithmetic":
+            cursor = emit(cursor, "89 f7 47 57")
+            cursor = emit_call(cursor, 0x1C0)
+            cursor = emit(cursor, "59")
+        elif second_stack_receiver_alias_transport == "global-publication":
+            cursor = emit(cursor, "89 35 00 31 40 00")
+        elif second_stack_receiver_alias_transport == "transitive-stack-slot":
+            cursor = emit(cursor, "83 ec 04 89 34 24 83 c4 04")
+        elif second_stack_receiver_alias_transport == "spill-address":
+            cursor = emit(cursor, "8d 3c 24")
         cursor = emit(cursor, "8b 04 24 0f b6 18")
         if second_stack_receiver_overwrite:
             cursor = emit(cursor, "89 0c 24")
@@ -3436,7 +3481,7 @@ def lifecycle_movzx_dispatch_image(
     if second_stack_receiver:
         cursor = emit(cursor, "83 c4 04")
     cursor = emit(cursor, "5e c3")
-    assert cursor < callback
+    assert cursor <= callback
 
     emit(callback, "c3")
     cursor = emit(
@@ -3454,7 +3499,9 @@ def lifecycle_movzx_dispatch_image(
     if (
         second_stack_receiver_helper_mutation
         or second_stack_receiver_register_alias_mutation
+        or second_stack_receiver_register_copy_alias_mutation
         or second_stack_receiver_preallocated_argument_mutation
+        or second_stack_receiver_alias_transport is not None
     ):
         emit(0x1C0, "8b 44 24 04 c6 00 c8 c3")
     elif receiver_escape_alias_mutation:
@@ -3463,7 +3510,9 @@ def lifecycle_movzx_dispatch_image(
         emit(0x1C0, "c7 00 c8 00 00 00 c3")
     if (
         second_stack_receiver_register_alias_mutation
+        or second_stack_receiver_register_copy_alias_mutation
         or second_stack_receiver_preallocated_argument_mutation
+        or second_stack_receiver_alias_transport is not None
     ):
         emit(0x1D0, "c3")
 
@@ -3477,7 +3526,9 @@ def lifecycle_movzx_dispatch_image(
         struct.pack_into("<I", data, 0x200 + index * 4, value)
     if (
         second_stack_receiver_register_alias_mutation
+        or second_stack_receiver_register_copy_alias_mutation
         or second_stack_receiver_preallocated_argument_mutation
+        or second_stack_receiver_alias_transport is not None
     ):
         struct.pack_into("<I", data, 0x200 + 200 * 4, 0x11D0)
     struct.pack_into("<I", data, 0x600, 0x1000)
@@ -7955,9 +8006,10 @@ def test_object_tag_lifecycle_rejects_stack_receiver_forwarded_to_mutator():
     "mutation",
     [
         {"second_stack_receiver_register_alias_mutation": True},
+        {"second_stack_receiver_register_copy_alias_mutation": True},
         {"second_stack_receiver_preallocated_argument_mutation": True},
     ],
-    ids=("register-alias", "preallocated-argument"),
+    ids=("register-alias", "register-copy-alias", "preallocated-argument"),
 )
 def test_object_tag_lifecycle_rejects_hidden_stack_receiver_aliases(mutation):
     image, (_valid_transfer, mutated_transfer) = (
@@ -7983,9 +8035,10 @@ def test_object_tag_lifecycle_rejects_hidden_stack_receiver_aliases(mutation):
     "mutation",
     [
         {"second_stack_receiver_register_alias_mutation": True},
+        {"second_stack_receiver_register_copy_alias_mutation": True},
         {"second_stack_receiver_preallocated_argument_mutation": True},
     ],
-    ids=("register-alias", "preallocated-argument"),
+    ids=("register-alias", "register-copy-alias", "preallocated-argument"),
 )
 def test_private_stack_pointer_rejects_hidden_call_aliases(mutation):
     image, _transfers = lifecycle_movzx_dispatch_image(
@@ -8040,6 +8093,107 @@ def test_private_stack_pointer_rejects_hidden_call_aliases(mutation):
         0,
         observation.address,
     )
+
+
+@pytest.mark.parametrize(
+    "transport",
+    [
+        "copy-chain",
+        "spill-reload",
+        "same-identity-merge",
+        "mixed-identity-merge",
+        "interior-lea",
+        "arithmetic",
+        "global-publication",
+        "transitive-stack-slot",
+        "spill-address",
+    ],
+)
+def test_private_stack_pointer_alias_transport_matrix_fails_closed(transport):
+    image, (_valid_transfer, transported_transfer) = (
+        lifecycle_movzx_dispatch_image(
+            second_stack_receiver=True,
+            second_stack_receiver_alias_transport=transport,
+            all_entries_relocated=True,
+        )
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transported_transfer)
+    assert 0x004011D0 not in cfg.instructions
+
+
+@pytest.mark.parametrize(
+    "transport, expected",
+    [
+        ("copy-chain", "must"),
+        ("spill-reload", "must"),
+        ("same-identity-merge", "must"),
+        ("mixed-identity-merge", "may"),
+        ("interior-lea", "may"),
+        ("arithmetic", "may"),
+    ],
+)
+def test_private_stack_pointer_alias_transport_classification(
+    transport,
+    expected,
+):
+    image, _transfers = lifecycle_movzx_dispatch_image(
+        second_stack_receiver=True,
+        second_stack_receiver_alias_transport=transport,
+        all_entries_relocated=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    function_entry = 0x004010B0
+    rows = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(
+            function_entry
+        )
+    )
+    publication = next(
+        row
+        for row in rows
+        if row.mnemonic == "mov"
+        and row.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(row.operands[0].mem.base) == "esp"
+        and row.operands[1].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(row.operands[1].reg) == "esi"
+    )
+    mutator_call = next(
+        row
+        for row in rows
+        if row.mnemonic == "call"
+        and recovery._direct_target(row) == 0x004011C0
+    )
+    pushed = recovery._pushed_call_argument(mutator_call.address, 0)
+    slot_offset = recovery._stack_operand_logical_offset(
+        publication.address,
+        publication.operands[0],
+        function_entry,
+    )
+
+    assert pushed is not None
+    assert slot_offset is not None
+    assert recovery._closed_caller_value_alias_relation(
+        publication.address,
+        publication.operands[1],
+        pushed[0].address,
+        pushed[1],
+        function_entry,
+        private_stack_alias=(publication.address, slot_offset),
+    ) == expected
 
 
 def test_linear_stack_receiver_comparison_rejects_overlapping_write():
