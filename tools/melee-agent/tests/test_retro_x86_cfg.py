@@ -3570,6 +3570,47 @@ def lifecycle_movzx_dispatch_image(
     return image, (transfer_a, transfer_b)
 
 
+def patched_lifecycle_consumer_b(
+    program_hex,
+    transfer_offset,
+    *,
+    callback=0xE0,
+    helper_hex=None,
+):
+    image, _transfers = lifecycle_movzx_dispatch_image(
+        second_stack_receiver=True,
+        second_stack_receiver_helper_mutation=True,
+        all_entries_relocated=True,
+    )
+    data = bytearray(image.data)
+    program = bytes.fromhex(program_hex)
+    assert len(program) <= callback - 0xB0
+    data[0xB0:callback] = b"\x90" * (callback - 0xB0)
+    data[0xB0 : 0xB0 + len(program)] = program
+    data[callback] = 0xC3
+    data[0x1D0] = 0xC3
+    if helper_hex is not None:
+        helper = bytes.fromhex(helper_hex)
+        data[0x1C0:0x1D0] = b"\x90" * 0x10
+        data[0x1C0 : 0x1C0 + len(helper)] = helper
+    for index in range(75):
+        struct.pack_into(
+            "<I",
+            data,
+            0x200 + index * 4,
+            0x1000 + callback,
+        )
+    struct.pack_into("<I", data, 0x200 + 200 * 4, 0x11D0)
+    return (
+        replace(
+            image,
+            data=bytes(data),
+            sha256=hashlib.sha256(data).hexdigest(),
+        ),
+        0x00401000 + transfer_offset,
+    )
+
+
 def guarded_call_return_object_origins_image(
     *,
     affine_root_guard=True,
@@ -8194,6 +8235,171 @@ def test_private_stack_pointer_alias_transport_classification(
         function_entry,
         private_stack_alias=(publication.address, slot_offset),
     ) == expected
+
+
+@pytest.mark.parametrize(
+    "program_hex, transfer_offset, callback",
+    [
+        (
+            "56 8b742408 83ec08 893424 89742404 ff3424"
+            "e8f9000000 59 8b442404 0fb618 50"
+            "ff149d00204000 59 83c408 5e c3",
+            0xD0,
+            0xE0,
+        ),
+        (
+            "56 8b742408 83ec04 893500314000 893424"
+            "ff3500314000 e8f4000000 59 8b0424 0fb618"
+            "ff3424 ff149d00204000 59 83c404 5e c3",
+            0xD6,
+            0xE8,
+        ),
+        (
+            "56 8b742408 83ec08 8d7c2404 89742404 57"
+            "e8fa000000 59 8b442404 0fb618 50"
+            "ff149d00204000 59 83c408 5e c3",
+            0xCF,
+            0xE0,
+        ),
+    ],
+    ids=(
+        "earlier-private-spill",
+        "earlier-global-publication-reload",
+        "earlier-spill-address",
+    ),
+)
+def test_private_stack_pointer_audits_prepublication_aliases(
+    program_hex,
+    transfer_offset,
+    callback,
+):
+    image, transfer = patched_lifecycle_consumer_b(
+        program_hex,
+        transfer_offset,
+        callback=callback,
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer)
+    assert 0x004011D0 not in cfg.instructions
+
+
+@pytest.mark.parametrize(
+    "program_hex, transfer_offset, helper_hex",
+    [
+        (
+            "56 8b742408 83ec04 893424 89f1 e8fe000000"
+            "8b0424 0fb618 ff3424 ff149d00204000"
+            "59 83c404 5e c3",
+            0xCB,
+            "c601c8c3",
+        ),
+        (
+            "56 8b742408 83ec04 893424 89f2 e8fe000000"
+            "8b0424 0fb618 ff3424 ff149d00204000"
+            "59 83c404 5e c3",
+            0xCB,
+            "c602c8c3",
+        ),
+        (
+            "56 8b742408 83ec04 893424 83ec04 873424"
+            "ff3424 e8f7000000 59 8b442404 0fb618 50"
+            "ff149d00204000 59 83c408 5e c3",
+            0xD2,
+            None,
+        ),
+        (
+            "56 8b742408 83ec04 893424 56 ff3424"
+            "e8fc000000 59 83c404 8b0424 0fb618 50"
+            "ff149d00204000 59 83c404 5e c3",
+            0xCF,
+            None,
+        ),
+    ],
+    ids=(
+        "ecx-register-argument",
+        "edx-register-argument",
+        "xchg-memory-publication",
+        "push-memory-publication",
+    ),
+)
+def test_private_stack_pointer_rejects_hidden_alias_transports(
+    program_hex,
+    transfer_offset,
+    helper_hex,
+):
+    image, transfer = patched_lifecycle_consumer_b(
+        program_hex,
+        transfer_offset,
+        helper_hex=helper_hex,
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer)
+    assert 0x004011D0 not in cfg.instructions
+
+
+def test_lifecycle_binding_rejects_overwritten_stack_argument_slot():
+    image, transfer = patched_lifecycle_consumer_b(
+        "56 8b742408 0fb61e 894c2408 ff742408"
+        "ff149d00204000 59 5e c3",
+        0xC0,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    cfg = recovery.recover()
+
+    assert transfer not in {
+        binding[3]
+        for binding in recovery._object_tag_lifecycle_consumer_bindings(
+            0x00402000,
+            4,
+        )
+    }
+    assert (
+        cfg.jump_table_at(transfer).guard_operator
+        == "movzx-producer-domain"
+    )
+
+
+def test_lifecycle_rejects_reloaded_overwritten_nominal_argument():
+    image, transfer = patched_lifecycle_consumer_b(
+        "56 c7442408 00314000 8b742408 0fb61e 56"
+        "ff149d00204000 59 5e c3",
+        0xC1,
+    )
+    data = bytearray(image.data)
+    data[0x700] = 200
+    image = replace(
+        image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    with pytest.raises(KeyError):
+        cfg.jump_table_at(transfer)
+    assert 0x004011D0 not in cfg.instructions
 
 
 def test_linear_stack_receiver_comparison_rejects_overlapping_write():

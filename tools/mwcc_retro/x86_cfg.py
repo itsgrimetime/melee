@@ -36,6 +36,7 @@ from capstone.x86 import (
     X86_INS_LEA,
     X86_INS_LJMP,
     X86_INS_MOV,
+    X86_INS_PUSH,
     X86_INS_XOR,
     X86_OP_IMM,
     X86_OP_MEM,
@@ -4883,6 +4884,12 @@ class _DirectCfgRecovery:
             address, operand, function_entry
         )
         if argument_index is not None:
+            if not self._incoming_stack_argument_value_is_unchanged(
+                address,
+                argument_index,
+                function_entry,
+            ):
+                return None
             if not self._function_argument_preserves_field_before(
                 address,
                 function_entry,
@@ -19777,7 +19784,13 @@ class _DirectCfgRecovery:
                 if local is not None:
                     return local
         argument_index = self._stack_argument_index_at(address, operand, function_entry)
-        if argument_index is None:
+        if argument_index is None or not (
+            self._incoming_stack_argument_value_is_unchanged(
+                address,
+                argument_index,
+                function_entry,
+            )
+        ):
             return None
         return self._finite_argument_object_byte_values_before(
             address,
@@ -26902,6 +26915,12 @@ class _DirectCfgRecovery:
                     definition_address, source, function_entry
                 )
                 if definition_argument is not None:
+                    if not self._incoming_stack_argument_value_is_unchanged(
+                        definition_address,
+                        definition_argument,
+                        function_entry,
+                    ):
+                        return None
                     result = self._finite_argument_object_byte_values_before(
                         address,
                         function_entry,
@@ -32850,7 +32869,16 @@ class _DirectCfgRecovery:
                     argument_index = self._stack_argument_index_at(
                         current, source, function_entry
                     )
-                    output = None if argument_index is None else (argument_index, frozenset({current}))
+                    output = (
+                        None
+                        if argument_index is None
+                        or not self._incoming_stack_argument_value_is_unchanged(
+                            current,
+                            argument_index,
+                            function_entry,
+                        )
+                        else (argument_index, frozenset({current}))
+                    )
             elif (
                 CS_GRP_CALL in decoded_groups
                 and register_family in {"eax", "ecx", "edx"}
@@ -50139,6 +50167,151 @@ class _DirectCfgRecovery:
                     return False
         return True
 
+    def _incoming_stack_argument_value_is_unchanged(
+        self,
+        load_address: int,
+        argument_index: int,
+        function_entry: int,
+    ) -> bool:
+        """Prove a nominal argument slot still holds its incoming value."""
+        slot_offset = 4 * (argument_index + 1)
+        following_entry = self._following_function_entry(function_entry)
+        if not self._reachable_within_function(
+            function_entry,
+            load_address,
+            function_entry,
+            following_entry,
+        ):
+            return False
+        for address in self._function_instruction_addresses_between(
+            function_entry,
+            function_entry,
+            load_address,
+        ):
+            if not (
+                self._reachable_within_function(
+                    function_entry,
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+                and self._reachable_within_function(
+                    address,
+                    load_address,
+                    function_entry,
+                    following_entry,
+                )
+            ):
+                continue
+            decoded = self._owned_decoded(address)
+            for operand in decoded.operands:
+                if operand.type != X86_OP_MEM or operand.size <= 0:
+                    continue
+                operand_offset = self._stack_operand_logical_offset(
+                    address,
+                    operand,
+                    function_entry,
+                )
+                if operand_offset is None:
+                    if (
+                        (
+                            operand.access & CS_AC_WRITE
+                            or decoded.id == X86_INS_LEA
+                        )
+                        and self._is_stack_backed_memory(
+                            address,
+                            operand,
+                            function_entry,
+                        )
+                    ):
+                        return False
+                    continue
+                if not (
+                    operand_offset < slot_offset + 4
+                    and slot_offset < operand_offset + operand.size
+                ):
+                    continue
+                if operand.access & CS_AC_WRITE or decoded.id == X86_INS_LEA:
+                    return False
+        return True
+
+    def _closed_caller_value_lifetime_start(
+        self,
+        address: int,
+        operand,
+        function_entry: int,
+        active: frozenset[tuple[int, str]] = frozenset(),
+    ) -> int | None:
+        """Return the instruction that first materializes a closed value."""
+        if operand.type == X86_OP_MEM:
+            return address if operand.size == 4 else None
+        if operand.type != X86_OP_REG or operand.size != 4:
+            return None
+        family = self._register_family(operand.reg)
+        key = (address, family)
+        if key in active:
+            return None
+        definitions = self._register_definitions_across_blocks(
+            address,
+            family,
+            function_entry,
+        )
+        if definitions is None:
+            return None
+        if not definitions:
+            # The value is live on function entry, before its first decoded
+            # instruction.
+            return function_entry - 1
+        starts = []
+        for definition_address in definitions:
+            definition = self._owned_decoded(definition_address)
+            if (
+                definition.id == X86_INS_MOV
+                and len(definition.operands) == 2
+                and definition.operands[0].type == X86_OP_REG
+                and definition.operands[0].size == 4
+                and definition.operands[1].size == 4
+            ):
+                start = self._closed_caller_value_lifetime_start(
+                    definition_address,
+                    definition.operands[1],
+                    function_entry,
+                    active | {key},
+                )
+            elif (
+                definition.id == X86_INS_LEA
+                and len(definition.operands) == 2
+                and definition.operands[0].type == X86_OP_REG
+                and definition.operands[0].size == 4
+                and definition.operands[1].type == X86_OP_MEM
+                and self._stack_operand_logical_offset(
+                    definition_address,
+                    definition.operands[1],
+                    function_entry,
+                )
+                is not None
+            ):
+                # LEA is the materialization point for a pointer to a local
+                # stack object.  The pointee's earlier initialization is not
+                # an alias publication, while every later use of the pointer
+                # still belongs to its closed lifetime.
+                start = definition_address
+            elif definition.group(CS_GRP_CALL):
+                start = definition_address
+            else:
+                return None
+            if start is None:
+                return None
+            starts.append(start)
+        # Multiple reaching definitions may live on disjoint arms.  No one
+        # definition is a valid reachability root for the others, so audit
+        # conservatively from the common function entry.
+        return (
+            function_entry - 1
+            if len(starts) > 1
+            else (starts[0] if starts else None)
+        )
+
     def _private_stack_pointer_slot_preserves_field_before(
         self,
         publication_address: int,
@@ -50169,15 +50342,28 @@ class _DirectCfgRecovery:
         ):
             return False
         source = publication.operands[1]
+        lifetime_start = self._closed_caller_value_lifetime_start(
+            publication_address,
+            source,
+            function_entry,
+        )
+        if lifetime_start is None or lifetime_start > publication_address:
+            return False
+        lifetime_root = max(lifetime_start, function_entry)
+        scan_start = (
+            function_entry
+            if lifetime_start < function_entry
+            else lifetime_start + self.instructions[lifetime_start].size
+        )
         following_entry = self._following_function_entry(function_entry)
         for address in self._function_instruction_addresses_between(
             function_entry,
-            publication_address + self.instructions[publication_address].size,
+            scan_start,
             end_address,
         ):
             if not (
                 self._reachable_within_function(
-                    publication_address,
+                    lifetime_root,
                     address,
                     function_entry,
                     following_entry,
@@ -50190,12 +50376,208 @@ class _DirectCfgRecovery:
                 )
             ):
                 continue
+            if address == publication_address:
+                continue
             decoded = self._owned_decoded(address)
-            if decoded.id == X86_INS_MOV and len(decoded.operands) == 2:
-                destination, stored = decoded.operands
-                if (
-                    destination.type == X86_OP_MEM
-                    and self._closed_caller_value_alias_relation(
+            overwrites_selected_slot = address < publication_address and any(
+                operand.type == X86_OP_MEM
+                and operand.access & CS_AC_WRITE
+                and (operand_offset := self._stack_operand_logical_offset(
+                    address,
+                    operand,
+                    function_entry,
+                ))
+                is not None
+                and operand.size > 0
+                and operand_offset < slot_offset + width
+                and slot_offset < operand_offset + operand.size
+                for operand in decoded.operands
+            )
+            if overwrites_selected_slot:
+                for intervening_address in (
+                    self._function_instruction_addresses_between(
+                        function_entry,
+                        address + decoded.size,
+                        publication_address,
+                    )
+                ):
+                    if not (
+                        self._reachable_within_function(
+                            address,
+                            intervening_address,
+                            function_entry,
+                            following_entry,
+                        )
+                        and self._reachable_within_function(
+                            intervening_address,
+                            publication_address,
+                            function_entry,
+                            following_entry,
+                        )
+                    ):
+                        continue
+                    intervening = self._owned_decoded(
+                        intervening_address
+                    )
+                    if intervening.group(CS_GRP_CALL):
+                        stack_states = self._function_stack_states(
+                            function_entry
+                        )
+                        stack_state = (
+                            None
+                            if stack_states is None
+                            else stack_states.get(intervening_address)
+                        )
+                        stack_delta = (
+                            None if stack_state is None else stack_state[0]
+                        )
+                        if (
+                            stack_delta is None
+                            or (
+                                slot_offset >= stack_delta
+                                and (slot_offset - stack_delta) % 4 == 0
+                            )
+                        ):
+                            return False
+                    for operand in intervening.operands:
+                        if operand.type != X86_OP_MEM or operand.size <= 0:
+                            continue
+                        operand_offset = self._stack_operand_logical_offset(
+                            intervening_address,
+                            operand,
+                            function_entry,
+                        )
+                        if operand_offset is None:
+                            if (
+                                intervening.id == X86_INS_LEA
+                                and self._is_stack_backed_memory(
+                                    intervening_address,
+                                    operand,
+                                    function_entry,
+                                )
+                            ):
+                                return False
+                            continue
+                        if not (
+                            operand_offset < slot_offset + width
+                            and slot_offset
+                            < operand_offset + operand.size
+                        ):
+                            continue
+                        if (
+                            operand.access & CS_AC_READ
+                            or intervening.id == X86_INS_LEA
+                        ):
+                            return False
+                # The selected exact publication supersedes earlier contents
+                # of its own slot only when that older value is never
+                # observed before the overwrite.
+                continue
+            if decoded.id == X86_INS_PUSH and len(decoded.operands) == 1:
+                relation = self._closed_caller_value_alias_relation(
+                    publication_address,
+                    source,
+                    address,
+                    decoded.operands[0],
+                    function_entry,
+                    private_stack_alias=(
+                        publication_address,
+                        slot_offset,
+                    ),
+                )
+                if relation != "none":
+                    stack_states = self._function_stack_states(
+                        function_entry
+                    )
+                    stack_state = (
+                        None
+                        if stack_states is None
+                        else stack_states.get(address)
+                    )
+                    if stack_state is None or stack_state[0] is None:
+                        return False
+                    pushed_slot = stack_state[0] - 4
+                    for later_address in (
+                        self._function_instruction_addresses_between(
+                            function_entry,
+                            address + decoded.size,
+                            end_address,
+                        )
+                    ):
+                        if not (
+                            self._reachable_within_function(
+                                address,
+                                later_address,
+                                function_entry,
+                                following_entry,
+                            )
+                            and self._reachable_within_function(
+                                later_address,
+                                end_address,
+                                function_entry,
+                                following_entry,
+                            )
+                            and self._stack_slot_value_is_unchanged(
+                                address,
+                                later_address,
+                                pushed_slot,
+                                4,
+                                function_entry,
+                            )
+                        ):
+                            continue
+                        later = self._owned_decoded(later_address)
+                        for operand in later.operands:
+                            if operand.type != X86_OP_MEM or operand.size <= 0:
+                                continue
+                            operand_offset = self._stack_operand_logical_offset(
+                                later_address,
+                                operand,
+                                function_entry,
+                            )
+                            if operand_offset is None or not (
+                                operand_offset < pushed_slot + 4
+                                and pushed_slot
+                                < operand_offset + operand.size
+                            ):
+                                continue
+                            if (
+                                operand.access & CS_AC_READ
+                                or later.id == X86_INS_LEA
+                            ):
+                                return False
+            memory_destinations = {
+                operand_index
+                for operand_index, operand in enumerate(decoded.operands)
+                if operand.type == X86_OP_MEM
+                and operand.access & CS_AC_WRITE
+            }
+            if memory_destinations:
+                stored_values = [
+                    operand
+                    for operand_index, operand in enumerate(decoded.operands)
+                    if operand_index not in memory_destinations
+                    and operand.access & CS_AC_READ
+                    and operand.type in {X86_OP_REG, X86_OP_MEM}
+                ]
+                address_families = {
+                    self._register_family(register)
+                    for operand_index in memory_destinations
+                    for register in (
+                        decoded.operands[operand_index].mem.base,
+                        decoded.operands[operand_index].mem.index,
+                    )
+                    if register != X86_REG_INVALID
+                }
+                implicit_stored_families = {
+                    self._register_family(register)
+                    for register in decoded.regs_read
+                    if register != x86_const.X86_REG_EFLAGS
+                    and self._register_family(register)
+                    not in address_families
+                }
+                if any(
+                    self._closed_caller_value_alias_relation(
                         publication_address,
                         source,
                         address,
@@ -50205,12 +50587,28 @@ class _DirectCfgRecovery:
                             publication_address,
                             slot_offset,
                         ),
+                    ) != "none"
+                    for stored in stored_values
+                ) or any(
+                    self._closed_caller_value_alias_relation(
+                        publication_address,
+                        source,
+                        address,
+                        None,
+                        function_entry,
+                        private_stack_alias=(
+                            publication_address,
+                            slot_offset,
+                        ),
+                        right_register_family=register_family,
                     )
                     != "none"
+                    for register_family in implicit_stored_families
                 ):
-                    # A second local slot, global, or arbitrary memory
-                    # publication creates an alias outside this exact private
-                    # spill certificate.
+                    # Any explicit value copied or mixed into memory creates
+                    # an alias outside this exact private-spill certificate.
+                    # This includes read/write forms such as XCHG, not only
+                    # simple MOV stores.
                     return False
             if decoded.group(CS_GRP_CALL):
                 targets = tuple(
@@ -50224,12 +50622,40 @@ class _DirectCfgRecovery:
                             argument_index,
                             field,
                         )
-                        and self._function_argument_does_not_escape(
+                        and self._function_argument_does_not_escape_closed_scc(
                             target,
                             argument_index,
                         )
                         for target in targets
                     )
+
+                # ECX and EDX may carry thiscall/fastcall inputs without a
+                # PUSH.  A live alias is safe only when every closed target is
+                # proved not to consume that incoming register at all.
+                for register_family in ("ecx", "edx"):
+                    relation = self._closed_caller_value_alias_relation(
+                        publication_address,
+                        source,
+                        address,
+                        None,
+                        function_entry,
+                        private_stack_alias=(
+                            publication_address,
+                            slot_offset,
+                        ),
+                        right_register_family=register_family,
+                    )
+                    if relation != "none" and (
+                        not targets
+                        or any(
+                            self._function_reads_incoming_register(
+                                target,
+                                register_family,
+                            )
+                            for target in targets
+                        )
+                    ):
+                        return False
 
                 # Spilling the pointer does not kill its original register
                 # identity.  Close any explicit argument that still carries
@@ -50253,9 +50679,19 @@ class _DirectCfgRecovery:
                             slot_offset,
                         ),
                     )
-                    if relation == "may" or (
-                        relation == "must"
-                        and not call_argument_is_closed(argument_index)
+                    if relation == "may" and not (
+                        targets
+                        and all(
+                            self._function_argument_is_not_used_as_pointer(
+                                target,
+                                argument_index,
+                            )
+                            for target in targets
+                        )
+                    ):
+                        return False
+                    if relation == "must" and not call_argument_is_closed(
+                        argument_index
                     ):
                         return False
 
@@ -50278,6 +50714,8 @@ class _DirectCfgRecovery:
                     None if stack_state is None else stack_state[0]
                 )
                 if (
+                    address > publication_address
+                    and
                     stack_delta is not None
                     and slot_offset >= stack_delta
                     and (slot_offset - stack_delta) % 4 == 0
@@ -50355,6 +50793,7 @@ class _DirectCfgRecovery:
         function_entry: int,
         *,
         private_stack_alias: tuple[int, int] | None = None,
+        right_register_family: str | None = None,
     ) -> str:
         """Classify one operand as a must/may/non-alias of a closed value.
 
@@ -50364,11 +50803,24 @@ class _DirectCfgRecovery:
         ``may`` when they consume an alias so callers can fail closed.
         """
 
-        def argument_index(
+        def argument_value(
             address: int,
             operand,
             active: frozenset[tuple[int, str]] = frozenset(),
-        ) -> int | None:
+        ) -> tuple[int, frozenset[int] | None] | None:
+            if operand.type == X86_OP_MEM:
+                if operand.size != 4:
+                    return None
+                index = self._stack_argument_index_at(
+                    address,
+                    operand,
+                    function_entry,
+                )
+                return (
+                    None
+                    if index is None
+                    else (index, frozenset({address}))
+                )
             if operand.type == X86_OP_REG:
                 if operand.size != 4:
                     return None
@@ -50376,49 +50828,87 @@ class _DirectCfgRecovery:
                 key = (address, family)
                 if key in active:
                     return None
-                direct = self._register_argument_index_across_blocks(
-                    address, family, function_entry
-                )
-                if direct is not None:
-                    return direct
                 definitions = self._register_definitions_across_blocks(
                     address,
                     family,
                     function_entry,
                 )
-                if not definitions:
-                    return None
-                origins = set()
-                for definition_address in definitions:
-                    definition = self._owned_decoded(definition_address)
-                    if not (
-                        definition.id == X86_INS_MOV
-                        and len(definition.operands) == 2
-                        and definition.operands[0].type == X86_OP_REG
-                        and definition.operands[0].size == 4
-                        and definition.operands[1].size == 4
-                    ):
+                if definitions:
+                    values = []
+                    for definition_address in definitions:
+                        definition = self._owned_decoded(
+                            definition_address
+                        )
+                        if not (
+                            definition.id == X86_INS_MOV
+                            and len(definition.operands) == 2
+                            and definition.operands[0].type == X86_OP_REG
+                            and definition.operands[0].size == 4
+                            and definition.operands[1].size == 4
+                        ):
+                            return None
+                        value = argument_value(
+                            definition_address,
+                            definition.operands[1],
+                            active | {key},
+                        )
+                        if value is None:
+                            return None
+                        values.append(value)
+                    indices = {value[0] for value in values}
+                    if len(indices) != 1:
                         return None
-                    origin = argument_index(
-                        definition_address,
-                        definition.operands[1],
-                        active | {key},
-                    )
-                    if origin is None:
-                        return None
-                    origins.add(origin)
-                return (
-                    next(iter(origins)) if len(origins) == 1 else None
+                    if any(value[1] is None for value in values):
+                        origins = None
+                    else:
+                        origins = frozenset(
+                            origin
+                            for value in values
+                            for origin in value[1] or ()
+                        )
+                    return next(iter(indices)), origins
+                direct = self._register_argument_index_across_blocks(
+                    address,
+                    family,
+                    function_entry,
                 )
-            if operand.type != X86_OP_MEM or operand.size != 4:
-                return None
-            return self._stack_argument_index_at(
-                address,
-                operand,
-                function_entry,
+                return (
+                    None
+                    if direct is None
+                    else (direct, None)
+                )
+            return None
+
+        def same_argument_value(
+            left: tuple[int, frozenset[int] | None],
+            right: tuple[int, frozenset[int] | None],
+        ) -> str:
+            if left[0] != right[0]:
+                return "none"
+            if left[1] is None or right[1] is None:
+                return (
+                    "must"
+                    if left[1] is None and right[1] is None
+                    else "may"
+                )
+            slot_offset = 4 * (left[0] + 1)
+            return (
+                "must"
+                if all(
+                    self._stack_slot_value_is_unchanged(
+                        left_origin,
+                        right_origin,
+                        slot_offset,
+                        4,
+                        function_entry,
+                    )
+                    for left_origin in left[1]
+                    for right_origin in right[1]
+                )
+                else "may"
             )
 
-        left_argument = argument_index(left_address, left_operand)
+        left_argument = argument_value(left_address, left_operand)
         left_family = (
             self._register_family(left_operand.reg)
             if left_operand.type == X86_OP_REG and left_operand.size == 4
@@ -50441,6 +50931,123 @@ class _DirectCfgRecovery:
             if all(row == "none" for row in relations):
                 return "none"
             return "may"
+
+        def push_stack_slot_relation(
+            address: int,
+            operand,
+            active: frozenset[tuple[int, str]],
+        ) -> str | None:
+            if operand.type != X86_OP_MEM or operand.size != 4:
+                return None
+            slot_offset = self._stack_operand_logical_offset(
+                address,
+                operand,
+                function_entry,
+            )
+            if slot_offset is None:
+                return None
+            key = (address, f"push-stack-slot:{slot_offset}")
+            if key in active:
+                return "may"
+            following_entry = self._following_function_entry(function_entry)
+            stack_states = self._function_stack_states(function_entry)
+            candidates = []
+            for candidate_address in self._function_instruction_addresses_between(
+                function_entry,
+                function_entry,
+                address,
+            ):
+                candidate = self._owned_decoded(candidate_address)
+                if candidate.id != X86_INS_PUSH or len(candidate.operands) != 1:
+                    continue
+                state = (
+                    None
+                    if stack_states is None
+                    else stack_states.get(candidate_address)
+                )
+                if state is None:
+                    state = self._linear_stack_state_before(
+                        candidate_address,
+                        function_entry,
+                    )
+                if state is None or state[0] is None or state[0] - 4 != slot_offset:
+                    continue
+                if not (
+                    self._reachable_within_function(
+                        function_entry,
+                        candidate_address,
+                        function_entry,
+                        following_entry,
+                    )
+                    and self._reachable_within_function(
+                        candidate_address,
+                        address,
+                        function_entry,
+                        following_entry,
+                    )
+                    and self._stack_slot_value_is_unchanged(
+                        candidate_address,
+                        address,
+                        slot_offset,
+                        4,
+                        function_entry,
+                    )
+                ):
+                    continue
+                superseded = False
+                for later_address in self._function_instruction_addresses_between(
+                    function_entry,
+                    candidate_address + candidate.size,
+                    address,
+                ):
+                    later = self._owned_decoded(later_address)
+                    if later.id != X86_INS_PUSH:
+                        continue
+                    later_state = (
+                        None
+                        if stack_states is None
+                        else stack_states.get(later_address)
+                    )
+                    if (
+                        later_state is not None
+                        and later_state[0] is not None
+                        and later_state[0] - 4 == slot_offset
+                        and self._reachable_within_function(
+                            candidate_address,
+                            later_address,
+                            function_entry,
+                            following_entry,
+                        )
+                        and self._reachable_within_function(
+                            later_address,
+                            address,
+                            function_entry,
+                            following_entry,
+                        )
+                    ):
+                        superseded = True
+                        break
+                if not superseded:
+                    candidates.append(candidate)
+            if not candidates:
+                return None
+            relations = [
+                operand_relation(
+                    candidate.address,
+                    candidate.operands[0],
+                    active | {key},
+                )
+                for candidate in candidates
+            ]
+            if self._reachable_within_function(
+                function_entry,
+                address,
+                function_entry,
+                following_entry,
+                excluded=frozenset(row.address for row in candidates),
+            ):
+                relations.append("none")
+            return combine(relations)
 
         def private_spill_load(address: int, operand) -> bool:
             if private_stack_alias is None or operand.type != X86_OP_MEM:
@@ -50587,12 +51194,18 @@ class _DirectCfgRecovery:
         ) -> str:
             if private_spill_load(address, operand):
                 return "must"
-            candidate_argument = argument_index(address, operand)
+            pushed_relation = push_stack_slot_relation(
+                address,
+                operand,
+                active,
+            )
+            if pushed_relation is not None:
+                return pushed_relation
+            candidate_argument = argument_value(address, operand)
             if left_argument is not None and candidate_argument is not None:
-                return (
-                    "must"
-                    if left_argument == candidate_argument
-                    else "none"
+                return same_argument_value(
+                    left_argument,
+                    candidate_argument,
                 )
             if operand.type == X86_OP_REG and operand.size == 4:
                 return register_relation(
@@ -50602,11 +51215,13 @@ class _DirectCfgRecovery:
                 )
             return "none"
 
-        return operand_relation(
-            right_address,
-            right_operand,
-            frozenset(),
-        )
+        if right_register_family is not None:
+            return register_relation(
+                right_address,
+                right_register_family,
+                frozenset(),
+            )
+        return operand_relation(right_address, right_operand, frozenset())
 
     def _register_argument_origin_index(
         self,
@@ -50642,6 +51257,14 @@ class _DirectCfgRecovery:
             index = self._stack_argument_index_at(
                 definition.address, source, function_entry
             )
+            if index is not None and not (
+                self._incoming_stack_argument_value_is_unchanged(
+                    definition.address,
+                    index,
+                    function_entry,
+                )
+            ):
+                return None
             if index is None and source.type == X86_OP_REG:
                 index = self._register_argument_origin_index(
                     definition.address,
