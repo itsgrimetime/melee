@@ -8262,11 +8262,20 @@ def test_private_stack_pointer_alias_transport_classification(
             0xCF,
             0xE0,
         ),
+        (
+            "56 83ec04 8b44240c 890424 8b74240c"
+            "83ec04 893424 ff742404 e8f2000000 59"
+            "8b0424 0fb618 50 ff149d00204000 59"
+            "83c408 5e c3",
+            0xD6,
+            0xE8,
+        ),
     ],
     ids=(
         "earlier-private-spill",
         "earlier-global-publication-reload",
         "earlier-spill-address",
+        "earlier-copy-before-selected-argument-load",
     ),
 )
 def test_private_stack_pointer_audits_prepublication_aliases(
@@ -8401,6 +8410,40 @@ def test_lifecycle_rejects_reloaded_overwritten_nominal_argument():
     with pytest.raises(KeyError):
         cfg.jump_table_at(transfer)
     assert 0x004011D0 not in cfg.instructions
+
+
+def test_closed_value_lifetime_distinguishes_argument_and_local_memory():
+    argument_image, _transfers = lifecycle_movzx_dispatch_image(
+        second_stack_receiver=True,
+    )
+    argument_recovery = _DirectCfgRecovery(
+        argument_image,
+        build_seed_inventory(argument_image, ()),
+        generous_limits(argument_image),
+    )
+    argument_recovery.recover()
+    argument_load = argument_recovery._owned_decoded(0x004010B1)
+
+    assert argument_recovery._closed_caller_value_lifetime_start(
+        argument_load.address,
+        argument_load.operands[1],
+        0x004010B0,
+    ) == 0x004010AF
+
+    local_image, _observation = superseded_outparam_stack_slot_image()
+    local_recovery = _DirectCfgRecovery(
+        local_image,
+        build_seed_inventory(local_image, ()),
+        generous_limits(local_image),
+    )
+    local_recovery.recover()
+    local_load = local_recovery._owned_decoded(0x0040101D)
+
+    assert local_recovery._closed_caller_value_lifetime_start(
+        local_load.address,
+        local_load.operands[1],
+        0x00401000,
+    ) == local_load.address
 
 
 def test_linear_stack_receiver_comparison_rejects_overlapping_write():
@@ -8718,7 +8761,7 @@ def test_object_tag_lifecycle_does_not_widen_narrower_producer_domain():
     assert (shared_table.index_min, shared_table.index_max) == (0, 74)
 
 
-def test_object_tag_lifecycle_checkpoint_is_separate_from_v26(
+def test_object_tag_lifecycle_checkpoint_is_separate_from_v27(
     tmp_path,
 ):
     image, transfers = lifecycle_movzx_dispatch_image()
@@ -8742,10 +8785,10 @@ def test_object_tag_lifecycle_checkpoint_is_separate_from_v26(
     )
     payloads = [json.loads(path.read_bytes()) for path in checkpoint_dir.glob("*.json")]
 
-    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == "movzx-producer-analysis-v26"
+    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == "movzx-producer-analysis-v27"
     assert (
         _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
-        == "object-tag-lifecycle-analysis-v4"
+        == "object-tag-lifecycle-analysis-v5"
     )
     lifecycle = [
         payload
@@ -8767,7 +8810,7 @@ def test_object_tag_lifecycle_checkpoint_is_separate_from_v26(
     } == {"movzx-lifecycle-domain"}
 
 
-def test_object_tag_lifecycle_checkpoint_does_not_reuse_v3_certificate(
+def test_object_tag_lifecycle_checkpoint_does_not_reuse_v4_certificate(
     tmp_path,
 ):
     image, transfers = lifecycle_movzx_dispatch_image()
@@ -8797,9 +8840,9 @@ def test_object_tag_lifecycle_checkpoint_does_not_reuse_v3_certificate(
     )
     stale = _rewrite_certificate_semantics(
         current,
-        "object-tag-lifecycle-analysis-v3",
+        "object-tag-lifecycle-analysis-v4",
         {
-            "provenance": "hostile-stale-lifecycle-v3-underapproximation",
+            "provenance": "hostile-stale-lifecycle-v4-underapproximation",
             "status": "finite",
             "values": [0],
         },
@@ -8834,14 +8877,14 @@ def test_object_tag_lifecycle_checkpoint_does_not_reuse_v3_certificate(
     assert {
         payload["query"]["analysis_semantics"] for payload in payloads
     } == {
-        "object-tag-lifecycle-analysis-v3",
         "object-tag-lifecycle-analysis-v4",
+        "object-tag-lifecycle-analysis-v5",
     }
     current_payload = next(
         payload
         for payload in payloads
         if payload["query"]["analysis_semantics"]
-        == "object-tag-lifecycle-analysis-v4"
+        == "object-tag-lifecycle-analysis-v5"
     )
     assert current_payload["result"]["values"] == [0, 74]
     assert {
@@ -22141,7 +22184,7 @@ def test_byte_producer_checkpoint_requires_durable_resume(tmp_path):
     assert len(certificates) == 1
     certificate = json.loads(certificates[0].read_bytes())
     assert certificate["compiler_sha256"] == image.sha256
-    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == ("movzx-producer-analysis-v26")
+    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == ("movzx-producer-analysis-v27")
     assert certificate["query"]["analysis_semantics"] == (_MOVZX_PRODUCER_ANALYSIS_SEMANTICS)
     assert certificate["query"]["movzx_address"] == 0x00401044
     assert certificate["result"] == {
@@ -22194,7 +22237,7 @@ def test_byte_producer_checkpoint_does_not_discover_old_analysis_semantics(
     assert {json.loads(path.read_bytes())["result"]["status"] for path in certificates} == {"blocked", "finite"}
 
 
-def test_byte_producer_checkpoint_does_not_reuse_v25_certificate(
+def test_byte_producer_checkpoint_does_not_reuse_v26_certificate(
     tmp_path,
 ):
     image = movzx_dispatch_image(closed_producer_bound=74)
@@ -22212,9 +22255,9 @@ def test_byte_producer_checkpoint_does_not_reuse_v25_certificate(
     current = next(checkpoint_dir.glob("*.json"))
     stale = _rewrite_certificate_semantics(
         current,
-        "movzx-producer-analysis-v25",
+        "movzx-producer-analysis-v26",
         {
-            "provenance": "hostile-stale-v25-underapproximation",
+            "provenance": "hostile-stale-v26-underapproximation",
             "status": "finite",
             "values": [0],
         },
@@ -22240,14 +22283,14 @@ def test_byte_producer_checkpoint_does_not_reuse_v25_certificate(
     assert {
         payload["query"]["analysis_semantics"] for payload in payloads
     } == {
-        "movzx-producer-analysis-v25",
         "movzx-producer-analysis-v26",
+        "movzx-producer-analysis-v27",
     }
     current_payload = next(
         payload
         for payload in payloads
         if payload["query"]["analysis_semantics"]
-        == "movzx-producer-analysis-v26"
+        == "movzx-producer-analysis-v27"
     )
     assert current_payload["result"]["values"] == [0, 74]
     assert any(

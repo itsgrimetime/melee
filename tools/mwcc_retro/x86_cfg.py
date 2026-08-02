@@ -196,12 +196,12 @@ class AnalysisLimits:
 
 
 _PRODUCER_CERTIFICATE_SCHEMA = "mwcc-retro-x86-producer-certificate-v1"
-_MOVZX_PRODUCER_ANALYSIS_SEMANTICS = "movzx-producer-analysis-v26"
+_MOVZX_PRODUCER_ANALYSIS_SEMANTICS = "movzx-producer-analysis-v27"
 _OBJECT_TAG_LIFECYCLE_CERTIFICATE_SCHEMA = (
     "mwcc-retro-x86-object-tag-lifecycle-certificate-v1"
 )
 _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS = (
-    "object-tag-lifecycle-analysis-v4"
+    "object-tag-lifecycle-analysis-v5"
 )
 _RELOCATED_REJECTION_LEDGER_SCHEMA = "mwcc-retro-relocated-rejection-ledger-v1"
 _RELOCATED_REJECTION_ANALYSIS_SEMANTICS = "relocated-rejection-analysis-v1"
@@ -50244,7 +50244,26 @@ class _DirectCfgRecovery:
     ) -> int | None:
         """Return the instruction that first materializes a closed value."""
         if operand.type == X86_OP_MEM:
-            return address if operand.size == 4 else None
+            if operand.size != 4:
+                return None
+            argument_index = self._stack_argument_index_at(
+                address,
+                operand,
+                function_entry,
+            )
+            if argument_index is None:
+                # A non-argument memory value becomes part of this tracked
+                # register identity only when it is loaded locally.
+                return address
+            if not self._incoming_stack_argument_value_is_unchanged(
+                address,
+                argument_index,
+                function_entry,
+            ):
+                return None
+            # An unchanged formal stack slot carries an incoming value whose
+            # aliases may already exist at the first function instruction.
+            return function_entry - 1
         if operand.type != X86_OP_REG or operand.size != 4:
             return None
         family = self._register_family(operand.reg)
