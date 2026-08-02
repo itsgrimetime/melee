@@ -29,6 +29,7 @@ from tools.mwcc_retro.semantic_memo import (  # noqa: E402
 from tools.mwcc_retro.x86_cfg import (  # noqa: E402
     _DECODED_INSTRUCTION_CACHE_LIMIT,
     _MOVZX_PRODUCER_ANALYSIS_SEMANTICS,
+    _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS,
     AnalysisLimitError,
     AnalysisLimits,
     AuditAnchor,
@@ -8717,7 +8718,7 @@ def test_object_tag_lifecycle_does_not_widen_narrower_producer_domain():
     assert (shared_table.index_min, shared_table.index_max) == (0, 74)
 
 
-def test_object_tag_lifecycle_checkpoint_is_separate_from_v25(
+def test_object_tag_lifecycle_checkpoint_is_separate_from_v26(
     tmp_path,
 ):
     image, transfers = lifecycle_movzx_dispatch_image()
@@ -8741,12 +8742,16 @@ def test_object_tag_lifecycle_checkpoint_is_separate_from_v25(
     )
     payloads = [json.loads(path.read_bytes()) for path in checkpoint_dir.glob("*.json")]
 
-    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == "movzx-producer-analysis-v25"
+    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == "movzx-producer-analysis-v26"
+    assert (
+        _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
+        == "object-tag-lifecycle-analysis-v4"
+    )
     lifecycle = [
         payload
         for payload in payloads
         if payload["query"]["analysis_semantics"]
-        == "object-tag-lifecycle-analysis-v3"
+        == _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
     ]
     assert len(lifecycle) == 1
     assert lifecycle[0]["schema"] == (
@@ -8760,6 +8765,95 @@ def test_object_tag_lifecycle_checkpoint_is_separate_from_v25(
     assert {
         cfg.jump_table_at(transfer).guard_operator for transfer in transfers
     } == {"movzx-lifecycle-domain"}
+
+
+def test_object_tag_lifecycle_checkpoint_does_not_reuse_v3_certificate(
+    tmp_path,
+):
+    image, transfers = lifecycle_movzx_dispatch_image()
+    inventory = build_seed_inventory(image, ())
+    limits = generous_limits(image)
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    with pytest.raises(ProducerCheckpointIncomplete):
+        recover_cfg(
+            image,
+            inventory,
+            limits,
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=100,
+        )
+    recover_cfg(
+        image,
+        inventory,
+        limits,
+        producer_checkpoint_dir=checkpoint_dir,
+        producer_query_budget=0,
+    )
+    current = next(
+        path
+        for path in checkpoint_dir.glob("*.json")
+        if json.loads(path.read_bytes())["schema"]
+        == "mwcc-retro-x86-object-tag-lifecycle-certificate-v1"
+    )
+    stale = _rewrite_certificate_semantics(
+        current,
+        "object-tag-lifecycle-analysis-v3",
+        {
+            "provenance": "hostile-stale-lifecycle-v3-underapproximation",
+            "status": "finite",
+            "values": [0],
+        },
+    )
+    progress = []
+
+    with pytest.raises(ProducerCheckpointIncomplete) as raised:
+        recover_cfg(
+            image,
+            inventory,
+            limits,
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+            producer_progress_callback=progress.append,
+        )
+
+    assert raised.value.completed_this_run == 1
+    assert stale.exists()
+    cfg = recover_cfg(
+        image,
+        inventory,
+        limits,
+        producer_checkpoint_dir=checkpoint_dir,
+        producer_query_budget=0,
+    )
+    payloads = [
+        json.loads(path.read_bytes())
+        for path in checkpoint_dir.glob("*.json")
+        if json.loads(path.read_bytes())["schema"]
+        == "mwcc-retro-x86-object-tag-lifecycle-certificate-v1"
+    ]
+    assert {
+        payload["query"]["analysis_semantics"] for payload in payloads
+    } == {
+        "object-tag-lifecycle-analysis-v3",
+        "object-tag-lifecycle-analysis-v4",
+    }
+    current_payload = next(
+        payload
+        for payload in payloads
+        if payload["query"]["analysis_semantics"]
+        == "object-tag-lifecycle-analysis-v4"
+    )
+    assert current_payload["result"]["values"] == [0, 74]
+    assert {
+        cfg.jump_table_at(transfer).guard_operator
+        for transfer in transfers
+    } == {"movzx-lifecycle-domain"}
+    current_query = current_payload["query_sha256"]
+    assert any(
+        row.startswith("producer query evaluating:")
+        and f"query={current_query}" in row
+        for row in progress
+    )
 
 
 def test_object_tag_lifecycle_checkpoint_invalidates_dynamic_writer_growth(
@@ -21965,24 +22059,32 @@ def _write_rehashed_producer_certificate(path, mutate):
     path.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
 
 
-def _rewrite_as_old_semantics_blocked_certificate(path):
+def _rewrite_certificate_semantics(path, semantics, result):
     payload = json.loads(path.read_bytes())
-    payload["query"]["analysis_semantics"] = "movzx-producer-analysis-v7"
+    payload["query"]["analysis_semantics"] = semantics
     old_query_sha256 = hashlib.sha256(
         json.dumps(payload["query"], sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     payload["query_sha256"] = old_query_sha256
-    payload["result"] = {
-        "provenance": "producer-domain-analysis-returned-bottom",
-        "status": "blocked",
-        "values": [],
-    }
+    payload["result"] = result
     payload["certificate_sha256"] = _producer_certificate_digest(payload)
     old_path = path.with_name(f"{old_query_sha256}-{payload['dependency_sha256']}.json")
     old_path.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
     if old_path != path:
         path.unlink()
     return old_path
+
+
+def _rewrite_as_old_semantics_blocked_certificate(path):
+    return _rewrite_certificate_semantics(
+        path,
+        "movzx-producer-analysis-v7",
+        {
+            "provenance": "producer-domain-analysis-returned-bottom",
+            "status": "blocked",
+            "values": [],
+        },
+    )
 
 
 def _complete_resumable_producer_cfg(image, inventory, limits, checkpoint_dir):
@@ -22039,7 +22141,7 @@ def test_byte_producer_checkpoint_requires_durable_resume(tmp_path):
     assert len(certificates) == 1
     certificate = json.loads(certificates[0].read_bytes())
     assert certificate["compiler_sha256"] == image.sha256
-    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == ("movzx-producer-analysis-v25")
+    assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == ("movzx-producer-analysis-v26")
     assert certificate["query"]["analysis_semantics"] == (_MOVZX_PRODUCER_ANALYSIS_SEMANTICS)
     assert certificate["query"]["movzx_address"] == 0x00401044
     assert certificate["result"] == {
@@ -22090,6 +22192,70 @@ def test_byte_producer_checkpoint_does_not_discover_old_analysis_semantics(
     assert old_certificate in certificates
     assert len(certificates) == 2
     assert {json.loads(path.read_bytes())["result"]["status"] for path in certificates} == {"blocked", "finite"}
+
+
+def test_byte_producer_checkpoint_does_not_reuse_v25_certificate(
+    tmp_path,
+):
+    image = movzx_dispatch_image(closed_producer_bound=74)
+    inventory = build_seed_inventory(image, ())
+    limits = generous_limits(image)
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    with pytest.raises(ProducerCheckpointIncomplete):
+        recover_cfg(
+            image,
+            inventory,
+            limits,
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+        )
+    current = next(checkpoint_dir.glob("*.json"))
+    stale = _rewrite_certificate_semantics(
+        current,
+        "movzx-producer-analysis-v25",
+        {
+            "provenance": "hostile-stale-v25-underapproximation",
+            "status": "finite",
+            "values": [0],
+        },
+    )
+    progress = []
+
+    with pytest.raises(ProducerCheckpointIncomplete) as raised:
+        recover_cfg(
+            image,
+            inventory,
+            limits,
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+            producer_progress_callback=progress.append,
+        )
+
+    assert raised.value.completed_this_run == 1
+    assert stale.exists()
+    payloads = [
+        json.loads(path.read_bytes())
+        for path in checkpoint_dir.glob("*.json")
+    ]
+    assert {
+        payload["query"]["analysis_semantics"] for payload in payloads
+    } == {
+        "movzx-producer-analysis-v25",
+        "movzx-producer-analysis-v26",
+    }
+    current_payload = next(
+        payload
+        for payload in payloads
+        if payload["query"]["analysis_semantics"]
+        == "movzx-producer-analysis-v26"
+    )
+    assert current_payload["result"]["values"] == [0, 74]
+    assert any(
+        row.startswith("producer query evaluating:") for row in progress
+    )
+    assert not any(
+        row.startswith("producer query validated:") for row in progress
+    )
 
 
 @pytest.mark.parametrize(

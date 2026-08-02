@@ -196,12 +196,12 @@ class AnalysisLimits:
 
 
 _PRODUCER_CERTIFICATE_SCHEMA = "mwcc-retro-x86-producer-certificate-v1"
-_MOVZX_PRODUCER_ANALYSIS_SEMANTICS = "movzx-producer-analysis-v25"
+_MOVZX_PRODUCER_ANALYSIS_SEMANTICS = "movzx-producer-analysis-v26"
 _OBJECT_TAG_LIFECYCLE_CERTIFICATE_SCHEMA = (
     "mwcc-retro-x86-object-tag-lifecycle-certificate-v1"
 )
 _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS = (
-    "object-tag-lifecycle-analysis-v3"
+    "object-tag-lifecycle-analysis-v4"
 )
 _RELOCATED_REJECTION_LEDGER_SCHEMA = "mwcc-retro-relocated-rejection-ledger-v1"
 _RELOCATED_REJECTION_ANALYSIS_SEMANTICS = "relocated-rejection-analysis-v1"
