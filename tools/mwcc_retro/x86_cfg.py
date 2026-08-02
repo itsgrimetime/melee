@@ -1455,6 +1455,31 @@ class _PublicationReferenceInventory:
     sha256: str
 
 
+def _publication_reference_inventory_sha256(
+    *,
+    slot: int,
+    rows: tuple[_PublicationReferenceRow, ...],
+    control_flow_revision: int,
+    producer_seed_revision: int,
+    absolute_memory_write_revision: int,
+    reference_classification_revision: int,
+    current_ownership_sha256: str,
+) -> str:
+    """Bind every query-independent raw-reference inventory field."""
+    payload = {
+        "slot": slot,
+        "rows": tuple(asdict(row) for row in rows),
+        "control_flow_revision": control_flow_revision,
+        "producer_seed_revision": producer_seed_revision,
+        "absolute_memory_write_revision": absolute_memory_write_revision,
+        "reference_classification_revision": (
+            reference_classification_revision
+        ),
+        "current_ownership_sha256": current_ownership_sha256,
+    }
+    return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
+
+
 @dataclass(frozen=True, slots=True)
 class _PublicationReferenceDisjointnessWitness:
     reference: _PublicationReferenceRow
@@ -1834,6 +1859,7 @@ class _ProducerCertificateSession:
         self.completed_this_run = 0
         self.validated_query_ids: set[str] = set()
         self.query_states: dict[str, str] = {}
+        self.rehydrating_warm_hit = 0
         if self.checkpoint_dir.is_dir():
             self.limits.check(
                 "max_producer_domain_cache_entries",
@@ -2274,28 +2300,110 @@ class _ProducerCertificateSession:
                     # and tentative-hypothesis evidence are reconstructed.
                     # This rehydration consumes no query budget and must match
                     # the exact validated dependency-bound result.
+                    recovery_state = (
+                        dict(recovery.producer_domain_memo),
+                        dict(recovery.field_preservation_cache),
+                        dict(
+                            recovery.return_path_publication_certificate_memo
+                        ),
+                        dict(recovery.allocator_totality_cache),
+                        dict(recovery.publication_reference_inventory_cache),
+                        set(recovery.publication_table_hypotheses),
+                        dict(recovery.publication_guard_candidates),
+                        dict(
+                            recovery.provisional_publication_guard_domains
+                        ),
+                        set(recovery.producer_query_ids),
+                        dict(recovery.producer_progress),
+                        dict(recovery.high_water),
+                    )
+                    session_state = (
+                        set(self.validated_query_ids),
+                        dict(self.query_states),
+                        self.remaining_budget,
+                        self.completed_this_run,
+                    )
+
+                    def rollback_rehydration() -> None:
+                        mappings = (
+                            (
+                                recovery.producer_domain_memo,
+                                recovery_state[0],
+                            ),
+                            (
+                                recovery.field_preservation_cache,
+                                recovery_state[1],
+                            ),
+                            (
+                                recovery.return_path_publication_certificate_memo,
+                                recovery_state[2],
+                            ),
+                            (
+                                recovery.allocator_totality_cache,
+                                recovery_state[3],
+                            ),
+                            (
+                                recovery.publication_reference_inventory_cache,
+                                recovery_state[4],
+                            ),
+                            (
+                                recovery.publication_guard_candidates,
+                                recovery_state[6],
+                            ),
+                            (
+                                recovery.provisional_publication_guard_domains,
+                                recovery_state[7],
+                            ),
+                            (
+                                recovery.producer_progress,
+                                recovery_state[9],
+                            ),
+                            (
+                                recovery.high_water,
+                                recovery_state[10],
+                            ),
+                        )
+                        for current, prior in mappings:
+                            current.clear()
+                            current.update(prior)
+                        recovery.publication_table_hypotheses.clear()
+                        recovery.publication_table_hypotheses.update(
+                            recovery_state[5]
+                        )
+                        recovery.producer_query_ids.clear()
+                        recovery.producer_query_ids.update(
+                            recovery_state[8]
+                        )
+                        self.validated_query_ids.clear()
+                        self.validated_query_ids.update(session_state[0])
+                        self.query_states.clear()
+                        self.query_states.update(session_state[1])
+                        self.remaining_budget = session_state[2]
+                        self.completed_this_run = session_state[3]
+
                     recovery.producer_domain_memo.pop(query.memo_key, None)
                     recovery.field_preservation_cache.clear()
-                    result = recovery._producer_domain_cached(
-                        query.memo_key, query.function_entry, compute
-                    )
+                    self.rehydrating_warm_hit += 1
+                    try:
+                        result = recovery._producer_domain_cached(
+                            query.memo_key, query.function_entry, compute
+                        )
+                    except BaseException:
+                        rollback_rehydration()
+                        raise
+                    finally:
+                        self.rehydrating_warm_hit -= 1
                     rehydrated = recovery.producer_domain_memo.get(
                         query.memo_key
                     )
                     if (
                         rehydrated is None
                         or rehydrated.result != entry.result
-                        or (
-                            entry.result is not None
-                            and rehydrated.dependencies
-                            != entry.dependencies
-                        )
+                        or rehydrated.dependencies != entry.dependencies
+                        or self.remaining_budget != session_state[2]
+                        or self.completed_this_run != session_state[3]
                     ):
-                        recovery.producer_domain_memo.pop(
-                            query.memo_key, None
-                        )
-                        self.validated_query_ids.discard(query_id)
-                        self.query_states[query_id] = "stale"
+                        rollback_rehydration()
                         continue
                     # A blocked lifecycle aggregate can be a provisional
                     # publication screen rather than semantic bottom.  Its
@@ -2318,7 +2426,7 @@ class _ProducerCertificateSession:
             self.validated_query_ids.discard(query_id)
             self.query_states[query_id] = "stale"
 
-        if self.remaining_budget == 0:
+        if self.remaining_budget == 0 or self.rehydrating_warm_hit:
             recovery._producer_progress_increment("max_producer_domain_queries")
             self.query_states[query_id] = "pending"
             return None
@@ -42588,19 +42696,6 @@ class _DirectCfgRecovery:
                 )
             )
         inventory_rows = tuple(rows)
-        payload = {
-            "slot": slot,
-            "rows": tuple(asdict(row) for row in inventory_rows),
-            "control_flow_revision": self.control_flow_revision,
-            "producer_seed_revision": self.producer_seed_revision,
-            "absolute_memory_write_revision": (
-                self.absolute_memory_write_revision
-            ),
-            "reference_classification_revision": (
-                self.reference_classification_revision
-            ),
-            "current_ownership_sha256": ownership_sha256,
-        }
         inventory = _PublicationReferenceInventory(
             slot=slot,
             rows=inventory_rows,
@@ -42613,9 +42708,19 @@ class _DirectCfgRecovery:
                 self.reference_classification_revision
             ),
             current_ownership_sha256=ownership_sha256,
-            sha256=hashlib.sha256(
-                _canonical_json_bytes(payload)
-            ).hexdigest(),
+            sha256=_publication_reference_inventory_sha256(
+                slot=slot,
+                rows=inventory_rows,
+                control_flow_revision=self.control_flow_revision,
+                producer_seed_revision=self.producer_seed_revision,
+                absolute_memory_write_revision=(
+                    self.absolute_memory_write_revision
+                ),
+                reference_classification_revision=(
+                    self.reference_classification_revision
+                ),
+                current_ownership_sha256=ownership_sha256,
+            ),
         )
         self.publication_reference_inventory_cache[cache_key] = inventory
         return inventory
@@ -65103,52 +65208,101 @@ class _DirectCfgRecovery:
                 raise _PublicationCandidateTrialRejected(
                     (identity,), "definitive lifecycle query identity changed"
                 )
-            aggregate_values: set[int] = set()
-            for raw_binding in raw_bindings:
-                aggregate_binding = _ObjectTagLifecycleConsumerBinding(
-                    function_entry=raw_binding[0],
-                    movzx_address=raw_binding[1],
-                    movzx_bytes_hex=raw_binding[2],
-                    transfer_address=raw_binding[3],
-                    transfer_bytes_hex=raw_binding[4],
-                    destination_register=raw_binding[5],
-                    source_register=raw_binding[6],
-                    argument_push_address=raw_binding[7],
-                    argument_push_bytes_hex=raw_binding[8],
+            def compute_aggregate_domain():
+                self._note_producer_dynamic_field_dependency(
+                    query.field_path[-1]
                 )
-                aggregate_context = _ObjectTagLifecycleEvaluationContext(
-                    query_sha256=query.sha256,
-                    analysis_semantics=query.analysis_semantics,
-                    binding=aggregate_binding,
-                    consumer_entry=aggregate_binding.function_entry,
-                )
-                self.object_tag_lifecycle_evaluation_contexts.append(
-                    aggregate_context
-                )
-                try:
-                    aggregate_result = (
-                        self._object_tag_lifecycle_register_values_before(
-                            aggregate_binding.movzx_address,
-                            aggregate_binding.source_register,
-                            aggregate_binding.function_entry,
-                            query.field_path,
-                            frozenset(),
+                aggregate_values: set[int] = set()
+                details = []
+                for raw_binding in raw_bindings:
+                    aggregate_binding = (
+                        _ObjectTagLifecycleConsumerBinding(
+                            function_entry=raw_binding[0],
+                            movzx_address=raw_binding[1],
+                            movzx_bytes_hex=raw_binding[2],
+                            transfer_address=raw_binding[3],
+                            transfer_bytes_hex=raw_binding[4],
+                            destination_register=raw_binding[5],
+                            source_register=raw_binding[6],
+                            argument_push_address=raw_binding[7],
+                            argument_push_bytes_hex=raw_binding[8],
                         )
                     )
-                finally:
-                    if (
-                        self.object_tag_lifecycle_evaluation_contexts.pop()
-                        is not aggregate_context
-                    ):
-                        raise CfgRecoveryError(
-                            "object-tag lifecycle context stack is corrupted"
+                    aggregate_context = (
+                        _ObjectTagLifecycleEvaluationContext(
+                            query_sha256=query.sha256,
+                            analysis_semantics=query.analysis_semantics,
+                            binding=aggregate_binding,
+                            consumer_entry=(
+                                aggregate_binding.function_entry
+                            ),
                         )
-                if aggregate_result is None or not aggregate_result[0]:
-                    raise _PublicationCandidateTrialRejected(
-                        (identity,),
-                        "definitive lifecycle aggregate bottomed",
                     )
-                aggregate_values.update(aggregate_result[0])
+                    self.object_tag_lifecycle_evaluation_contexts.append(
+                        aggregate_context
+                    )
+                    try:
+                        binding_result = (
+                            self._object_tag_lifecycle_register_values_before(
+                                aggregate_binding.movzx_address,
+                                aggregate_binding.source_register,
+                                aggregate_binding.function_entry,
+                                query.field_path,
+                                frozenset(),
+                            )
+                        )
+                    finally:
+                        if (
+                            self.object_tag_lifecycle_evaluation_contexts.pop()
+                            is not aggregate_context
+                        ):
+                            raise CfgRecoveryError(
+                                "object-tag lifecycle context stack is "
+                                "corrupted"
+                            )
+                    if binding_result is None or not binding_result[0]:
+                        return None
+                    aggregate_values.update(binding_result[0])
+                    details.append(
+                        "consumer="
+                        f"{aggregate_binding.transfer_address:#x};"
+                        f"{binding_result[1]}"
+                    )
+                if not aggregate_values:
+                    return None
+                self._check_count(
+                    "max_finite_values", len(aggregate_values)
+                )
+                return (
+                    frozenset(aggregate_values),
+                    "object-tag-lifecycle-table="
+                    f"{hypothesis.table_base:#x};"
+                    + "|".join(details),
+                )
+
+            if self.producer_certificate_session is None:
+                aggregate_result = self._producer_domain_cached(
+                    query.memo_key,
+                    query.function_entry,
+                    compute_aggregate_domain,
+                )
+            else:
+                aggregate_result = (
+                    self.producer_certificate_session.evaluate(
+                        recovery=self,
+                        query=query,
+                        compute=compute_aggregate_domain,
+                    )
+                )
+                self.producer_certificate_session.require_fresh_resume(
+                    self.producer_query_ids
+                )
+            if aggregate_result is None or not aggregate_result[0]:
+                raise _PublicationCandidateTrialRejected(
+                    (identity,),
+                    "definitive lifecycle aggregate bottomed",
+                )
+            aggregate_values = aggregate_result[0]
             if (
                 not aggregate_values
                 or min(aggregate_values) != hypothesis.index_min

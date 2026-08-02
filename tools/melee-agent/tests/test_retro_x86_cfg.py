@@ -1,4 +1,5 @@
 import hashlib
+import heapq
 import json
 import struct
 import sys
@@ -10730,6 +10731,912 @@ def test_return_path_publication_checkpoint_rehydrates_tentative_evidence(
         for payload in lifecycle_payloads
         for dependency in payload["dependencies"]
     )
+
+
+def test_return_path_publication_checkpoint_binds_complete_durable_dependencies(
+    tmp_path,
+):
+    fixture = return_path_publication_lifecycle_image()
+    inventory = build_seed_inventory(fixture.image, ())
+    limits = generous_limits(fixture.image)
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    cfg = _complete_resumable_producer_cfg(
+        fixture.image,
+        inventory,
+        limits,
+        checkpoint_dir,
+    )
+    lifecycle_payloads = [
+        json.loads(path.read_bytes())
+        for path in checkpoint_dir.glob("*.json")
+        if json.loads(path.read_bytes())["query"]["analysis_semantics"]
+        == _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
+    ]
+    finite = [
+        payload
+        for payload in lifecycle_payloads
+        if payload["result"]["status"] == "finite"
+    ]
+    assert len(finite) >= 2
+    assert len({row["dependency_sha256"] for row in finite}) == len(finite)
+    payload = max(
+        finite,
+        key=lambda row: row["high_water_marks"]["max_jump_tables"],
+    )
+    dependencies = {
+        (row["kind"], row["identifier"])
+        for row in payload["dependencies"]
+    }
+    expected_functions = {
+        fixture.publishing_consumer,
+        *fixture.incoming_owners,
+        fixture.helper_target,
+        fixture.allocator,
+        fixture.grow_target,
+        fixture.session_root,
+        fixture.backend_root,
+        *fixture.callback_targets,
+    }
+    assert {
+        ("function", address) for address in expected_functions
+    } <= dependencies
+    assert ("global-slot", fixture.callback_slot) in dependencies
+    assert ("absolute-reference", fixture.publication_slot) in dependencies
+    assert {
+        binding[0]
+        for binding in payload["query"]["consumer_bindings"]
+    } == set(fixture.consumer_entries)
+    assert payload["query"]["function_entry"] == fixture.minimum_consumer
+    assert payload["result"]["values"] == [0, 74]
+    assert set(payload) == _ProducerCertificateSession._TOP_LEVEL_KEYS
+    assert all(
+        len(row["fingerprint"]) == 64
+        for row in payload["dependencies"]
+    )
+
+    certificate = cfg.publication_noninterference_certificates[0]
+    bridge = certificate.backend_bridges[0]
+    typed_functions = {
+        certificate.caller_entry,
+        *(row.function_entry for row in certificate.returning_bodies),
+        *(row.owner_entry for row in bridge.incoming_calls),
+        *(row.function_entry for row in bridge.backend_bodies),
+    }
+    durable_functions = {
+        identifier
+        for kind, identifier in dependencies
+        if kind == "function"
+    }
+    assert typed_functions <= durable_functions
+    assert (
+        certificate.caller_entry
+        == fixture.publishing_consumer
+        != fixture.minimum_consumer
+    )
+
+
+def test_lifecycle_warm_rehydration_is_no_budget_and_rolls_back_mismatch(
+    tmp_path,
+):
+    fixture = return_path_publication_lifecycle_image()
+    direct = _direct_return_path_publication_certificate(fixture)
+    recovery = direct.recovery
+    query = direct.query
+    session = _ProducerCertificateSession(
+        image_sha256=fixture.image.sha256,
+        limits=recovery.limits,
+        checkpoint_dir=tmp_path,
+        query_budget=1,
+    )
+    stored_result = (frozenset({0, 74}), "stored-lifecycle-domain")
+    dependencies = recovery._producer_dependency_snapshot(
+        {("function", query.function_entry)}
+    )
+    stored_entry = x86_cfg_module._ProducerDomainMemoEntry(
+        image_sha256=fixture.image.sha256,
+        dependencies=dependencies,
+        result=stored_result,
+    )
+    payload = session._certificate_payload(
+        query=query,
+        entry=stored_entry,
+        recovery=recovery,
+    )
+    lifecycle_path = session._path(query, payload["dependency_sha256"])
+    session._write_atomic(lifecycle_path, payload)
+    recovery.producer_domain_memo.pop(query.memo_key, None)
+    prior_progress = dict(recovery.producer_progress)
+    prior_high_water = dict(recovery.high_water)
+    prior_publication_keys = set(
+        recovery.return_path_publication_certificate_memo
+    )
+    nested_query = _MovzxProducerQuery(
+        function_entry=fixture.minimum_consumer,
+        movzx_address=fixture.observation,
+        movzx_bytes_hex="0fb618",
+        destination_register="ebx",
+        source_base_register="eax",
+        field_path=(0,),
+        source_width=1,
+    )
+    calls = 0
+    nested_results = []
+
+    def compute():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            recovery.return_path_publication_certificate_memo[
+                "tentative-warm-side-effect"
+            ] = x86_cfg_module._DependencyMemoEntry(
+                image_sha256=fixture.image.sha256,
+                dependencies=(),
+                result="tentative",
+            )
+            recovery._note_producer_dependency(fixture.helper_target)
+            nested_results.append(
+                session.evaluate(
+                    recovery=recovery,
+                    query=nested_query,
+                    compute=lambda: (
+                        frozenset({0}),
+                        "nested-producer-domain",
+                    ),
+                )
+            )
+        return stored_result
+
+    assert session.evaluate(
+        recovery=recovery,
+        query=query,
+        compute=compute,
+    ) == stored_result
+    assert calls == 2
+    assert nested_results == [None]
+    assert session.completed_this_run == 1
+    assert session.remaining_budget == 0
+    assert set(recovery.return_path_publication_certificate_memo) == (
+        prior_publication_keys
+    )
+    assert recovery.producer_progress["max_producer_domain_queries"] == (
+        prior_progress["max_producer_domain_queries"] + 1
+    )
+    assert recovery.producer_progress["max_producer_domain_evaluations"] == (
+        prior_progress["max_producer_domain_evaluations"] + 1
+    )
+    for name in (
+        "max_producer_domain_queries",
+        "max_producer_domain_evaluations",
+    ):
+        assert recovery.high_water[name] == max(
+            prior_high_water[name],
+            recovery.producer_progress[name],
+        )
+    assert tuple(tmp_path.glob("*.json")) == (lifecycle_path,)
+
+
+def test_return_path_publication_checkpoint_rehydrates_after_final_normalization(
+    tmp_path,
+    monkeypatch,
+):
+    fixture = return_path_publication_lifecycle_image()
+    inventory = build_seed_inventory(fixture.image, ())
+    limits = generous_limits(fixture.image)
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    _complete_resumable_producer_cfg(
+        fixture.image,
+        inventory,
+        limits,
+        checkpoint_dir,
+    )
+    lifecycle_payloads = [
+        json.loads(path.read_bytes())
+        for path in checkpoint_dir.glob("*.json")
+        if json.loads(path.read_bytes())["query"]["analysis_semantics"]
+        == _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
+    ]
+    assert len({row["query_sha256"] for row in lifecycle_payloads}) == 1
+    assert len({row["dependency_sha256"] for row in lifecycle_payloads}) > 1
+
+    observations = []
+    original = _ProducerCertificateSession.evaluate
+
+    def observe_final_rehydration(session, *, recovery, query, compute):
+        if isinstance(query, x86_cfg_module._ObjectTagLifecycleQuery):
+            observations.append(
+                (
+                    recovery.publication_final_residue is not None,
+                    recovery.reference_classification_revision,
+                    tuple(sorted(recovery.jump_tables)),
+                )
+            )
+        return original(
+            session,
+            recovery=recovery,
+            query=query,
+            compute=compute,
+        )
+
+    monkeypatch.setattr(
+        _ProducerCertificateSession,
+        "evaluate",
+        observe_final_rehydration,
+    )
+    cfg = recover_cfg(
+        fixture.image,
+        inventory,
+        limits,
+        producer_checkpoint_dir=checkpoint_dir,
+        producer_query_budget=0,
+    )
+
+    assert {
+        cfg.jump_table_at(transfer).guard_operator
+        for transfer in fixture.transfers
+    } == {"movzx-lifecycle-domain"}
+    assert any(
+        final_residue
+        and set(fixture.transfers) <= set(table_addresses)
+        for final_residue, _revision, table_addresses in observations
+    )
+
+
+@pytest.mark.parametrize("mutation", ("result", "dependencies"))
+def test_return_path_publication_checkpoint_rejects_hostile_final_variant(
+    tmp_path,
+    mutation,
+):
+    fixture = return_path_publication_lifecycle_image()
+    inventory = build_seed_inventory(fixture.image, ())
+    limits = generous_limits(fixture.image)
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    _complete_resumable_producer_cfg(
+        fixture.image,
+        inventory,
+        limits,
+        checkpoint_dir,
+    )
+    finite = [
+        (path, json.loads(path.read_bytes()))
+        for path in checkpoint_dir.glob("*.json")
+        if json.loads(path.read_bytes())["query"]["analysis_semantics"]
+        == _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
+        and json.loads(path.read_bytes())["result"]["status"]
+        == "finite"
+    ]
+    assert len(finite) >= 2
+    path, payload = max(
+        finite,
+        key=lambda row: row[1]["high_water_marks"]["max_jump_tables"],
+    )
+    if mutation == "result":
+        payload["result"] = {
+            "status": "finite",
+            "values": [0],
+            "provenance": "hostile-final-underapproximation",
+        }
+    else:
+        payload["dependencies"] = [
+            row
+            for row in payload["dependencies"]
+            if not (
+                row["kind"] == "function"
+                and row["identifier"] == fixture.helper_target
+            )
+        ]
+        payload["dependency_count"] = len(payload["dependencies"])
+        payload["dependency_sha256"] = hashlib.sha256(
+            json.dumps(
+                payload["dependencies"],
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+    payload["certificate_sha256"] = _producer_certificate_digest(payload)
+    hostile_path = path.with_name(
+        f"{payload['query_sha256']}-{payload['dependency_sha256']}.json"
+    )
+    hostile_path.write_text(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+    )
+    if hostile_path != path:
+        path.unlink()
+
+    with pytest.raises(ProducerCheckpointIncomplete) as raised:
+        recover_cfg(
+            fixture.image,
+            inventory,
+            limits,
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=0,
+        )
+
+    assert raised.value.completed_this_run == 0
+    assert raised.value.pending_queries >= 1
+
+
+def test_return_path_publication_final_variant_requires_fresh_resume(
+    tmp_path,
+):
+    fixture = return_path_publication_lifecycle_image()
+    inventory = build_seed_inventory(fixture.image, ())
+    limits = generous_limits(fixture.image)
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    _complete_resumable_producer_cfg(
+        fixture.image,
+        inventory,
+        limits,
+        checkpoint_dir,
+    )
+    finite = [
+        (path, json.loads(path.read_bytes()))
+        for path in checkpoint_dir.glob("*.json")
+        if json.loads(path.read_bytes())["query"]["analysis_semantics"]
+        == _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
+        and json.loads(path.read_bytes())["result"]["status"]
+        == "finite"
+    ]
+    final_path, final_payload = max(
+        finite,
+        key=lambda row: row[1]["high_water_marks"]["max_jump_tables"],
+    )
+    final_path.unlink()
+    progress = []
+
+    with pytest.raises(ProducerCheckpointIncomplete) as raised:
+        recover_cfg(
+            fixture.image,
+            inventory,
+            limits,
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=1,
+            producer_progress_callback=progress.append,
+        )
+
+    assert raised.value.completed_this_run == 1
+    assert final_path.exists()
+    assert json.loads(final_path.read_bytes())["dependency_sha256"] == (
+        final_payload["dependency_sha256"]
+    )
+    assert any("trial-start:" in row for row in progress)
+    assert any(
+        row.startswith("producer query checkpointed:")
+        and f"query={final_payload['query_sha256']}" in row
+        for row in progress
+    )
+    assert not any("trial-complete:" in row for row in progress)
+
+    cfg = recover_cfg(
+        fixture.image,
+        inventory,
+        limits,
+        producer_checkpoint_dir=checkpoint_dir,
+        producer_query_budget=0,
+    )
+    assert {
+        cfg.jump_table_at(transfer).guard_operator
+        for transfer in fixture.transfers
+    } == {"movzx-lifecycle-domain"}
+
+
+@pytest.mark.parametrize(
+    "target_name",
+    (
+        "returning-helper",
+        "callback-target",
+        "incoming-owner",
+        "session-root",
+        "backend-root",
+    ),
+)
+def test_publication_dependency_memo_invalidates_each_function_domain(
+    target_name,
+):
+    fixture = return_path_publication_lifecycle_image()
+    result = _direct_return_path_publication_certificate(fixture)
+    assert result.certificate is not None
+    entry = next(
+        row
+        for row in result.recovery.return_path_publication_certificate_memo.values()
+        if row.result == result.certificate
+    )
+    targets = {
+        "returning-helper": fixture.helper_target,
+        "callback-target": fixture.callback_targets[0],
+        "incoming-owner": fixture.incoming_owners[-1],
+        "session-root": fixture.session_root,
+        "backend-root": fixture.backend_root,
+    }
+    target = targets[target_name]
+    assert ("function", target) in {
+        (kind, identifier)
+        for kind, identifier, _fingerprint in entry.dependencies
+    }
+    address = result.recovery._function_instruction_addresses(target)[0]
+    instruction = result.recovery.instructions[address]
+    changed = bytearray.fromhex(instruction.bytes_hex)
+    changed[-1] ^= 1
+    result.recovery.instructions[address] = replace(
+        instruction,
+        bytes_hex=changed.hex(),
+    )
+    result.recovery.producer_function_fingerprint_cache.pop(target, None)
+
+    assert not result.recovery._dependency_memo_hit(entry)
+
+
+def test_publication_dependency_memo_invalidates_incoming_edge_and_callback_slot():
+    fixture = return_path_publication_lifecycle_image()
+    for mutation in ("incoming-edge", "callback-slot"):
+        result = _direct_return_path_publication_certificate(fixture)
+        assert result.certificate is not None
+        recovery = result.recovery
+        entry = next(
+            row
+            for row in recovery.return_path_publication_certificate_memo.values()
+            if row.result == result.certificate
+        )
+        if mutation == "incoming-edge":
+            owner = fixture.incoming_owners[-1]
+            recovery.incoming_edges[owner].add(
+                (fixture.publication, "synthetic-hostile-edge")
+            )
+            recovery.producer_function_fingerprint_cache.pop(owner, None)
+        else:
+            assert ("global-slot", fixture.callback_slot) in {
+                (kind, identifier)
+                for kind, identifier, _fingerprint in entry.dependencies
+            }
+            recovery.global_slot_writes.setdefault(
+                fixture.callback_slot, set()
+            ).add(
+                x86_cfg_module._GlobalSlotWrite(
+                    instruction_address=fixture.publication,
+                    value=0,
+                    provenance="synthetic-hostile-callback-write",
+                )
+            )
+            recovery.global_slot_write_count += 1
+            recovery.producer_dependency_fingerprint_cache.pop(
+                ("global-slot", fixture.callback_slot),
+                None,
+            )
+        assert not recovery._dependency_memo_hit(entry)
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    (
+        "reference_start",
+        "reference_end",
+        "bytes_hex",
+        "relocation_type",
+        "reference_class",
+        "target_slot",
+        "source_kind",
+        "interval_start",
+        "interval_end",
+        "source_bytes_sha256",
+        "source_ownership_sha256",
+        "slot",
+        "control_flow_revision",
+        "producer_seed_revision",
+        "absolute_memory_write_revision",
+        "reference_classification_revision",
+        "inventory_ownership_sha256",
+    ),
+)
+def test_publication_absolute_reference_inventory_digest_binds_every_field(
+    field_name,
+):
+    fixture = return_path_publication_lifecycle_image(
+        mutation="outside-residue-slot-reference"
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+    assert result.certificate is not None
+    inventory = result.certificate.reference_inventory
+    row_index, raw_row = next(
+        (index, row)
+        for index, row in enumerate(inventory.rows)
+        if isinstance(
+            row.source,
+            x86_cfg_module._PublicationProvisionalExecutableSource,
+        )
+    )
+    source = raw_row.source
+    if field_name == "reference_start":
+        changed_row = replace(raw_row, reference_start=raw_row.reference_start + 1)
+    elif field_name == "reference_end":
+        changed_row = replace(raw_row, reference_end=raw_row.reference_end + 1)
+    elif field_name == "bytes_hex":
+        changed_row = replace(raw_row, bytes_hex="00" * 4)
+    elif field_name == "relocation_type":
+        changed_row = replace(
+            raw_row,
+            relocation_type=3 if raw_row.relocation_type is None else None,
+        )
+    elif field_name == "reference_class":
+        changed_row = replace(raw_row, reference_class="lea")
+    elif field_name == "target_slot":
+        changed_row = replace(raw_row, target_slot=raw_row.target_slot + 4)
+    else:
+        source_changes = {
+            "source_kind": {"kind": "changed-provisional-kind"},
+            "interval_start": {
+                "interval_start": source.interval_start + 1
+            },
+            "interval_end": {"interval_end": source.interval_end - 1},
+            "source_bytes_sha256": {"bytes_sha256": "1" * 64},
+            "source_ownership_sha256": {
+                "current_ownership_sha256": "2" * 64
+            },
+        }
+        changed_row = replace(
+            raw_row,
+            source=replace(source, **source_changes.get(field_name, {})),
+        )
+    rows = list(inventory.rows)
+    rows[row_index] = changed_row
+
+    def digest(**changes):
+        values = {
+            "slot": inventory.slot,
+            "rows": inventory.rows,
+            "control_flow_revision": inventory.control_flow_revision,
+            "producer_seed_revision": inventory.producer_seed_revision,
+            "absolute_memory_write_revision": (
+                inventory.absolute_memory_write_revision
+            ),
+            "reference_classification_revision": (
+                inventory.reference_classification_revision
+            ),
+            "current_ownership_sha256": (
+                inventory.current_ownership_sha256
+            ),
+        }
+        values.update(changes)
+        return x86_cfg_module._publication_reference_inventory_sha256(
+            **values,
+        )
+
+    inventory_changes = {
+        "slot": {"slot": inventory.slot + 4},
+        "control_flow_revision": {
+            "control_flow_revision": inventory.control_flow_revision + 1
+        },
+        "producer_seed_revision": {
+            "producer_seed_revision": inventory.producer_seed_revision + 1
+        },
+        "absolute_memory_write_revision": {
+            "absolute_memory_write_revision": (
+                inventory.absolute_memory_write_revision + 1
+            )
+        },
+        "reference_classification_revision": {
+            "reference_classification_revision": (
+                inventory.reference_classification_revision + 1
+            )
+        },
+        "inventory_ownership_sha256": {
+            "current_ownership_sha256": "3" * 64
+        },
+    }
+    changed_values = inventory_changes.get(
+        field_name,
+        {"rows": tuple(rows)},
+    )
+    assert inventory.sha256 == digest()
+    assert inventory.sha256 != digest(**changed_values)
+
+
+def test_publication_memo_keeps_two_bindings_isolated_in_opposite_order():
+    fixture = return_path_publication_lifecycle_image()
+    result = _direct_return_path_publication_certificate(fixture)
+    recovery = result.recovery
+    assert result.certificate is not None
+    raw_binding = next(
+        row
+        for row in result.query.consumer_bindings
+        if row[0] == fixture.minimum_consumer
+    )
+    minimum_binding = x86_cfg_module._ObjectTagLifecycleConsumerBinding(
+        function_entry=raw_binding[0],
+        movzx_address=raw_binding[1],
+        movzx_bytes_hex=raw_binding[2],
+        transfer_address=raw_binding[3],
+        transfer_bytes_hex=raw_binding[4],
+        destination_register=raw_binding[5],
+        source_register=raw_binding[6],
+        argument_push_address=raw_binding[7],
+        argument_push_bytes_hex=raw_binding[8],
+    )
+
+    def evaluate(binding):
+        context = x86_cfg_module._ObjectTagLifecycleEvaluationContext(
+            query_sha256=result.query.sha256,
+            analysis_semantics=result.query.analysis_semantics,
+            binding=binding,
+            consumer_entry=binding.function_entry,
+        )
+        recovery.object_tag_lifecycle_evaluation_contexts.append(context)
+        try:
+            return recovery._return_path_publication_noninterference_certificate(
+                publication_address=fixture.publication,
+                publication_slot=fixture.publication_slot,
+                caller_entry=binding.function_entry,
+                root=result.root,
+                observation_address=fixture.observation,
+                field_start=0,
+                field_width=4,
+                relative_states=result.relative_states,
+            )
+        finally:
+            assert recovery.object_tag_lifecycle_evaluation_contexts.pop() is context
+
+    for order in (
+        (minimum_binding, result.binding),
+        (result.binding, minimum_binding),
+    ):
+        recovery.return_path_publication_certificate_memo.clear()
+        outcomes = {binding.function_entry: evaluate(binding) for binding in order}
+        assert outcomes[fixture.minimum_consumer] is None
+        assert outcomes[fixture.publishing_consumer] == result.certificate
+        entries = tuple(
+            recovery.return_path_publication_certificate_memo.items()
+        )
+        assert {key.candidate_identity.consumer_entry for key, _row in entries} == {
+            fixture.minimum_consumer,
+            fixture.publishing_consumer,
+        }
+        assert all(
+            key.candidate_identity.consumer_binding.function_entry
+            == key.candidate_identity.consumer_entry
+            and key.candidate_identity.lifecycle_query_sha256
+            == result.query.sha256
+            for key, _row in entries
+        )
+        limits_sha256 = hashlib.sha256(
+            json.dumps(
+                asdict(recovery.limits),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        assert {
+            field.name
+            for field in fields(x86_cfg_module._PublicationCertificateLookupKey)
+        } == {
+            "candidate_identity",
+            "control_flow_revision",
+            "producer_seed_revision",
+            "absolute_memory_write_revision",
+            "reference_classification_revision",
+        }
+        assert {
+            field.name
+            for field in fields(x86_cfg_module._PublicationCandidateIdentity)
+        } == {
+            "compiler_sha256",
+            "lifecycle_query_sha256",
+            "lifecycle_analysis_semantics",
+            "consumer_binding",
+            "consumer_entry",
+            "caller_entry",
+            "publication_address",
+            "publication_slot",
+            "root",
+            "observation_address",
+            "field_start",
+            "field_width",
+            "analysis_limits_sha256",
+        }
+        expected_bindings = {
+            fixture.minimum_consumer: minimum_binding,
+            fixture.publishing_consumer: result.binding,
+        }
+        for key, _row in entries:
+            binding = expected_bindings[
+                key.candidate_identity.consumer_entry
+            ]
+            assert key.candidate_identity.consumer_binding == binding
+            assert key == x86_cfg_module._PublicationCertificateLookupKey(
+                candidate_identity=x86_cfg_module._PublicationCandidateIdentity(
+                    compiler_sha256=fixture.image.sha256,
+                    lifecycle_query_sha256=result.query.sha256,
+                    lifecycle_analysis_semantics=result.query.analysis_semantics,
+                    consumer_binding=binding,
+                    consumer_entry=binding.function_entry,
+                    caller_entry=binding.function_entry,
+                    publication_address=fixture.publication,
+                    publication_slot=fixture.publication_slot,
+                    root=result.root,
+                    observation_address=fixture.observation,
+                    field_start=0,
+                    field_width=4,
+                    analysis_limits_sha256=limits_sha256,
+                ),
+                control_flow_revision=recovery.control_flow_revision,
+                producer_seed_revision=recovery.producer_seed_revision,
+                absolute_memory_write_revision=(
+                    recovery.absolute_memory_write_revision
+                ),
+                reference_classification_revision=(
+                    recovery.reference_classification_revision
+                ),
+            )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "grow_into_closure", "expected_status"),
+    (
+        ("ownership-growth-into-returning-closure", True, "blocked"),
+        ("outside-residue-slot-reference", False, "finite"),
+    ),
+    ids=("into-returning-closure", "outside-returning-closure"),
+)
+def test_publication_checkpoint_recomputes_after_same_image_ownership_growth(
+    tmp_path,
+    mutation,
+    grow_into_closure,
+    expected_status,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    direct = _direct_return_path_publication_certificate(fixture)
+    recovery = direct.recovery
+    assert direct.certificate is not None
+    raw_reference = next(
+        row
+        for row in direct.certificate.reference_inventory.rows
+        if isinstance(
+            row.source,
+            x86_cfg_module._PublicationProvisionalExecutableSource,
+        )
+    )
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    first_session = _ProducerCertificateSession(
+        image_sha256=fixture.image.sha256,
+        limits=recovery.limits,
+        checkpoint_dir=checkpoint_dir,
+        query_budget=1,
+    )
+    observed_certificates = []
+
+    def compute_aggregate():
+        recovery.object_tag_lifecycle_evaluation_contexts.append(
+            direct.context
+        )
+        try:
+            certificate = (
+                recovery._return_path_publication_noninterference_certificate(
+                    publication_address=fixture.publication,
+                    publication_slot=fixture.publication_slot,
+                    caller_entry=fixture.publishing_consumer,
+                    root=direct.root,
+                    observation_address=fixture.observation,
+                    field_start=0,
+                    field_width=4,
+                    relative_states=direct.relative_states,
+                )
+            )
+        finally:
+            assert (
+                recovery.object_tag_lifecycle_evaluation_contexts.pop()
+                is direct.context
+            )
+        observed_certificates.append(certificate)
+        if certificate is None:
+            return None
+        return frozenset({0, 74}), "test-lifecycle-aggregate"
+
+    recovery.producer_domain_memo.pop(direct.query.memo_key, None)
+    assert first_session.evaluate(
+        recovery=recovery,
+        query=direct.query,
+        compute=compute_aggregate,
+    ) == (frozenset({0, 74}), "test-lifecycle-aggregate")
+    old_path = next(checkpoint_dir.glob("*.json"))
+    old_payload = json.loads(old_path.read_bytes())
+    old_absolute_fingerprint = next(
+        row["fingerprint"]
+        for row in old_payload["dependencies"]
+        if row["kind"] == "absolute-reference"
+    )
+    assert old_payload["schema"] == (
+        x86_cfg_module._OBJECT_TAG_LIFECYCLE_CERTIFICATE_SCHEMA
+    )
+    assert old_payload["compiler_sha256"] == fixture.image.sha256
+    assert old_payload["result"]["status"] == "finite"
+
+    callback_target = fixture.callback_targets[1]
+    recovery._enqueue(callback_target, is_function=True)
+    while recovery.pending:
+        recovery._decode_from(heapq.heappop(recovery.pending))
+    if grow_into_closure:
+        recovery._add_edge(
+            direct.binding.transfer_address,
+            callback_target,
+            "indirect-call-table",
+        )
+    closure = recovery._returning_publication_closure(
+        context=direct.context,
+        caller_entry=fixture.publishing_consumer,
+        observation_address=fixture.observation,
+        publication_slot=fixture.publication_slot,
+        same_generation_slice=direct.certificate.same_generation_slice,
+        republish_cuts=direct.certificate.republish_cuts,
+    )
+    assert closure is not None
+    closure_entries = {row.function_entry for row in closure.bodies}
+    assert (callback_target in closure_entries) is grow_into_closure
+    if grow_into_closure:
+        callback_body = next(
+            row for row in closure.bodies if row.function_entry == callback_target
+        )
+        assert (
+            callback_body.range_start
+            <= raw_reference.reference_start
+            < raw_reference.reference_end
+            <= callback_body.range_end
+        )
+
+    current_absolute_fingerprint = (
+        recovery._producer_dependency_fingerprint(
+            "absolute-reference",
+            fixture.publication_slot,
+        )
+    )
+    assert current_absolute_fingerprint != old_absolute_fingerprint
+    recovery.producer_domain_memo.pop(direct.query.memo_key, None)
+    recovery.field_preservation_cache.clear()
+    progress = []
+    second_session = _ProducerCertificateSession(
+        image_sha256=fixture.image.sha256,
+        limits=recovery.limits,
+        checkpoint_dir=checkpoint_dir,
+        query_budget=1,
+        progress_callback=progress.append,
+    )
+    observed_certificates.clear()
+    fresh_result = second_session.evaluate(
+        recovery=recovery,
+        query=direct.query,
+        compute=compute_aggregate,
+    )
+
+    assert second_session.completed_this_run == 1
+    assert direct.query.sha256 not in second_session.validated_query_ids
+    assert len(observed_certificates) == 1
+    assert any(row.startswith("producer query evaluating:") for row in progress)
+    assert not any(row.startswith("producer query validated:") for row in progress)
+    payloads = [
+        json.loads(path.read_bytes())
+        for path in checkpoint_dir.glob("*.json")
+    ]
+    assert len(payloads) == 2
+    assert {row["compiler_sha256"] for row in payloads} == {
+        fixture.image.sha256
+    }
+    assert {row["query_sha256"] for row in payloads} == {
+        direct.query.sha256
+    }
+    fresh_payload = next(
+        row for row in payloads if row["dependency_sha256"] != old_payload["dependency_sha256"]
+    )
+    assert fresh_payload["result"]["status"] == expected_status
+    if expected_status == "blocked":
+        assert fresh_result is None
+        assert observed_certificates == [None]
+    else:
+        assert fresh_result == (
+            frozenset({0, 74}),
+            "test-lifecycle-aggregate",
+        )
+        assert observed_certificates[0] is not None
+        assert next(
+            row["fingerprint"]
+            for row in fresh_payload["dependencies"]
+            if row["kind"] == "absolute-reference"
+        ) == current_absolute_fingerprint
 
 
 @pytest.mark.parametrize(
@@ -31575,10 +32482,8 @@ def test_relocated_rejection_ledger_replays_v27_v5_contract(
     assert stale_value["contract"][
         "object_tag_lifecycle_analysis_semantics"
     ] == _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
-    stale_value["contract"].pop("producer_analysis_semantics", None)
-    stale_value["contract"].pop(
-        "object_tag_lifecycle_analysis_semantics",
-        None,
+    stale_value["contract"]["object_tag_lifecycle_analysis_semantics"] = (
+        "object-tag-lifecycle-analysis-v5"
     )
     unsigned = {
         key: stale_value[key]
@@ -31617,6 +32522,7 @@ def test_relocated_rejection_ledger_replays_v27_v5_contract(
     )
     if stale_path != current_path:
         current_path.unlink()
+    assert stale_path.exists()
     progress = []
 
     recover_cfg(
@@ -31635,6 +32541,13 @@ def test_relocated_rejection_ledger_replays_v27_v5_contract(
         json.loads(path.read_bytes())["contract"]
         for path in directory.glob("*.json")
     ]
+    assert any(
+        contract.get("producer_analysis_semantics")
+        == "movzx-producer-analysis-v27"
+        and contract.get("object_tag_lifecycle_analysis_semantics")
+        == "object-tag-lifecycle-analysis-v5"
+        for contract in current_contracts
+    )
     assert any(
         contract.get("producer_analysis_semantics")
         == _MOVZX_PRODUCER_ANALYSIS_SEMANTICS

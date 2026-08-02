@@ -536,6 +536,107 @@ def test_publication_reference_obligation_accepts_final_certificate_audit(
     )
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    ("missing", "extra", "changed-interval", "changed-hash"),
+)
+def test_return_path_publication_checkpoint_warm_hit_rejects_hostile_external_evidence(
+    tmp_path,
+    mutation,
+):
+    from test_retro_x86_cfg import (
+        _complete_resumable_producer_cfg,
+        generous_limits,
+        return_path_publication_lifecycle_image,
+    )
+
+    fixture = return_path_publication_lifecycle_image(
+        mutation="outside-residue-slot-reference"
+    )
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    cfg = _complete_resumable_producer_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+        checkpoint_dir,
+    )
+    assert cfg.publication_noninterference_certificates
+    assert cfg.publication_reference_obligations
+    obligation = cfg.publication_reference_obligations[0]
+    source = obligation.reference.source
+    assert isinstance(source, _PublicationProvisionalExecutableSource)
+
+    if mutation in {"changed-interval", "changed-hash"}:
+        intervals = list(cfg.provisional_unreachable_residue.intervals)
+        index, interval = next(
+            (index, row)
+            for index, row in enumerate(intervals)
+            if row.start == source.interval_start
+            and row.end == source.interval_end
+        )
+        intervals[index] = replace(
+            interval,
+            **(
+                {"start": interval.start + 1}
+                if mutation == "changed-interval"
+                else {"bytes_sha256": "9" * 64}
+            ),
+        )
+        cfg = replace(
+            cfg,
+            provisional_unreachable_residue=replace(
+                cfg.provisional_unreachable_residue,
+                intervals=tuple(intervals),
+            ),
+        )
+
+    extra_rows = []
+    if mutation != "missing":
+        extra_rows.append(
+            {
+                "record_kind": "data-reference",
+                "address": obligation.reference.reference_start,
+                "target": obligation.reference.target_slot,
+            }
+        )
+    if mutation == "extra":
+        extra_rows.append(
+            {
+                "record_kind": "data-reference",
+                "address": obligation.reference.reference_start + 1,
+                "target": obligation.reference.target_slot,
+            }
+        )
+    path = tmp_path / "warm-inventory.jsonl"
+    write_inventory(
+        path,
+        cfg,
+        compiler_sha256=fixture.image.sha256,
+        extra_rows=tuple(extra_rows),
+    )
+    inventory = load_ghidra_inventory(
+        path,
+        expected_sha256=fixture.image.sha256,
+    )
+
+    report = compare_ghidra_inventory(cfg, inventory)
+
+    assert any(
+        row.status != "passed"
+        for row in report.publication_reference_reconciliations
+    )
+    with pytest.raises(
+        GhidraInventoryError,
+        match="publication reference obligation|provisional residue",
+    ):
+        report.require_publishable()
+    assert not any(
+        json.loads(line)["record_kind"]
+        == "return-path-publication-noninterference"
+        for line in canonical_jsonl_bytes(cfg).splitlines()
+    )
+
+
 def test_definitive_publication_certificate_requires_exact_obligation_union(
     tmp_path,
 ):
