@@ -59264,6 +59264,12 @@ def _recover_cfg_fixed_point(
         return {
             "compiler_sha256": image.sha256,
             "analysis_semantics": _RELOCATED_REJECTION_ANALYSIS_SEMANTICS,
+            "producer_analysis_semantics": (
+                _MOVZX_PRODUCER_ANALYSIS_SEMANTICS
+            ),
+            "object_tag_lifecycle_analysis_semantics": (
+                _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
+            ),
             "limits": asdict(limits),
             "authoritative_seed_inventory": seed_inventory.to_dict(),
             "accepted_hypotheses": sorted(

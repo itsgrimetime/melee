@@ -28436,6 +28436,142 @@ def test_rejected_relocated_batch_is_durably_skipped_on_identical_resume(
     assert not any("trial-start:" in row for row in second_progress)
 
 
+def test_relocated_rejection_ledger_replays_v26_v4_contract(
+    tmp_path,
+    monkeypatch,
+):
+    image = load_cfg_image(tmp_path)
+    entry = image.entrypoint
+    record = SeedRecord(
+        address=entry,
+        category="relocated-dispatch-bootstrap-entry",
+        provenance_address=0x00402000,
+        provenance_bytes="00104000",
+        detail="synthetic-stale-proof-semantics",
+        is_function=True,
+    )
+    rejected = x86_cfg_module._RelocatedDispatchSlotHypothesis(
+        transfer_address=entry,
+        table_base=0x00402000,
+        index=0,
+        slot_address=0x00402000,
+        target=entry,
+        records=(record,),
+    )
+    original = _DirectCfgRecovery.recover
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+
+    def reject_relocated_trial(recovery):
+        cfg = original(recovery)
+        recovery.relocated_dispatch_slot_hypotheses.add(rejected)
+        if any(
+            row.category == "relocated-dispatch-bootstrap-entry"
+            for row in recovery.seed_records
+        ):
+            recovery.validated_relocated_dispatch_slot_hypotheses.clear()
+        return cfg
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "recover",
+        reject_relocated_trial,
+    )
+    recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+        producer_checkpoint_dir=checkpoint_dir,
+        producer_query_budget=0,
+    )
+    directory = checkpoint_dir / ".relocated-rejection-ledger-v1"
+    current_path = next(directory.glob("*.json"))
+    stale_value = json.loads(current_path.read_bytes())
+    assert stale_value["contract"]["analysis_semantics"] == (
+        "relocated-rejection-analysis-v1"
+    )
+    assert (
+        _MOVZX_PRODUCER_ANALYSIS_SEMANTICS
+        == "movzx-producer-analysis-v27"
+    )
+    assert stale_value["contract"]["producer_analysis_semantics"] == (
+        _MOVZX_PRODUCER_ANALYSIS_SEMANTICS
+    )
+    assert (
+        _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
+        == "object-tag-lifecycle-analysis-v5"
+    )
+    assert stale_value["contract"][
+        "object_tag_lifecycle_analysis_semantics"
+    ] == _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
+    stale_value["contract"].pop("producer_analysis_semantics", None)
+    stale_value["contract"].pop(
+        "object_tag_lifecycle_analysis_semantics",
+        None,
+    )
+    unsigned = {
+        key: stale_value[key]
+        for key in (
+            "schema",
+            "contract",
+            "batch",
+            "high_water_marks",
+        )
+    }
+    stale_value["sha256"] = hashlib.sha256(
+        json.dumps(
+            unsigned,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    stale_payload = {
+        key: stale_value[key]
+        for key in ("schema", "contract", "batch")
+    }
+    stale_digest = hashlib.sha256(
+        json.dumps(
+            stale_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    stale_path = directory / f"{stale_digest}.json"
+    stale_path.write_text(
+        json.dumps(
+            stale_value,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    if stale_path != current_path:
+        current_path.unlink()
+    progress = []
+
+    recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+        producer_checkpoint_dir=checkpoint_dir,
+        producer_query_budget=0,
+        producer_progress_callback=progress.append,
+    )
+
+    assert any("rejection-ledger-miss:" in row for row in progress)
+    assert any("trial-start:" in row for row in progress)
+    assert not any("rejection-ledger-skip:" in row for row in progress)
+    current_contracts = [
+        json.loads(path.read_bytes())["contract"]
+        for path in directory.glob("*.json")
+    ]
+    assert any(
+        contract.get("producer_analysis_semantics")
+        == _MOVZX_PRODUCER_ANALYSIS_SEMANTICS
+        and contract.get("object_tag_lifecycle_analysis_semantics")
+        == _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
+        for contract in current_contracts
+    )
+
+
 def test_relocated_rejection_ledger_contract_mutation_replays(tmp_path, monkeypatch):
     image = load_cfg_image(tmp_path)
     entry = image.entrypoint
@@ -28524,6 +28660,10 @@ def _ledger_boundary(tmp_path):
     contract = {
         "compiler_sha256": "a" * 64,
         "analysis_semantics": "relocated-rejection-analysis-v1",
+        "producer_analysis_semantics": _MOVZX_PRODUCER_ANALYSIS_SEMANTICS,
+        "object_tag_lifecycle_analysis_semantics": (
+            _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
+        ),
         "limits": asdict(limits),
         "authoritative_seed_inventory": {"records": []},
         "accepted_hypotheses": [],
@@ -28543,13 +28683,25 @@ def _ledger_boundary(tmp_path):
 
 
 @pytest.mark.parametrize("field", [
-    "compiler_sha256", "analysis_semantics", "limits", "authoritative_seed_inventory",
-    "accepted_hypotheses", "rejected_identities", "rejected_object_bases",
+    "compiler_sha256", "analysis_semantics", "producer_analysis_semantics",
+    "object_tag_lifecycle_analysis_semantics", "limits",
+    "authoritative_seed_inventory", "accepted_hypotheses",
+    "rejected_identities", "rejected_object_bases",
 ])
 def test_relocated_rejection_ledger_changed_contract_input_misses(tmp_path, field):
     ledger, contract, batch, _path, _value = _ledger_boundary(tmp_path)
     changed = json.loads(json.dumps(contract))
-    changed[field] = "changed" if field in {"compiler_sha256", "analysis_semantics"} else ["changed"]
+    changed[field] = (
+        "changed"
+        if field
+        in {
+            "compiler_sha256",
+            "analysis_semantics",
+            "producer_analysis_semantics",
+            "object_tag_lifecycle_analysis_semantics",
+        }
+        else ["changed"]
+    )
     assert ledger.contains(changed, batch) is None
 
 
