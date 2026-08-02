@@ -3,7 +3,7 @@ import json
 import struct
 import sys
 from collections import Counter
-from dataclasses import asdict, fields, replace
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +22,7 @@ from retro_pe_fixture import (  # noqa: E402
     write_synthetic_dispatch_pe,
 )
 from tools.mwcc_retro import pe  # noqa: E402
+from tools.mwcc_retro import pe as pe_mod  # noqa: E402
 from tools.mwcc_retro import x86_cfg as x86_cfg_module
 from tools.mwcc_retro.semantic_memo import (  # noqa: E402
     InMemoryReadableGlobalEffectMemoStore,
@@ -3217,6 +3218,551 @@ def recursive_nested_movzx_dispatch_image():
         executable_ranges=((text_va, text_va + 0x200),),
     )
     return image, text_va + transfer_offset
+
+
+@dataclass(frozen=True, slots=True)
+class ReturnPathPublicationFixture:
+    image: pe_mod.Image
+    transfers: tuple[int, ...]
+    consumer_entries: tuple[int, ...]
+    minimum_consumer: int
+    publishing_consumer: int
+    incoming_calls: tuple[int, ...]
+    incoming_owners: tuple[int, ...]
+    publication: int
+    publication_slot: int
+    observation: int
+    slice_addresses: tuple[int, ...]
+    helper_call: int
+    helper_target: int
+    allocator: int
+    grow_target: int
+    callback_slot: int
+    callback_targets: tuple[int, ...]
+    session_root: int
+    backend_root: int
+
+
+_RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
+    {
+        "alternate-slice-entry",
+        "partial-publication",
+        "different-observation-root",
+        "same-root-republish",
+        "unknown-republish-root",
+        "stale-alias-republish",
+        "returning-unresolved-indirect",
+        "extra-finite-returning-target",
+        "closure-slot-read",
+        "closure-slot-materialization",
+        "root-actual",
+        "child-actual",
+        "slot-address-actual",
+        "opaque-actual-dereference",
+        "opaque-actual-mutation",
+        "opaque-actual-unknown-forward",
+        "opaque-multihop-reload-dereference",
+        "wrong-import-dll",
+        "wrong-import-symbol",
+        "wrong-import-lookup-mode",
+        "changed-import-iat",
+        "unlisted-import",
+        "extra-tainted-import-argument",
+        "sync-handle-alias",
+        "returning-failure-callback",
+        "callback-slot-overwrite",
+        "partial-callback-slot-overwrite",
+        "reset-in-lifetime",
+        "lifecycle-root-outside-backend",
+        "incoming-owner-outside-backend",
+        "split-backend-union",
+        "unowned-raw-incoming-call",
+        "exported-lifecycle-caller",
+        "unreconciled-address-taken-caller",
+        "unreconciled-slot-reference",
+        "outside-residue-slot-reference",
+        "overlapping-residue-slot-reference",
+        "ownership-growth-into-returning-closure",
+    }
+)
+
+
+def return_path_publication_lifecycle_image(
+    *,
+    mutation: str | None = None,
+) -> ReturnPathPublicationFixture:
+    """One deterministic publication lifecycle with future hostile seams."""
+    if mutation is not None and mutation not in _RETURN_PATH_PUBLICATION_MUTATIONS:
+        raise ValueError(f"unknown return-path publication mutation: {mutation}")
+
+    text_va = 0x00401000
+    data_va = 0x00403000
+    minimum_consumer = 0x00401000
+    publishing_consumer = 0x00401080
+    incoming_owners = (0x00401200, 0x00401280)
+    backend_root = 0x00401300
+    session_root = 0x00401500
+    initializer = 0x00401600
+    helper_target = 0x00401800
+    helper_forwarder = 0x00401840
+    allocator = 0x00401900
+    grow_target = 0x00401980
+    context_save = 0x00401A80
+    context_restore = 0x00401AC0
+    installed_callback = 0x00401B00
+    default_callback = 0x00401B40
+    publication_slot = 0x00403000
+    callback_slot = 0x00403004
+    branch_flag = 0x00403008
+    heap_remaining = 0x00403020
+    heap_cursor = 0x00403024
+    sync_handle = 0x00403040
+    opaque_copy_slot = 0x00403044
+    stale_alias_slot = 0x00403048
+    finite_target_slot = 0x0040304C
+    context_slot = 0x00403080
+    iat_vas = {
+        "EnterCriticalSection": 0x00403100,
+        "LeaveCriticalSection": 0x00403104,
+        "GlobalAlloc": 0x00403108,
+        "GetLastError": 0x0040310C,
+        "GlobalFlags": 0x00403110,
+    }
+    unlisted_iat = 0x00403114
+    table_base = 0x00403400
+    data = bytearray(0x1400)
+    text = memoryview(data)[:0xC00]
+    relocation_vas: set[int] = set()
+
+    def text_offset(address: int) -> int:
+        offset = address - text_va
+        assert 0 <= offset < len(text)
+        return offset
+
+    def emit(address: int, encoded: str) -> int:
+        raw = bytes.fromhex(encoded)
+        offset = text_offset(address)
+        text[offset : offset + len(raw)] = raw
+        return address + len(raw)
+
+    def emit_call(address: int, target: int) -> int:
+        offset = text_offset(address)
+        text[offset] = 0xE8
+        displacement = target - (address + 5)
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return address + 5
+
+    def emit_abs(
+        address: int,
+        prefix: str,
+        absolute: int,
+        suffix: str = "",
+    ) -> int:
+        prefix_bytes = bytes.fromhex(prefix)
+        raw = prefix_bytes + absolute.to_bytes(4, "little") + bytes.fromhex(suffix)
+        offset = text_offset(address)
+        text[offset : offset + len(raw)] = raw
+        relocation_vas.add(address + len(prefix_bytes))
+        return address + len(raw)
+
+    def patch_short(branch_address: int, target: int) -> None:
+        displacement = target - (branch_address + 2)
+        assert -0x80 <= displacement <= 0x7F
+        text[text_offset(branch_address) + 1] = displacement & 0xFF
+
+    # The minimum binding shares the lifecycle query but has no publication.
+    cursor = emit(minimum_consumer, "56 8b 74 24 08 56")
+    cursor = emit_call(cursor, minimum_consumer)
+    cursor = emit(cursor, "59 56")
+    minimum_movzx = cursor
+    cursor = emit(cursor, "0f b6 1e")
+    minimum_transfer = cursor
+    cursor = emit_abs(cursor, "ff 14 9d", table_base)
+    emit(cursor, "59 5e c3")
+
+    # The later binding publishes one generation. One arm returns through an
+    # opaque helper to the observation; the other kills every old alias and
+    # publishes a distinct fresh generation before returning.
+    cursor = emit(publishing_consumer, "56 57")
+    root_definition = cursor
+    cursor = emit(cursor, "8b 74 24 0c")
+    recursive_push = cursor
+    cursor = emit(cursor, "56")
+    recursive_call = cursor
+    cursor = emit_call(cursor, publishing_consumer)
+    recursive_cleanup = cursor
+    cursor = emit(cursor, "59")
+    publication = cursor
+    if mutation == "partial-publication":
+        cursor = emit_abs(cursor, "66 89 35", publication_slot)
+    else:
+        cursor = emit_abs(cursor, "89 35", publication_slot)
+    flag_compare = cursor
+    cursor = emit_abs(cursor, "83 3d", branch_flag, "00")
+    republish_branch = cursor
+    cursor = emit(cursor, "75 00")
+    actual_load = cursor
+    if mutation == "root-actual":
+        cursor = emit(cursor, "89 f0")
+    elif mutation == "child-actual":
+        cursor = emit(cursor, "8b 46 04")
+    elif mutation == "slot-address-actual":
+        cursor = emit_abs(cursor, "b8", publication_slot)
+    else:
+        cursor = emit(cursor, "8b 46 16")
+    actual_push = cursor
+    cursor = emit(cursor, "50")
+    helper_call = cursor
+    cursor = emit_call(cursor, helper_target)
+    actual_cleanup = cursor
+    cursor = emit(cursor, "59")
+    observation_push = cursor
+    if mutation == "different-observation-root":
+        cursor = emit(cursor, "57")
+        observation = cursor
+        cursor = emit(cursor, "0f b6 1f")
+    else:
+        cursor = emit(cursor, "56")
+        observation = cursor
+        cursor = emit(cursor, "0f b6 1e")
+    publishing_transfer = cursor
+    cursor = emit_abs(cursor, "ff 14 9d", table_base)
+    cursor = emit(cursor, "59 5f 5e c3")
+
+    republish_start = cursor
+    patch_short(republish_branch, republish_start)
+    cursor = emit(cursor, "6a 20")
+    cursor = emit_call(cursor, allocator)
+    cursor = emit(cursor, "59 85 c0")
+    republish_failure_branch = cursor
+    cursor = emit(cursor, "74 00")
+    cursor = emit(cursor, "89 c7")
+    if mutation == "same-root-republish":
+        cursor = emit(cursor, "89 f7")
+    elif mutation == "unknown-republish-root":
+        cursor = emit(cursor, "89 cf")
+    if mutation == "stale-alias-republish":
+        cursor = emit_abs(cursor, "89 35", stale_alias_slot)
+    cursor = emit(cursor, "c7 44 24 0c 00 00 00 00 31 f6")
+    cursor = emit_abs(cursor, "89 3d", publication_slot)
+    cursor = emit(cursor, "5f 5e c3")
+    republish_failure = cursor
+    patch_short(republish_failure_branch, republish_failure)
+    cursor = emit_call(cursor, installed_callback)
+    emit(cursor, "eb fe")
+
+    slice_addresses = (
+        root_definition,
+        recursive_push,
+        recursive_call,
+        recursive_cleanup,
+        publication,
+        flag_compare,
+        republish_branch,
+        actual_load,
+        actual_push,
+        helper_call,
+        actual_cleanup,
+        observation_push,
+        observation,
+    )
+
+    incoming_calls: list[int] = []
+
+    def emit_owner(function_entry: int, tag: int) -> None:
+        cursor = emit(function_entry, "56 6a 20")
+        cursor = emit_call(cursor, allocator)
+        cursor = emit(cursor, "59 85 c0")
+        failure_branch = cursor
+        cursor = emit(cursor, "74 00 89 c6")
+        cursor = emit(cursor, f"c6 06 {tag:02x}")
+        cursor = emit(
+            cursor,
+            f"c7 46 16 {0x1200 + tag:08x}",
+        )
+        cursor = emit(cursor, "56")
+        cursor = emit_call(cursor, minimum_consumer)
+        cursor = emit(cursor, "59 56")
+        incoming_calls.append(cursor)
+        cursor = emit_call(cursor, publishing_consumer)
+        cursor = emit(cursor, "59 5e c3")
+        failure = cursor
+        patch_short(failure_branch, failure)
+        cursor = emit_call(cursor, installed_callback)
+        emit(cursor, "eb fe")
+
+    emit_owner(incoming_owners[0], 0)
+    emit_owner(incoming_owners[1], 74)
+
+    # One backend owns both incoming lifecycle callers in the baseline.
+    cursor = backend_root
+    if mutation != "incoming-owner-outside-backend":
+        cursor = emit_call(cursor, incoming_owners[0])
+    if mutation not in {"incoming-owner-outside-backend", "split-backend-union"}:
+        cursor = emit_call(cursor, incoming_owners[1])
+    emit(cursor, "c3")
+
+    # Checked session root: init, context-save, backend, context-restore.
+    cursor = emit_abs(session_root, "68", installed_callback)
+    cursor = emit_call(cursor, initializer)
+    cursor = emit(cursor, "59 85 c0")
+    init_failure_branch = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit_abs(cursor, "68", context_slot)
+    cursor = emit_call(cursor, context_save)
+    cursor = emit(cursor, "59 85 c0")
+    save_failure_branch = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit_call(cursor, backend_root)
+    if mutation in {
+        "incoming-owner-outside-backend",
+        "lifecycle-root-outside-backend",
+    }:
+        cursor = emit_call(cursor, incoming_owners[1])
+    if mutation == "split-backend-union":
+        cursor = emit_call(cursor, incoming_owners[1])
+    cursor = emit_abs(cursor, "68", context_slot)
+    cursor = emit_call(cursor, context_restore)
+    cursor = emit(cursor, "59 c3")
+    session_failure = cursor
+    patch_short(init_failure_branch, session_failure)
+    patch_short(save_failure_branch, session_failure)
+    if mutation == "reset-in-lifetime":
+        cursor = emit_abs(cursor, "c7 05", heap_cursor, "00 00 00 00")
+    emit(cursor, "c3")
+
+    # Checked initializer installs the nonreturn callback exactly once.
+    cursor = initializer
+    callback_target = default_callback if mutation == "returning-failure-callback" else installed_callback
+    if mutation == "partial-callback-slot-overwrite":
+        cursor = emit_abs(cursor, "66 c7 05", callback_slot)
+        cursor = emit(cursor, f"{callback_target & 0xFFFF:04x}")
+    else:
+        start = cursor
+        cursor = emit_abs(cursor, "c7 05", callback_slot)
+        relocation_vas.add(start + 6)
+        cursor = emit(cursor, callback_target.to_bytes(4, "little").hex())
+    if mutation == "callback-slot-overwrite":
+        start = cursor
+        cursor = emit_abs(cursor, "c7 05", callback_slot)
+        relocation_vas.add(start + 6)
+        cursor = emit(cursor, default_callback.to_bytes(4, "little").hex())
+    emit(cursor, "31 c0 c3")
+
+    # The helper receives the scalar loaded from root+0x16. It copies that
+    # opaque value to an unrelated global and exercises the exact import set.
+    cursor = helper_target
+    if mutation == "returning-unresolved-indirect":
+        cursor = emit(cursor, "8b 44 24 04 ff d0")
+    elif mutation == "extra-finite-returning-target":
+        cursor = emit_abs(cursor, "ff 15", finite_target_slot)
+    elif mutation == "closure-slot-read":
+        cursor = emit_abs(cursor, "a1", publication_slot)
+    elif mutation == "closure-slot-materialization":
+        cursor = emit_abs(cursor, "b8", publication_slot)
+    elif mutation == "opaque-actual-dereference":
+        cursor = emit(cursor, "8b 44 24 04 8b 00")
+    elif mutation == "opaque-actual-mutation":
+        cursor = emit(cursor, "8b 44 24 04 c6 00 01")
+    elif mutation == "opaque-actual-unknown-forward":
+        cursor = emit(cursor, "ff 74 24 04")
+        cursor = emit_call(cursor, helper_forwarder)
+        cursor = emit(cursor, "59")
+    elif mutation == "opaque-multihop-reload-dereference":
+        cursor = emit(cursor, "8b 44 24 04")
+        cursor = emit_abs(cursor, "a3", opaque_copy_slot)
+        cursor = emit_abs(cursor, "a1", opaque_copy_slot)
+        cursor = emit(cursor, "8b 00")
+    else:
+        cursor = emit(cursor, "8b 44 24 04")
+    cursor = emit_abs(cursor, "a3", opaque_copy_slot)
+
+    sync_actual = "ff 74 24 04" if mutation == "sync-handle-alias" else None
+    if sync_actual is None:
+        cursor = emit_abs(cursor, "68", sync_handle)
+    else:
+        cursor = emit(cursor, sync_actual)
+    cursor = emit_abs(
+        cursor,
+        "ff 15",
+        iat_vas["EnterCriticalSection"],
+    )
+    cursor = emit(cursor, "59")
+    cursor = emit_abs(cursor, "ff 15", iat_vas["GlobalFlags"])
+    cursor = emit(cursor, "6a 10 6a 00")
+    if mutation == "extra-tainted-import-argument":
+        cursor = emit(cursor, "ff 74 24 0c")
+    global_alloc_iat = unlisted_iat if mutation == "unlisted-import" else iat_vas["GlobalAlloc"]
+    if mutation == "changed-import-iat":
+        global_alloc_iat += 4
+    cursor = emit_abs(cursor, "ff 15", global_alloc_iat)
+    cursor = emit(
+        cursor,
+        "83 c4 0c" if mutation == "extra-tainted-import-argument" else "59 59",
+    )
+    cursor = emit_abs(cursor, "ff 15", iat_vas["GetLastError"])
+    if sync_actual is None:
+        cursor = emit_abs(cursor, "68", sync_handle)
+    else:
+        cursor = emit(cursor, sync_actual)
+    cursor = emit_abs(
+        cursor,
+        "ff 15",
+        iat_vas["LeaveCriticalSection"],
+    )
+    cursor = emit(cursor, "59 c3")
+    emit(helper_forwarder, "8b 44 24 04 ff d0 c3")
+
+    # Owned fixed bump allocator and grow callback seam.
+    cursor = emit(
+        allocator,
+        "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08",
+    )
+    cursor = emit_abs(cursor, "39 1d", heap_remaining)
+    cursor = emit(cursor, "7d 0d 53")
+    cursor = emit_abs(cursor, "68", heap_cursor)
+    cursor = emit_call(cursor, grow_target)
+    cursor = emit(cursor, "59 59")
+    cursor = emit_abs(cursor, "29 1d", heap_remaining)
+    cursor = emit_abs(cursor, "a1", heap_cursor)
+    cursor = emit_abs(cursor, "01 1d", heap_cursor)
+    emit(cursor, "5b c3")
+
+    cursor = emit(grow_target, "53")
+    cursor = emit_abs(cursor, "ff 15", iat_vas["GlobalAlloc"])
+    cursor = emit(cursor, "85 c0")
+    grow_success_branch = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit_abs(cursor, "ff 15", callback_slot)
+    patch_short(grow_success_branch, cursor)
+    emit(cursor, "5b c3")
+
+    emit(context_save, "31 c0 c3")
+    emit(context_restore, "c3")
+    emit(installed_callback, "eb fe")
+    emit(default_callback, "c3")
+
+    if mutation == "unowned-raw-incoming-call":
+        emit_call(0x00401700, publishing_consumer)
+        emit(0x00401705, "c3")
+    if mutation == "alternate-slice-entry":
+        emit_call(0x00401720, actual_load)
+        emit(0x00401725, "c3")
+    if mutation in {
+        "unreconciled-slot-reference",
+        "outside-residue-slot-reference",
+        "overlapping-residue-slot-reference",
+        "ownership-growth-into-returning-closure",
+    }:
+        reference = {
+            "unreconciled-slot-reference": 0x00401740,
+            "outside-residue-slot-reference": 0x00401760,
+            "overlapping-residue-slot-reference": helper_target + 1,
+            "ownership-growth-into-returning-closure": default_callback + 1,
+        }[mutation]
+        offset = text_offset(reference)
+        text[offset : offset + 4] = publication_slot.to_bytes(4, "little")
+    if mutation == "unreconciled-address-taken-caller":
+        struct.pack_into("<I", data, 0xC00 + 0x54, publishing_consumer)
+
+    # All 75 relocated entries point at the returning default callback.
+    table_offset = 0xC00 + (table_base - data_va)
+    for index in range(75):
+        entry_address = table_base + index * 4
+        struct.pack_into(
+            "<I",
+            data,
+            table_offset + index * 4,
+            default_callback,
+        )
+        relocation_vas.add(entry_address)
+    struct.pack_into("<I", data, 0xC00 + 0x20, 0x1000)
+    struct.pack_into("<I", data, 0xC00 + 0x24, data_va + 0x600)
+    struct.pack_into("<I", data, 0xC00 + 0x4C, default_callback)
+
+    imports = []
+    for index, (name, iat_va) in enumerate(iat_vas.items()):
+        dll = "USER32.dll" if mutation == "wrong-import-dll" and index == 0 else "KERNEL32.dll"
+        import_name = "HeapAlloc" if mutation == "wrong-import-symbol" and name == "GlobalAlloc" else name
+        imports.append(
+            pe_mod.Import(
+                dll=dll,
+                name=(None if mutation == "wrong-import-lookup-mode" and name == "GlobalAlloc" else import_name),
+                ordinal=(12 if mutation == "wrong-import-lookup-mode" and name == "GlobalAlloc" else None),
+                hint=index + 1,
+                iat_va=iat_va,
+            )
+        )
+
+    exports = (
+        (
+            pe_mod.Export(
+                name="PublishedConsumer",
+                ordinal=1,
+                va=publishing_consumer,
+                forwarded_to=None,
+            ),
+        )
+        if mutation == "exported-lifecycle-caller"
+        else ()
+    )
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=session_root,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0xC00,
+                0xC00,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                0xC00,
+                0x800,
+                0x800,
+                0xC0000040,
+            ),
+        ),
+        imports=tuple(imports),
+        exports=exports,
+        relocations=tuple(pe_mod.Relocation(address, 3) for address in sorted(relocation_vas)),
+        executable_ranges=((text_va, text_va + 0xC00),),
+    )
+    return ReturnPathPublicationFixture(
+        image=image,
+        transfers=(minimum_transfer, publishing_transfer),
+        consumer_entries=(minimum_consumer, publishing_consumer),
+        minimum_consumer=minimum_consumer,
+        publishing_consumer=publishing_consumer,
+        incoming_calls=tuple(incoming_calls),
+        incoming_owners=incoming_owners,
+        publication=publication,
+        publication_slot=publication_slot,
+        observation=observation,
+        slice_addresses=slice_addresses,
+        helper_call=helper_call,
+        helper_target=helper_target,
+        allocator=allocator,
+        grow_target=grow_target,
+        callback_slot=callback_slot,
+        callback_targets=(installed_callback, default_callback),
+        session_root=session_root,
+        backend_root=backend_root,
+    )
 
 
 def lifecycle_movzx_dispatch_image(
@@ -7989,6 +8535,50 @@ def test_closed_object_tag_lifecycle_bounds_shared_movzx_consumers():
     assert {table.guard_bound for table in tables} == {74}
     assert {(table.index_min, table.index_max) for table in tables} == {(0, 74)}
     assert all(table.targets == (0x004010E0,) * 75 for table in tables)
+
+
+def test_object_tag_lifecycle_accepts_return_path_publication_noninterference():
+    fixture = return_path_publication_lifecycle_image()
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert {
+        cfg.jump_table_at(transfer).guard_operator
+        for transfer in fixture.transfers
+    } == {"movzx-lifecycle-domain"}
+    assert {
+        cfg.jump_table_at(transfer).index_max
+        for transfer in fixture.transfers
+    } == {74}
+
+
+def test_non_lifecycle_callers_still_reject_return_path_publication():
+    fixture = return_path_publication_lifecycle_image()
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+
+    assert not recovery._pointer_definition_preserves_field_before(
+        fixture.slice_addresses[0],
+        fixture.publishing_consumer,
+        0,
+        fixture.observation,
+    )
+    transfer = recovery._owned_decoded(fixture.transfers[-1])
+    producer_guard = recovery._movzx_guard_for_index(
+        transfer.address,
+        transfer.operands[0].mem.index,
+        producer_domain=True,
+    )
+    assert producer_guard is not None
+    assert producer_guard[1] != "movzx-producer-domain"
 
 
 def test_object_tag_lifecycle_binds_stack_reloaded_receiver():
