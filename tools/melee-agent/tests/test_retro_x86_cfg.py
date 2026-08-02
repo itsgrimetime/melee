@@ -3238,9 +3238,18 @@ class ReturnPathPublicationFixture:
     allocator: int
     grow_target: int
     callback_slot: int
+    heap_cursor: int
+    heap_remaining: int
     callback_targets: tuple[int, ...]
     session_root: int
+    session_helper: int
+    session_helpers: tuple[int, ...]
     backend_root: int
+    system_allocator: int
+    unrelated_write_slot: int
+    setjmp_target: int
+    context_slot: int
+    longjmp_target: int
 
 
 _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
@@ -3292,6 +3301,64 @@ _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
         "returning-failure-callback",
         "callback-slot-overwrite",
         "partial-callback-slot-overwrite",
+        "cmpxchg-callback-slot",
+        "cmpxchg-partial-callback-slot",
+        "cmpxchg-cursor-slot",
+        "cmpxchg-partial-cursor-slot",
+        "cmpxchg-remaining-slot",
+        "cmpxchg-partial-remaining-slot",
+        "stosd-callback-slot",
+        "cmpxchg-unrelated-slot",
+        "stosd-unrelated-slot",
+        "session-callback-overwrite",
+        "session-partial-callback-overwrite",
+        "session-helper-callback-overwrite",
+        "session-helper-partial-callback-overwrite",
+        "session-helper-cmpxchg-callback-slot",
+        "session-finite-helper-benign",
+        "session-finite-helper-callback-overwrite",
+        "session-finite-helper-partial-callback-overwrite",
+        "session-finite-helper-cmpxchg-callback-slot",
+        "session-finite-helper-multi-benign",
+        "session-finite-helper-multi-hostile",
+        "backend-finite-helper-benign",
+        "backend-finite-helper-callback-overwrite",
+        "backend-unresolved-indirect",
+        "backend-unresolved-indexed-indirect",
+        "backend-helper-df-leak",
+        "backend-helper-df-restored",
+        "backend-df-set-before-helper-write",
+        "deferred-lifecycle-target-df-leak",
+        "deferred-lifecycle-target-callback-overwrite",
+        "deferred-lifecycle-target-stack-pivot-overwrite",
+        "deferred-lifecycle-target-iret",
+        "session-helper-df-leak-before-backend",
+        "session-helper-df-restored-before-backend",
+        "ebp-callback-partial-write",
+        "ebp-cursor-write",
+        "ebp-remaining-write",
+        "esp-callback-write",
+        "push-after-esp-cursor-reassignment",
+        "push-after-esp-remaining-reassignment",
+        "canonical-frame-write",
+        "private-stack-push",
+        "descending-rep-stosd",
+        "descending-rep-movsd",
+        "clear-restored-rep-stosd",
+        "wrapping-rep-stosd",
+        "system-allocator-callback-return",
+        "system-allocator-cursor-return",
+        "system-allocator-remaining-return",
+        "system-arena-callback-overlap",
+        "system-arena-cursor-overlap",
+        "system-arena-remaining-overlap",
+        "system-arena-before-protected",
+        "system-arena-after-protected",
+        "system-arena-partial-register-splice",
+        "system-arena-optional-zero-remaining",
+        "system-arena-partial-cursor-store",
+        "system-arena-fresh-size-overflow",
+        "system-arena-fresh-size-exact",
         "reset-in-lifetime",
         "lifecycle-root-outside-backend",
         "incoming-owner-outside-backend",
@@ -3323,6 +3390,8 @@ def return_path_publication_lifecycle_image(
     backend_root = 0x00401300
     session_root = 0x00401500
     initializer = 0x00401600
+    session_helper = 0x004017A0
+    second_session_helper = 0x004017C0
     helper_target = 0x00401800
     helper_forwarder = 0x00401880
     allocator = 0x00401900
@@ -3331,16 +3400,21 @@ def return_path_publication_lifecycle_image(
     context_restore = 0x00401AC0
     installed_callback = 0x00401B00
     default_callback = 0x00401B40
+    system_allocator = 0x00401B80
     publication_slot = 0x00403000
     callback_slot = 0x00403004
     branch_flag = 0x00403008
-    heap_remaining = 0x00403020
-    heap_cursor = 0x00403024
+    heap_descriptor = 0x00403014
+    heap_cursor = heap_descriptor + 12
+    heap_remaining = heap_descriptor + 16
+    second_heap_descriptor = 0x00403050
     sync_handle = 0x00403040
     opaque_copy_slot = 0x00403044
     stale_alias_slot = 0x00403048
     finite_target_slot = 0x0040304C
     context_slot = 0x00403080
+    unrelated_write_slot = 0x004030D0
+    session_target_slot = 0x004030D4
     iat_vas = {
         "EnterCriticalSection": 0x00403100,
         "LeaveCriticalSection": 0x00403104,
@@ -3516,30 +3590,190 @@ def return_path_publication_lifecycle_image(
     emit_owner(incoming_owners[0], 0)
     emit_owner(incoming_owners[1], 74)
 
-    # One backend owns both incoming lifecycle callers in the baseline.
+    # One backend owns both incoming lifecycle callers in the baseline.  The
+    # hostile variants preserve an individually valid allocation caller while
+    # removing another exact incoming owner, or split the two owners across
+    # individually valid roots whose union is insufficient.
     cursor = backend_root
-    if mutation != "incoming-owner-outside-backend":
+    if mutation in {"callback-slot-overwrite"}:
+        start = cursor
+        cursor = emit_abs(cursor, "c7 05", callback_slot)
+        relocation_vas.add(start + 6)
+        cursor = emit(cursor, default_callback.to_bytes(4, "little").hex())
+    elif mutation == "partial-callback-slot-overwrite":
+        cursor = emit_abs(
+            cursor,
+            "66 c7 05",
+            callback_slot + 1,
+            "00 00",
+        )
+    semantic_write_target = {
+        "cmpxchg-callback-slot": callback_slot,
+        "cmpxchg-partial-callback-slot": callback_slot + 1,
+        "cmpxchg-cursor-slot": heap_cursor,
+        "cmpxchg-partial-cursor-slot": heap_cursor + 1,
+        "cmpxchg-remaining-slot": heap_remaining,
+        "cmpxchg-partial-remaining-slot": heap_remaining + 1,
+        "cmpxchg-unrelated-slot": unrelated_write_slot,
+    }.get(mutation)
+    if semantic_write_target is not None:
+        cursor = emit_abs(cursor, "0f b1 05", semantic_write_target)
+    if mutation in {"stosd-callback-slot", "stosd-unrelated-slot"}:
+        stosd_target = (
+            callback_slot
+            if mutation == "stosd-callback-slot"
+            else unrelated_write_slot
+        )
+        cursor = emit_abs(cursor, "bf", stosd_target)
+        cursor = emit(cursor, "ab")
+    ebp_write_target = {
+        "ebp-callback-partial-write": callback_slot,
+        "ebp-cursor-write": heap_cursor,
+        "ebp-remaining-write": heap_remaining,
+    }.get(mutation)
+    if ebp_write_target is not None:
+        cursor = emit(cursor, "89 ea")
+        cursor = emit_abs(cursor, "bd", ebp_write_target)
+        cursor = emit(
+            cursor,
+            "66 c7 45 00 00 00"
+            if mutation == "ebp-callback-partial-write"
+            else "c7 45 00 00 00 00 00",
+        )
+        cursor = emit(cursor, "89 d5")
+    if mutation == "esp-callback-write":
+        cursor = emit(cursor, "89 e2")
+        cursor = emit_abs(cursor, "bc", callback_slot)
+        cursor = emit(cursor, "c7 04 24 00 00 00 00 89 d4")
+    push_stack_target = {
+        "push-after-esp-cursor-reassignment": heap_cursor,
+        "push-after-esp-remaining-reassignment": heap_remaining,
+    }.get(mutation)
+    if push_stack_target is not None:
+        cursor = emit(cursor, "89 e2")
+        cursor = emit_abs(cursor, "bc", push_stack_target + 4)
+        cursor = emit(cursor, "50 89 d4")
+    if mutation == "canonical-frame-write":
+        cursor = emit(
+            cursor,
+            "55 89 e5 83 ec 04 c7 45 fc 00 00 00 00 89 ec 5d",
+        )
+    if mutation == "private-stack-push":
+        cursor = emit(cursor, "50 58")
+    if mutation in {"descending-rep-stosd", "descending-rep-movsd"}:
+        cursor = emit_abs(cursor, "bf", callback_slot + 4)
+        if mutation == "descending-rep-movsd":
+            cursor = emit_abs(cursor, "be", unrelated_write_slot)
+        cursor = emit(cursor, "b9 02 00 00 00 fd")
+        cursor = emit(
+            cursor,
+            "f3 a5 fc"
+            if mutation == "descending-rep-movsd"
+            else "f3 ab fc",
+        )
+    if mutation == "clear-restored-rep-stosd":
+        cursor = emit_abs(cursor, "bf", unrelated_write_slot)
+        cursor = emit(cursor, "b9 02 00 00 00 fd fc f3 ab")
+    if mutation == "wrapping-rep-stosd":
+        cursor = emit(cursor, "bf fc ff ff ff b9 02 00 00 00 f3 ab")
+    if mutation == "reset-in-lifetime":
+        cursor = emit_abs(cursor, "c7 05", heap_cursor, "00 00 00 00")
+    if mutation in {
+        "backend-finite-helper-benign",
+        "backend-finite-helper-callback-overwrite",
+    }:
+        cursor = emit_abs(cursor, "b8", second_session_helper)
+        cursor = emit(cursor, "ff d0")
+    if mutation == "backend-unresolved-indirect":
+        cursor = emit(cursor, "31 c0 ff d0")
+    if mutation == "backend-unresolved-indexed-indirect":
+        cursor = emit_abs(cursor, "ff 14 85", unrelated_write_slot)
+    if mutation in {
+        "backend-helper-df-leak",
+        "backend-helper-df-restored",
+        "session-helper-df-leak-before-backend",
+        "session-helper-df-restored-before-backend",
+    }:
+        cursor = emit_call(cursor, second_session_helper)
+        cursor = emit_abs(cursor, "bf", callback_slot + 4)
+        cursor = emit(cursor, "b9 02 00 00 00 f3 ab fc")
+    if mutation == "backend-df-set-before-helper-write":
+        cursor = emit(cursor, "fd")
+        cursor = emit_call(cursor, second_session_helper)
+        cursor = emit(cursor, "fc")
+    if mutation != "lifecycle-root-outside-backend":
         cursor = emit_call(cursor, incoming_owners[0])
     if mutation not in {"incoming-owner-outside-backend", "split-backend-union"}:
         cursor = emit_call(cursor, incoming_owners[1])
+    if mutation == "deferred-lifecycle-target-df-leak":
+        cursor = emit_abs(cursor, "bf", callback_slot + 4)
+        cursor = emit(cursor, "b9 02 00 00 00 f3 ab fc")
+    if mutation == "lifecycle-root-outside-backend":
+        cursor = emit_call(cursor, publishing_consumer)
     emit(cursor, "c3")
 
     # Checked session root: init, context-save, backend, context-restore.
-    cursor = emit_abs(session_root, "68", installed_callback)
+    session_callback = (
+        default_callback
+        if mutation == "returning-failure-callback"
+        else installed_callback
+    )
+    cursor = emit_abs(session_root, "68", session_callback)
     cursor = emit_call(cursor, initializer)
     cursor = emit(cursor, "59 85 c0")
     init_failure_branch = cursor
     cursor = emit(cursor, "75 00")
+    if mutation == "session-callback-overwrite":
+        start = cursor
+        cursor = emit_abs(cursor, "c7 05", callback_slot)
+        relocation_vas.add(start + 6)
+        cursor = emit(cursor, default_callback.to_bytes(4, "little").hex())
+    elif mutation == "session-partial-callback-overwrite":
+        cursor = emit_abs(
+            cursor,
+            "66 c7 05",
+            callback_slot + 1,
+            "00 00",
+        )
+    finite_session_helper = bool(
+        mutation and mutation.startswith("session-finite-helper-")
+    )
+    finite_session_multi = bool(
+        mutation and mutation.startswith("session-finite-helper-multi-")
+    )
+    if finite_session_multi:
+        cursor = emit_abs(cursor, "80 3d", branch_flag, "00")
+        second_target_branch = cursor
+        cursor = emit(cursor, "74 00")
+        start = cursor
+        cursor = emit_abs(cursor, "c7 05", session_target_slot)
+        relocation_vas.add(start + 6)
+        cursor = emit(cursor, session_helper.to_bytes(4, "little").hex())
+        target_merge_branch = cursor
+        cursor = emit(cursor, "eb 00")
+        second_target = cursor
+        start = cursor
+        cursor = emit_abs(cursor, "c7 05", session_target_slot)
+        relocation_vas.add(start + 6)
+        cursor = emit(
+            cursor, second_session_helper.to_bytes(4, "little").hex()
+        )
+        target_call = cursor
+        cursor = emit_abs(cursor, "ff 15", session_target_slot)
+        patch_short(second_target_branch, second_target)
+        patch_short(target_merge_branch, target_call)
+    elif finite_session_helper:
+        cursor = emit_abs(cursor, "b8", session_helper)
+        cursor = emit(cursor, "ff d0")
+    else:
+        cursor = emit_call(cursor, session_helper)
     cursor = emit_abs(cursor, "68", context_slot)
     cursor = emit_call(cursor, context_save)
     cursor = emit(cursor, "59 85 c0")
     save_failure_branch = cursor
     cursor = emit(cursor, "75 00")
     cursor = emit_call(cursor, backend_root)
-    if mutation in {
-        "incoming-owner-outside-backend",
-        "lifecycle-root-outside-backend",
-    }:
+    if mutation in {"incoming-owner-outside-backend", "lifecycle-root-outside-backend"}:
         cursor = emit_call(cursor, incoming_owners[1])
     if mutation == "split-backend-union":
         cursor = emit_call(cursor, incoming_owners[1])
@@ -3549,27 +3783,29 @@ def return_path_publication_lifecycle_image(
     session_failure = cursor
     patch_short(init_failure_branch, session_failure)
     patch_short(save_failure_branch, session_failure)
-    if mutation == "reset-in-lifetime":
-        cursor = emit_abs(cursor, "c7 05", heap_cursor, "00 00 00 00")
     emit(cursor, "c3")
 
-    # Checked initializer installs the nonreturn callback exactly once.
+    # Checked initializer grows two descriptors with the callback disabled,
+    # installs its argument exactly once, and checks both descriptor arenas.
     cursor = initializer
-    callback_target = default_callback if mutation == "returning-failure-callback" else installed_callback
-    if mutation == "partial-callback-slot-overwrite":
-        cursor = emit_abs(cursor, "66 c7 05", callback_slot)
-        cursor = emit(cursor, f"{callback_target & 0xFFFF:04x}")
-    else:
-        start = cursor
-        cursor = emit_abs(cursor, "c7 05", callback_slot)
-        relocation_vas.add(start + 6)
-        cursor = emit(cursor, callback_target.to_bytes(4, "little").hex())
-    if mutation == "callback-slot-overwrite":
-        start = cursor
-        cursor = emit_abs(cursor, "c7 05", callback_slot)
-        relocation_vas.add(start + 6)
-        cursor = emit(cursor, default_callback.to_bytes(4, "little").hex())
-    emit(cursor, "31 c0 c3")
+    cursor = emit_abs(cursor, "c7 05", callback_slot, "00 00 00 00")
+    for descriptor in (heap_descriptor, second_heap_descriptor):
+        cursor = emit(cursor, "6a 00")
+        cursor = emit_abs(cursor, "68", descriptor)
+        cursor = emit_call(cursor, grow_target)
+        cursor = emit(cursor, "83 c4 08")
+    cursor = emit(cursor, "8b 44 24 04")
+    cursor = emit_abs(cursor, "a3", callback_slot)
+    check_branches = []
+    for descriptor in (heap_descriptor, second_heap_descriptor):
+        cursor = emit_abs(cursor, "83 3d", descriptor + 8, "00")
+        check_branches.append(cursor)
+        cursor = emit(cursor, "74 00")
+    cursor = emit(cursor, "31 c0 c3")
+    init_failure = cursor
+    emit(cursor, "b8 ff ff ff ff c3")
+    for branch in check_branches:
+        patch_short(branch, init_failure)
 
     # The helper receives the scalar loaded from root+0x16. It copies that
     # opaque value to an unrelated global and exercises the exact import set.
@@ -3698,14 +3934,14 @@ def return_path_publication_lifecycle_image(
     cursor = emit(cursor, "59 c3")
     emit(helper_forwarder, "8b 44 24 04 ff d0 c3")
 
-    # Owned fixed bump allocator and grow callback seam.
+    # Owned fixed bump allocator and checked grow callback seam.
     cursor = emit(
         allocator,
         "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08",
     )
     cursor = emit_abs(cursor, "39 1d", heap_remaining)
     cursor = emit(cursor, "7d 0d 53")
-    cursor = emit_abs(cursor, "68", heap_cursor)
+    cursor = emit_abs(cursor, "68", heap_descriptor)
     cursor = emit_call(cursor, grow_target)
     cursor = emit(cursor, "59 59")
     cursor = emit_abs(cursor, "29 1d", heap_remaining)
@@ -3713,19 +3949,148 @@ def return_path_publication_lifecycle_image(
     cursor = emit_abs(cursor, "01 1d", heap_cursor)
     emit(cursor, "5b c3")
 
-    cursor = emit(grow_target, "53")
-    cursor = emit_abs(cursor, "ff 15", iat_vas["GlobalAlloc"])
+    cursor = emit(grow_target, "53 8b 5c 24 08")
+    cursor = emit_call(cursor, system_allocator)
     cursor = emit(cursor, "85 c0")
     grow_success_branch = cursor
     cursor = emit(cursor, "75 00")
+    cursor = emit_abs(cursor, "83 3d", callback_slot, "00")
+    no_callback_branch = cursor
+    cursor = emit(cursor, "74 00")
     cursor = emit_abs(cursor, "ff 15", callback_slot)
-    patch_short(grow_success_branch, cursor)
-    emit(cursor, "5b c3")
+    no_callback = cursor
+    cursor = emit(cursor, "5b c3")
+    grow_success = cursor
+    if mutation == "system-arena-partial-register-splice":
+        cursor = emit(
+            cursor,
+            "89 43 08 89 c1 81 c1 30 ff 0f 00 66 89 c8 83 c0 10 89 43 0c",
+        )
+    elif mutation == "system-arena-partial-cursor-store":
+        cursor = emit(cursor, "89 43 08 83 c0 10 66 89 43 0c")
+    else:
+        cursor = emit(cursor, "89 43 08 83 c0 10 89 43 0c")
+    if mutation == "system-arena-fresh-size-overflow":
+        cursor = emit(cursor, "c7 43 10 ff ff ff ff 5b c3")
+    elif mutation == "system-arena-optional-zero-remaining":
+        cursor = emit(cursor, "31 c9")
+        cursor = emit_abs(cursor, "83 3d", branch_flag, "00")
+        cursor = emit(cursor, "74 05 b9 00 10 00 00 89 4b 10 5b c3")
+    else:
+        cursor = emit(cursor, "c7 43 10 00 10 00 00 5b c3")
+    patch_short(grow_success_branch, grow_success)
+    patch_short(no_callback_branch, no_callback)
 
-    emit(context_save, "31 c0 c3")
-    emit(context_restore, "c3")
-    emit(installed_callback, "eb fe")
-    emit(default_callback, "c3")
+    emit(context_save, "8b 4c 24 04 89 21 8b 04 24 89 41 04 31 c0 c3")
+    emit(context_restore, "8b 4c 24 04 8b 21 b8 01 00 00 00 c3")
+    cursor = emit_abs(installed_callback, "68", context_slot)
+    cursor = emit_call(cursor, context_restore)
+    emit(cursor, "59 c3")
+    if mutation == "deferred-lifecycle-target-callback-overwrite":
+        cursor = emit_abs(default_callback, "c7 05", callback_slot)
+        emit(cursor, "00 00 00 00 c3")
+    elif mutation == "deferred-lifecycle-target-stack-pivot-overwrite":
+        cursor = emit_abs(
+            default_callback,
+            "89 e2 bc",
+            callback_slot + 4,
+        )
+        emit(cursor, "50 89 d4 c3")
+    elif mutation == "deferred-lifecycle-target-iret":
+        emit(default_callback, "cf c3")
+    else:
+        emit(
+            default_callback,
+            "fd c3"
+            if mutation == "deferred-lifecycle-target-df-leak"
+            else "c3",
+        )
+    if mutation in {
+        "system-arena-fresh-size-overflow",
+        "system-arena-fresh-size-exact",
+    }:
+        cursor = emit(
+            system_allocator,
+            (
+                "68 10 00 00 00 6a 00"
+                if mutation == "system-arena-fresh-size-overflow"
+                else "68 10 10 00 00 6a 00"
+            ),
+        )
+        cursor = emit_abs(cursor, "ff 15", iat_vas["GlobalAlloc"])
+        emit(cursor, "59 59 c3")
+    else:
+        cursor = emit_abs(system_allocator, "a1", 0x004030C0)
+        emit(cursor, "c3")
+
+    cursor = session_helper
+    if mutation in {
+        "session-helper-df-leak-before-backend",
+        "session-helper-df-restored-before-backend",
+    }:
+        emit(
+            cursor,
+            "fd fc c3"
+            if mutation == "session-helper-df-restored-before-backend"
+            else "fd c3",
+        )
+    elif mutation in {
+        "session-helper-callback-overwrite",
+        "session-finite-helper-callback-overwrite",
+    }:
+        if mutation == "session-finite-helper-callback-overwrite":
+            cursor = emit_abs(cursor, "bf", callback_slot)
+            cursor = emit(cursor, "31 c0 ab")
+        else:
+            start = cursor
+            cursor = emit_abs(cursor, "c7 05", callback_slot)
+            relocation_vas.add(start + 6)
+            cursor = emit(
+                cursor, default_callback.to_bytes(4, "little").hex()
+            )
+        emit(cursor, "c3")
+    elif mutation in {
+        "session-helper-partial-callback-overwrite",
+        "session-finite-helper-partial-callback-overwrite",
+    }:
+        cursor = emit_abs(
+            cursor,
+            "66 c7 05",
+            callback_slot + 1,
+            "00 00",
+        )
+        emit(cursor, "c3")
+    elif mutation in {
+        "session-helper-cmpxchg-callback-slot",
+        "session-finite-helper-cmpxchg-callback-slot",
+    }:
+        cursor = emit_abs(cursor, "0f b1 05", callback_slot)
+        emit(cursor, "c3")
+    else:
+        emit(cursor, "c3")
+    if mutation in {
+        "session-finite-helper-multi-hostile",
+        "backend-finite-helper-callback-overwrite",
+    }:
+        cursor = emit_abs(
+            second_session_helper,
+            "66 c7 05",
+            callback_slot + 1,
+            "00 00",
+        )
+        emit(cursor, "c3")
+    elif mutation in {"backend-helper-df-leak", "backend-helper-df-restored"}:
+        emit(
+            second_session_helper,
+            "fd fc c3"
+            if mutation == "backend-helper-df-restored"
+            else "fd c3",
+        )
+    elif mutation == "backend-df-set-before-helper-write":
+        cursor = emit_abs(second_session_helper, "bf", callback_slot + 4)
+        emit(cursor, "b9 02 00 00 00 f3 ab c3")
+    else:
+        emit(second_session_helper, "c3")
 
     if mutation == "unowned-raw-incoming-call":
         emit_call(0x00401700, publishing_consumer)
@@ -3763,8 +4128,37 @@ def return_path_publication_lifecycle_image(
             default_callback,
         )
         relocation_vas.add(entry_address)
-    struct.pack_into("<I", data, 0xC00 + 0x20, 0x1000)
-    struct.pack_into("<I", data, 0xC00 + 0x24, data_va + 0x600)
+    struct.pack_into(
+        "<I",
+        data,
+        0xC00 + 0x20,
+        (
+            0x00400000
+            if mutation == "system-arena-partial-cursor-store"
+            else data_va + 0x600
+        ),
+    )
+    struct.pack_into("<I", data, 0xC00 + 0x24, 0x1000)
+    struct.pack_into("<I", data, 0xC00 + 0x5C, data_va + 0x700)
+    struct.pack_into("<I", data, 0xC00 + 0x60, 0x1000)
+    system_return = {
+        "system-allocator-callback-return": callback_slot,
+        "system-allocator-cursor-return": heap_cursor,
+        "system-allocator-remaining-return": heap_remaining,
+        "system-arena-callback-overlap": callback_slot - 0x10,
+        "system-arena-cursor-overlap": heap_cursor - 0x10,
+        "system-arena-remaining-overlap": heap_remaining - 0x10,
+        "system-arena-before-protected": min(
+            callback_slot, heap_cursor, heap_remaining
+        )
+        - 0x1010,
+        # The typed return-storage slot at data+0xC0 is protected too.
+        "system-arena-after-protected": data_va + 0xC4,
+        "system-arena-partial-register-splice": data_va + 0xC4,
+        "system-arena-optional-zero-remaining": data_va + 0x800,
+        "system-arena-partial-cursor-store": 0x00502FF4,
+    }.get(mutation, data_va + 0x800)
+    struct.pack_into("<I", data, 0xC00 + 0xC0, system_return)
     struct.pack_into("<I", data, 0xC00 + 0x4C, default_callback)
 
     imports = []
@@ -3831,8 +4225,8 @@ def return_path_publication_lifecycle_image(
         consumer_entries=(minimum_consumer, publishing_consumer),
         minimum_consumer=minimum_consumer,
         publishing_consumer=publishing_consumer,
-        incoming_calls=tuple(incoming_calls),
-        incoming_owners=incoming_owners,
+        incoming_calls=(recursive_call, *incoming_calls),
+        incoming_owners=(publishing_consumer, *incoming_owners),
         publication=publication,
         publication_slot=publication_slot,
         observation=observation,
@@ -3842,9 +4236,18 @@ def return_path_publication_lifecycle_image(
         allocator=allocator,
         grow_target=grow_target,
         callback_slot=callback_slot,
+        heap_cursor=heap_cursor,
+        heap_remaining=heap_remaining,
         callback_targets=(installed_callback, default_callback),
         session_root=session_root,
+        session_helper=session_helper,
+        session_helpers=(session_helper, second_session_helper),
         backend_root=backend_root,
+        system_allocator=system_allocator,
+        unrelated_write_slot=unrelated_write_slot,
+        setjmp_target=context_save,
+        context_slot=context_slot,
+        longjmp_target=context_restore,
     )
 
 
@@ -7022,14 +7425,14 @@ def lifecycle_optional_allocation_pointee_image(*, mutation=None):
         emit(cursor, "59 c3")
     # reset(desc A) and a deterministic system allocator stub.
     emit(0x580, "c7 05 0c 30 40 00 00 00 00 00 c7 05 10 30 40 00 00 00 00 00 c3")
-    emit(0x5A0, "a1 c0 30 40 00 83 05 c0 30 40 00 40 c3")
+    emit(0x5A0, "a1 c0 30 40 00 c3")
     emit(0x5C0, "31 c0 57 8b 4c 24 0c 8b 7c 24 08 f3 aa 5f c3")
     emit(0x600, "c3")
     if mutation == "callback-overwritten":
         emit(0x620, "c7 05 80 30 40 00 00 00 00 00 c3")
     elif mutation == "callback-overwritten-partial-overlap":
         emit(0x620, "66 c7 05 81 30 40 00 00 00 c3")
-    emit(0x640, "a1 c8 30 40 00 83 05 c8 30 40 00 40 c3")
+    emit(0x640, "a1 c8 30 40 00 c3")
     emit(0x660, "8b 44 24 04 c7 00 34 12 00 00 c3")
     emit(0x680, "8b 44 24 04 a3 d0 30 40 00 c3")
     if mutation == "second-checked-backend":
@@ -7040,6 +7443,7 @@ def lifecycle_optional_allocation_pointee_image(*, mutation=None):
     for index in range(75):
         struct.pack_into("<I", data, 0x700 + index * 4, text_va + 0x600)
     struct.pack_into("<I", data, 0xAC0, data_va + 0x100)
+    struct.pack_into("<I", data, 0xAC8, data_va + 0x180)
     # Both runtime choices are intentionally unknown to the static proof.
     struct.pack_into("<I", data, 0xAB0, 1)
     struct.pack_into("<I", data, 0xAB4, 1)
@@ -8970,6 +9374,460 @@ def test_return_path_publication_rejects_hostile_generation_shape(mutation):
     )
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "lifecycle-root-outside-backend",
+        "incoming-owner-outside-backend",
+        "unowned-raw-incoming-call",
+        "exported-lifecycle-caller",
+        "unreconciled-address-taken-caller",
+        "split-backend-union",
+    ),
+)
+def test_return_path_publication_requires_closed_backend_caller_bridge(
+    mutation,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert not any(
+        table.address in fixture.transfers
+        and table.guard_operator == "movzx-lifecycle-domain"
+        for table in cfg.jump_tables
+    )
+
+
+def test_return_path_publication_incoming_owner_outside_backend_keeps_allocation_caller():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="incoming-owner-outside-backend"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+
+    totality = recovery._allocator_totality_certificate(
+        fixture.allocator,
+        fixture.publishing_consumer,
+        lifetime_roots=frozenset({fixture.publishing_consumer}),
+    )
+    assert totality is not None
+    assert fixture.backend_root in totality.backend_roots
+    closure = recovery._direct_function_call_closure(fixture.backend_root)
+    assert fixture.publishing_consumer in closure
+    assert fixture.incoming_owners[-1] not in closure
+
+
+def test_return_path_publication_split_backend_union_has_no_complete_root():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="split-backend-union"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+
+    totality = recovery._allocator_totality_certificate(
+        fixture.allocator,
+        fixture.publishing_consumer,
+        lifetime_roots=frozenset({fixture.publishing_consumer}),
+    )
+    assert totality is not None
+    closures = tuple(
+        recovery._direct_function_call_closure(root)
+        for root in totality.backend_roots
+    )
+    required = set(fixture.incoming_owners)
+    required.add(fixture.publishing_consumer)
+    # The second candidate's success slice crosses the first backend, whose
+    # indexed callback call has no complete call_targets_by_source entry.
+    # The stricter session proof must not combine that unresolved slice.
+    assert not required <= set().union(*closures)
+    assert all(not required <= closure for closure in closures)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "returning-failure-callback",
+        "callback-slot-overwrite",
+        "partial-callback-slot-overwrite",
+        "cmpxchg-callback-slot",
+        "cmpxchg-partial-callback-slot",
+        "cmpxchg-cursor-slot",
+        "cmpxchg-partial-cursor-slot",
+        "cmpxchg-remaining-slot",
+        "cmpxchg-partial-remaining-slot",
+        "stosd-callback-slot",
+        "session-callback-overwrite",
+        "session-partial-callback-overwrite",
+        "session-helper-callback-overwrite",
+        "session-helper-partial-callback-overwrite",
+        "session-helper-cmpxchg-callback-slot",
+        "session-finite-helper-callback-overwrite",
+        "session-finite-helper-partial-callback-overwrite",
+        "session-finite-helper-cmpxchg-callback-slot",
+        "session-finite-helper-multi-hostile",
+        "backend-finite-helper-callback-overwrite",
+        "backend-unresolved-indirect",
+        "backend-unresolved-indexed-indirect",
+        "backend-helper-df-leak",
+        "backend-df-set-before-helper-write",
+        "deferred-lifecycle-target-df-leak",
+        "deferred-lifecycle-target-callback-overwrite",
+        "deferred-lifecycle-target-stack-pivot-overwrite",
+        "deferred-lifecycle-target-iret",
+        "session-helper-df-leak-before-backend",
+        "sync-handle-boundary-right",
+        "ebp-callback-partial-write",
+        "ebp-cursor-write",
+        "ebp-remaining-write",
+        "esp-callback-write",
+        "push-after-esp-cursor-reassignment",
+        "push-after-esp-remaining-reassignment",
+        "descending-rep-stosd",
+        "descending-rep-movsd",
+        "wrapping-rep-stosd",
+        "system-allocator-callback-return",
+        "system-allocator-cursor-return",
+        "system-allocator-remaining-return",
+        "system-arena-callback-overlap",
+        "system-arena-cursor-overlap",
+        "system-arena-remaining-overlap",
+        "system-arena-partial-register-splice",
+        "system-arena-optional-zero-remaining",
+        "system-arena-partial-cursor-store",
+        "system-arena-fresh-size-overflow",
+        "reset-in-lifetime",
+    ),
+)
+def test_return_path_publication_failure_callback_requires_bound_session(
+    mutation,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert set(fixture.transfers) <= {
+        row.address
+        for row in cfg.control_targets.unresolved
+        if row.kind == "computed-flow-blocker"
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "cmpxchg-unrelated-slot",
+        "stosd-unrelated-slot",
+        "canonical-frame-write",
+        "private-stack-push",
+        "clear-restored-rep-stosd",
+        "session-finite-helper-benign",
+        "session-finite-helper-multi-benign",
+        "backend-finite-helper-benign",
+        "backend-helper-df-restored",
+        "session-helper-df-restored-before-backend",
+        "system-arena-before-protected",
+        "system-arena-after-protected",
+    ),
+)
+def test_return_path_publication_accepts_disjoint_semantic_backend_write(
+    mutation,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert {
+        cfg.jump_table_at(transfer).guard_operator
+        for transfer in fixture.transfers
+    } == {"movzx-lifecycle-domain"}
+
+
+def test_backend_bridge_binds_finite_indirect_semantic_scope():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="backend-finite-helper-benign"
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+    bridge = result.certificate.backend_bridges[0]
+    assert fixture.session_helpers[1] in {
+        body.function_entry for body in bridge.backend_bodies
+    }
+    assert fixture.session_helpers[1] in (
+        bridge.allocator_certificate.stability_scope_functions
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "session-callback-overwrite",
+        "session-partial-callback-overwrite",
+        "session-helper-callback-overwrite",
+        "session-helper-partial-callback-overwrite",
+        "session-helper-cmpxchg-callback-slot",
+        "session-finite-helper-callback-overwrite",
+        "session-finite-helper-partial-callback-overwrite",
+        "session-finite-helper-cmpxchg-callback-slot",
+        "session-finite-helper-multi-hostile",
+        "session-helper-df-leak-before-backend",
+        "system-arena-callback-overlap",
+        "system-arena-cursor-overlap",
+        "system-arena-remaining-overlap",
+        "system-arena-partial-register-splice",
+        "system-arena-optional-zero-remaining",
+        "system-arena-partial-cursor-store",
+        "system-arena-fresh-size-overflow",
+    ),
+)
+def test_allocator_totality_rejects_post_init_session_overwrite(mutation):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+
+    certificate = recovery._allocator_totality_certificate(
+        fixture.allocator,
+        fixture.publishing_consumer,
+        lifetime_roots=frozenset({fixture.publishing_consumer}),
+    )
+
+    assert certificate is None
+    if mutation in {
+        "session-callback-overwrite",
+        "session-helper-callback-overwrite",
+    }:
+        callback_call = next(
+            address
+            for address in recovery._function_instruction_addresses(
+                fixture.grow_target
+            )
+            if recovery._owned_decoded(address).group(capstone.CS_GRP_CALL)
+            and any(
+                operand.type == capstone.x86_const.X86_OP_MEM
+                and recovery._absolute_memory_operand(operand)
+                == fixture.callback_slot
+                for operand in recovery._owned_decoded(address).operands
+            )
+        )
+        assert recovery.call_targets_by_source[callback_call] == {
+            *fixture.callback_targets
+        }
+
+
+def test_allocator_totality_accepts_exact_fresh_arena_capacity():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="system-arena-fresh-size-exact"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+
+    certificate = recovery._allocator_totality_certificate(
+        fixture.allocator,
+        fixture.publishing_consumer,
+        lifetime_roots=frozenset({fixture.publishing_consumer}),
+    )
+
+    assert certificate is not None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_helpers"),
+    (
+        ("session-finite-helper-benign", 1),
+        ("session-finite-helper-multi-benign", 2),
+    ),
+)
+def test_allocator_totality_binds_finite_session_helper_candidates(
+    mutation,
+    expected_helpers,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+
+    certificate = recovery._allocator_totality_certificate(
+        fixture.allocator,
+        fixture.publishing_consumer,
+        lifetime_roots=frozenset({fixture.publishing_consumer}),
+    )
+    assert certificate is not None
+    indirect_calls = tuple(
+        address
+        for address in certificate.session_slice_addresses
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_CALL)
+        and address not in recovery.direct_call_targets_by_source
+    )
+    assert len(indirect_calls) == 1
+    assert recovery.call_targets_by_source[indirect_calls[0]] == set(
+        fixture.session_helpers[:expected_helpers]
+    )
+    assert set(fixture.session_helpers[:expected_helpers]) <= set(
+        certificate.session_scope_functions
+    )
+
+
+def test_return_path_publication_backend_bridge_binds_exact_session_and_callers():
+    fixture = return_path_publication_lifecycle_image()
+    result = _direct_return_path_publication_certificate(fixture)
+
+    totality = result.recovery._allocator_totality_certificate(
+        fixture.allocator,
+        fixture.publishing_consumer,
+        lifetime_roots=frozenset({fixture.publishing_consumer}),
+    )
+    assert totality is not None
+    assert result.certificate is not None
+    assert len(result.certificate.backend_bridges) == 1
+    bridge = result.certificate.backend_bridges[0]
+    assert bridge.consumer_entry == fixture.publishing_consumer
+    assert bridge.allocator_certificate == totality
+    assert totality.session_root == fixture.session_root
+    assert totality.callback_slot == fixture.callback_slot
+    assert totality.callback_target == fixture.callback_targets[0]
+    assert totality.callback_candidate_targets == frozenset(
+        {fixture.callback_targets[0]}
+    )
+    assert totality.setjmp_target == fixture.setjmp_target
+    assert totality.context_slot == fixture.context_slot
+    assert totality.longjmp_target == fixture.longjmp_target
+    system_call = next(
+        call.address
+        for call in result.recovery.direct_calls
+        if call.target == fixture.system_allocator
+        and result.recovery._registrar_function_entry(call.address)
+        == fixture.grow_target
+    )
+    assert dict(
+        (address, (kind, values))
+        for address, kind, values in totality.call_return_domains
+    )[system_call] == ("finite", frozenset({0x00403800}))
+    assert totality.return_storage_slots == frozenset({0x004030C0})
+    assert totality.init_call_site < totality.setjmp_call_site
+    assert totality.setjmp_call_site < min(totality.backend_call_sites)
+    assert fixture.session_helper in totality.session_scope_functions
+    assert totality.setjmp_call_site in totality.session_slice_addresses
+    assert set(totality.backend_call_sites) <= set(
+        totality.session_slice_addresses
+    )
+    assert bridge.backend_root == fixture.backend_root
+    assert tuple(row.call_address for row in bridge.incoming_calls) == tuple(
+        sorted(fixture.incoming_calls)
+    )
+    assert {row.owner_entry for row in bridge.incoming_calls} == set(
+        fixture.incoming_owners
+    )
+    assert all(
+        row.call_kind == "direct" and row.raw_reconciled
+        for row in bridge.incoming_calls
+    )
+    assert {row.function_entry for row in bridge.backend_bodies} == set(
+        result.recovery._direct_function_call_closure(fixture.backend_root)
+    )
+    assert all(
+        marker in result.certificate.provenance
+        for marker in (
+            f"publication={fixture.publication:#x}",
+            f"observation={fixture.observation:#x}",
+            "slice-digest=",
+            "reference-inventory-digest=",
+            "closure-digest=",
+            f"session={fixture.session_root:#x}",
+            f"backend-root={fixture.backend_root:#x}",
+            "opaque-copy-escape=0x403044",
+        )
+    )
+    assert "no-escape" not in result.certificate.provenance
+    assert "does-not-escape" not in result.certificate.provenance
+
+
+def test_allocator_totality_cache_tracks_reachable_session_helper():
+    fixture = return_path_publication_lifecycle_image()
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    certificate = recovery._allocator_totality_certificate(
+        fixture.allocator,
+        fixture.publishing_consumer,
+        lifetime_roots=frozenset({fixture.publishing_consumer}),
+    )
+    assert certificate is not None
+    entry = next(
+        row
+        for row in recovery.allocator_totality_cache.values()
+        if row is not None and row.result == certificate
+    )
+    assert ("function", fixture.session_helper) in {
+        (kind, identifier)
+        for kind, identifier, _fingerprint in entry.dependencies
+    }
+
+    instruction_address = recovery._function_instruction_addresses(
+        fixture.session_helper
+    )[0]
+    instruction = recovery.instructions[instruction_address]
+    changed = bytearray.fromhex(instruction.bytes_hex)
+    changed[-1] ^= 1
+    recovery.instructions[instruction_address] = replace(
+        instruction,
+        bytes_hex=changed.hex(),
+    )
+    recovery.producer_function_fingerprint_cache.pop(
+        fixture.session_helper,
+        None,
+    )
+
+    assert not recovery._dependency_memo_hit(entry)
+    recomputed = recovery._allocator_totality_certificate(
+        fixture.allocator,
+        fixture.publishing_consumer,
+        lifetime_roots=frozenset({fixture.publishing_consumer}),
+    )
+    assert recomputed == certificate
+    replacement_entry = next(
+        row
+        for row in recovery.allocator_totality_cache.values()
+        if row is not None and row.result == recomputed
+    )
+    assert replacement_entry is not entry
+    assert recovery._dependency_memo_hit(replacement_entry)
+
+
 def test_publication_certificate_binds_exact_slice_and_consumer():
     fixture = return_path_publication_lifecycle_image()
     recovery = _DirectCfgRecovery(
@@ -9404,7 +10262,7 @@ def test_return_path_publication_rejects_exact_import_boundary(mutation):
 
 @pytest.mark.parametrize(
     "mutation",
-    ("sync-handle-boundary-left", "sync-handle-boundary-right"),
+    ("sync-handle-boundary-left",),
 )
 def test_return_path_publication_accepts_disjoint_sync_span_boundary(
     mutation,
@@ -14752,7 +15610,9 @@ def test_allocator_totality_cache_hit_replays_all_dependencies():
         ("function", 0x00401580),  # reset target
         ("function", 0x004015A0),  # system allocator
         ("function", 0x004015C0),  # backend/lifetime memset
+        ("function", 0x00401600),  # finite-indirect table callback
         ("global-slot", 0x00403080),
+        ("global-slot", 0x004030C0),  # system return storage
     }
     assert first is not None and second == first
     assert fresh == expected
