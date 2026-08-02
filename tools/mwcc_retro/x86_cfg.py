@@ -14,7 +14,7 @@ from bisect import bisect_left, bisect_right
 from collections import OrderedDict
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import capstone
 from capstone import (
@@ -43,8 +43,11 @@ from capstone.x86 import (
     X86_OP_REG,
     X86_REG_INVALID,
 )
+
 from tools.mwcc_retro.semantic_memo import (
     DependencyMemoEntry as _DependencyMemoEntry,
+)
+from tools.mwcc_retro.semantic_memo import (
     InMemoryReadableGlobalEffectMemoStore,
     ReadableGlobalEffectKey,
     ReadableGlobalEffectMemoStore,
@@ -201,7 +204,7 @@ _OBJECT_TAG_LIFECYCLE_CERTIFICATE_SCHEMA = (
     "mwcc-retro-x86-object-tag-lifecycle-certificate-v1"
 )
 _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS = (
-    "object-tag-lifecycle-analysis-v5"
+    "object-tag-lifecycle-analysis-v6"
 )
 _RELOCATED_REJECTION_LEDGER_SCHEMA = "mwcc-retro-relocated-rejection-ledger-v1"
 _RELOCATED_REJECTION_ANALYSIS_SEMANTICS = "relocated-rejection-analysis-v1"
@@ -1222,6 +1225,335 @@ class _ObjectTagLifecycleQuery:
             self.source_width,
             self.consumer_bindings,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _ObjectTagLifecycleConsumerBinding:
+    function_entry: int
+    movzx_address: int
+    movzx_bytes_hex: str
+    transfer_address: int
+    transfer_bytes_hex: str
+    destination_register: str
+    source_register: str
+    argument_push_address: int
+    argument_push_bytes_hex: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ObjectTagLifecycleEvaluationContext:
+    query_sha256: str
+    analysis_semantics: str
+    binding: _ObjectTagLifecycleConsumerBinding
+    consumer_entry: int
+
+
+@dataclass(frozen=True, slots=True)
+class _TrackedPublicationRoot:
+    kind: Literal["definition", "argument"]
+    identifier: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationCandidateIdentity:
+    compiler_sha256: str
+    lifecycle_query_sha256: str
+    lifecycle_analysis_semantics: str
+    consumer_binding: _ObjectTagLifecycleConsumerBinding
+    consumer_entry: int
+    caller_entry: int
+    publication_address: int
+    publication_slot: int
+    root: _TrackedPublicationRoot
+    observation_address: int
+    field_start: int
+    field_width: int
+    analysis_limits_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationCertificateLookupKey:
+    candidate_identity: _PublicationCandidateIdentity
+    control_flow_revision: int
+    producer_seed_revision: int
+    absolute_memory_write_revision: int
+    reference_classification_revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationBodyInterval:
+    start: int
+    end: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationFunctionBody:
+    function_entry: int
+    range_start: int
+    range_end: int
+    owned_intervals: tuple[_PublicationBodyInterval, ...]
+    instruction_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationCallEdge:
+    source_address: int
+    target_address: int
+    flow_kind: Literal["direct", "finite-indirect", "import"]
+    returns_to_continuation: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationRepublishCut:
+    instruction_address: int
+    old_root: _TrackedPublicationRoot
+    new_root: _TrackedPublicationRoot
+    distinct_generation_provenance: str
+    alias_deaths: tuple[_PublicationAliasDeath, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationStorageIdentity:
+    kind: Literal[
+        "register", "stack", "global-slot", "object-field", "immediate"
+    ]
+    owner_entry: int
+    address: int
+    offset: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationAliasDeath:
+    alias: _PublicationStorageIdentity
+    death_address: int
+    proof_kind: Literal["overwritten", "scope-ended", "generation-advanced"]
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationTaintOrigin:
+    origin_address: int
+    call_address: int
+    argument_index: int
+    source_kind: Literal["root-field", "derived-scalar"]
+    root_field_path: tuple[int, ...]
+    width: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationTaintFlow:
+    origin: _PublicationTaintOrigin
+    instruction_address: int
+    operation: Literal["copy", "store", "reload", "compare", "mask", "test"]
+    source: _PublicationStorageIdentity
+    destination: _PublicationStorageIdentity
+    width: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationOpaqueCopyDestination:
+    origin: _PublicationTaintOrigin
+    instruction_address: int
+    destination: _PublicationStorageIdentity
+    width: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationOwnedInstructionSource:
+    kind: Literal["owned-instruction"]
+    owner_instruction_address: int
+    owner_function_entry: int
+    range_start: int
+    range_end: int
+    owned_interval: _PublicationBodyInterval
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationTypedDataSource:
+    kind: Literal["typed-data"]
+    region_start: int
+    region_end: int
+    provenance: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationProvisionalExecutableSource:
+    kind: Literal["provisional-unowned-executable"]
+    interval_start: int
+    interval_end: int
+    bytes_sha256: str
+    current_ownership_sha256: str
+
+
+_PublicationReferenceSource = (
+    _PublicationOwnedInstructionSource
+    | _PublicationTypedDataSource
+    | _PublicationProvisionalExecutableSource
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationReferenceRow:
+    reference_start: int
+    reference_end: int
+    bytes_hex: str
+    relocation_type: int | None
+    reference_class: Literal[
+        "type-3-relocation",
+        "immediate",
+        "displacement",
+        "absolute-memory",
+        "lea",
+    ]
+    source: _PublicationReferenceSource
+    target_slot: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationReferenceInventory:
+    slot: int
+    rows: tuple[_PublicationReferenceRow, ...]
+    control_flow_revision: int
+    producer_seed_revision: int
+    absolute_memory_write_revision: int
+    reference_classification_revision: int
+    current_ownership_sha256: str
+    sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationReferenceDisjointnessWitness:
+    reference: _PublicationReferenceRow
+    returning_body: _PublicationFunctionBody
+    declared_range_relation: Literal["disjoint"]
+    owned_intervals_relation: Literal["disjoint"]
+    fixed_point_ownership_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationFiniteAddressDomain:
+    kind: Literal["finite"]
+    values: frozenset[int]
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationUnknownMappedGlobalDomain:
+    kind: Literal["unknown-mapped-global"]
+    mapped_intervals: tuple[_PublicationBodyInterval, ...]
+
+
+_PublicationAddressDomain = (
+    _PublicationFiniteAddressDomain | _PublicationUnknownMappedGlobalDomain
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationBodyAddressDomainWitness:
+    returning_body: _PublicationFunctionBody
+    instruction_addresses: tuple[int, ...]
+    instruction_bytes_sha256: str
+    input_domain: _PublicationAddressDomain
+    output_domain: _PublicationAddressDomain
+    protected_slot_relation: Literal["disjoint"]
+    function_dependency: tuple[Literal["function"], int, str]
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationReferenceReconciliationObligation:
+    certificate_sha256: str
+    reference: _PublicationReferenceRow
+    fixed_point_ownership_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationImportArgumentEffect:
+    argument_index: int
+    origin: _PublicationTaintOrigin | None
+    alias_class: Literal["disjoint", "protected", "opaque-taint"]
+    effect: Literal["scalar", "fresh-size", "mutates-sync", "handle-query"]
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationImportContract:
+    dll: str
+    name: str | None
+    ordinal: int | None
+    effect: Literal[
+        "sync-enter",
+        "sync-leave",
+        "fresh-allocation",
+        "last-error",
+        "flags-query",
+    ]
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationImportWitness:
+    call_address: int
+    iat_va: int
+    dll: str
+    lookup_mode: Literal["name", "ordinal"]
+    name: str | None
+    ordinal: int | None
+    hint: int | None
+    effect: Literal[
+        "sync-enter",
+        "sync-leave",
+        "fresh-allocation",
+        "last-error",
+        "flags-query",
+    ]
+    argument_effects: tuple[_PublicationImportArgumentEffect, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationIncomingCall:
+    call_address: int
+    owner_entry: int
+    call_kind: Literal["direct", "finite-indirect"]
+    raw_reconciled: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationBackendBridge:
+    consumer_entry: int
+    incoming_calls: tuple[_PublicationIncomingCall, ...]
+    allocator_certificate: _AllocatorTotalityCertificate
+    backend_root: int
+    backend_bodies: tuple[_PublicationFunctionBody, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ReturnPathPublicationNoninterferenceCertificate:
+    compiler_sha256: str
+    lifecycle_analysis_semantics: str
+    lifecycle_query_sha256: str
+    consumer_binding: _ObjectTagLifecycleConsumerBinding
+    caller_entry: int
+    root: _TrackedPublicationRoot
+    publication_address: int
+    publication_slot: int
+    observation_address: int
+    field_start: int
+    field_width: int
+    same_generation_slice: frozenset[int]
+    republish_cuts: tuple[_PublicationRepublishCut, ...]
+    returning_bodies: tuple[_PublicationFunctionBody, ...]
+    call_edges: tuple[_PublicationCallEdge, ...]
+    candidate_targets: frozenset[int]
+    taint_origins: tuple[_PublicationTaintOrigin, ...]
+    taint_flows: tuple[_PublicationTaintFlow, ...]
+    reference_inventory: _PublicationReferenceInventory
+    reference_disjointness: tuple[
+        _PublicationReferenceDisjointnessWitness, ...
+    ]
+    body_address_domains: tuple[_PublicationBodyAddressDomainWitness, ...]
+    imports: tuple[_PublicationImportWitness, ...]
+    opaque_copy_destinations: tuple[_PublicationOpaqueCopyDestination, ...]
+    backend_bridges: tuple[_PublicationBackendBridge, ...]
+    summary_fact_signature: tuple[int, ...]
+    control_flow_revision: int
+    producer_seed_revision: int
+    absolute_memory_write_revision: int
 
 
 def _strict_json_object(raw: bytes, *, path: Path) -> dict[str, Any]:
@@ -2422,6 +2754,7 @@ class _DirectCfgRecovery:
         self.absolute_memory_writes: dict[int, set[int]] = {}
         self.absolute_memory_write_count = 0
         self.absolute_memory_write_revision = 0
+        self.reference_classification_revision = 0
         self.dynamic_field_writes: dict[int, set[_DynamicFieldWrite]] = {}
         self.dynamic_field_write_count = 0
         self.dynamic_field_cache: dict[
@@ -2665,6 +2998,13 @@ class _DirectCfgRecovery:
         self.summary_successors_cache: dict[tuple[Any, ...], tuple[int, ...]] = {}
         self.function_reachability_cache: dict[tuple[Any, ...], bool] = {}
         self.field_preservation_cache: dict[tuple[Any, ...], bool] = {}
+        self.object_tag_lifecycle_evaluation_contexts: list[
+            _ObjectTagLifecycleEvaluationContext
+        ] = []
+        self.return_path_publication_certificate_memo: dict[
+            _PublicationCertificateLookupKey,
+            _DependencyMemoEntry,
+        ] = {}
         self.field_read_avoidance_cache: dict[tuple[Any, ...], bool] = {}
         self.zeroing_wrapper_cache: dict[tuple[Any, ...], int | None] = {}
         self.zeroed_field_return_cache: dict[tuple[Any, ...], bool] = {}
@@ -5067,19 +5407,50 @@ class _DirectCfgRecovery:
             )
             values: set[int] = set()
             details = []
-            for binding in bindings:
-                result = self._object_tag_lifecycle_register_values_before(
-                    binding[1],
-                    binding[6],
-                    binding[0],
-                    query.field_path,
-                    frozenset(),
+            for raw_binding in bindings:
+                binding = _ObjectTagLifecycleConsumerBinding(
+                    function_entry=raw_binding[0],
+                    movzx_address=raw_binding[1],
+                    movzx_bytes_hex=raw_binding[2],
+                    transfer_address=raw_binding[3],
+                    transfer_bytes_hex=raw_binding[4],
+                    destination_register=raw_binding[5],
+                    source_register=raw_binding[6],
+                    argument_push_address=raw_binding[7],
+                    argument_push_bytes_hex=raw_binding[8],
                 )
+                context = _ObjectTagLifecycleEvaluationContext(
+                    query_sha256=query.sha256,
+                    analysis_semantics=query.analysis_semantics,
+                    binding=binding,
+                    consumer_entry=binding.function_entry,
+                )
+                self.object_tag_lifecycle_evaluation_contexts.append(
+                    context
+                )
+                try:
+                    result = (
+                        self._object_tag_lifecycle_register_values_before(
+                            binding.movzx_address,
+                            binding.source_register,
+                            binding.function_entry,
+                            query.field_path,
+                            frozenset(),
+                        )
+                    )
+                finally:
+                    if (
+                        self.object_tag_lifecycle_evaluation_contexts.pop()
+                        is not context
+                    ):
+                        raise CfgRecoveryError(
+                            "object-tag lifecycle context stack is corrupted"
+                        )
                 if result is None:
                     return None
                 values.update(result[0])
                 details.append(
-                    f"consumer={binding[3]:#x};{result[1]}"
+                    f"consumer={binding.transfer_address:#x};{result[1]}"
                 )
             if not values:
                 return None
@@ -37825,6 +38196,676 @@ class _DirectCfgRecovery:
                 return True
         return False
 
+    def _publication_current_ownership_sha256(self) -> str:
+        rows = {
+            "byte_owners": tuple(sorted(self.byte_owners.items())),
+            "function_entries": tuple(sorted(self.function_addresses)),
+            "instructions": tuple(
+                (
+                    address,
+                    self.instructions[address].bytes_hex,
+                    self.byte_owners.get(address),
+                )
+                for address in sorted(self.instructions)
+            ),
+        }
+        return hashlib.sha256(_canonical_json_bytes(rows)).hexdigest()
+
+    def _return_path_publication_noninterference_certificate(
+        self,
+        *,
+        publication_address: int,
+        publication_slot: int,
+        caller_entry: int,
+        root: _TrackedPublicationRoot,
+        observation_address: int,
+        field_start: int,
+        field_width: int,
+        relative_states,
+    ) -> _ReturnPathPublicationNoninterferenceCertificate | None:
+        """Certify one exact publication/observation generation slice.
+
+        Returning-call, reference, import, and backend closure fields remain
+        empty here. Later proof stages fill them without widening this
+        lifecycle-only admission boundary.
+        """
+        if not self.object_tag_lifecycle_evaluation_contexts:
+            return None
+        context = self.object_tag_lifecycle_evaluation_contexts[-1]
+        if (
+            context.analysis_semantics
+            != _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
+        ):
+            return None
+        if (
+            caller_entry != context.consumer_entry
+            or caller_entry != context.binding.function_entry
+        ):
+            return None
+        if root.kind not in {"definition", "argument"}:
+            return None
+        limits_sha256 = hashlib.sha256(
+            _canonical_json_bytes(asdict(self.limits))
+        ).hexdigest()
+        candidate_identity = _PublicationCandidateIdentity(
+            compiler_sha256=self.image.sha256,
+            lifecycle_query_sha256=context.query_sha256,
+            lifecycle_analysis_semantics=context.analysis_semantics,
+            consumer_binding=context.binding,
+            consumer_entry=context.consumer_entry,
+            caller_entry=caller_entry,
+            publication_address=publication_address,
+            publication_slot=publication_slot,
+            root=root,
+            observation_address=observation_address,
+            field_start=field_start,
+            field_width=field_width,
+            analysis_limits_sha256=limits_sha256,
+        )
+        lookup_key = _PublicationCertificateLookupKey(
+            candidate_identity=candidate_identity,
+            control_flow_revision=self.control_flow_revision,
+            producer_seed_revision=self.producer_seed_revision,
+            absolute_memory_write_revision=(
+                self.absolute_memory_write_revision
+            ),
+            reference_classification_revision=(
+                self.reference_classification_revision
+            ),
+        )
+        cached = self.return_path_publication_certificate_memo.get(
+            lookup_key
+        )
+        if cached is not None and self._dependency_memo_hit(cached):
+            return (
+                cached.result
+                if isinstance(
+                    cached.result,
+                    _ReturnPathPublicationNoninterferenceCertificate,
+                )
+                else None
+            )
+
+        dependencies = {("function", caller_entry)}
+        self.producer_dependency_collectors.append(dependencies)
+        try:
+            result = self._compute_return_path_publication_slice_certificate(
+                context=context,
+                publication_address=publication_address,
+                publication_slot=publication_slot,
+                caller_entry=caller_entry,
+                root=root,
+                observation_address=observation_address,
+                field_start=field_start,
+                field_width=field_width,
+                relative_states=relative_states,
+            )
+        except AnalysisLimitError:
+            result = None
+        finally:
+            popped = self.producer_dependency_collectors.pop()
+            if popped is not dependencies:
+                raise CfgRecoveryError(
+                    "publication dependency collector stack is corrupted"
+                )
+            self._propagate_producer_dependencies(dependencies)
+        snapshot = self._producer_dependency_snapshot(dependencies)
+        self.return_path_publication_certificate_memo[lookup_key] = (
+            _DependencyMemoEntry(
+                image_sha256=self.image.sha256,
+                dependencies=snapshot,
+                result=result,
+            )
+        )
+        return result
+
+    def _compute_return_path_publication_slice_certificate(
+        self,
+        *,
+        context: _ObjectTagLifecycleEvaluationContext,
+        publication_address: int,
+        publication_slot: int,
+        caller_entry: int,
+        root: _TrackedPublicationRoot,
+        observation_address: int,
+        field_start: int,
+        field_width: int,
+        relative_states,
+    ) -> _ReturnPathPublicationNoninterferenceCertificate | None:
+        if (
+            not isinstance(relative_states, dict)
+            or field_width <= 0
+            or not _is_mapped_span(self.image, publication_slot, 4)
+            or _is_executable_span(self.image, publication_slot, 4)
+            or self._registrar_function_entry(publication_address)
+            != caller_entry
+            or self._registrar_function_entry(observation_address)
+            != caller_entry
+        ):
+            return None
+        publication = self._owned_decoded(publication_address)
+        if (
+            publication.id != X86_INS_MOV
+            or len(publication.operands) != 2
+            or publication.operands[0].type != X86_OP_MEM
+            or publication.operands[0].size != 4
+            or self._absolute_memory_operand(publication.operands[0])
+            != publication_slot
+            or publication.operands[1].type != X86_OP_REG
+            or not any(
+                row.type == 3
+                and row.va == publication.address + publication.disp_offset
+                for row in self.image.relocations
+            )
+        ):
+            return None
+        argument_index = root.identifier if root.kind == "argument" else None
+        if root.kind == "definition" and root.identifier not in self.instructions:
+            return None
+        if self._relative_operand_offsets(
+            publication.address,
+            publication.operands[1],
+            caller_entry,
+            argument_index,
+            relative_states,
+        ) != frozenset({0}):
+            return None
+        publication_state = relative_states.get(publication.address)
+        observation_state = relative_states.get(observation_address)
+        if (
+            publication_state is None
+            or observation_state is None
+            or publication_state[1] != 2
+            or observation_state[1] != 2
+        ):
+            return None
+        observation = self._owned_decoded(observation_address)
+        if (
+            observation_address != context.binding.movzx_address
+            or bytes(observation.bytes).hex()
+            != context.binding.movzx_bytes_hex
+            or observation.id != x86_const.X86_INS_MOVZX
+            or len(observation.operands) != 2
+            or observation.operands[0].type != X86_OP_REG
+            or observation.operands[0].size != 4
+            or self._register_family(observation.operands[0].reg)
+            != context.binding.destination_register
+            or observation.operands[1].type != X86_OP_MEM
+            or not observation.operands[1].access & CS_AC_READ
+            or observation.operands[1].size != 1
+            or observation.operands[1].mem.segment != X86_REG_INVALID
+            or observation.operands[1].mem.base == X86_REG_INVALID
+            or self._register_family(observation.operands[1].mem.base)
+            != context.binding.source_register
+            or observation.operands[1].mem.index != X86_REG_INVALID
+        ):
+            return None
+        source_operand = observation.operands[1]
+        base_values = observation_state[0][
+            _REGISTER_FAMILIES.index(context.binding.source_register)
+        ]
+        observed_start = source_operand.mem.disp
+        if (
+            base_values != frozenset({0})
+            or observed_start < field_start
+            or observed_start + source_operand.size
+            > field_start + field_width
+        ):
+            return None
+
+        following_entry = self._following_function_entry(caller_entry)
+        same_generation_slice = frozenset(
+            address
+            for address in self._function_instruction_addresses(caller_entry)
+            if self._reachable_within_function(
+                publication_address,
+                address,
+                caller_entry,
+                following_entry,
+            )
+            and self._reachable_within_function(
+                address,
+                observation_address,
+                caller_entry,
+                following_entry,
+            )
+        )
+        if (
+            publication_address not in same_generation_slice
+            or observation_address not in same_generation_slice
+            or any(
+                entry != caller_entry and entry in same_generation_slice
+                for entry in self.function_addresses
+            )
+            or any(
+                address != publication_address
+                and any(
+                    source not in same_generation_slice
+                    for source, _kind in self.incoming_edges.get(address, ())
+                )
+                for address in same_generation_slice
+            )
+        ):
+            return None
+
+        republish_cuts = self._publication_republish_cuts(
+            publication_address=publication_address,
+            publication_slot=publication_slot,
+            caller_entry=caller_entry,
+            root=root,
+            observation_address=observation_address,
+            initial_source=publication.operands[1],
+        )
+        if republish_cuts is None:
+            return None
+
+        self._note_producer_dependency(caller_entry)
+        self._note_producer_global_slot_dependency(publication_slot)
+        ownership_sha256 = self._publication_current_ownership_sha256()
+        inventory_payload = {
+            "slot": publication_slot,
+            "rows": (),
+            "control_flow_revision": self.control_flow_revision,
+            "producer_seed_revision": self.producer_seed_revision,
+            "absolute_memory_write_revision": (
+                self.absolute_memory_write_revision
+            ),
+            "reference_classification_revision": (
+                self.reference_classification_revision
+            ),
+            "current_ownership_sha256": ownership_sha256,
+        }
+        reference_inventory = _PublicationReferenceInventory(
+            **inventory_payload,
+            sha256=hashlib.sha256(
+                _canonical_json_bytes(inventory_payload)
+            ).hexdigest(),
+        )
+        return _ReturnPathPublicationNoninterferenceCertificate(
+            compiler_sha256=self.image.sha256,
+            lifecycle_analysis_semantics=context.analysis_semantics,
+            lifecycle_query_sha256=context.query_sha256,
+            consumer_binding=context.binding,
+            caller_entry=caller_entry,
+            root=root,
+            publication_address=publication_address,
+            publication_slot=publication_slot,
+            observation_address=observation_address,
+            field_start=field_start,
+            field_width=field_width,
+            same_generation_slice=same_generation_slice,
+            republish_cuts=republish_cuts,
+            returning_bodies=(),
+            call_edges=(),
+            candidate_targets=frozenset(),
+            taint_origins=(),
+            taint_flows=(),
+            reference_inventory=reference_inventory,
+            reference_disjointness=(),
+            body_address_domains=(),
+            imports=(),
+            opaque_copy_destinations=(),
+            backend_bridges=(),
+            summary_fact_signature=self._summary_fact_signature(),
+            control_flow_revision=self.control_flow_revision,
+            producer_seed_revision=self.producer_seed_revision,
+            absolute_memory_write_revision=(
+                self.absolute_memory_write_revision
+            ),
+        )
+
+    def _publication_instruction_must_reach(
+        self,
+        start_address: int,
+        instruction_address: int,
+        target_address: int,
+        function_entry: int,
+        following_entry: int,
+    ) -> bool:
+        """Require one instruction on every local path to the target."""
+        return (
+            self._reachable_within_function(
+                start_address,
+                instruction_address,
+                function_entry,
+                following_entry,
+            )
+            and self._reachable_within_function(
+                instruction_address,
+                target_address,
+                function_entry,
+                following_entry,
+            )
+            and not self._reachable_within_function(
+                start_address,
+                target_address,
+                function_entry,
+                following_entry,
+                excluded=instruction_address,
+            )
+        )
+
+    def _publication_push_alias_scope_death(
+        self,
+        push_address: int,
+        target_address: int,
+        function_entry: int,
+        following_entry: int,
+    ) -> int | None:
+        """Close one implicit stack alias through an exact call cleanup."""
+        for call_address in self._function_instruction_addresses(
+            function_entry
+        ):
+            if not push_address < call_address < target_address:
+                continue
+            call = self._owned_decoded(call_address)
+            if not call.group(CS_GRP_CALL):
+                continue
+            pushed = self._pushed_call_argument(call_address, 0)
+            if pushed is None or pushed[0].address != push_address:
+                continue
+            cleanup_address = call.address + call.size
+            if cleanup_address not in self.instructions:
+                continue
+            cleanup = self._owned_decoded(cleanup_address)
+            exact_cleanup = (
+                cleanup.mnemonic == "add"
+                and len(cleanup.operands) == 2
+                and cleanup.operands[0].type == X86_OP_REG
+                and self._register_family(cleanup.operands[0].reg) == "esp"
+                and cleanup.operands[1].type == X86_OP_IMM
+                and cleanup.operands[1].imm == 4
+            )
+            if exact_cleanup and self._publication_instruction_must_reach(
+                push_address,
+                cleanup_address,
+                target_address,
+                function_entry,
+                following_entry,
+            ):
+                return cleanup_address
+        return None
+
+    def _publication_republish_cuts(
+        self,
+        *,
+        publication_address: int,
+        publication_slot: int,
+        caller_entry: int,
+        root: _TrackedPublicationRoot,
+        observation_address: int,
+        initial_source,
+    ) -> tuple[_PublicationRepublishCut, ...] | None:
+        following_entry = self._following_function_entry(caller_entry)
+        stores = []
+        for address in self._function_instruction_addresses(caller_entry):
+            if address == publication_address:
+                continue
+            decoded = self._owned_decoded(address)
+            if (
+                decoded.id == X86_INS_MOV
+                and len(decoded.operands) == 2
+                and decoded.operands[0].type == X86_OP_MEM
+                and self._absolute_memory_operand(decoded.operands[0])
+                == publication_slot
+                and self._reachable_within_function(
+                    publication_address,
+                    address,
+                    caller_entry,
+                    following_entry,
+                )
+            ):
+                stores.append(decoded)
+        cuts = []
+        argument_index = root.identifier if root.kind == "argument" else None
+        root_definition = root.identifier if root.kind == "definition" else None
+        root_family = self._register_family(initial_source.reg)
+        root_source = (
+            self._owned_decoded(root.identifier).operands[1]
+            if root.kind == "definition"
+            else None
+        )
+        root_argument = (
+            argument_index
+            if argument_index is not None
+            else self._stack_argument_index_at(
+                root.identifier,
+                root_source,
+                caller_entry,
+            )
+        )
+        for store in stores:
+            if self._reachable_within_function(
+                store.address,
+                observation_address,
+                caller_entry,
+                following_entry,
+            ):
+                return None
+            if (
+                store.operands[0].size != 4
+                or store.operands[1].type != X86_OP_REG
+                or not any(
+                    row.type == 3
+                    and row.va == store.address + store.disp_offset
+                    for row in self.image.relocations
+                )
+            ):
+                return None
+            states = self._relative_pointer_states(
+                caller_entry,
+                root_definition=root_definition,
+                argument_index=argument_index,
+                propagate_call_returns=True,
+                allow_partial_taint=True,
+                stop_address=store.address,
+            )
+            if states is None:
+                return None
+            store_state = states.get(store.address)
+            if store_state is None or any(store_state[0]):
+                return None
+            source_offsets = self._relative_operand_offsets(
+                store.address,
+                store.operands[1],
+                caller_entry,
+                argument_index,
+                states,
+            )
+            if source_offsets:
+                return None
+            new_family = self._register_family(store.operands[1].reg)
+            allocation_origins = self._fresh_allocation_origin_calls_before(
+                store.address,
+                new_family,
+                caller_entry,
+            )
+            if allocation_origins is None or len(allocation_origins) != 1:
+                return None
+            allocation_call = next(iter(allocation_origins))
+
+            register_death = None
+            stack_death = None
+            implicit_stack_deaths = []
+            alias_scan_start = (
+                root_definition
+                if root_definition is not None
+                else caller_entry
+            )
+            for address in self._function_instruction_addresses(caller_entry):
+                if not alias_scan_start <= address < store.address:
+                    continue
+                decoded = self._owned_decoded(address)
+                if (
+                    publication_address < address
+                    and decoded.id == X86_INS_XOR
+                    and len(decoded.operands) == 2
+                    and all(
+                        operand.type == X86_OP_REG
+                        and self._register_family(operand.reg) == root_family
+                        for operand in decoded.operands
+                    )
+                ):
+                    register_death = address
+                if (
+                    publication_address < address
+                    and root_argument is not None
+                    and decoded.id == X86_INS_MOV
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_MEM
+                    and decoded.operands[0].size == 4
+                    and self._stack_argument_index_at(
+                        address,
+                        decoded.operands[0],
+                        caller_entry,
+                    )
+                    == root_argument
+                    and decoded.operands[1].type == X86_OP_IMM
+                    and decoded.operands[1].imm & 0xFFFF_FFFF == 0
+                ):
+                    stack_death = address
+                try:
+                    memory_writes = self._instruction_value_flow(
+                        decoded
+                    ).memory_writes
+                except CfgRecoveryError:
+                    return None
+                if (
+                    memory_writes
+                    and decoded.id not in {X86_INS_MOV, X86_INS_PUSH}
+                ):
+                    return None
+                if (
+                    decoded.id == X86_INS_MOV
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_MEM
+                    and address != publication_address
+                    and self._relative_operand_offsets(
+                        address,
+                        decoded.operands[1],
+                        caller_entry,
+                        argument_index,
+                        states,
+                    )
+                ):
+                    return None
+                if (
+                    decoded.id == X86_INS_PUSH
+                    and len(decoded.operands) == 1
+                    and self._reachable_within_function(
+                        address,
+                        store.address,
+                        caller_entry,
+                        following_entry,
+                    )
+                    and self._relative_operand_offsets(
+                        address,
+                        decoded.operands[0],
+                        caller_entry,
+                        argument_index,
+                        states,
+                    )
+                ):
+                    alias_target = (
+                        publication_address
+                        if address < publication_address
+                        else store.address
+                    )
+                    cleanup = self._publication_push_alias_scope_death(
+                        address,
+                        alias_target,
+                        caller_entry,
+                        following_entry,
+                    )
+                    if cleanup is None:
+                        return None
+                    implicit_stack_deaths.append(
+                        _PublicationAliasDeath(
+                            alias=_PublicationStorageIdentity(
+                                kind="stack",
+                                owner_entry=caller_entry,
+                                address=address,
+                                offset=0,
+                            ),
+                            death_address=cleanup,
+                            proof_kind="scope-ended",
+                        )
+                    )
+            if register_death is None or (
+                root_argument is not None and stack_death is None
+            ):
+                return None
+            if not self._publication_instruction_must_reach(
+                publication_address,
+                register_death,
+                store.address,
+                caller_entry,
+                following_entry,
+            ) or (
+                stack_death is not None
+                and not self._publication_instruction_must_reach(
+                    publication_address,
+                    stack_death,
+                    store.address,
+                    caller_entry,
+                    following_entry,
+                )
+            ):
+                return None
+            deaths = [
+                _PublicationAliasDeath(
+                    alias=_PublicationStorageIdentity(
+                        kind="register",
+                        owner_entry=caller_entry,
+                        address=publication_address,
+                        offset=_REGISTER_FAMILIES.index(root_family),
+                    ),
+                    death_address=register_death,
+                    proof_kind="overwritten",
+                )
+            ]
+            if stack_death is not None and root_argument is not None:
+                deaths.append(
+                    _PublicationAliasDeath(
+                        alias=_PublicationStorageIdentity(
+                            kind="stack",
+                            owner_entry=caller_entry,
+                            address=caller_entry,
+                            offset=root_argument * 4,
+                        ),
+                        death_address=stack_death,
+                        proof_kind="overwritten",
+                    )
+                )
+            deaths.extend(implicit_stack_deaths)
+            cuts.append(
+                _PublicationRepublishCut(
+                    instruction_address=store.address,
+                    old_root=root,
+                    new_root=_TrackedPublicationRoot(
+                        kind="definition",
+                        identifier=allocation_call,
+                    ),
+                    distinct_generation_provenance=(
+                        f"fresh-allocation-call={allocation_call:#x};"
+                        f"alias-deaths={len(deaths)}"
+                    ),
+                    alias_deaths=tuple(
+                        sorted(
+                            deaths,
+                            key=lambda row: (
+                                row.alias.kind,
+                                row.alias.owner_entry,
+                                row.alias.address,
+                                row.alias.offset,
+                                row.death_address,
+                            ),
+                        )
+                    ),
+                )
+            )
+        return tuple(sorted(cuts, key=lambda row: row.instruction_address))
+
     def _pointer_definition_preserves_field_before(
         self,
         root_definition: int,
@@ -37909,7 +38950,28 @@ class _DirectCfgRecovery:
                         address, source, function_entry, states
                     )
                 ):
-                    return False
+                    publication_slot = self._absolute_memory_operand(
+                        destination
+                    )
+                    certificate = (
+                        None
+                        if publication_slot is None
+                        else self._return_path_publication_noninterference_certificate(
+                            publication_address=address,
+                            publication_slot=publication_slot,
+                            caller_entry=function_entry,
+                            root=_TrackedPublicationRoot(
+                                kind="definition",
+                                identifier=root_definition,
+                            ),
+                            observation_address=end_address,
+                            field_start=field,
+                            field_width=4,
+                            relative_states=states,
+                        )
+                    )
+                    if certificate is None:
+                        return False
             if not decoded.group(CS_GRP_CALL):
                 continue
             targets = tuple(sorted(self.call_targets_by_source.get(address, ())))
@@ -42465,6 +43527,11 @@ class _DirectCfgRecovery:
             *key,
             self._summary_fact_signature(),
             self.control_flow_revision,
+            (
+                self.object_tag_lifecycle_evaluation_contexts[-1]
+                if self.object_tag_lifecycle_evaluation_contexts
+                else None
+            ),
         )
         if cache_key in self.field_preservation_cache:
             return self.field_preservation_cache[cache_key]
@@ -42551,18 +43618,46 @@ class _DirectCfgRecovery:
                         states,
                     )
                 ):
-                    if not self._is_stack_backed_memory(
-                        address,
-                        destination,
-                        function_entry,
-                    ):
-                        return False
-                    stack_offset = self._stack_operand_logical_offset(
+                    stack_backed = self._is_stack_backed_memory(
                         address,
                         destination,
                         function_entry,
                     )
-                    if (address, stack_offset) not in local_stack_aliases:
+                    stack_offset = (
+                        self._stack_operand_logical_offset(
+                            address,
+                            destination,
+                            function_entry,
+                        )
+                        if stack_backed
+                        else None
+                    )
+                    if stack_backed and (
+                        address,
+                        stack_offset,
+                    ) in local_stack_aliases:
+                        continue
+                    publication_slot = self._absolute_memory_operand(
+                        destination
+                    )
+                    certificate = (
+                        None
+                        if publication_slot is None
+                        else self._return_path_publication_noninterference_certificate(
+                            publication_address=address,
+                            publication_slot=publication_slot,
+                            caller_entry=function_entry,
+                            root=_TrackedPublicationRoot(
+                                kind="argument",
+                                identifier=argument_index,
+                            ),
+                            observation_address=end_address,
+                            field_start=field,
+                            field_width=4,
+                            relative_states=states,
+                        )
+                    )
+                    if certificate is None:
                         return False
             if not decoded.group(CS_GRP_CALL):
                 continue

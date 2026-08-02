@@ -3395,7 +3395,7 @@ def return_path_publication_lifecycle_image(
     recursive_call = cursor
     cursor = emit_call(cursor, publishing_consumer)
     recursive_cleanup = cursor
-    cursor = emit(cursor, "59")
+    cursor = emit(cursor, "83 c4 04")
     publication = cursor
     if mutation == "partial-publication":
         cursor = emit_abs(cursor, "66 89 35", publication_slot)
@@ -3456,10 +3456,6 @@ def return_path_publication_lifecycle_image(
     emit(cursor, "eb fe")
 
     slice_addresses = (
-        root_definition,
-        recursive_push,
-        recursive_call,
-        recursive_cleanup,
         publication,
         flag_compare,
         republish_branch,
@@ -3484,9 +3480,11 @@ def return_path_publication_lifecycle_image(
             cursor,
             f"c7 46 16 {0x1200 + tag:08x}",
         )
+        if mutation != "different-observation-root":
+            cursor = emit(cursor, "56")
+            cursor = emit_call(cursor, minimum_consumer)
+            cursor = emit(cursor, "59")
         cursor = emit(cursor, "56")
-        cursor = emit_call(cursor, minimum_consumer)
-        cursor = emit(cursor, "59 56")
         incoming_calls.append(cursor)
         cursor = emit_call(cursor, publishing_consumer)
         cursor = emit(cursor, "59 5e c3")
@@ -3762,6 +3760,272 @@ def return_path_publication_lifecycle_image(
         callback_targets=(installed_callback, default_callback),
         session_root=session_root,
         backend_root=backend_root,
+    )
+
+
+def _return_path_publication_hostile_alias_image(
+    *,
+    bypass_stack_death: bool = False,
+    leave_implicit_stack_alias: bool = False,
+    pop_cleanup_alias: bool = False,
+    xchg_memory_alias: bool = False,
+    cmpxchg_memory_alias: bool = False,
+    stosd_memory_alias: bool = False,
+):
+    """Make one local alias-death obligation hostile before republish."""
+    assert sum(
+        (
+            bypass_stack_death,
+            leave_implicit_stack_alias,
+            pop_cleanup_alias,
+            xchg_memory_alias,
+            cmpxchg_memory_alias,
+            stosd_memory_alias,
+        )
+    ) == 1
+    fixture = return_path_publication_lifecycle_image()
+    branch_address = fixture.slice_addresses[2]
+    branch = fixture.image.read(branch_address, 2)
+    assert branch[0] == 0x75
+    republish_start = branch_address + 2 + int.from_bytes(
+        branch[1:],
+        "little",
+        signed=True,
+    )
+    encoded = bytearray()
+    extra_relocations = []
+
+    def emit(raw: bytes) -> int:
+        address = republish_start + len(encoded)
+        encoded.extend(raw)
+        return address
+
+    emit(b"\x6a\x20")
+    allocator_call = emit(b"\xe8\x00\x00\x00\x00")
+    struct.pack_into(
+        "<i",
+        encoded,
+        allocator_call - republish_start + 1,
+        fixture.allocator - (allocator_call + 5),
+    )
+    emit(b"\x59\x85\xc0")
+    allocation_failure_branch = emit(b"\x74\x00")
+    emit(b"\x89\xc3" if stosd_memory_alias else b"\x89\xc7")
+    if xchg_memory_alias:
+        xchg_alias = emit(
+            b"\x87\x35" + fixture.callback_slot.to_bytes(4, "little")
+        )
+        extra_relocations.append(xchg_alias + 2)
+    if cmpxchg_memory_alias:
+        cmpxchg_alias = emit(
+            b"\x0f\xb1\x35"
+            + fixture.callback_slot.to_bytes(4, "little")
+        )
+        extra_relocations.append(cmpxchg_alias + 3)
+    if stosd_memory_alias:
+        emit(b"\x89\xf0")
+        stos_destination = emit(
+            b"\xbf" + fixture.callback_slot.to_bytes(4, "little")
+        )
+        extra_relocations.append(stos_destination + 1)
+        emit(b"\xab\x89\xdf\x31\xc0")
+    bypass_branch = None
+    if bypass_stack_death:
+        emit(b"\x85\xc9")
+        bypass_branch = emit(b"\x75\x00")
+    stack_death = emit(b"\xc7\x44\x24\x0c\x00\x00\x00\x00")
+    if leave_implicit_stack_alias:
+        emit(b"\x56")
+    register_death = emit(b"\x31\xf6")
+    republish_store = emit(
+        b"\x89\x3d" + fixture.publication_slot.to_bytes(4, "little")
+    )
+    emit(b"\x5f\x5e\xc3")
+    failure = republish_start + len(encoded)
+    callback_call = emit(b"\xe8\x00\x00\x00\x00")
+    struct.pack_into(
+        "<i",
+        encoded,
+        callback_call - republish_start + 1,
+        fixture.callback_targets[0] - (callback_call + 5),
+    )
+    emit(b"\xeb\xfe")
+    encoded[allocation_failure_branch - republish_start + 1] = (
+        failure - (allocation_failure_branch + 2)
+    )
+    if bypass_branch is not None:
+        encoded[bypass_branch - republish_start + 1] = (
+            register_death - (bypass_branch + 2)
+        )
+
+    data = bytearray(fixture.image.data)
+    if pop_cleanup_alias:
+        publication_offset = fixture.image.va_to_offset(fixture.publication)
+        function_offset = fixture.image.va_to_offset(
+            fixture.publishing_consumer
+        )
+        assert publication_offset is not None and function_offset is not None
+        cleanup_offset = data.rfind(
+            b"\x83\xc4\x04",
+            function_offset,
+            publication_offset,
+        )
+        assert cleanup_offset >= 0
+        data[cleanup_offset : cleanup_offset + 3] = b"\x59\x90\x90"
+    offset = fixture.image.va_to_offset(republish_start)
+    assert offset is not None
+    data[offset : offset + len(encoded)] = encoded
+    end = republish_start + len(encoded)
+    relocations = tuple(
+        row
+        for row in fixture.image.relocations
+        if not republish_start <= row.va < end
+    ) + tuple(
+        pe_mod.Relocation(address, 3)
+        for address in (*extra_relocations, republish_store + 2)
+    )
+    image = replace(
+        fixture.image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        relocations=tuple(sorted(relocations, key=lambda row: row.va)),
+    )
+    return replace(fixture, image=image), stack_death, republish_store
+
+
+def _return_path_publication_root_definition(recovery, fixture):
+    publication = recovery._owned_decoded(fixture.publication)
+    source_family = recovery._register_family(publication.operands[1].reg)
+    definitions = recovery._register_definitions_across_blocks(
+        fixture.publication,
+        source_family,
+        fixture.publishing_consumer,
+    )
+    assert len(definitions) == 1
+    return next(iter(definitions))
+
+
+def _return_path_publication_interior_jump_image():
+    fixture = return_path_publication_lifecycle_image()
+    jump_source = fixture.callback_targets[0]
+    jump_target = fixture.helper_call
+    data = bytearray(fixture.image.data)
+    offset = fixture.image.va_to_offset(jump_source)
+    assert offset is not None
+    data[offset] = 0xE9
+    struct.pack_into("<i", data, offset + 1, jump_target - (jump_source + 5))
+    image = replace(
+        fixture.image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    return replace(fixture, image=image), jump_source, jump_target
+
+
+def _return_path_publication_unrelated_observation_image():
+    fixture = return_path_publication_lifecycle_image()
+    observation = next(
+        address
+        for address in fixture.slice_addresses
+        if fixture.image.read(address, 3) == b"\x8b\x46\x16"
+    )
+    data = bytearray(fixture.image.data)
+    offset = fixture.image.va_to_offset(observation)
+    assert offset is not None
+    data[offset + 2] = 0
+    image = replace(
+        fixture.image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    return replace(fixture, image=image), observation
+
+
+def _direct_return_path_publication_certificate(
+    fixture,
+    *,
+    observation_address=None,
+    binding_entry=None,
+):
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    transfer = recovery._owned_decoded(fixture.transfers[-1])
+    table_base = transfer.operands[0].mem.disp & 0xFFFF_FFFF
+    raw_bindings = recovery._object_tag_lifecycle_consumer_bindings(
+        table_base,
+        transfer.operands[0].size,
+    )
+    binding_entry = binding_entry or fixture.publishing_consumer
+    raw_binding = next(row for row in raw_bindings if row[0] == binding_entry)
+    binding = x86_cfg_module._ObjectTagLifecycleConsumerBinding(
+        function_entry=raw_binding[0],
+        movzx_address=raw_binding[1],
+        movzx_bytes_hex=raw_binding[2],
+        transfer_address=raw_binding[3],
+        transfer_bytes_hex=raw_binding[4],
+        destination_register=raw_binding[5],
+        source_register=raw_binding[6],
+        argument_push_address=raw_binding[7],
+        argument_push_bytes_hex=raw_binding[8],
+    )
+    query = x86_cfg_module._ObjectTagLifecycleQuery(
+        function_entry=min(row[0] for row in raw_bindings),
+        table_base=table_base,
+        entry_width=transfer.operands[0].size,
+        field_path=(0,),
+        source_width=1,
+        consumer_bindings=raw_bindings,
+    )
+    context = x86_cfg_module._ObjectTagLifecycleEvaluationContext(
+        query_sha256=query.sha256,
+        analysis_semantics=query.analysis_semantics,
+        binding=binding,
+        consumer_entry=binding.function_entry,
+    )
+    root_definition = _return_path_publication_root_definition(
+        recovery,
+        fixture,
+    )
+    root = x86_cfg_module._TrackedPublicationRoot(
+        kind="definition",
+        identifier=root_definition,
+    )
+    observation_address = observation_address or fixture.observation
+    relative_states = recovery._relative_pointer_states(
+        fixture.publishing_consumer,
+        root_definition=root_definition,
+        propagate_call_returns=True,
+        allow_partial_taint=True,
+        stop_address=observation_address,
+    )
+    recovery.object_tag_lifecycle_evaluation_contexts.append(context)
+    try:
+        certificate = (
+            recovery._return_path_publication_noninterference_certificate(
+                publication_address=fixture.publication,
+                publication_slot=fixture.publication_slot,
+                caller_entry=fixture.publishing_consumer,
+                root=root,
+                observation_address=observation_address,
+                field_start=0,
+                field_width=4,
+                relative_states=relative_states,
+            )
+        )
+    finally:
+        assert recovery.object_tag_lifecycle_evaluation_contexts.pop() is context
+    return SimpleNamespace(
+        recovery=recovery,
+        certificate=certificate,
+        context=context,
+        binding=binding,
+        query=query,
+        root=root,
+        relative_states=relative_states,
     )
 
 
@@ -8564,9 +8828,13 @@ def test_non_lifecycle_callers_still_reject_return_path_publication():
         generous_limits(fixture.image),
     )
     recovery.recover()
+    root_definition = _return_path_publication_root_definition(
+        recovery,
+        fixture,
+    )
 
     assert not recovery._pointer_definition_preserves_field_before(
-        fixture.slice_addresses[0],
+        root_definition,
         fixture.publishing_consumer,
         0,
         fixture.observation,
@@ -8579,6 +8847,363 @@ def test_non_lifecycle_callers_still_reject_return_path_publication():
     )
     assert producer_guard is not None
     assert producer_guard[1] != "movzx-producer-domain"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "alternate-slice-entry",
+        "partial-publication",
+        "different-observation-root",
+        "same-root-republish",
+        "unknown-republish-root",
+        "stale-alias-republish",
+    ),
+)
+def test_return_path_publication_rejects_hostile_generation_shape(mutation):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert not any(
+        table.address in fixture.transfers
+        and table.guard_operator == "movzx-lifecycle-domain"
+        for table in cfg.jump_tables
+    )
+
+
+def test_publication_certificate_binds_exact_slice_and_consumer():
+    fixture = return_path_publication_lifecycle_image()
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    transfer = recovery._owned_decoded(fixture.transfers[-1])
+    table_base = transfer.operands[0].mem.disp & 0xFFFF_FFFF
+    raw_bindings = recovery._object_tag_lifecycle_consumer_bindings(
+        table_base,
+        transfer.operands[0].size,
+    )
+    query = x86_cfg_module._ObjectTagLifecycleQuery(
+        function_entry=min(row[0] for row in raw_bindings),
+        table_base=table_base,
+        entry_width=transfer.operands[0].size,
+        field_path=(0,),
+        source_width=1,
+        consumer_bindings=raw_bindings,
+    )
+
+    def binding_for(function_entry):
+        raw = next(row for row in raw_bindings if row[0] == function_entry)
+        return x86_cfg_module._ObjectTagLifecycleConsumerBinding(
+            function_entry=raw[0],
+            movzx_address=raw[1],
+            movzx_bytes_hex=raw[2],
+            transfer_address=raw[3],
+            transfer_bytes_hex=raw[4],
+            destination_register=raw[5],
+            source_register=raw[6],
+            argument_push_address=raw[7],
+            argument_push_bytes_hex=raw[8],
+        )
+
+    publishing_binding = binding_for(fixture.publishing_consumer)
+    context = x86_cfg_module._ObjectTagLifecycleEvaluationContext(
+        query_sha256=query.sha256,
+        analysis_semantics=query.analysis_semantics,
+        binding=publishing_binding,
+        consumer_entry=publishing_binding.function_entry,
+    )
+    root_definition = _return_path_publication_root_definition(
+        recovery,
+        fixture,
+    )
+    root = x86_cfg_module._TrackedPublicationRoot(
+        kind="definition",
+        identifier=root_definition,
+    )
+    relative_states = recovery._relative_pointer_states(
+        fixture.publishing_consumer,
+        root_definition=root_definition,
+        propagate_call_returns=True,
+        allow_partial_taint=True,
+        stop_address=fixture.observation,
+    )
+    recovery.object_tag_lifecycle_evaluation_contexts.append(context)
+    try:
+        certificate = (
+            recovery._return_path_publication_noninterference_certificate(
+                publication_address=fixture.publication,
+                publication_slot=fixture.publication_slot,
+                caller_entry=fixture.publishing_consumer,
+                root=root,
+                observation_address=fixture.observation,
+                field_start=0,
+                field_width=4,
+                relative_states=relative_states,
+            )
+        )
+    finally:
+        assert recovery.object_tag_lifecycle_evaluation_contexts.pop() is context
+
+    assert certificate is not None
+    assert certificate.consumer_binding == publishing_binding
+    assert certificate.caller_entry == fixture.publishing_consumer
+    assert certificate.caller_entry != fixture.minimum_consumer
+    assert certificate.root == root
+    assert certificate.publication_address == fixture.publication
+    assert certificate.publication_slot == fixture.publication_slot
+    assert certificate.observation_address == fixture.observation
+    assert certificate.same_generation_slice == frozenset(
+        fixture.slice_addresses
+    )
+    republish_stores = tuple(
+        address
+        for address in recovery._function_instruction_addresses(
+            fixture.publishing_consumer
+        )
+        if address != fixture.publication
+        and (
+            decoded := recovery._owned_decoded(address)
+        ).id
+        == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._absolute_memory_operand(decoded.operands[0])
+        == fixture.publication_slot
+    )
+    assert tuple(
+        cut.instruction_address for cut in certificate.republish_cuts
+    ) == republish_stores
+    assert len(certificate.republish_cuts) == 1
+    assert certificate.republish_cuts[0].old_root == root
+    assert certificate.republish_cuts[0].new_root != root
+    assert {
+        death.alias.kind
+        for death in certificate.republish_cuts[0].alias_deaths
+    } == {"register", "stack"}
+    assert any(
+        death.alias.address < fixture.publication
+        and death.proof_kind == "scope-ended"
+        for death in certificate.republish_cuts[0].alias_deaths
+    )
+    assert certificate.returning_bodies == ()
+    assert certificate.call_edges == ()
+    assert certificate.candidate_targets == frozenset()
+    assert certificate.reference_inventory.rows == ()
+    matching_entries = tuple(
+        (lookup_key, memo_entry)
+        for lookup_key, memo_entry in (
+            recovery.return_path_publication_certificate_memo.items()
+        )
+        if lookup_key.candidate_identity.root == root
+    )
+    assert len(matching_entries) == 1
+    lookup_key, memo_entry = matching_entries[0]
+    assert lookup_key.candidate_identity.consumer_entry == fixture.publishing_consumer
+    assert lookup_key.candidate_identity.root == root
+    assert memo_entry.result == certificate
+    assert memo_entry.dependencies == tuple(sorted(memo_entry.dependencies))
+
+    minimum_binding = binding_for(fixture.minimum_consumer)
+    wrong_context = x86_cfg_module._ObjectTagLifecycleEvaluationContext(
+        query_sha256=query.sha256,
+        analysis_semantics=query.analysis_semantics,
+        binding=minimum_binding,
+        consumer_entry=minimum_binding.function_entry,
+    )
+    recovery.object_tag_lifecycle_evaluation_contexts.append(wrong_context)
+    try:
+        assert (
+            recovery._return_path_publication_noninterference_certificate(
+                publication_address=fixture.publication,
+                publication_slot=fixture.publication_slot,
+                caller_entry=fixture.publishing_consumer,
+                root=root,
+                observation_address=fixture.observation,
+                field_start=0,
+                field_width=4,
+                relative_states=relative_states,
+            )
+            is None
+        )
+    finally:
+        assert (
+            recovery.object_tag_lifecycle_evaluation_contexts.pop()
+            is wrong_context
+        )
+
+
+def test_publication_certificate_rejects_owned_jump_into_slice_interior():
+    fixture, jump_source, jump_target = (
+        _return_path_publication_interior_jump_image()
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert jump_source not in fixture.slice_addresses
+    assert jump_target in fixture.slice_addresses
+    assert jump_target != fixture.publication
+    assert any(
+        source == jump_source
+        for source, _kind in result.recovery.incoming_edges[jump_target]
+    )
+    assert result.certificate is None
+
+
+def test_publication_certificate_binds_observation_to_active_movzx():
+    fixture, unrelated_observation = (
+        _return_path_publication_unrelated_observation_image()
+    )
+    result = _direct_return_path_publication_certificate(
+        fixture,
+        observation_address=unrelated_observation,
+    )
+
+    assert unrelated_observation != result.binding.movzx_address
+    assert result.certificate is None
+
+
+@pytest.mark.parametrize(
+    "hostile_kwargs",
+    (
+        {"bypass_stack_death": True},
+        {"leave_implicit_stack_alias": True},
+        {"pop_cleanup_alias": True},
+    ),
+    ids=("branch-bypass", "implicit-push-alias", "pop-transfers-alias"),
+)
+def test_publication_certificate_rejects_incomplete_stack_alias_death(
+    hostile_kwargs,
+):
+    fixture, stack_death, republish_store = (
+        _return_path_publication_hostile_alias_image(**hostile_kwargs)
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    transfer = recovery._owned_decoded(fixture.transfers[-1])
+    table_base = transfer.operands[0].mem.disp & 0xFFFF_FFFF
+    raw_bindings = recovery._object_tag_lifecycle_consumer_bindings(
+        table_base,
+        transfer.operands[0].size,
+    )
+    raw_binding = next(
+        row for row in raw_bindings if row[0] == fixture.publishing_consumer
+    )
+    binding = x86_cfg_module._ObjectTagLifecycleConsumerBinding(
+        function_entry=raw_binding[0],
+        movzx_address=raw_binding[1],
+        movzx_bytes_hex=raw_binding[2],
+        transfer_address=raw_binding[3],
+        transfer_bytes_hex=raw_binding[4],
+        destination_register=raw_binding[5],
+        source_register=raw_binding[6],
+        argument_push_address=raw_binding[7],
+        argument_push_bytes_hex=raw_binding[8],
+    )
+    query = x86_cfg_module._ObjectTagLifecycleQuery(
+        function_entry=min(row[0] for row in raw_bindings),
+        table_base=table_base,
+        entry_width=transfer.operands[0].size,
+        field_path=(0,),
+        source_width=1,
+        consumer_bindings=raw_bindings,
+    )
+    context = x86_cfg_module._ObjectTagLifecycleEvaluationContext(
+        query_sha256=query.sha256,
+        analysis_semantics=query.analysis_semantics,
+        binding=binding,
+        consumer_entry=binding.function_entry,
+    )
+    root_definition = _return_path_publication_root_definition(
+        recovery,
+        fixture,
+    )
+    root = x86_cfg_module._TrackedPublicationRoot(
+        kind="definition",
+        identifier=root_definition,
+    )
+    relative_states = recovery._relative_pointer_states(
+        fixture.publishing_consumer,
+        root_definition=root.identifier,
+        propagate_call_returns=True,
+        allow_partial_taint=True,
+        stop_address=fixture.observation,
+    )
+    assert recovery._reachable_within_function(
+        stack_death,
+        republish_store,
+        fixture.publishing_consumer,
+        recovery._following_function_entry(fixture.publishing_consumer),
+    )
+    recovery.object_tag_lifecycle_evaluation_contexts.append(context)
+    try:
+        assert (
+            recovery._return_path_publication_noninterference_certificate(
+                publication_address=fixture.publication,
+                publication_slot=fixture.publication_slot,
+                caller_entry=fixture.publishing_consumer,
+                root=root,
+                observation_address=fixture.observation,
+                field_start=0,
+                field_width=4,
+                relative_states=relative_states,
+            )
+            is None
+        )
+    finally:
+        assert recovery.object_tag_lifecycle_evaluation_contexts.pop() is context
+
+
+@pytest.mark.parametrize(
+    "hostile_kwargs",
+    (
+        {"xchg_memory_alias": True},
+        {"stosd_memory_alias": True},
+    ),
+    ids=("xchg", "implicit-stosd"),
+)
+def test_publication_certificate_rejects_non_mov_memory_alias_store(
+    hostile_kwargs,
+):
+    fixture, _stack_death, _republish_store = (
+        _return_path_publication_hostile_alias_image(**hostile_kwargs)
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is None
+
+
+def test_publication_certificate_rejects_cmpxchg_alias_store():
+    fixture, _stack_death, _republish_store = (
+        _return_path_publication_hostile_alias_image(
+            cmpxchg_memory_alias=True
+        )
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+    cmpxchg = next(
+        result.recovery._owned_decoded(address)
+        for address in result.recovery._function_instruction_addresses(
+            fixture.publishing_consumer
+        )
+        if result.recovery._owned_decoded(address).id
+        == capstone.x86_const.X86_INS_CMPXCHG
+    )
+    memory = cmpxchg.operands[0]
+
+    assert memory.type == capstone.x86_const.X86_OP_MEM
+    assert memory.access & capstone.CS_AC_READ
+    assert not memory.access & capstone.CS_AC_WRITE
+    assert result.certificate is None
 
 
 def test_object_tag_lifecycle_binds_stack_reloaded_receiver():
@@ -9378,7 +10003,7 @@ def test_object_tag_lifecycle_checkpoint_is_separate_from_v27(
     assert _MOVZX_PRODUCER_ANALYSIS_SEMANTICS == "movzx-producer-analysis-v27"
     assert (
         _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
-        == "object-tag-lifecycle-analysis-v5"
+        == "object-tag-lifecycle-analysis-v6"
     )
     lifecycle = [
         payload
@@ -9400,7 +10025,7 @@ def test_object_tag_lifecycle_checkpoint_is_separate_from_v27(
     } == {"movzx-lifecycle-domain"}
 
 
-def test_object_tag_lifecycle_checkpoint_does_not_reuse_v4_certificate(
+def test_object_tag_lifecycle_checkpoint_does_not_reuse_v5_certificate(
     tmp_path,
 ):
     image, transfers = lifecycle_movzx_dispatch_image()
@@ -9430,9 +10055,9 @@ def test_object_tag_lifecycle_checkpoint_does_not_reuse_v4_certificate(
     )
     stale = _rewrite_certificate_semantics(
         current,
-        "object-tag-lifecycle-analysis-v4",
+        "object-tag-lifecycle-analysis-v5",
         {
-            "provenance": "hostile-stale-lifecycle-v4-underapproximation",
+            "provenance": "hostile-stale-lifecycle-v5-underapproximation",
             "status": "finite",
             "values": [0],
         },
@@ -9467,14 +10092,14 @@ def test_object_tag_lifecycle_checkpoint_does_not_reuse_v4_certificate(
     assert {
         payload["query"]["analysis_semantics"] for payload in payloads
     } == {
-        "object-tag-lifecycle-analysis-v4",
         "object-tag-lifecycle-analysis-v5",
+        "object-tag-lifecycle-analysis-v6",
     }
     current_payload = next(
         payload
         for payload in payloads
         if payload["query"]["analysis_semantics"]
-        == "object-tag-lifecycle-analysis-v5"
+        == "object-tag-lifecycle-analysis-v6"
     )
     assert current_payload["result"]["values"] == [0, 74]
     assert {
@@ -29026,7 +29651,7 @@ def test_rejected_relocated_batch_is_durably_skipped_on_identical_resume(
     assert not any("trial-start:" in row for row in second_progress)
 
 
-def test_relocated_rejection_ledger_replays_v26_v4_contract(
+def test_relocated_rejection_ledger_replays_v27_v5_contract(
     tmp_path,
     monkeypatch,
 ):
@@ -29088,7 +29713,7 @@ def test_relocated_rejection_ledger_replays_v26_v4_contract(
     )
     assert (
         _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
-        == "object-tag-lifecycle-analysis-v5"
+        == "object-tag-lifecycle-analysis-v6"
     )
     assert stale_value["contract"][
         "object_tag_lifecycle_analysis_semantics"
