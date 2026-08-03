@@ -3085,6 +3085,9 @@ class _DirectCfgRecovery:
         self.block_starts: set[int] = set()
         self.terminators: set[int] = set()
         self.edges: set[CfgEdge] = set()
+        self.special_control_targets_by_source_kind: dict[
+            tuple[int, str], set[int]
+        ] = {}
         self.call_targets_by_source: dict[int, set[int]] = {}
         self.direct_call_targets_by_source: dict[int, int] = {}
         self.direct_call_sources_by_target: dict[int, set[int]] = {}
@@ -4621,6 +4624,10 @@ class _DirectCfgRecovery:
                 self.edge_provenance[edge] = provenance
             return
         self.edges.add(edge)
+        if kind.startswith("indirect-"):
+            self.special_control_targets_by_source_kind.setdefault(
+                (source, kind), set()
+            ).add(target)
         if kind == "direct-call" or kind.startswith("indirect-call-"):
             self.call_targets_by_source.setdefault(source, set()).add(target)
         if kind == "direct-call":
@@ -4644,6 +4651,15 @@ class _DirectCfgRecovery:
         )
         self._check_count("max_edges", len(self.edges))
 
+    def _retained_special_control_targets(
+        self,
+        source: int,
+        kind: str,
+    ) -> frozenset[int]:
+        return frozenset(
+            self.special_control_targets_by_source_kind.get((source, kind), ())
+        )
+
     def _require_retained_pre_finite_targets_sound(
         self,
         instruction: Instruction,
@@ -4651,10 +4667,9 @@ class _DirectCfgRecovery:
         candidate_values: set[int] | frozenset[int] | tuple[int, ...],
     ) -> None:
         """Reject a recomputed special-control domain that lost a target."""
-        retained = frozenset(
-            row.target
-            for row in self.edges
-            if row.source == instruction.address and row.kind == edge_kind
+        retained = self._retained_special_control_targets(
+            instruction.address,
+            edge_kind,
         )
         candidates = frozenset(candidate_values)
         if retained and not retained <= candidates:
@@ -55511,10 +55526,9 @@ class _DirectCfgRecovery:
         if function_entry is None:
             return False
         edge_kind = f"indirect-{flow_kind}-finite-value"
-        retained_targets = frozenset(
-            row.target
-            for row in self.edges
-            if row.source == instruction.address and row.kind == edge_kind
+        retained_targets = self._retained_special_control_targets(
+            instruction.address,
+            edge_kind,
         )
 
         def require_retained_targets_sound(
@@ -55685,14 +55699,9 @@ class _DirectCfgRecovery:
 
     def _strict_identity_validator(self, function_entry: int) -> tuple[int, int] | None:
         """Return ``(tag offset, tag)`` for an identity-or-zero validator."""
-        following_entry = min(
-            (row for row in self.function_addresses if row > function_entry),
-            default=0x1_0000_0000,
-        )
         rows = [
             self._owned_decoded(address)
-            for address in sorted(self.instructions)
-            if function_entry <= address < following_entry
+            for address in self._function_instruction_addresses(function_entry)
         ]
         if len(rows) != 8 or [row.mnemonic for row in rows] != [
             "mov",
@@ -60533,13 +60542,10 @@ class _DirectCfgRecovery:
             return False
         object_family = self._register_family(definition.operands[1].mem.base)
         descriptor_field = definition.operands[1].mem.disp
-        following_entry = min(
-            (row for row in self.function_addresses if row > function_entry),
-            default=0x1_0000_0000,
-        )
+        following_entry = self._following_function_entry(function_entry)
         validator_calls = []
         if object_family == "eax":
-            for call in sorted(self.direct_calls, key=lambda row: row.address):
+            for call in self._function_direct_calls(function_entry):
                 if not (
                     function_entry <= call.address < definition.address
                     and self._strict_identity_validator(call.target) is not None
@@ -60561,11 +60567,13 @@ class _DirectCfgRecovery:
                 ):
                     continue
                 clobbered = False
-                for candidate_address in sorted(self.instructions):
-                    if not (
-                        function_entry <= candidate_address < following_entry
-                        and candidate_address not in {call.address, definition.address}
-                    ):
+                for candidate_address in self._function_instruction_addresses(
+                    function_entry
+                ):
+                    if candidate_address in {
+                        call.address,
+                        definition.address,
+                    }:
                         continue
                     candidate = self._owned_decoded(candidate_address)
                     writes_object = (
@@ -60660,12 +60668,7 @@ class _DirectCfgRecovery:
         constructor_entry = self._registrar_function_entry(writer.instruction_address)
         if constructor_entry is None:
             return block("descriptor writer has no constructor function")
-        constructor_calls = tuple(
-            sorted(
-                (row for row in self.direct_calls if row.target == constructor_entry),
-                key=lambda row: row.address,
-            )
-        )
+        constructor_calls = self._direct_calls_to(constructor_entry)
         if not constructor_calls or any(
             self._fresh_constructor_receiver(row, descriptor_field) is None
             for row in constructor_calls

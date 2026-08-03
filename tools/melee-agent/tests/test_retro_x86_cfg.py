@@ -25739,6 +25739,68 @@ def test_nonmonotone_finite_domain_with_retained_edge_fails_closed(
         )
 
 
+def test_retained_special_control_targets_do_not_rescan_global_edges(monkeypatch):
+    image, consumer, source, first_target, second_target = finite_incoming_edge_image()
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    finite_kind = "indirect-call-finite-value"
+    sibling_kind = "indirect-jump-global-slot"
+    recovery._add_edge(source, first_target, finite_kind, provenance="test-edge")
+    recovery._add_edge(source, second_target, finite_kind, provenance="test-edge")
+    recovery._add_edge(source, consumer, sibling_kind, provenance="test-edge")
+    recovery._add_edge(source, first_target, finite_kind, provenance="test-edge")
+
+    class IterationForbiddenSet(set):
+        def __iter__(self):
+            raise AssertionError("retained-target lookup rescanned global edges")
+
+    recovery.edges = IterationForbiddenSet(recovery.edges)
+
+    assert recovery._retained_special_control_targets(source, finite_kind) == frozenset(
+        {first_target, second_target}
+    )
+    assert recovery._retained_special_control_targets(source, sibling_kind) == frozenset(
+        {consumer}
+    )
+    recovery._require_retained_pre_finite_targets_sound(
+        SimpleNamespace(address=source),
+        finite_kind,
+        {first_target, second_target},
+    )
+    with pytest.raises(
+        CfgRecoveryError,
+        match="retained pre-finite control target became unsound",
+    ):
+        recovery._require_retained_pre_finite_targets_sound(
+            SimpleNamespace(address=source),
+            finite_kind,
+            {first_target},
+        )
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_registrar_function_entry",
+        lambda _recovery, _address: image.entrypoint,
+    )
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_finite_control_domain_cached",
+        lambda *_args, **_kwargs: None,
+    )
+    with pytest.raises(
+        CfgRecoveryError,
+        match="retained finite-control edge became unsound",
+    ):
+        recovery._recover_finite_value_target(
+            SimpleNamespace(operands=[SimpleNamespace(type=0)]),
+            SimpleNamespace(address=source, bytes_hex="ff10"),
+            flow_kind="call",
+        )
+
+
 def test_callback_hypotheses_run_once_after_code_closure(monkeypatch):
     from tools.mwcc_retro import pe as pe_mod
 
@@ -28497,6 +28559,67 @@ def test_validated_constructor_descriptor_proves_field_callback(tmp_path):
     assert "constructor=0x4010a0" in edge.provenance
     assert "descriptor-field=+0x34" in edge.provenance
     assert not [row for row in cfg.control_targets.unresolved if row.address == 0x00401064]
+
+
+def test_constructor_descriptor_reuses_function_and_call_indexes(
+    tmp_path,
+    monkeypatch,
+):
+    image = load_dispatch_image(
+        tmp_path,
+        mode="validated-constructor-descriptor",
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    transfer = 0x00401064
+    instruction = recovery.instructions[transfer]
+    decoded = recovery._owned_decoded(transfer)
+    for function_entry in tuple(recovery.function_addresses):
+        recovery._function_instruction_addresses(function_entry)
+    monkeypatch.setattr(
+        recovery,
+        "_closed_object_origin_operand",
+        lambda *_args, **_kwargs: x86_cfg_module._ClosedObjectOrigin(
+            True,
+            frozenset(),
+            "test-closed-object-origin",
+        ),
+    )
+    prior_edge = x86_cfg_module.CfgEdge(
+        source=transfer,
+        target=0x004010F0,
+        kind="indirect-call-constructor-descriptor",
+    )
+    recovery.edges.remove(prior_edge)
+    recovery.edge_provenance.pop(prior_edge)
+    recovery.special_control_targets_by_source_kind[
+        (transfer, prior_edge.kind)
+    ].remove(prior_edge.target)
+
+    class IterationForbiddenDict(dict):
+        def __iter__(self):
+            raise AssertionError("constructor proof rescanned all instructions")
+
+    class IterationForbiddenSet(set):
+        def __iter__(self):
+            raise AssertionError("constructor proof rescanned all direct calls")
+
+    recovery.instructions = IterationForbiddenDict(recovery.instructions)
+    recovery.direct_calls = IterationForbiddenSet(recovery.direct_calls)
+
+    assert recovery._recover_constructor_descriptor_target(
+        decoded,
+        instruction,
+        flow_kind="call",
+    )
+    assert recovery._strict_identity_validator(0x00401080) == (
+        0x20,
+        0x50617273,
+    )
 
 
 def test_constructor_descriptor_validator_follows_retail_guard_arms(
