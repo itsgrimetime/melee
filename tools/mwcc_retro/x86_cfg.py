@@ -2290,6 +2290,12 @@ class _ProducerCertificateSession:
         query_id = query.sha256
         recovery.producer_query_ids.add(query_id)
         paths = self._paths(query)
+
+        def clear_lifecycle_dependency_caches() -> None:
+            recovery.field_preservation_cache.clear()
+            recovery.relative_pointer_state_cache.clear()
+            recovery.argument_return_offset_cache.clear()
+
         for path in paths:
             entry = self._load(path=path, expected_query=query, recovery=recovery)
             if entry is not None:
@@ -2316,6 +2322,8 @@ class _ProducerCertificateSession:
                         set(recovery.producer_query_ids),
                         dict(recovery.producer_progress),
                         dict(recovery.high_water),
+                        dict(recovery.relative_pointer_state_cache),
+                        dict(recovery.argument_return_offset_cache),
                     )
                     session_state = (
                         set(self.validated_query_ids),
@@ -2362,6 +2370,14 @@ class _ProducerCertificateSession:
                                 recovery.high_water,
                                 recovery_state[10],
                             ),
+                            (
+                                recovery.relative_pointer_state_cache,
+                                recovery_state[11],
+                            ),
+                            (
+                                recovery.argument_return_offset_cache,
+                                recovery_state[12],
+                            ),
                         )
                         for current, prior in mappings:
                             current.clear()
@@ -2382,7 +2398,7 @@ class _ProducerCertificateSession:
                         self.completed_this_run = session_state[3]
 
                     recovery.producer_domain_memo.pop(query.memo_key, None)
-                    recovery.field_preservation_cache.clear()
+                    clear_lifecycle_dependency_caches()
                     self.rehydrating_warm_hit += 1
                     try:
                         result = recovery._producer_domain_cached(
@@ -2432,6 +2448,8 @@ class _ProducerCertificateSession:
             return None
 
         recovery.producer_domain_memo.pop(query.memo_key, None)
+        if isinstance(query, _ObjectTagLifecycleQuery):
+            clear_lifecycle_dependency_caches()
         self.remaining_budget -= 1
         if self.progress_callback is not None:
             self.progress_callback(

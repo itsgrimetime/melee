@@ -10845,11 +10845,6 @@ def test_lifecycle_warm_rehydration_is_no_budget_and_rolls_back_mismatch(
     lifecycle_path = session._path(query, payload["dependency_sha256"])
     session._write_atomic(lifecycle_path, payload)
     recovery.producer_domain_memo.pop(query.memo_key, None)
-    prior_progress = dict(recovery.producer_progress)
-    prior_high_water = dict(recovery.high_water)
-    prior_publication_keys = set(
-        recovery.return_path_publication_certificate_memo
-    )
     nested_query = _MovzxProducerQuery(
         function_entry=fixture.minimum_consumer,
         movzx_address=fixture.observation,
@@ -10859,12 +10854,76 @@ def test_lifecycle_warm_rehydration_is_no_budget_and_rolls_back_mismatch(
         field_path=(0,),
         source_width=1,
     )
+    relative_pointer_marker = ("stale-relative-pointer-state",)
+    argument_return_marker = ("stale-argument-return-offset",)
+    recovery.relative_pointer_state_cache[relative_pointer_marker] = "stale"
+    recovery.argument_return_offset_cache[argument_return_marker] = None
+    prior_relative_pointer_cache = dict(
+        recovery.relative_pointer_state_cache
+    )
+    prior_argument_return_cache = dict(
+        recovery.argument_return_offset_cache
+    )
+    rollback_session = _ProducerCertificateSession(
+        image_sha256=fixture.image.sha256,
+        limits=recovery.limits,
+        checkpoint_dir=tmp_path,
+        query_budget=0,
+    )
+
+    def mismatched_compute():
+        assert not recovery.relative_pointer_state_cache
+        assert not recovery.argument_return_offset_cache
+        recovery.relative_pointer_state_cache[relative_pointer_marker] = (
+            "fresh"
+        )
+        recovery.argument_return_offset_cache[argument_return_marker] = (
+            frozenset({0})
+        )
+        recovery._note_producer_dependency(fixture.helper_target)
+        return stored_result
+
+    assert rollback_session.evaluate(
+        recovery=recovery,
+        query=query,
+        compute=mismatched_compute,
+    ) is None
+    assert (
+        recovery.relative_pointer_state_cache
+        == prior_relative_pointer_cache
+    )
+    assert (
+        recovery.argument_return_offset_cache
+        == prior_argument_return_cache
+    )
+    recovery.producer_domain_memo.pop(query.memo_key, None)
+    prior_progress = dict(recovery.producer_progress)
+    prior_high_water = dict(recovery.high_water)
+    prior_publication_keys = set(
+        recovery.return_path_publication_certificate_memo
+    )
     calls = 0
     nested_results = []
+    lifecycle_cache_states = []
 
     def compute():
         nonlocal calls
         calls += 1
+        lifecycle_cache_states.append(
+            (
+                dict(recovery.relative_pointer_state_cache),
+                dict(recovery.argument_return_offset_cache),
+            )
+        )
+        assert not recovery.relative_pointer_state_cache
+        assert not recovery.argument_return_offset_cache
+        recovery.relative_pointer_state_cache[relative_pointer_marker] = (
+            "fresh"
+        )
+        recovery.argument_return_offset_cache[argument_return_marker] = (
+            frozenset({0})
+        )
+        recovery._note_producer_dependency(fixture.helper_target)
         if calls == 1:
             recovery.return_path_publication_certificate_memo[
                 "tentative-warm-side-effect"
@@ -10892,6 +10951,7 @@ def test_lifecycle_warm_rehydration_is_no_budget_and_rolls_back_mismatch(
         compute=compute,
     ) == stored_result
     assert calls == 2
+    assert lifecycle_cache_states == [({}, {}), ({}, {})]
     assert nested_results == [None]
     assert session.completed_this_run == 1
     assert session.remaining_budget == 0
@@ -10912,7 +10972,28 @@ def test_lifecycle_warm_rehydration_is_no_budget_and_rolls_back_mismatch(
             prior_high_water[name],
             recovery.producer_progress[name],
         )
-    assert tuple(tmp_path.glob("*.json")) == (lifecycle_path,)
+    lifecycle_paths = tuple(sorted(tmp_path.glob("*.json")))
+    assert len(lifecycle_paths) == 2
+    assert lifecycle_path in lifecycle_paths
+
+    recovery.producer_domain_memo.pop(query.memo_key, None)
+    warm_session = _ProducerCertificateSession(
+        image_sha256=fixture.image.sha256,
+        limits=recovery.limits,
+        checkpoint_dir=tmp_path,
+        query_budget=0,
+    )
+    assert warm_session.evaluate(
+        recovery=recovery,
+        query=query,
+        compute=compute,
+    ) == stored_result
+    assert calls > 2
+    assert len(lifecycle_cache_states) == calls
+    assert all(state == ({}, {}) for state in lifecycle_cache_states)
+    assert warm_session.completed_this_run == 0
+    assert warm_session.remaining_budget == 0
+    assert tuple(sorted(tmp_path.glob("*.json"))) == lifecycle_paths
 
 
 def test_return_path_publication_checkpoint_rehydrates_after_final_normalization(
