@@ -32554,7 +32554,105 @@ def test_rejected_relocated_trial_rebuilds_after_producer_checkpoint(
             producer_query_budget=1,
         )
 
-    assert len(recoveries) == 3
+    assert len(recoveries) == 4
+
+
+def test_rejected_relocated_trial_retries_after_producer_checkpoint_before_sealing(
+    tmp_path,
+    monkeypatch,
+):
+    image = load_cfg_image(tmp_path)
+    entry = image.entrypoint
+    record = SeedRecord(
+        address=entry,
+        category="relocated-dispatch-bootstrap-entry",
+        provenance_address=0x00402000,
+        provenance_bytes="00104000",
+        detail="synthetic-checkpointed-rejected-bootstrap-candidate",
+        is_function=True,
+    )
+    rejected = x86_cfg_module._RelocatedDispatchSlotHypothesis(
+        transfer_address=entry,
+        table_base=0x00402000,
+        index=0,
+        slot_address=0x00402000,
+        target=entry,
+        records=(record,),
+    )
+    checkpoint_dir = tmp_path / "producer-checkpoints"
+    recoveries = []
+    first_progress = []
+    original = _DirectCfgRecovery.recover
+
+    def checkpoint_during_first_rejected_trial(recovery):
+        cfg = original(recovery)
+        recoveries.append(recovery)
+        recovery.relocated_dispatch_slot_hypotheses.add(rejected)
+        if len(recoveries) == 2:
+            session = recovery.producer_certificate_session
+            assert session is not None
+            session.completed_this_run += 1
+        return cfg
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "recover",
+        checkpoint_during_first_rejected_trial,
+    )
+
+    with pytest.raises(ProducerCheckpointIncomplete):
+        recover_cfg(
+            image,
+            build_seed_inventory(image, ()),
+            generous_limits(image),
+            producer_checkpoint_dir=checkpoint_dir,
+            producer_query_budget=2,
+            producer_progress_callback=first_progress.append,
+        )
+
+    retry_starts = [
+        row
+        for row in first_progress
+        if row.startswith("hypothesis replay trial-start:")
+    ]
+    baseline_starts = [
+        row
+        for row in first_progress
+        if row.startswith("hypothesis replay baseline-start:")
+    ]
+    assert len(recoveries) == 4
+    assert len(baseline_starts) == 2
+    assert retry_starts == [
+        "hypothesis replay trial-start: "
+        "iteration=1;trial=1;selected=1;"
+        "selected_kind=relocated-dispatch-slot;"
+        f"selected_transfer={entry:#x}",
+        "hypothesis replay trial-start: "
+        "iteration=2;trial=2;selected=1;"
+        "selected_kind=relocated-dispatch-slot;"
+        f"selected_transfer={entry:#x}",
+    ]
+    assert any(
+        row.startswith("hypothesis replay relocated-rejection-deferred:")
+        for row in first_progress
+    )
+    assert any(
+        row.startswith("hypothesis replay rejection-ledger-write:")
+        for row in first_progress
+    )
+
+    second_progress = []
+    second = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+        producer_checkpoint_dir=checkpoint_dir,
+        producer_query_budget=2,
+        producer_progress_callback=second_progress.append,
+    )
+
+    assert any("rejection-ledger-hit:" in row for row in second_progress)
+    assert not any("trial-start:" in row for row in second_progress)
 
 
 def test_rejected_relocated_batch_is_durably_skipped_on_identical_resume(

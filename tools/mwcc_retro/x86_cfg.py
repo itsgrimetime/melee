@@ -66680,6 +66680,7 @@ def _recover_cfg_fixed_point(
             f"tables={len(trial_cfg.jump_tables)}"
         )
         reproduced_changed = False
+        unreproduced_candidates = []
         for hypothesis_identity, hypothesis in new_candidates.items():
             if hypothesis_identity in reproduced_hypotheses:
                 reproduced = reproduced_hypotheses[
@@ -66688,9 +66689,22 @@ def _recover_cfg_fixed_point(
                 accepted[hypothesis_identity] = reproduced
                 reproduced_changed |= reproduced != hypothesis
                 continue
-            rejected_identities.add(hypothesis_identity)
-            if isinstance(hypothesis, _ObjectCallbackTableHypothesis):
-                rejected_object_bases.add(hypothesis.table_base)
+            unreproduced_candidates.append((hypothesis_identity, hypothesis))
+        producer_checkpoint_created = (
+            producer_certificate_session is not None
+            and producer_certificate_session.completed_this_run
+            != completed_before_trial
+        )
+        defer_relocated_rejection = (
+            reproduced_selected == 0
+            and selected_kind == "relocated-dispatch-slot"
+            and producer_checkpoint_created
+        )
+        if not defer_relocated_rejection:
+            for hypothesis_identity, hypothesis in unreproduced_candidates:
+                rejected_identities.add(hypothesis_identity)
+                if isinstance(hypothesis, _ObjectCallbackTableHypothesis):
+                    rejected_object_bases.add(hypothesis.table_base)
         report_hypothesis_progress(
             "hypothesis replay trial-outcome: "
             f"iteration={iteration};trial={trial_count};"
@@ -66698,11 +66712,15 @@ def _recover_cfg_fixed_point(
             f"rejected={len(rejected_identities)};"
             f"reproduced_changed={int(reproduced_changed)}"
         )
-        producer_checkpoint_created = (
-            producer_certificate_session is not None
-            and producer_certificate_session.completed_this_run
-            != completed_before_trial
-        )
+        if defer_relocated_rejection:
+            reusable_trial = None
+            reusable_baseline = None
+            report_hypothesis_progress(
+                "hypothesis replay relocated-rejection-deferred: "
+                f"iteration={iteration};trial={trial_count};"
+                "reason=producer-checkpoint-created"
+            )
+            continue
         if publication_trial and reproduced_selected == len(new_candidates):
             merge_private_publication_memos(
                 trial_recovery,
