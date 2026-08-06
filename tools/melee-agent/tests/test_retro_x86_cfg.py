@@ -3228,12 +3228,15 @@ class ReturnPathPublicationFixture:
     consumer_entries: tuple[int, ...]
     minimum_consumer: int
     publishing_consumer: int
+    root_definition: int
     incoming_calls: tuple[int, ...]
     incoming_owners: tuple[int, ...]
     publication: int
     publication_slot: int
     observation: int
     observation_field_start: int
+    terminal_publication_store: int | None
+    publication_reentry_advance: int | None
     slice_addresses: tuple[int, ...]
     helper_call: int
     helper_target: int
@@ -3262,6 +3265,8 @@ _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
         "same-root-republish",
         "unknown-republish-root",
         "stale-alias-republish",
+        "terminal-nonnull-immediate",
+        "same-root-publication-reentry",
         "returning-unresolved-indirect",
         "extra-finite-returning-target",
         "closure-slot-read",
@@ -3381,6 +3386,10 @@ def return_path_publication_lifecycle_image(
     mutation: str | None = None,
     publishing_consumer_first: bool = False,
     indirect_observation: bool = False,
+    terminal_clear: bool = False,
+    publication_reentry: bool = False,
+    returning_allocator: bool = False,
+    terminal_only: bool = False,
 ) -> ReturnPathPublicationFixture:
     """One deterministic publication lifecycle with future hostile seams."""
     if mutation is not None and mutation not in _RETURN_PATH_PUBLICATION_MUTATIONS:
@@ -3450,6 +3459,17 @@ def return_path_publication_lifecycle_image(
     def emit_call(address: int, target: int) -> int:
         offset = text_offset(address)
         text[offset] = 0xE8
+        displacement = target - (address + 5)
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return address + 5
+
+    def emit_jump(address: int, target: int) -> int:
+        offset = text_offset(address)
+        text[offset] = 0xE9
         displacement = target - (address + 5)
         text[offset + 1 : offset + 5] = displacement.to_bytes(
             4,
@@ -3551,25 +3571,70 @@ def return_path_publication_lifecycle_image(
 
     republish_start = cursor
     patch_short(republish_branch, republish_start)
-    cursor = emit(cursor, "6a 20")
-    cursor = emit_call(cursor, allocator)
-    cursor = emit(cursor, "59 85 c0")
-    republish_failure_branch = cursor
-    cursor = emit(cursor, "74 00")
-    cursor = emit(cursor, "89 c7")
-    if mutation == "same-root-republish":
-        cursor = emit(cursor, "89 f7")
-    elif mutation == "unknown-republish-root":
-        cursor = emit(cursor, "89 cf")
-    if mutation == "stale-alias-republish":
-        cursor = emit_abs(cursor, "89 35", stale_alias_slot)
-    cursor = emit(cursor, "c7 44 24 0c 00 00 00 00 31 f6")
-    cursor = emit_abs(cursor, "89 3d", publication_slot)
-    cursor = emit(cursor, "5f 5e c3")
-    republish_failure = cursor
-    patch_short(republish_failure_branch, republish_failure)
-    cursor = emit_call(cursor, installed_callback)
-    emit(cursor, "eb fe")
+    terminal_publication_store = None
+    publication_reentry_advance = None
+    publication_reentry_branch = None
+    if terminal_only:
+        cursor = emit(
+            cursor,
+            "c7 44 24 0c 00 00 00 00 31 f6 31 c0",
+        )
+        terminal_publication_store = cursor
+        cursor = emit_abs(
+            cursor,
+            "c7 05",
+            publication_slot,
+            "00 00 00 00",
+        )
+        cursor = emit(cursor, "5f 5e c3")
+    elif publication_reentry or mutation == "same-root-publication-reentry":
+        cursor = emit_abs(cursor, "83 3d", branch_flag, "01")
+        publication_reentry_branch = cursor
+        cursor = emit(cursor, "74 00")
+    if not terminal_only:
+        cursor = emit(cursor, "6a 20")
+        cursor = emit_call(cursor, allocator)
+        cursor = emit(cursor, "59 85 c0")
+        republish_failure_branch = cursor
+        cursor = emit(cursor, "74 00")
+        cursor = emit(cursor, "89 c7")
+        if mutation == "same-root-republish":
+            cursor = emit(cursor, "89 f7")
+        elif mutation == "unknown-republish-root":
+            cursor = emit(cursor, "89 cf")
+        if mutation == "stale-alias-republish":
+            cursor = emit_abs(cursor, "89 35", stale_alias_slot)
+        cursor = emit(cursor, "c7 44 24 0c 00 00 00 00 31 f6")
+        cursor = emit_abs(cursor, "89 3d", publication_slot)
+        if terminal_clear or mutation == "terminal-nonnull-immediate":
+            terminal_publication_store = cursor
+            cursor = emit_abs(
+                cursor,
+                "c7 05",
+                publication_slot,
+                (
+                    "01 00 00 00"
+                    if mutation == "terminal-nonnull-immediate"
+                    else "00 00 00 00"
+                ),
+            )
+        cursor = emit(cursor, "5f 5e c3")
+        republish_failure = cursor
+        patch_short(republish_failure_branch, republish_failure)
+        cursor = emit_call(cursor, installed_callback)
+        cursor = emit(cursor, "eb fe")
+        if publication_reentry_branch is not None:
+            patch_short(publication_reentry_branch, cursor)
+            publication_reentry_advance = cursor
+            cursor = emit(
+                cursor,
+                (
+                    "89 f6"
+                    if mutation == "same-root-publication-reentry"
+                    else "8b 76 04"
+                ),
+            )
+            cursor = emit_jump(cursor, publication)
 
     slice_addresses = (
         publication,
@@ -3956,7 +4021,12 @@ def return_path_publication_lifecycle_image(
         "ff 15",
         iat_vas["LeaveCriticalSection"],
     )
-    cursor = emit(cursor, "59 c3")
+    cursor = emit(cursor, "59")
+    if returning_allocator:
+        cursor = emit(cursor, "6a 20")
+        cursor = emit_call(cursor, allocator)
+        cursor = emit(cursor, "59")
+    cursor = emit(cursor, "c3")
     emit(helper_forwarder, "8b 44 24 04 ff d0 c3")
 
     # Owned fixed bump allocator and checked grow callback seam.
@@ -4250,12 +4320,15 @@ def return_path_publication_lifecycle_image(
         consumer_entries=(minimum_consumer, publishing_consumer),
         minimum_consumer=minimum_consumer,
         publishing_consumer=publishing_consumer,
+        root_definition=root_definition,
         incoming_calls=(recursive_call, *incoming_calls),
         incoming_owners=(publishing_consumer, *incoming_owners),
         publication=publication,
         publication_slot=publication_slot,
         observation=observation,
         observation_field_start=observation_field_start,
+        terminal_publication_store=terminal_publication_store,
+        publication_reentry_advance=publication_reentry_advance,
         slice_addresses=slice_addresses,
         helper_call=helper_call,
         helper_target=helper_target,
@@ -4415,8 +4488,8 @@ def _return_path_publication_root_definition(recovery, fixture):
         source_family,
         fixture.publishing_consumer,
     )
-    assert len(definitions) == 1
-    return next(iter(definitions))
+    assert fixture.root_definition in definitions
+    return fixture.root_definition
 
 
 def _return_path_publication_interior_jump_image():
@@ -9408,6 +9481,58 @@ def test_return_path_publication_rejects_indirect_different_observation_root():
     assert result.certificate is None
 
 
+def test_return_path_publication_accepts_terminal_null_clear():
+    fixture = return_path_publication_lifecycle_image(terminal_clear=True)
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert fixture.terminal_publication_store is not None
+    assert result.certificate is not None
+    assert fixture.terminal_publication_store not in {
+        row.instruction_address for row in result.certificate.republish_cuts
+    }
+
+
+def test_return_path_publication_rejects_terminal_nonnull_immediate():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="terminal-nonnull-immediate"
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert fixture.terminal_publication_store is not None
+    assert result.certificate is None
+
+
+def test_return_path_publication_stops_at_advancing_publication_reentry():
+    fixture = return_path_publication_lifecycle_image(
+        publication_reentry=True
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert fixture.publication_reentry_advance is not None
+    assert result.certificate is not None
+    assert result.certificate.same_generation_slice == frozenset(
+        fixture.slice_addresses
+    )
+    assert (
+        fixture.publication_reentry_advance
+        not in result.certificate.same_generation_slice
+    )
+
+
+def test_return_path_publication_rejects_same_root_publication_reentry():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="same-root-publication-reentry"
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert fixture.publication_reentry_advance is not None
+    assert result.certificate is None
+
+
 def test_non_lifecycle_callers_still_reject_return_path_publication():
     fixture = return_path_publication_lifecycle_image()
     recovery = _DirectCfgRecovery(
@@ -9666,6 +9791,82 @@ def test_backend_bridge_binds_finite_indirect_semantic_scope():
     assert fixture.session_helpers[1] in (
         bridge.allocator_certificate.stability_scope_functions
     )
+
+
+def test_returning_closure_prunes_context_bound_callback_failure():
+    fixture = return_path_publication_lifecycle_image()
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+    bridge = result.certificate.backend_bridges[0]
+    callback_call = next(
+        address
+        for address in bridge.allocator_certificate.grow_call_sites
+        if any(
+            operand.type == capstone.x86_const.X86_OP_MEM
+            and result.recovery._absolute_memory_operand(operand)
+            == bridge.allocator_certificate.callback_slot
+            for operand in result.recovery._owned_decoded(address).operands
+        )
+    )
+    call = result.recovery._owned_decoded(callback_call)
+    observation = call.address + call.size
+    context = replace(
+        result.context,
+        binding=replace(
+            result.context.binding,
+            transfer_address=0xDEAD_BEEF,
+        ),
+    )
+
+    closure = result.recovery._returning_publication_closure(
+        context=context,
+        caller_entry=fixture.grow_target,
+        observation_address=observation,
+        publication_slot=fixture.publication_slot,
+        same_generation_slice=frozenset({callback_call, observation}),
+        republish_cuts=(),
+        backend_bridges=(bridge,),
+    )
+
+    assert closure is not None
+    assert closure.bodies == ()
+    assert closure.candidate_targets == frozenset(
+        {bridge.allocator_certificate.callback_target}
+    )
+    assert len(closure.call_edges) == 1
+    assert not closure.call_edges[0].returns_to_continuation
+
+
+def test_publication_discovers_allocator_from_returning_closure():
+    fixture = return_path_publication_lifecycle_image(
+        returning_allocator=True,
+        terminal_only=True,
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    # This fixture's deliberately tiny allocator uses an address-arithmetic
+    # shape outside the later body-domain proof. Discovery and totality must
+    # nevertheless happen before that independent fail-closed boundary.
+    matching_totality = [
+        entry
+        for key, entry in result.recovery.allocator_totality_cache.items()
+        if key[:3]
+        == (
+            fixture.allocator,
+            fixture.helper_target,
+            frozenset({fixture.publishing_consumer}),
+        )
+    ]
+    assert len(matching_totality) == 1
+    assert matching_totality[0] is not None
+    assert fixture.allocator in {
+        call.target
+        for call in result.recovery._function_direct_calls(
+            fixture.helper_target
+        )
+    }
 
 
 @pytest.mark.parametrize(
@@ -11733,6 +11934,7 @@ def test_publication_checkpoint_recomputes_after_same_image_ownership_growth(
         publication_slot=fixture.publication_slot,
         same_generation_slice=direct.certificate.same_generation_slice,
         republish_cuts=direct.certificate.republish_cuts,
+        backend_bridges=direct.certificate.backend_bridges,
     )
     assert closure is not None
     closure_entries = {row.function_entry for row in closure.bodies}

@@ -11,7 +11,7 @@ import struct
 import tempfile
 import time
 from bisect import bisect_left, bisect_right
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -41540,6 +41540,7 @@ class _DirectCfgRecovery:
         publication_slot: int,
         same_generation_slice: frozenset[int],
         republish_cuts: tuple[_PublicationRepublishCut, ...],
+        backend_bridges: tuple[_PublicationBackendBridge, ...],
     ) -> _ReturningPublicationClosure | None:
         cut_addresses = {
             cut.instruction_address for cut in republish_cuts
@@ -41571,6 +41572,37 @@ class _DirectCfgRecovery:
                         heapq.heappush(pending, successor)
             return False
 
+        def context_bound_nonreturn_targets(
+            call_address: int,
+            targets: set[int],
+        ) -> frozenset[int]:
+            call = self._owned_decoded(call_address)
+            if (
+                len(call.operands) != 1
+                or call.operands[0].type != X86_OP_MEM
+            ):
+                return frozenset()
+            call_slot = self._absolute_memory_operand(call.operands[0])
+            nonreturn_targets = set()
+            for bridge in backend_bridges:
+                certificate = bridge.allocator_certificate
+                if (
+                    call_address not in certificate.grow_call_sites
+                    or call_slot != certificate.callback_slot
+                    or frozenset(targets)
+                    != certificate.callback_candidate_targets
+                    or certificate.callback_candidate_targets
+                    != frozenset({certificate.callback_target})
+                    or self._callback_nonreturns_via_context_restore(
+                        certificate.callback_target,
+                        certificate.context_slot,
+                    )
+                    != certificate.longjmp_target
+                ):
+                    continue
+                nonreturn_targets.add(certificate.callback_target)
+            return frozenset(nonreturn_targets)
+
         pending = []
         call_edges = []
         candidate_targets = set()
@@ -41595,13 +41627,15 @@ class _DirectCfgRecovery:
                 if address == context.binding.transfer_address:
                     continue
                 return None
+            nonreturn_targets = context_bound_nonreturn_targets(
+                address, targets
+            )
             for target in sorted(targets):
                 if (
                     target == context.consumer_entry
                     or target not in self.function_addresses
                 ):
                     return None
-                pending.append(target)
                 candidate_targets.add(target)
                 call_edges.append(
                     _PublicationCallEdge(
@@ -41612,9 +41646,13 @@ class _DirectCfgRecovery:
                             if direct == target
                             else "finite-indirect"
                         ),
-                        returns_to_continuation=True,
+                        returns_to_continuation=(
+                            target not in nonreturn_targets
+                        ),
                     )
                 )
+                if target not in nonreturn_targets:
+                    pending.append(target)
 
         bodies = {}
         while pending:
@@ -41677,6 +41715,9 @@ class _DirectCfgRecovery:
                     targets.add(direct)
                 if not targets:
                     return None
+                nonreturn_targets = context_bound_nonreturn_targets(
+                    address, targets
+                )
                 for target in sorted(targets):
                     if (
                         target == context.consumer_entry
@@ -41691,11 +41732,16 @@ class _DirectCfgRecovery:
                             source_address=address,
                             target_address=target,
                             flow_kind=flow_kind,
-                            returns_to_continuation=True,
+                            returns_to_continuation=(
+                                target not in nonreturn_targets
+                            ),
                         )
                     )
                     candidate_targets.add(target)
-                    if target not in bodies:
+                    if (
+                        target not in nonreturn_targets
+                        and target not in bodies
+                    ):
                         heapq.heappush(pending, target)
         return _ReturningPublicationClosure(
             bodies=tuple(
@@ -42061,6 +42107,15 @@ class _DirectCfgRecovery:
         body_by_entry = {
             body.function_entry: body for body in closure.bodies
         }
+        nonreturn_targets_by_source: dict[int, set[int]] = {}
+        for edge in closure.call_edges:
+            if (
+                edge.flow_kind in {"direct", "finite-indirect"}
+                and not edge.returns_to_continuation
+            ):
+                nonreturn_targets_by_source.setdefault(
+                    edge.source_address, set()
+                ).add(edge.target_address)
 
         def memory_storage_identity(
             address: int,
@@ -42305,12 +42360,16 @@ class _DirectCfgRecovery:
                                 )
                             )
                 elif decoded.group(CS_GRP_CALL):
-                    targets = set(
+                    raw_targets = set(
                         self.call_targets_by_source.get(address, ())
                     )
                     direct = self._direct_target(decoded)
                     if direct is not None:
-                        targets.add(direct)
+                        raw_targets.add(direct)
+                    nonreturn_targets = (
+                        nonreturn_targets_by_source.get(address, set())
+                    )
+                    targets = raw_targets - nonreturn_targets
                     for index in range(8):
                         pushed = self._pushed_call_argument(address, index)
                         if pushed is None:
@@ -42327,6 +42386,8 @@ class _DirectCfgRecovery:
                             push_state,
                         )
                         if actual_tainted:
+                            if nonreturn_targets:
+                                return None
                             if not targets:
                                 return None
                             for target in targets:
@@ -42433,9 +42494,14 @@ class _DirectCfgRecovery:
                     frozenset(local_storage),
                     frozenset(globals_),
                 )
-                for successor in self._summary_successors(
-                    address, function_entry, following_entry
-                ):
+                successors = (
+                    ()
+                    if address in nonreturn_targets_by_source
+                    else self._summary_successors(
+                        address, function_entry, following_entry
+                    )
+                )
+                for successor in successors:
                     if successor not in body_addresses:
                         return None
                     updated = (
@@ -43671,22 +43737,72 @@ class _DirectCfgRecovery:
             return None
 
         following_entry = self._following_function_entry(caller_entry)
-        same_generation_slice = frozenset(
-            address
-            for address in self._function_instruction_addresses(caller_entry)
-            if self._reachable_within_function(
-                publication_address,
-                address,
+        root_family = self._register_family(publication.operands[1].reg)
+        forward = set()
+        reverse_edges: dict[int, set[int]] = defaultdict(set)
+        reentry_sources = set()
+        pending = [publication_address]
+        while pending:
+            address = heapq.heappop(pending)
+            if address in forward:
+                continue
+            forward.add(address)
+            self.limits.check("max_summary_iterations", len(forward))
+            for successor in self._summary_successors(
+                address, caller_entry, following_entry
+            ):
+                if successor == publication_address:
+                    reentry_sources.add(address)
+                    continue
+                reverse_edges[successor].add(address)
+                if successor not in forward:
+                    heapq.heappush(pending, successor)
+
+        for reentry_source in reentry_sources:
+            definitions = self._register_definitions_across_blocks(
+                reentry_source,
+                root_family,
                 caller_entry,
-                following_entry,
             )
-            and self._reachable_within_function(
-                address,
-                observation_address,
-                caller_entry,
-                following_entry,
-            )
-        )
+            if not definitions:
+                return None
+            for definition_address in definitions:
+                definition = self._owned_decoded(definition_address)
+                if (
+                    definition.id != X86_INS_MOV
+                    or len(definition.operands) != 2
+                    or definition.operands[0].type != X86_OP_REG
+                    or definition.operands[0].size != 4
+                    or self._register_family(definition.operands[0].reg)
+                    != root_family
+                    or definition.operands[1].type != X86_OP_MEM
+                    or not definition.operands[1].access & CS_AC_READ
+                    or definition.operands[1].size != 4
+                    or definition.operands[1].mem.segment
+                    != X86_REG_INVALID
+                    or definition.operands[1].mem.base
+                    == X86_REG_INVALID
+                    or self._register_family(
+                        definition.operands[1].mem.base
+                    )
+                    != root_family
+                    or definition.operands[1].mem.index
+                    != X86_REG_INVALID
+                ):
+                    return None
+
+        reverse = set()
+        pending = [observation_address]
+        while pending:
+            address = heapq.heappop(pending)
+            if address in reverse or address not in forward:
+                continue
+            reverse.add(address)
+            self.limits.check("max_summary_iterations", len(reverse))
+            for predecessor in reverse_edges.get(address, ()):
+                if predecessor not in reverse:
+                    heapq.heappush(pending, predecessor)
+        same_generation_slice = frozenset(forward & reverse)
         if (
             publication_address not in same_generation_slice
             or observation_address not in same_generation_slice
@@ -43724,6 +43840,84 @@ class _DirectCfgRecovery:
         if republish_cuts is None:
             return None
 
+        required_allocation_candidates = set()
+        for cut in republish_cuts:
+            if cut.new_root.kind != "definition":
+                return None
+            allocation_call = self.instructions.get(
+                cut.new_root.identifier
+            )
+            allocation_caller = self._registrar_function_entry(
+                cut.new_root.identifier
+            )
+            allocator = self.direct_call_targets_by_source.get(
+                cut.new_root.identifier
+            )
+            if (
+                allocation_call is None
+                or not self._owned_decoded(
+                    cut.new_root.identifier
+                ).group(CS_GRP_CALL)
+                or allocation_caller is None
+                or allocator is None
+            ):
+                return None
+            required_allocation_candidates.add(
+                (allocator, allocation_caller)
+            )
+
+        returning_roots = set()
+        for address in same_generation_slice:
+            decoded = self._owned_decoded(address)
+            if not decoded.group(CS_GRP_CALL):
+                continue
+            direct = self._direct_target(decoded)
+            targets = set(self.call_targets_by_source.get(address, ()))
+            if direct is not None:
+                targets.add(direct)
+            returning_roots.update(
+                target
+                for target in targets
+                if target in self.function_addresses
+            )
+        returning_scope = frozenset().union(
+            *(
+                self._direct_function_call_closure(target)
+                for target in sorted(returning_roots)
+            )
+        )
+        discovered_allocation_candidates = {
+            (call.target, allocation_caller)
+            for allocation_caller in returning_scope
+            for call in self._function_direct_calls(allocation_caller)
+            if self._owned_fixed_bump_allocator_fact(call.target)
+            is not None
+        }
+
+        backend_bridges = []
+        for allocator, allocation_caller in sorted(
+            required_allocation_candidates
+            | discovered_allocation_candidates
+        ):
+            bridge = self._publication_backend_bridge(
+                active_context=context,
+                consumer_entry=context.binding.function_entry,
+                allocator=allocator,
+                allocation_caller=allocation_caller,
+            )
+            if bridge is None:
+                if (
+                    allocator,
+                    allocation_caller,
+                ) in required_allocation_candidates:
+                    return None
+                continue
+            if bridge not in backend_bridges:
+                backend_bridges.append(bridge)
+        if not backend_bridges:
+            return None
+        frozen_backend_bridges = tuple(backend_bridges)
+
         closure = self._returning_publication_closure(
             context=context,
             caller_entry=caller_entry,
@@ -43731,6 +43925,7 @@ class _DirectCfgRecovery:
             publication_slot=publication_slot,
             same_generation_slice=same_generation_slice,
             republish_cuts=republish_cuts,
+            backend_bridges=frozen_backend_bridges,
         )
         if closure is None:
             return None
@@ -43767,40 +43962,6 @@ class _DirectCfgRecovery:
         if body_address_domains is None:
             return None
 
-        backend_bridges = []
-        for cut in republish_cuts:
-            if cut.new_root.kind != "definition":
-                return None
-            allocation_call = self.instructions.get(
-                cut.new_root.identifier
-            )
-            allocation_caller = self._registrar_function_entry(
-                cut.new_root.identifier
-            )
-            allocator = self.direct_call_targets_by_source.get(
-                cut.new_root.identifier
-            )
-            if (
-                allocation_call is None
-                or not self._owned_decoded(
-                    cut.new_root.identifier
-                ).group(CS_GRP_CALL)
-                or allocation_caller is None
-                or allocator is None
-            ):
-                return None
-            bridge = self._publication_backend_bridge(
-                active_context=context,
-                consumer_entry=context.binding.function_entry,
-                allocator=allocator,
-                allocation_caller=allocation_caller,
-            )
-            if bridge is None:
-                return None
-            backend_bridges.append(bridge)
-        if not backend_bridges:
-            return None
-
         slice_payload = tuple(
             (
                 address,
@@ -43833,7 +43994,7 @@ class _DirectCfgRecovery:
                         for body in bridge.backend_bodies
                     ),
                 )
-                for bridge in backend_bridges
+                for bridge in frozen_backend_bridges
             ),
         }
         closure_sha256 = hashlib.sha256(
@@ -43851,11 +44012,11 @@ class _DirectCfgRecovery:
                 f"closure-digest={closure_sha256}",
                 *(
                     f"session={bridge.allocator_certificate.session_root:#x}"
-                    for bridge in backend_bridges
+                    for bridge in frozen_backend_bridges
                 ),
                 *(
                     f"backend-root={bridge.backend_root:#x}"
-                    for bridge in backend_bridges
+                    for bridge in frozen_backend_bridges
                 ),
                 *(
                     "opaque-copy-escape="
@@ -43892,7 +44053,7 @@ class _DirectCfgRecovery:
             body_address_domains=body_address_domains,
             imports=closure.imports,
             opaque_copy_destinations=opaque_copy_destinations,
-            backend_bridges=tuple(backend_bridges),
+            backend_bridges=frozen_backend_bridges,
             provenance=provenance,
             summary_fact_signature=self._summary_fact_signature(),
             control_flow_revision=self.control_flow_revision,
@@ -44030,14 +44191,27 @@ class _DirectCfgRecovery:
                 following_entry,
             ):
                 return None
+            relocated_slot = any(
+                row.type == 3
+                and row.va == store.address + store.disp_offset
+                for row in self.image.relocations
+            )
+            if (
+                store.operands[0].size == 4
+                and store.operands[1].type == X86_OP_IMM
+                and store.operands[1].size == 4
+                and store.operands[1].imm & 0xFFFF_FFFF == 0
+                and relocated_slot
+            ):
+                # A full-width null store on a path that cannot reach the
+                # observation terminates publication of this generation; it
+                # does not publish another pointer generation requiring an
+                # alias-death witness.
+                continue
             if (
                 store.operands[0].size != 4
                 or store.operands[1].type != X86_OP_REG
-                or not any(
-                    row.type == 3
-                    and row.va == store.address + store.disp_offset
-                    for row in self.image.relocations
-                )
+                or not relocated_slot
             ):
                 return None
             states = self._relative_pointer_states(
