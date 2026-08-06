@@ -3378,6 +3378,7 @@ _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
 def return_path_publication_lifecycle_image(
     *,
     mutation: str | None = None,
+    publishing_consumer_first: bool = False,
 ) -> ReturnPathPublicationFixture:
     """One deterministic publication lifecycle with future hostile seams."""
     if mutation is not None and mutation not in _RETURN_PATH_PUBLICATION_MUTATIONS:
@@ -3385,8 +3386,12 @@ def return_path_publication_lifecycle_image(
 
     text_va = 0x00401000
     data_va = 0x00403000
-    minimum_consumer = 0x00401000
-    publishing_consumer = 0x00401080
+    if publishing_consumer_first:
+        publishing_consumer = 0x00401000
+        minimum_consumer = 0x00401080
+    else:
+        minimum_consumer = 0x00401000
+        publishing_consumer = 0x00401080
     incoming_owners = (0x00401200, 0x00401280)
     backend_root = 0x00401300
     session_root = 0x00401500
@@ -9318,6 +9323,33 @@ def test_object_tag_lifecycle_accepts_return_path_publication_noninterference():
         cfg.jump_table_at(transfer).index_max
         for transfer in fixture.transfers
     } == {74}
+
+
+def test_return_path_publication_is_independent_of_consumer_order():
+    fixture = return_path_publication_lifecycle_image(
+        publishing_consumer_first=True
+    )
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert fixture.publishing_consumer < fixture.minimum_consumer
+    assert {
+        cfg.jump_table_at(transfer).guard_operator
+        for transfer in fixture.transfers
+    } == {"movzx-lifecycle-domain"}
+    assert {
+        cfg.jump_table_at(transfer).index_max
+        for transfer in fixture.transfers
+    } == {74}
+    assert len(cfg.publication_noninterference_certificates) == 1
+    assert (
+        cfg.publication_noninterference_certificates[0].caller_entry
+        == fixture.publishing_consumer
+    )
 
 
 def test_non_lifecycle_callers_still_reject_return_path_publication():

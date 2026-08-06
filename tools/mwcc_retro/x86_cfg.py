@@ -5885,6 +5885,9 @@ class _DirectCfgRecovery:
             )
             values: set[int] = set()
             details = []
+            blocked_publication_candidates = set()
+            blocked_candidates_are_unambiguous = True
+            has_blocked_binding = False
             for raw_binding in bindings:
                 binding = _ObjectTagLifecycleConsumerBinding(
                     function_entry=raw_binding[0],
@@ -5925,6 +5928,7 @@ class _DirectCfgRecovery:
                             "object-tag lifecycle context stack is corrupted"
                         )
                 if result is None:
+                    has_blocked_binding = True
                     candidates = tuple(
                         sorted(
                             {
@@ -5948,24 +5952,44 @@ class _DirectCfgRecovery:
                             ),
                         )
                     )
-                    if values and len(candidates) == 1:
-                        # A publication-dependent consumer can be circular
-                        # through an earlier protected dispatch: its incoming
-                        # fresh object reaches this consumer only after the
-                        # candidate table is installed.  Preserve the finite
-                        # values already established by the other exact
-                        # bindings solely as a non-mutating table hypothesis.
-                        # The producer query itself remains bottom; the
-                        # disposable installed trial must recompute the full
-                        # aggregate before publication is admitted.
-                        self.provisional_publication_guard_domains[
-                            query.sha256
-                        ] = (frozenset(values), candidates)
-                    return None
+                    if len(candidates) != 1:
+                        blocked_candidates_are_unambiguous = False
+                    else:
+                        blocked_publication_candidates.add(candidates[0])
+                    continue
                 values.update(result[0])
                 details.append(
                     f"consumer={binding.transfer_address:#x};{result[1]}"
                 )
+            if has_blocked_binding:
+                candidates = tuple(
+                    sorted(
+                        blocked_publication_candidates,
+                        key=lambda row: (
+                            row.consumer_entry,
+                            row.publication_address,
+                            row.observation_address,
+                        ),
+                    )
+                )
+                if (
+                    values
+                    and blocked_candidates_are_unambiguous
+                    and len(candidates) == 1
+                ):
+                    # A publication-dependent consumer can be circular
+                    # through an earlier protected dispatch: its incoming
+                    # fresh object reaches this consumer only after the
+                    # candidate table is installed.  Preserve the finite
+                    # values established by the other exact bindings solely
+                    # as a non-mutating table hypothesis.  The producer query
+                    # itself remains bottom; the disposable installed trial
+                    # must recompute the full aggregate before publication is
+                    # admitted.
+                    self.provisional_publication_guard_domains[
+                        query.sha256
+                    ] = (frozenset(values), candidates)
+                return None
             if not values:
                 return None
             self._check_count("max_finite_values", len(values))
