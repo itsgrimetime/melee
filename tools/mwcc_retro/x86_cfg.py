@@ -15546,6 +15546,22 @@ class _DirectCfgRecovery:
         self,
         function_entry: int,
         protected_slots: frozenset[int],
+        *,
+        active: frozenset[int] = frozenset(),
+        memo: dict[
+            int,
+            tuple[
+                tuple[
+                    Literal[
+                        "finite", "private-stack", "fresh-allocation"
+                    ],
+                    frozenset[int],
+                ],
+                frozenset[int],
+            ]
+            | None,
+        ]
+        | None = None,
     ) -> tuple[
         tuple[
             Literal["finite", "private-stack", "fresh-allocation"],
@@ -15553,19 +15569,48 @@ class _DirectCfgRecovery:
         ],
         frozenset[int],
     ] | None:
-        """Bind every EAX return to finite storage or exact GlobalAlloc."""
-        import_domains = {}
+        """Bind every EAX return to finite storage or exact allocation."""
+        self._note_producer_dependency(function_entry)
+        if function_entry in active:
+            return None
+        if memo is None:
+            memo = {}
+        if function_entry in memo:
+            return memo[function_entry]
+        memo[function_entry] = None
+        next_active = active | {function_entry}
+        call_domains = {}
+        return_storage_slots = set()
         for address in self._function_instruction_addresses(function_entry):
             decoded = self._owned_decoded(address)
-            if decoded.group(CS_GRP_CALL) and self._exact_semantic_import_effect(
-                address, protected_slots
-            ) == "fresh-allocation":
-                import_domains[address] = (
+            if not decoded.group(CS_GRP_CALL):
+                continue
+            if (
+                self._exact_semantic_import_effect(
+                    address, protected_slots
+                )
+                == "fresh-allocation"
+            ):
+                call_domains[address] = (
                     "fresh-allocation",
                     frozenset(),
                 )
+                continue
+            target = self.direct_call_targets_by_source.get(address)
+            if target not in self.function_addresses:
+                continue
+            typed = self._exact_typed_function_return_domain(
+                target,
+                protected_slots,
+                active=next_active,
+                memo=memo,
+            )
+            if typed is None:
+                continue
+            domain, storage_slots = typed
+            call_domains[address] = domain
+            return_storage_slots.update(storage_slots)
         domains = []
-        return_storage_slots = set()
         for return_address in self._function_instruction_addresses(
             function_entry
         ):
@@ -15575,7 +15620,7 @@ class _DirectCfgRecovery:
                 return_address,
                 "eax",
                 function_entry,
-                call_return_domains=import_domains,
+                call_return_domains=call_domains,
                 argument_domains={},
             )
             if domain is None or domain[0] == "private-stack":
@@ -15587,7 +15632,14 @@ class _DirectCfgRecovery:
                 return None
             if domain[0] == "fresh-allocation":
                 if any(
-                    definition not in import_domains
+                    definition not in call_domains
+                    and not (
+                        (row := self._owned_decoded(definition)).id
+                        == X86_INS_MOV
+                        and len(row.operands) == 2
+                        and row.operands[0].type == X86_OP_REG
+                        and row.operands[1].type == X86_OP_REG
+                    )
                     for definition in definitions
                 ):
                     return None
@@ -15595,6 +15647,21 @@ class _DirectCfgRecovery:
                 for definition_address in definitions:
                     definition = self._owned_decoded(definition_address)
                     operands = definition.operands
+                    if (
+                        definition_address in call_domains
+                        and call_domains[definition_address][0] == "finite"
+                    ):
+                        continue
+                    if (
+                        definition.id == X86_INS_XOR
+                        and len(operands) == 2
+                        and all(
+                            operand.type == X86_OP_REG
+                            and self._register_family(operand.reg) == "eax"
+                            for operand in operands
+                        )
+                    ):
+                        continue
                     if not (
                         definition.id == X86_INS_MOV
                         and len(operands) == 2
@@ -15621,11 +15688,19 @@ class _DirectCfgRecovery:
                     *(values for _kind, values in domains)
                 ),
             )
+        elif kinds == {"finite", "fresh-allocation"} and all(
+            not (values - {0})
+            for kind, values in domains
+            if kind == "finite"
+        ):
+            merged = ("fresh-allocation", frozenset())
         elif len(kinds) == 1:
             merged = domains[0]
         else:
             return None
-        return merged, frozenset(return_storage_slots)
+        result = merged, frozenset(return_storage_slots)
+        memo[function_entry] = result
+        return result
 
     def _exact_fresh_allocation_sizes(
         self,
@@ -15685,11 +15760,14 @@ class _DirectCfgRecovery:
         call_domains = {}
         return_storage_slots = set()
         domains_by_target = {}
+        nested_domains = {}
         for call in grow_shape.allocator_calls:
             typed = domains_by_target.get(call.target)
             if typed is None:
                 typed = self._exact_typed_function_return_domain(
-                    call.target, protected_slots
+                    call.target,
+                    protected_slots,
+                    memo=nested_domains,
                 )
                 if typed is None:
                     return None

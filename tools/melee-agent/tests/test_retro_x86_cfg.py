@@ -3251,6 +3251,7 @@ class ReturnPathPublicationFixture:
     session_helpers: tuple[int, ...]
     backend_root: int
     system_allocator: int
+    system_allocator_helper: int
     unrelated_write_slot: int
     setjmp_target: int
     context_slot: int
@@ -3366,6 +3367,7 @@ _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
         "system-arena-partial-cursor-store",
         "system-arena-fresh-size-overflow",
         "system-arena-fresh-size-exact",
+        "system-allocator-return-cycle",
         "reset-in-lifetime",
         "lifecycle-root-outside-backend",
         "incoming-owner-outside-backend",
@@ -3389,6 +3391,7 @@ def return_path_publication_lifecycle_image(
     terminal_clear: bool = False,
     publication_reentry: bool = False,
     returning_allocator: bool = False,
+    nested_system_allocator: bool = False,
     terminal_only: bool = False,
 ) -> ReturnPathPublicationFixture:
     """One deterministic publication lifecycle with future hostile seams."""
@@ -3418,6 +3421,7 @@ def return_path_publication_lifecycle_image(
     installed_callback = 0x00401B00
     default_callback = 0x00401B40
     system_allocator = 0x00401B80
+    system_allocator_helper = 0x00401BC0
     publication_slot = 0x00403000
     callback_slot = 0x00403004
     branch_flag = 0x00403008
@@ -4100,7 +4104,17 @@ def return_path_publication_lifecycle_image(
             if mutation == "deferred-lifecycle-target-df-leak"
             else "c3",
         )
-    if mutation in {
+    if mutation == "system-allocator-return-cycle":
+        cursor = emit_call(system_allocator, system_allocator_helper)
+        emit(cursor, "c3")
+        cursor = emit_call(system_allocator_helper, system_allocator)
+        emit(cursor, "c3")
+    elif nested_system_allocator:
+        cursor = emit_call(system_allocator, system_allocator_helper)
+        emit(cursor, "c3")
+        cursor = emit_abs(system_allocator_helper, "a1", 0x004030C0)
+        emit(cursor, "c3")
+    elif mutation in {
         "system-arena-fresh-size-overflow",
         "system-arena-fresh-size-exact",
     }:
@@ -4343,6 +4357,7 @@ def return_path_publication_lifecycle_image(
         session_helpers=(session_helper, second_session_helper),
         backend_root=backend_root,
         system_allocator=system_allocator,
+        system_allocator_helper=system_allocator_helper,
         unrelated_write_slot=unrelated_write_slot,
         setjmp_target=context_save,
         context_slot=context_slot,
@@ -9947,6 +9962,52 @@ def test_allocator_totality_accepts_exact_fresh_arena_capacity():
     )
 
     assert certificate is not None
+
+
+def test_allocator_totality_accepts_nested_owned_typed_return():
+    fixture = return_path_publication_lifecycle_image(
+        nested_system_allocator=True
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+
+    dependencies: set[tuple[str, int]] = set()
+    recovery.producer_dependency_collectors.append(dependencies)
+    try:
+        certificate = recovery._allocator_totality_certificate(
+            fixture.allocator,
+            fixture.publishing_consumer,
+            lifetime_roots=frozenset({fixture.publishing_consumer}),
+        )
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is dependencies
+
+    assert certificate is not None
+    assert ("function", fixture.system_allocator_helper) in dependencies
+
+
+def test_allocator_totality_rejects_recursive_owned_typed_return():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="system-allocator-return-cycle"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+
+    certificate = recovery._allocator_totality_certificate(
+        fixture.allocator,
+        fixture.publishing_consumer,
+        lifetime_roots=frozenset({fixture.publishing_consumer}),
+    )
+
+    assert certificate is None
 
 
 @pytest.mark.parametrize(
