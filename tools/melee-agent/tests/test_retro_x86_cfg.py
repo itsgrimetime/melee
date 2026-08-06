@@ -3233,6 +3233,7 @@ class ReturnPathPublicationFixture:
     publication: int
     publication_slot: int
     observation: int
+    observation_field_start: int
     slice_addresses: tuple[int, ...]
     helper_call: int
     helper_target: int
@@ -3379,6 +3380,7 @@ def return_path_publication_lifecycle_image(
     *,
     mutation: str | None = None,
     publishing_consumer_first: bool = False,
+    indirect_observation: bool = False,
 ) -> ReturnPathPublicationFixture:
     """One deterministic publication lifecycle with future hostile seams."""
     if mutation is not None and mutation not in _RETURN_PATH_PUBLICATION_MUTATIONS:
@@ -3520,15 +3522,29 @@ def return_path_publication_lifecycle_image(
     cursor = emit_call(cursor, helper_target)
     actual_cleanup = cursor
     cursor = emit(cursor, "59")
-    observation_push = cursor
-    if mutation == "different-observation-root":
-        cursor = emit(cursor, "57")
+    if indirect_observation:
         observation = cursor
-        cursor = emit(cursor, "0f b6 1f")
+        cursor = emit(
+            cursor,
+            "8b 5f 0a"
+            if mutation == "different-observation-root"
+            else "8b 5e 0a",
+        )
+        observation_field_start = 0xA
+        observation_push = cursor
+        cursor = emit(cursor, "53")
+        cursor = emit(cursor, "0f b6 1b")
     else:
-        cursor = emit(cursor, "56")
-        observation = cursor
-        cursor = emit(cursor, "0f b6 1e")
+        observation_field_start = 0
+        observation_push = cursor
+        if mutation == "different-observation-root":
+            cursor = emit(cursor, "57")
+            observation = cursor
+            cursor = emit(cursor, "0f b6 1f")
+        else:
+            cursor = emit(cursor, "56")
+            observation = cursor
+            cursor = emit(cursor, "0f b6 1e")
     publishing_transfer = cursor
     cursor = emit_abs(cursor, "ff 14 9d", table_base)
     cursor = emit(cursor, "59 5f 5e c3")
@@ -3563,9 +3579,10 @@ def return_path_publication_lifecycle_image(
         actual_push,
         helper_call,
         actual_cleanup,
-        observation_push,
         observation,
     )
+    if not indirect_observation:
+        slice_addresses = (*slice_addresses[:-1], observation_push, observation)
 
     incoming_calls: list[int] = []
 
@@ -3576,6 +3593,8 @@ def return_path_publication_lifecycle_image(
         failure_branch = cursor
         cursor = emit(cursor, "74 00 89 c6")
         cursor = emit(cursor, f"c6 06 {tag:02x}")
+        if indirect_observation:
+            cursor = emit(cursor, "89 76 0a")
         cursor = emit(
             cursor,
             f"c7 46 16 {0x1200 + tag:08x}",
@@ -4236,6 +4255,7 @@ def return_path_publication_lifecycle_image(
         publication=publication,
         publication_slot=publication_slot,
         observation=observation,
+        observation_field_start=observation_field_start,
         slice_addresses=slice_addresses,
         helper_call=helper_call,
         helper_target=helper_target,
@@ -4505,7 +4525,7 @@ def _direct_return_path_publication_certificate(
                 caller_entry=fixture.publishing_consumer,
                 root=root,
                 observation_address=observation_address,
-                field_start=0,
+                field_start=fixture.observation_field_start,
                 field_width=4,
                 relative_states=relative_states,
             )
@@ -9350,6 +9370,42 @@ def test_return_path_publication_is_independent_of_consumer_order():
         cfg.publication_noninterference_certificates[0].caller_entry
         == fixture.publishing_consumer
     )
+
+
+def test_return_path_publication_emits_indirect_pointer_observation_candidate():
+    fixture = return_path_publication_lifecycle_image(
+        publishing_consumer_first=True,
+        indirect_observation=True,
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    direct = _direct_return_path_publication_certificate(fixture)
+
+    assert len(recovery.publication_table_hypotheses) == 2
+    assert direct.certificate is not None
+    certificate = direct.certificate
+    assert certificate.observation_address == fixture.observation
+    assert certificate.field_start == 0xA
+    assert certificate.same_generation_slice == frozenset(
+        fixture.slice_addresses
+    )
+    assert direct.binding.movzx_address not in certificate.same_generation_slice
+
+
+def test_return_path_publication_rejects_indirect_different_observation_root():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="different-observation-root",
+        publishing_consumer_first=True,
+        indirect_observation=True,
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is None
 
 
 def test_non_lifecycle_callers_still_reject_return_path_publication():

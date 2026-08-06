@@ -43594,30 +43594,72 @@ class _DirectCfgRecovery:
             or observation_state[1] != 2
         ):
             return None
-        observation = self._owned_decoded(observation_address)
+        binding_observation = self._owned_decoded(
+            context.binding.movzx_address
+        )
         if (
-            observation_address != context.binding.movzx_address
-            or bytes(observation.bytes).hex()
+            bytes(binding_observation.bytes).hex()
             != context.binding.movzx_bytes_hex
-            or observation.id != x86_const.X86_INS_MOVZX
-            or len(observation.operands) != 2
-            or observation.operands[0].type != X86_OP_REG
-            or observation.operands[0].size != 4
-            or self._register_family(observation.operands[0].reg)
+            or binding_observation.id != x86_const.X86_INS_MOVZX
+            or len(binding_observation.operands) != 2
+            or binding_observation.operands[0].type != X86_OP_REG
+            or binding_observation.operands[0].size != 4
+            or self._register_family(binding_observation.operands[0].reg)
             != context.binding.destination_register
-            or observation.operands[1].type != X86_OP_MEM
-            or not observation.operands[1].access & CS_AC_READ
-            or observation.operands[1].size != 1
-            or observation.operands[1].mem.segment != X86_REG_INVALID
-            or observation.operands[1].mem.base == X86_REG_INVALID
-            or self._register_family(observation.operands[1].mem.base)
+            or binding_observation.operands[1].type != X86_OP_MEM
+            or not binding_observation.operands[1].access & CS_AC_READ
+            or binding_observation.operands[1].size != 1
+            or binding_observation.operands[1].mem.segment
+            != X86_REG_INVALID
+            or binding_observation.operands[1].mem.base
+            == X86_REG_INVALID
+            or self._register_family(
+                binding_observation.operands[1].mem.base
+            )
             != context.binding.source_register
-            or observation.operands[1].mem.index != X86_REG_INVALID
+            or binding_observation.operands[1].mem.index
+            != X86_REG_INVALID
         ):
             return None
-        source_operand = observation.operands[1]
+        observation = self._owned_decoded(observation_address)
+        if observation_address == context.binding.movzx_address:
+            source_operand = observation.operands[1]
+        else:
+            if (
+                observation.id != X86_INS_MOV
+                or len(observation.operands) != 2
+                or observation.operands[0].type != X86_OP_REG
+                or observation.operands[0].size != 4
+                or self._register_family(observation.operands[0].reg)
+                != context.binding.source_register
+                or observation.operands[1].type != X86_OP_MEM
+                or not observation.operands[1].access & CS_AC_READ
+                or observation.operands[1].size != 4
+                or observation.operands[1].mem.segment
+                != X86_REG_INVALID
+                or observation.operands[1].mem.base
+                == X86_REG_INVALID
+                or observation.operands[1].mem.index
+                != X86_REG_INVALID
+                or self._register_definitions_across_blocks(
+                    context.binding.movzx_address,
+                    context.binding.source_register,
+                    caller_entry,
+                )
+                != frozenset({observation_address})
+                or not self._reachable_within_function(
+                    observation_address,
+                    context.binding.movzx_address,
+                    caller_entry,
+                    self._following_function_entry(caller_entry),
+                )
+            ):
+                return None
+            source_operand = observation.operands[1]
         base_values = observation_state[0][
-            _REGISTER_FAMILIES.index(context.binding.source_register)
+            _REGISTER_FAMILIES.index(
+                self._register_family(source_operand.mem.base)
+            )
         ]
         observed_start = source_operand.mem.disp
         if (
@@ -66668,7 +66710,8 @@ def _recover_cfg_fixed_point(
             report_hypothesis_progress(
                 "hypothesis replay publication-trial-discarded: "
                 f"iteration={iteration};trial={trial_count};"
-                f"rejected={len(failed_publications)}"
+                f"rejected={len(failed_publications)};"
+                f"reason={rejection.reason}"
             )
             continue
         require_checkpoint_resume_if_budget_exhausted(
