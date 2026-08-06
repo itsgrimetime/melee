@@ -147,10 +147,10 @@ functions, instructions, calls, leaf dependencies, and protected slots in
 `_allocator_totality_dependencies`. Memo hits replay all of them.
 
 `_publication_backend_bridge` reuses the current totality slice rather than
-rebuilding a whole-root semantic closure. Its body inventory fingerprints each
-function participating in the transaction, while write auditing uses the
-recorded retained addresses for spine functions and complete bodies for side
-closures.
+rebuilding a whole-root semantic-write closure. Its existing `backend_bodies`
+inventory still fingerprints every function in the full direct closure, as
+required by the Task 5 caller bridge. Write auditing alone uses the recorded
+retained addresses for spine functions and complete bodies for side closures.
 
 ### Caching and invalidation
 
