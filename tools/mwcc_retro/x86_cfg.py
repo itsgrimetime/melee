@@ -22927,7 +22927,8 @@ class _DirectCfgRecovery:
             scalar: Value = frozenset({"scalar"})
             empty_registers = tuple(unknown for _ in _REGISTER_FAMILIES)
             # State: initial head, registers, tracked memory, ordered events,
-            # last exact flag predicate, and the discriminator addresses.
+            # last exact flag predicate, discriminator addresses, and the
+            # path-local stack delta relative to the owned return slot.
             initial_state = (
                 "unrefined",
                 empty_registers,
@@ -22935,6 +22936,7 @@ class _DirectCfgRecovery:
                 (),
                 None,
                 (),
+                0,
             )
             pending = [(function_entry, initial_state)]
             seen = set()
@@ -23127,6 +23129,7 @@ class _DirectCfgRecovery:
                     events,
                     predicate,
                     discriminators,
+                    stack_delta,
                 ) = state
                 decoded = self._owned_decoded(address)
                 groups = self._owned_decoded_groups(decoded)
@@ -23165,6 +23168,7 @@ class _DirectCfgRecovery:
                 next_memory = memory
                 next_events = events
                 next_predicate = predicate
+                next_stack_delta = stack_delta
                 if decoded.id == X86_INS_MOV and len(decoded.operands) == 2:
                     destination, source = decoded.operands
                     read = read_operand(
@@ -23332,8 +23336,12 @@ class _DirectCfgRecovery:
                     if read is None:
                         return None
                     _value, next_events = read
+                    next_stack_delta -= 4
                 elif decoded.mnemonic == "pop":
-                    if not supported_stack_transfer(decoded, pop=True):
+                    if (
+                        not supported_stack_transfer(decoded, pop=True)
+                        or stack_delta >= 0
+                    ):
                         return None
                     next_registers = set_register_operand(
                         registers,
@@ -23342,12 +23350,18 @@ class _DirectCfgRecovery:
                     )
                     if next_registers is None:
                         return None
+                    next_stack_delta += 4
                 elif decoded.mnemonic == "nop":
                     pass
-                elif decoded.group(CS_GRP_RET):
+                elif (
+                    decoded.mnemonic == "ret"
+                    and not decoded.operands
+                    and decoded.group(CS_GRP_RET)
+                ):
                     if (
                         initial_head == "unrefined"
                         or len(discriminators) != 1
+                        or stack_delta != 0
                     ):
                         return None
                     returns.append(
@@ -23359,6 +23373,8 @@ class _DirectCfgRecovery:
                         )
                     )
                     continue
+                elif decoded.group(CS_GRP_RET) or decoded.group(CS_GRP_IRET):
+                    return None
                 elif decoded.mnemonic not in {
                     "je",
                     "jz",
@@ -23417,6 +23433,7 @@ class _DirectCfgRecovery:
                                     next_events,
                                     None,
                                     (address,),
+                                    next_stack_delta,
                                 ),
                             )
                         )
@@ -23442,6 +23459,7 @@ class _DirectCfgRecovery:
                             next_events,
                             next_predicate,
                             discriminators,
+                            next_stack_delta,
                         ),
                     )
                 )
