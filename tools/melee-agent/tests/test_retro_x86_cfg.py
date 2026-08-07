@@ -4578,7 +4578,9 @@ def _normalize_private_page_symbolic_writes(
 
 
 def private_page_arena_image(
-    *, mutation: str | None = None,
+    *,
+    mutation: str | None = None,
+    post_initializer_unknown_clobber: str | None = None,
 ) -> PrivatePageArenaFixture:
     """Extend the proved private heap with one coherent page/block arena."""
     assert mutation in {
@@ -4607,6 +4609,18 @@ def private_page_arena_image(
         "coalesce-prev-missing",
         "coalesce-next-missing",
         "block-page-flags",
+    }
+    assert post_initializer_unknown_clobber in {
+        None,
+        "largest-free",
+        "extent",
+        "header",
+        "page-flags",
+        "prev",
+        "next",
+        "boundary",
+        "page-end",
+        "sentinel",
     }
     base = finalized_handle_arena_image(
         mutation="private-heap-bounded-helper-effect"
@@ -4821,6 +4835,30 @@ def private_page_arena_image(
     cursor = emit(cursor, "8d 54 0d " + sentinel_disp + " c7 02 00 00 00 00")
     cursor = emit(cursor, "57 55")
     cursor = emit_call(cursor, block_inserter)
+    if post_initializer_unknown_clobber is not None:
+        base_displacements = {
+            "largest-free": 8,
+            "extent": 12,
+            "header": 16,
+            "page-flags": 20,
+            "prev": 24,
+            "next": 28,
+        }
+        if post_initializer_unknown_clobber in base_displacements:
+            displacement = base_displacements[
+                post_initializer_unknown_clobber
+            ]
+            cursor = emit(cursor, f"89 45 {displacement:02x}")
+        else:
+            end_displacements = {
+                "boundary": -12,
+                "page-end": -8,
+                "sentinel": -4,
+            }
+            displacement = end_displacements[
+                post_initializer_unknown_clobber
+            ]
+            cursor = emit(cursor, f"89 44 1d {displacement & 0xFF:02x}")
     cursor = emit(cursor, "83 c4 08")
     if mutation == "ambiguous-first-block":
         cursor = emit(
@@ -13270,6 +13308,31 @@ def test_private_page_layout_is_derived_from_untagged_initializer_header():
     )
     assert len(header_rows) == 1
     assert header_rows[0].value_after == ("affine", 0, 1, -0x18)
+    terminal = dict(effects.terminal_symbolic_memory)
+    assert terminal == {
+        ("affine", 1, 0, 8): ("affine", 0, 1, -0x18),
+        ("affine", 1, 0, 12): (
+            "tagged",
+            ("affine", 0, 1, 0),
+            3,
+        ),
+        ("affine", 1, 0, 16): ("affine", 0, 1, -0x18),
+        ("affine", 1, 0, 20): (
+            "bit-or",
+            ("affine", 1, 0, 0),
+            1,
+        ),
+        ("affine", 1, 0, 24): ("affine", 1, 0, 16),
+        ("affine", 1, 0, 28): ("affine", 1, 0, 16),
+        ("affine", 1, 1, -12): ("affine", 0, 1, -0x18),
+        ("affine", 1, 1, -8): (
+            "tagged",
+            ("affine", 0, 1, 0),
+            3,
+        ),
+        ("affine", 1, 1, -4): ("affine", 1, 0, 16),
+    }
+    assert all(value is not None for value in terminal.values())
 
     layout = recovery._publication_private_page_layout(
         contract, extent, effects
@@ -13291,6 +13354,61 @@ def test_private_page_layout_is_derived_from_untagged_initializer_header():
     assert layout.block_boundary_tag_displacement == -4
     assert layout.size_flag_mask == 7
     assert layout.minimum_split_remainder is None
+
+
+@pytest.mark.parametrize(
+    ("field", "destination"),
+    (
+        ("largest-free", (1, 0, 8)),
+        ("extent", (1, 0, 12)),
+        ("header", (1, 0, 16)),
+        ("page-flags", (1, 0, 20)),
+        ("prev", (1, 0, 24)),
+        ("next", (1, 0, 28)),
+        ("boundary", (1, 1, -12)),
+        ("page-end", (1, 1, -8)),
+        ("sentinel", (1, 1, -4)),
+    ),
+)
+def test_private_page_layout_rejects_post_initializer_unknown_layout_clobber(
+    field,
+    destination,
+):
+    fixture = private_page_arena_image(
+        post_initializer_unknown_clobber=field
+    )
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    clobbers = tuple(
+        row
+        for row in effects.symbolic_writes
+        if row.address == ("affine", *destination)
+        and row.value_after is None
+    )
+
+    assert recovery._publication_private_heap_effect_closure_is_current(
+        effects
+    )
+    assert len(effects.symbolic_writes) == 14
+    assert effects.function_entries == tuple(
+        sorted(
+            {
+                fixture.arena.private_page_helper,
+                fixture.block_inserter,
+                fixture.block_initializer,
+            }
+        )
+    )
+    assert len(clobbers) == 1
+    clobber = clobbers[0]
+    assert clobber.function_entry == fixture.arena.private_page_helper
+    assert clobber.operation == "mov"
+    assert clobber.immediate is None
+    assert clobber.address_bit_operations == ()
+    assert clobber.value_bit_operations == ()
+    assert (
+        recovery._publication_private_page_layout(contract, extent, effects)
+        is None
+    )
 
 
 def test_private_page_layout_rejects_incomplete_or_stale_effects():
@@ -13355,6 +13473,42 @@ def test_private_page_layout_rejects_incomplete_or_stale_effects():
         )
         is None
     )
+
+
+def test_private_page_effect_closure_rejects_tampered_terminal_memory():
+    fixture = private_page_arena_image()
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    terminal = effects.terminal_symbolic_memory
+    assert len(terminal) == 9
+    changed_value = (
+        terminal[0][0],
+        ("affine", 0, 0, 0),
+    )
+    fabricated_row = (
+        ("affine", 1, 0, 32),
+        ("affine", 0, 0, 0),
+    )
+    hostiles = (
+        terminal[:-1],
+        (changed_value, *terminal[1:]),
+        (*terminal, terminal[-1]),
+        tuple(reversed(terminal)),
+        tuple(sorted((*terminal, fabricated_row))),
+    )
+
+    for hostile in hostiles:
+        tampered = replace(effects, terminal_symbolic_memory=hostile)
+        assert not recovery._publication_private_heap_effect_closure_is_current(
+            tampered
+        )
+        assert (
+            recovery._publication_private_page_layout(
+                contract,
+                extent,
+                tampered,
+            )
+            is None
+        )
 
 
 def test_private_page_layout_rejects_tagged_initializer_header():

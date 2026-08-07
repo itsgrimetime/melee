@@ -1827,6 +1827,13 @@ class _PublicationPrivateHeapEffectClosure:
     pruned_branches: tuple[_PublicationPrivateHeapPrunedBranch, ...]
     bounded_spans: tuple[_PublicationPrivateHeapBoundedSpan, ...]
     symbolic_writes: tuple[_PublicationPrivateHeapSymbolicWrite, ...]
+    terminal_symbolic_memory: tuple[
+        tuple[
+            tuple[str, int, int, int],
+            tuple[Any, ...] | None,
+        ],
+        ...,
+    ]
     preserved_metadata_calls: tuple[int, ...]
     function_fingerprints: tuple[tuple[int, str], ...]
     allocator_dependency_fingerprints: tuple[tuple[int, str], ...]
@@ -21720,6 +21727,24 @@ class _DirectCfgRecovery:
                 )
             )
 
+        terminal_symbolic_memory = effects.terminal_symbolic_memory
+        if not isinstance(terminal_symbolic_memory, tuple) or not all(
+            isinstance(row, tuple)
+            and len(row) == 2
+            and is_affine(row[0])
+            and is_value(row[1])
+            for row in terminal_symbolic_memory
+        ):
+            return False
+        terminal_keys = tuple(
+            address for address, _value in terminal_symbolic_memory
+        )
+        if (
+            terminal_keys != tuple(sorted(terminal_keys))
+            or len(terminal_keys) != len(set(terminal_keys))
+        ):
+            return False
+
         def replay_bit_operation(
             operation: str,
             value: tuple[Any, ...] | None,
@@ -22245,6 +22270,57 @@ class _DirectCfgRecovery:
             and end_sentinel_displacement
             == page_end_tag_displacement + 4
             and end_sentinel_displacement <= -4
+        ):
+            return None
+
+        if any(row.value_after is None for row in rows):
+            return None
+        first_block = ("affine", 1, 0, first_block_offset)
+        tagged_extent = (
+            "tagged",
+            ("affine", 0, 1, 0),
+            extent_tag_mask,
+        )
+        expected_terminal = {
+            (
+                "affine",
+                1,
+                0,
+                page_largest_free_offset,
+            ): initial_size,
+            ("affine", 1, 0, page_extent_offset): tagged_extent,
+            first_block: initial_size,
+            (
+                "affine",
+                1,
+                0,
+                first_block_offset + block_page_flags_offset,
+            ): ("bit-or", ("affine", 1, 0, 0), 1),
+            (
+                "affine",
+                1,
+                0,
+                first_block_offset + block_prev_offset,
+            ): first_block,
+            (
+                "affine",
+                1,
+                0,
+                first_block_offset + block_next_offset,
+            ): first_block,
+            (
+                "affine",
+                1,
+                1,
+                boundary_end_displacement,
+            ): initial_size,
+            ("affine", 1, 1, page_end_tag_displacement): tagged_extent,
+            ("affine", 1, 1, end_sentinel_displacement): first_block,
+        }
+        terminal = dict(effects.terminal_symbolic_memory)
+        if set(terminal) != set(expected_terminal) or any(
+            terminal[address] != value
+            for address, value in expected_terminal.items()
         ):
             return None
 
@@ -23116,7 +23192,7 @@ class _DirectCfgRecovery:
         if result is None:
             return None
         (
-            _memory,
+            final_memory,
             _writes,
             symbolic_writes,
             spans,
@@ -23190,6 +23266,12 @@ class _DirectCfgRecovery:
                 )
             ),
             symbolic_writes=canonical_symbolic_writes,
+            terminal_symbolic_memory=tuple(
+                sorted(
+                    (address, value[0])
+                    for address, value in final_memory.items()
+                )
+            ),
             preserved_metadata_calls=tuple(sorted(preserved_calls)),
             function_fingerprints=fingerprints,
             allocator_dependency_fingerprints=dependency_fingerprints,
