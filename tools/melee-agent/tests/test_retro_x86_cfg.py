@@ -5990,6 +5990,127 @@ def private_page_ring_hostile(mutation: str) -> PrivatePageArenaFixture:
     return replace(fixture, arena=replace(fixture.arena, image=image))
 
 
+_PRIVATE_PAGE_RING_REMOVER_INVOCATION_MUTATIONS = frozenset(
+    {
+        None,
+        "wrong-existing-register",
+        "missing-existing-argument",
+        "partial-page-source",
+        "wrong-page-field",
+        "adjusted-page",
+        "tag-not-cleared",
+        "address-bit-cleared",
+        "external-caller",
+        "in-context-extra-call",
+        "owned-raw-interior",
+        "unowned-raw-residue",
+    }
+)
+
+
+def private_page_ring_remover_invocation_image(
+    mutation: str | None = None,
+) -> PrivatePageArenaFixture:
+    """Mutate one exact remover-call seam without touching the remover."""
+    assert mutation in _PRIVATE_PAGE_RING_REMOVER_INVOCATION_MUTATIONS
+    fixture = private_page_arena_image()
+    raw = bytearray(fixture.arena.image.data)
+    patched_changed_addresses = set()
+
+    def patch(address: int, expected: str, replacement: str) -> None:
+        expected_bytes = bytes.fromhex(expected)
+        replacement_bytes = bytes.fromhex(replacement)
+        assert len(expected_bytes) == len(replacement_bytes)
+        section = next(
+            section
+            for section in fixture.arena.image.sections
+            if section.va <= address < section.va + section.raw_size
+        )
+        offset = section.raw_offset + address - section.va
+        assert raw[offset : offset + len(expected_bytes)] == expected_bytes
+        patched_changed_addresses.update(
+            address + index
+            for index, (before, after) in enumerate(
+                zip(expected_bytes, replacement_bytes, strict=True)
+            )
+            if before != after
+        )
+        raw[offset : offset + len(replacement_bytes)] = replacement_bytes
+
+    def call_encoding(address: int, target: int) -> str:
+        displacement = target - address - 5
+        return "e8" + displacement.to_bytes(
+            4, "little", signed=True
+        ).hex()
+
+    caller_entry = fixture.arena_free
+    caller_end = fixture.arena_free + 0x80
+    if mutation == "wrong-existing-register":
+        patch(fixture.arena_free + 0x44, "56", "53")
+    elif mutation == "missing-existing-argument":
+        patch(fixture.arena_free + 0x44, "56", "90")
+    elif mutation == "partial-page-source":
+        patch(fixture.arena_free + 0x0A, "8b 73 04", "8a 73 04")
+    elif mutation == "wrong-page-field":
+        patch(fixture.arena_free + 0x0A, "8b 73 04", "8b 73 08")
+    elif mutation == "adjusted-page":
+        patch(fixture.arena_free + 0x0D, "83 e6 fe", "83 c6 08")
+    elif mutation == "tag-not-cleared":
+        patch(fixture.arena_free + 0x0D, "83 e6 fe", "83 e6 ff")
+    elif mutation == "address-bit-cleared":
+        patch(fixture.arena_free + 0x0D, "83 e6 fe", "83 e6 fd")
+    elif mutation == "external-caller":
+        caller_entry = fixture.selector
+        caller_end = fixture.selector + 0x80
+        patch(
+            fixture.selector + 0x70,
+            "5d 5f 5e 5b c3 90 90 90 90 90 90 90 90",
+            "56 "
+            + call_encoding(fixture.selector + 0x71, fixture.page_remover)
+            + " 59 5d 5f 5e 5b c3 90",
+        )
+    elif mutation == "in-context-extra-call":
+        patch(
+            fixture.arena_free + 0x52,
+            "5f 5e 5b c3 90 90 90 90 90 90 90 90",
+            "53 "
+            + call_encoding(fixture.arena_free + 0x53, fixture.page_remover)
+            + " 59 5f 5e 5b c3 90",
+        )
+    elif mutation == "owned-raw-interior":
+        raw_call = call_encoding(fixture.arena_free + 0x53, fixture.page_remover)
+        patch(
+            fixture.arena_free + 0x52,
+            "5f 5e 5b c3 90 90 90 90 90 90",
+            "81 " + raw_call + " 5f 5e 5b c3",
+        )
+    elif mutation == "unowned-raw-residue":
+        caller_entry = fixture.page_inserter
+        caller_end = fixture.page_inserter + 0x40
+        patch(
+            fixture.page_inserter + 0x33,
+            "90 90 90 90 90",
+            call_encoding(fixture.page_inserter + 0x33, fixture.page_remover),
+        )
+    elif mutation is not None:
+        raise AssertionError(mutation)
+
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    updated = replace(fixture, arena=replace(fixture.arena, image=image))
+    changed = private_page_image_changed_addresses(fixture, updated)
+    assert changed == patched_changed_addresses
+    assert all(caller_entry <= address < caller_end for address in changed)
+    assert all(
+        not (fixture.page_remover <= address < fixture.page_remover + 0x80)
+        for address in changed
+    )
+    return updated
+
+
 def private_page_ring_remover_path_image(
     mutation: str | None = None,
 ) -> PrivatePageArenaFixture:
@@ -6300,6 +6421,66 @@ def private_page_ring_task3_evidence(fixture):
         extent,
         layout,
     )
+
+
+def private_page_ring_remover_invocation_prerequisites(fixture):
+    """Require intact Task 1/2, remover body, and incoming call facts."""
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    assert recovery._publication_private_heap_effect_closure_is_current(
+        effects
+    )
+    layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert layout is not None
+    assert layout.page_link_offsets is None
+
+    baseline = private_page_arena_image()
+    baseline_recovery, _, _, _ = private_page_arena_contract(baseline)
+    assert recovery._function_instruction_addresses(
+        fixture.page_remover
+    ) == baseline_recovery._function_instruction_addresses(
+        baseline.page_remover
+    )
+    assert tuple(
+        recovery.instructions[address].bytes_hex
+        for address in recovery._function_instruction_addresses(
+            fixture.page_remover
+        )
+    ) == tuple(
+        baseline_recovery.instructions[address].bytes_hex
+        for address in baseline_recovery._function_instruction_addresses(
+            baseline.page_remover
+        )
+    )
+    baseline_ring = private_page_ring_remover_path_evidence(baseline)
+    assert baseline_ring is not None
+    baseline_remover = next(
+        transfer
+        for transfer in baseline_ring.transfers
+        if transfer.role == "ring-remove"
+    )
+    assert baseline_remover.span_keys
+
+    decoded = tuple(
+        sorted(
+            recovery.direct_call_sources_by_target.get(
+                fixture.page_remover,
+                (),
+            )
+        )
+    )
+    raw = tuple(sorted(recovery._raw_direct_call_sites(fixture.page_remover)))
+    assert decoded
+    assert set(decoded) <= set(raw)
+    assert all(
+        recovery.direct_call_targets_by_source.get(address)
+        == fixture.page_remover
+        for address in decoded
+    )
+    return recovery, contract, extent, effects, layout, decoded, raw
 
 
 def private_page_ring_selected_identity_prerequisites(fixture):
@@ -15143,6 +15324,219 @@ def test_private_page_ring_selector_selected_page_identity_accepts_same_node(
     )
 
 
+def assert_private_page_ring_remover_obligations(
+    evidence,
+    fixture,
+    expected_sites,
+):
+    """Require opaque one-for-one call obligations, never invocations."""
+    remover = next(
+        transfer
+        for transfer in evidence.transfers
+        if transfer.role == "ring-remove"
+    )
+    assert remover.invocations == ()
+    obligations = evidence.role.remover_call_obligations
+    assert tuple(row.call_address for row in obligations) == expected_sites
+    assert all(row.remover_entry == fixture.page_remover for row in obligations)
+    assert all(row.caller_entry for row in obligations)
+    assert all(row.caller_function_sha256 for row in obligations)
+    assert all(row.proof_instruction_addresses for row in obligations)
+    assert all(not hasattr(row, "context") for row in obligations)
+    assert all(not hasattr(row, "page_origins") for row in obligations)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        None,
+        "wrong-existing-register",
+        "missing-existing-argument",
+        "partial-page-source",
+        "wrong-page-field",
+        "adjusted-page",
+        "tag-not-cleared",
+        "address-bit-cleared",
+    ),
+)
+def test_private_page_ring_remover_invocation_page_argument_is_deferred(
+    mutation,
+):
+    """Task 3 inventories owned argument slots without claiming page P."""
+    fixture = private_page_ring_remover_invocation_image(mutation)
+    prerequisites = private_page_ring_remover_invocation_prerequisites(fixture)
+    recovery, contract, extent, _, layout, decoded, raw = prerequisites
+    expected = (fixture.arena_free + 0x45,)
+    assert decoded == expected
+    assert raw == expected
+
+    call = recovery._owned_decoded(expected[0])
+    assert recovery._direct_target(call) == fixture.page_remover
+    evidence = recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    )
+    if mutation == "missing-existing-argument" and evidence is None:
+        return
+    assert evidence is not None
+    assert_private_page_ring_remover_obligations(
+        evidence,
+        fixture,
+        expected,
+    )
+
+
+def test_private_page_ring_remover_invocation_context_rejects_external_caller():
+    """An exact page argument outside the deallocator closure is rejected."""
+    fixture = private_page_ring_remover_invocation_image("external-caller")
+    prerequisites = private_page_ring_remover_invocation_prerequisites(fixture)
+    recovery, contract, extent, _, layout, decoded, raw = prerequisites
+    expected = (
+        fixture.selector + 0x71,
+        fixture.arena_free + 0x45,
+    )
+    assert decoded == expected
+    assert raw == expected
+    argument = recovery._pushed_call_argument(fixture.selector + 0x71, 0)
+    assert argument is not None
+    assert argument[0].address == fixture.selector + 0x70
+    assert argument[1].type == capstone.x86.X86_OP_REG
+    assert argument[1].size == 4
+    deallocator_entries = set()
+    pending = [contract.deallocator_root]
+    while pending:
+        entry = pending.pop()
+        if entry in deallocator_entries or entry not in recovery.function_addresses:
+            continue
+        deallocator_entries.add(entry)
+        pending.extend(
+            call.target
+            for call in recovery._function_direct_calls(entry)
+            if call.target in recovery.function_addresses
+        )
+    assert fixture.selector not in deallocator_entries
+
+    assert recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    ) is None
+
+
+def test_private_page_ring_remover_invocation_context_retains_two_obligations():
+    """Two owned deallocator calls remain two unresolved Task 5 duties."""
+    fixture = private_page_ring_remover_invocation_image(
+        "in-context-extra-call"
+    )
+    prerequisites = private_page_ring_remover_invocation_prerequisites(fixture)
+    recovery, contract, extent, _, layout, decoded, raw = prerequisites
+    expected = (
+        fixture.arena_free + 0x45,
+        fixture.arena_free + 0x53,
+    )
+    assert decoded == expected
+    assert raw == expected
+    assert {
+        recovery._registrar_function_entry(address) for address in decoded
+    } == {fixture.arena_free}
+
+    evidence = recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    )
+    assert evidence is not None
+    assert_private_page_ring_remover_obligations(
+        evidence,
+        fixture,
+        expected,
+    )
+
+
+def test_private_page_ring_remover_invocation_context_rejects_owned_raw_interior():
+    """An owned instruction-interior E8 cannot be provisional residue."""
+    fixture = private_page_ring_remover_invocation_image(
+        "owned-raw-interior"
+    )
+    prerequisites = private_page_ring_remover_invocation_prerequisites(fixture)
+    recovery, contract, extent, _, layout, decoded, raw = prerequisites
+    assert decoded == (fixture.arena_free + 0x45,)
+    assert raw == (
+        fixture.arena_free + 0x45,
+        fixture.arena_free + 0x53,
+    )
+    assert recovery.byte_owners[fixture.arena_free + 0x53] == (
+        fixture.arena_free + 0x52
+    )
+
+    assert recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    ) is None
+
+
+def test_private_page_ring_remover_invocation_context_rejects_address_taken():
+    """An address-taken remover has no complete direct-call classification."""
+    fixture = private_page_ring_remover_invocation_image()
+    image = replace(
+        fixture.arena.image,
+        exports=(
+            *fixture.arena.image.exports,
+            pe_mod.Export(
+                "page_remover",
+                len(fixture.arena.image.exports) + 1,
+                fixture.page_remover,
+                None,
+            ),
+        ),
+    )
+    fixture = replace(fixture, arena=replace(fixture.arena, image=image))
+    prerequisites = private_page_ring_remover_invocation_prerequisites(fixture)
+    recovery, contract, extent, _, layout, decoded, raw = prerequisites
+    assert decoded == (fixture.arena_free + 0x45,)
+    assert raw == decoded
+    assert any(
+        export.va == fixture.page_remover
+        for export in fixture.arena.image.exports
+    )
+
+    assert recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    ) is None
+
+
+def test_private_page_ring_remover_invocation_context_retains_unowned_raw_residue():
+    """Unowned raw E8 residue stays provisional and is not an obligation."""
+    fixture = private_page_ring_remover_invocation_image(
+        "unowned-raw-residue"
+    )
+    prerequisites = private_page_ring_remover_invocation_prerequisites(fixture)
+    recovery, contract, extent, _, layout, decoded, raw = prerequisites
+    residue_site = fixture.page_inserter + 0x33
+    assert decoded == (fixture.arena_free + 0x45,)
+    assert raw == (residue_site, fixture.arena_free + 0x45)
+    assert recovery.byte_owners.get(residue_site) is None
+
+    evidence = recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    )
+    assert evidence is not None
+    assert_private_page_ring_remover_obligations(
+        evidence,
+        fixture,
+        decoded,
+    )
+    assert recovery.provisional_unowned_raw_callers_by_target[
+        fixture.page_remover
+    ] == frozenset({residue_site})
+
+
 def test_private_page_ring_remover_path_default_builder_is_exact():
     """The mutation builder preserves the active default remover exactly."""
     baseline = private_page_arena_image()
@@ -15395,7 +15789,11 @@ def test_private_page_ring_retains_singleton_and_nonempty_removal_evidence():
     assert len(remover_transfers) == 1
     remover = remover_transfers[0]
     assert remover.function_entry == fixture.page_remover
-    assert remover.invocations
+    assert remover.invocations == ()
+    assert tuple(
+        row.call_address
+        for row in ring_evidence.role.remover_call_obligations
+    ) == (fixture.arena_free + 0x45,)
     remover_spans = tuple(
         span
         for span in ring_evidence.spans
