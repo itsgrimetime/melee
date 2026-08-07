@@ -4586,6 +4586,7 @@ def private_page_arena_image(
         "extent-mask",
         "sentinel-displacement",
         "missing-first-block",
+        "ambiguous-first-block",
         "boundary-out-of-range",
         "missing-largest-free",
         "ring-broken-singleton",
@@ -4820,7 +4821,14 @@ def private_page_arena_image(
     cursor = emit(cursor, "8d 54 0d " + sentinel_disp + " c7 02 00 00 00 00")
     cursor = emit(cursor, "57 55")
     cursor = emit_call(cursor, block_inserter)
-    cursor = emit(cursor, "83 c4 08 5d 5f 5e 5b c3")
+    cursor = emit(cursor, "83 c4 08")
+    if mutation == "ambiguous-first-block":
+        cursor = emit(
+            cursor,
+            "8d 45 20 89 45 28 89 45 2c 89 44 1d fc "
+            "8d 43 e8 89 45 20",
+        )
+    cursor = emit(cursor, "5d 5f 5e 5b c3")
     assert cursor <= text_va + 0x900
 
     # Page publication is the only constructor of P+0/P+4 links.  The null
@@ -13349,6 +13357,133 @@ def test_private_page_layout_rejects_incomplete_or_stale_effects():
     )
 
 
+def test_private_page_layout_rejects_tagged_initializer_header():
+    fixture = private_page_arena_image(
+        mutation="initial-block-prev-allocated"
+    )
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    tagged_header_rows = tuple(
+        row
+        for row in effects.symbolic_writes
+        if row.address == ("affine", 1, 0, 0x10)
+        and isinstance(row.value_after, tuple)
+        and len(row.value_after) == 3
+        and row.value_after[0] in {"tagged", "bit-or"}
+        and row.value_after[1] == ("affine", 0, 1, -0x18)
+    )
+
+    assert tagged_header_rows
+    assert (
+        recovery._publication_private_page_layout(contract, extent, effects)
+        is None
+    )
+
+
+def test_private_page_layout_rejects_decorated_initializer_header():
+    fixture = private_page_arena_image(
+        mutation="block-initializer-masks-header"
+    )
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    header_rows = tuple(
+        row
+        for row in effects.symbolic_writes
+        if row.address == ("affine", 1, 0, 0x10)
+        and row.operation == "mov"
+        and row.value_after == ("affine", 0, 1, -0x18)
+    )
+
+    assert len(header_rows) == 1
+    assert header_rows[0].value_bit_operations
+    assert (
+        recovery._publication_private_page_layout(contract, extent, effects)
+        is None
+    )
+
+
+def test_private_page_layout_rejects_ambiguous_first_block_candidates():
+    fixture = private_page_arena_image(mutation="ambiguous-first-block")
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    second_block = ("affine", 1, 0, 0x20)
+    second_link_destinations = {
+        row.address
+        for row in effects.symbolic_writes
+        if row.value_after == second_block
+    }
+    second_header_rows = tuple(
+        row
+        for row in effects.symbolic_writes
+        if row.address == second_block
+        and row.operation == "mov"
+        and row.value_after == ("affine", 0, 1, -0x18)
+        and row.immediate is None
+        and row.address_bit_operations == ()
+        and row.value_bit_operations == ()
+    )
+
+    assert second_link_destinations == {
+        ("affine", 1, 0, 0x28),
+        ("affine", 1, 0, 0x2C),
+        ("affine", 1, 1, -4),
+    }
+    assert len(second_header_rows) == 1
+    assert (
+        recovery._publication_private_page_layout(contract, extent, effects)
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "extent-mask",
+        "sentinel-displacement",
+        "missing-first-block",
+        "boundary-out-of-range",
+        "missing-largest-free",
+        "block-page-flags",
+    ),
+)
+def test_private_page_layout_rejects_one_fact_mutations(mutation):
+    fixture = private_page_arena_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.arena.private_allocator,
+        frozenset({fixture.arena.callback_slot}),
+    )
+    assert contract is not None
+    extent = recovery._publication_private_heap_extent_witness(
+        contract, fixture.arena.private_page_helper
+    )
+    assert extent is not None
+    effects = recovery._publication_private_heap_effect_closure(extent)
+
+    assert effects is None or (
+        recovery._publication_private_page_layout(contract, extent, effects)
+        is None
+    )
+
+
+def test_private_page_layout_does_not_consume_page_ring_links():
+    fixture = private_page_arena_image(mutation="ring-broken-singleton")
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+
+    layout = recovery._publication_private_page_layout(
+        contract, extent, effects
+    )
+
+    assert layout is not None
+    assert layout.page_link_offsets is None
+
+
 def test_private_page_arena_fixed_slots_have_no_stale_executable_tail():
     fixture = private_page_arena_image()
     recovery = _DirectCfgRecovery(
@@ -15911,6 +16046,7 @@ _PRIVATE_PAGE_ARENA_MUTATION_COVERAGE = (
     ("extent-mask", "one-fact-matrix"),
     ("sentinel-displacement", "one-fact-matrix"),
     ("missing-first-block", "one-fact-matrix"),
+    ("ambiguous-first-block", "ambiguous-layout-candidate"),
     ("boundary-out-of-range", "one-fact-matrix"),
     ("ring-broken-singleton", "one-fact-matrix"),
     ("selector-foreign-page", "one-fact-matrix"),
@@ -15939,6 +16075,7 @@ def test_private_page_arena_mutation_coverage_is_complete():
         "extent-mask",
         "sentinel-displacement",
         "missing-first-block",
+        "ambiguous-first-block",
         "boundary-out-of-range",
         "missing-largest-free",
         "ring-broken-singleton",

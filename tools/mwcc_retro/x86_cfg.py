@@ -22085,25 +22085,94 @@ class _DirectCfgRecovery:
             )
             and row.value_after[3] < 0
         )
-        largest_free_offsets = {row.address[3] for row in largest_free_rows}
         initial_sizes = {row.value_after for row in largest_free_rows}
-        page_largest_free_offset = unique(largest_free_offsets)
-        if page_largest_free_offset is None or len(initial_sizes) != 1:
+        if len(initial_sizes) != 1:
             return None
         initial_size = next(iter(initial_sizes))
         if initial_size[3] % block_alignment:
             return None
 
-        first_block_offsets = {
+        sentinel_displacements = {
             row.address[3]
             for row in rows
-            if is_affine(row.address, payload=1, extent_coefficient=0)
-            and (tagged := tagged_base(row.value_after)) is not None
-            and tagged[0] == initial_size
-            and tagged[1] & ~size_flag_mask == 0
+            if is_affine(row.address, payload=1, extent_coefficient=1)
+            and row.value_after == ("affine", 0, 0, 0)
         }
+        end_sentinel_displacement = unique(sentinel_displacements)
+        if end_sentinel_displacement is None:
+            return None
+
+        first_block_offsets = set()
+        block_values = {
+            row.value_after
+            for row in rows
+            if is_affine(
+                row.value_after,
+                payload=1,
+                extent_coefficient=0,
+            )
+        }
+        for block_value in block_values:
+            base_destinations = {
+                row.address[3]
+                for row in rows
+                if row.value_after == block_value
+                and is_affine(
+                    row.address,
+                    payload=1,
+                    extent_coefficient=0,
+                )
+            }
+            end_rows = tuple(
+                row
+                for row in rows
+                if row.value_after == block_value
+                and is_affine(
+                    row.address,
+                    payload=1,
+                    extent_coefficient=1,
+                )
+            )
+            if (
+                len(base_destinations) != 2
+                or len(end_rows) != 1
+                or end_rows[0].address[3] != end_sentinel_displacement
+            ):
+                continue
+            first_block_offset = block_value[3]
+            header_address = ("affine", 1, 0, first_block_offset)
+            header_rows = tuple(
+                row
+                for row in rows
+                if row.address == header_address
+                and row.operation == "mov"
+                and row.immediate is None
+                and row.address_bit_operations == ()
+                and row.value_bit_operations == ()
+                and row.value_after == initial_size
+            )
+            tagged_header_rows = tuple(
+                row
+                for row in rows
+                if row.address == header_address
+                and isinstance(row.value_after, tuple)
+                and len(row.value_after) == 3
+                and row.value_after[0] in {"tagged", "bit-or"}
+                and row.value_after[1] == initial_size
+            )
+            if len(header_rows) == 1 and not tagged_header_rows:
+                first_block_offsets.add(first_block_offset)
         first_block_offset = unique(first_block_offsets)
         if first_block_offset is None:
+            return None
+
+        page_largest_free_offsets = {
+            row.address[3]
+            for row in largest_free_rows
+            if row.address[3] != first_block_offset
+        }
+        page_largest_free_offset = unique(page_largest_free_offsets)
+        if page_largest_free_offset is None:
             return None
 
         page_flag_offsets = {
@@ -22134,16 +22203,6 @@ class _DirectCfgRecovery:
         if len(link_offsets) != 2:
             return None
         block_prev_offset, block_next_offset = link_offsets
-
-        sentinel_displacements = {
-            row.address[3]
-            for row in rows
-            if is_affine(row.address, payload=1, extent_coefficient=1)
-            and row.value_after == ("affine", 0, 0, 0)
-        }
-        end_sentinel_displacement = unique(sentinel_displacements)
-        if end_sentinel_displacement is None:
-            return None
 
         boundary_rows = tuple(
             row
