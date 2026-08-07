@@ -22904,6 +22904,920 @@ class _DirectCfgRecovery:
                 "value": operand_value,
             }
 
+        def prove_selector_origins_and_rotation(
+            function_entry: int,
+            provider_entry: int,
+            selector_entry: int,
+            head_slot: int,
+            link_offsets: tuple[int, int],
+        ) -> dict[str, Any] | None:
+            """Prove exact selector origins and all successful ring rotations."""
+            if (
+                function_entry not in self.function_addresses
+                or provider_entry not in self.function_addresses
+                or selector_entry not in self.function_addresses
+                or len(link_offsets) != 2
+                or link_offsets[0] == link_offsets[1]
+            ):
+                return None
+            following_entry = self._following_function_entry(function_entry)
+            static_calls = self._function_direct_calls(function_entry)
+            static_provider_calls = frozenset(
+                call.address
+                for call in static_calls
+                if call.target == provider_entry
+            )
+            static_selector_calls = frozenset(
+                call.address
+                for call in static_calls
+                if call.target == selector_entry
+            )
+            if not static_provider_calls or not static_selector_calls:
+                return None
+
+            unknown_value = "unknown"
+            scalar_value = "scalar"
+            zero_value = "zero"
+            provider_page = "provider-page"
+            ring_head = "ring-head"
+            ring_scan = "ring-scan"
+            page_values = frozenset(
+                {provider_page, ring_head, ring_scan}
+            )
+            expected_mask = (~layout.size_flag_mask) & 0xFFFF_FFFF
+            empty_registers = tuple(
+                unknown_value for _ in _REGISTER_FAMILIES
+            )
+            state_cap = 512
+            event_cap = 64
+            iterations = 0
+
+            def family_value(registers, register: int):
+                family = self._register_family(register)
+                if family not in _REGISTER_FAMILIES:
+                    return unknown_value
+                return registers[_REGISTER_FAMILIES.index(family)]
+
+            def set_register_operand(registers, operand, value):
+                if operand.type != X86_OP_REG:
+                    return None
+                family = self._register_family(operand.reg)
+                if family not in _REGISTER_FAMILIES or family == "esp":
+                    return None
+                output = list(registers)
+                output[_REGISTER_FAMILIES.index(family)] = (
+                    value if operand.size == 4 else unknown_value
+                )
+                return tuple(output)
+
+            def request_value(value) -> bool:
+                return bool(
+                    isinstance(value, str)
+                    and value.startswith(
+                        (
+                            "request-normalized:",
+                            "request-floor:",
+                        )
+                    )
+                )
+
+            def selector_success(call_address: int) -> str:
+                return f"selector-success:{call_address:#x}"
+
+            def known_nonzero(value) -> bool:
+                return bool(
+                    value in page_values
+                    or (
+                        isinstance(value, str)
+                        and value.startswith(
+                            (
+                                "selector-success:",
+                                "scalar:",
+                            )
+                        )
+                    )
+                )
+
+            def append_event(events, event):
+                if event in events:
+                    return events
+                if len(events) >= event_cap:
+                    return None
+                return events + (event,)
+
+            def append_instruction(addresses, address: int):
+                if address in addresses:
+                    return addresses
+                return tuple(sorted((*addresses, address)))
+
+            def head_overlap(operand) -> bool:
+                absolute = self._absolute_memory_operand(operand)
+                return bool(
+                    absolute is not None
+                    and absolute < head_slot + 4
+                    and head_slot < absolute + max(operand.size, 1)
+                )
+
+            def read_operand(
+                address: int,
+                operand,
+                registers,
+                current_head,
+            ):
+                if operand.type == X86_OP_REG:
+                    return (
+                        family_value(registers, operand.reg)
+                        if operand.size == 4
+                        else unknown_value
+                    )
+                if operand.type == X86_OP_IMM:
+                    immediate = operand.imm & 0xFFFF_FFFF
+                    return (
+                        zero_value
+                        if immediate == 0
+                        else f"scalar:{immediate}"
+                    )
+                if operand.type != X86_OP_MEM:
+                    return None
+                argument = self._stack_argument_index_at(
+                    address,
+                    operand,
+                    function_entry,
+                )
+                if argument is not None:
+                    return (
+                        f"request-input:{argument}"
+                        if operand.size == 4
+                        else unknown_value
+                    )
+                absolute = self._absolute_memory_operand(operand)
+                if head_overlap(operand):
+                    if absolute != head_slot or operand.size != 4:
+                        return None
+                    return current_head
+                memory = operand.mem
+                indexed_head = bool(
+                    memory.segment == X86_REG_INVALID
+                    and memory.base == X86_REG_INVALID
+                    and memory.index != X86_REG_INVALID
+                    and memory.disp & 0xFFFF_FFFF == head_slot
+                )
+                if indexed_head:
+                    return None
+                if absolute is not None:
+                    return scalar_value
+                if memory.base == X86_REG_INVALID:
+                    return scalar_value
+                base = family_value(registers, memory.base)
+                if base not in page_values:
+                    return scalar_value
+                if (
+                    memory.segment != X86_REG_INVALID
+                    or memory.index != X86_REG_INVALID
+                    or operand.size != 4
+                ):
+                    return None
+                if memory.disp in link_offsets:
+                    return (
+                        ring_scan
+                        if memory.disp == link_offsets[1]
+                        else None
+                    )
+                return scalar_value
+
+            def exact_predicate(
+                decoded,
+                address: int,
+                registers,
+                current_head,
+            ):
+                if len(decoded.operands) != 2:
+                    return None
+                left_operand, right_operand = decoded.operands
+                if any(
+                    operand.type != X86_OP_IMM and operand.size != 4
+                    for operand in decoded.operands
+                ):
+                    return None
+                left = read_operand(
+                    address,
+                    left_operand,
+                    registers,
+                    current_head,
+                )
+                right = read_operand(
+                    address,
+                    right_operand,
+                    registers,
+                    current_head,
+                )
+                if left is None or right is None:
+                    return None
+                if decoded.mnemonic == "test":
+                    if not (
+                        left_operand.type == X86_OP_REG
+                        and right_operand.type == X86_OP_REG
+                        and self._register_family(left_operand.reg)
+                        == self._register_family(right_operand.reg)
+                    ):
+                        return None
+                    known = (
+                        True
+                        if left == zero_value
+                        else False if known_nonzero(left) else None
+                    )
+                    return (
+                        "zero",
+                        self._register_family(left_operand.reg),
+                        left,
+                        known,
+                    )
+                if decoded.mnemonic != "cmp":
+                    return None
+                if (
+                    {left, right} == {ring_scan, current_head}
+                    and current_head in {ring_head, provider_page}
+                ):
+                    return ("ring-anchor", None, None, None)
+                if left == right and left not in {
+                    unknown_value,
+                    scalar_value,
+                }:
+                    known = True
+                elif (
+                    left == zero_value and known_nonzero(right)
+                ) or (
+                    right == zero_value and known_nonzero(left)
+                ):
+                    known = False
+                else:
+                    known = None
+                if left == zero_value or right == zero_value:
+                    subject_operand = (
+                        right_operand if left == zero_value else left_operand
+                    )
+                    subject = right if left == zero_value else left
+                    family = (
+                        self._register_family(subject_operand.reg)
+                        if subject_operand.type == X86_OP_REG
+                        else None
+                    )
+                    return ("zero", family, subject, known)
+                return ("equal", None, (left, right), known)
+
+            def branch_relation(decoded, successor: int):
+                if decoded.mnemonic not in {"je", "jz", "jne", "jnz"}:
+                    return None
+                target = decoded.operands[0].imm & 0xFFFF_FFFF
+                fallthrough = decoded.address + decoded.size
+                equal_successor = (
+                    target
+                    if decoded.mnemonic in {"je", "jz"}
+                    else fallthrough
+                )
+                return successor == equal_successor
+
+            scenario_returns = []
+            for scenario, initial_head in (
+                ("zero", zero_value),
+                ("ring", ring_head),
+            ):
+                initial_state = (
+                    empty_registers,
+                    (),
+                    initial_head,
+                    None,
+                    None,
+                    None,
+                    (),
+                    (),
+                )
+                pending = [(function_entry, initial_state)]
+                seen = set()
+                returns = []
+                while pending:
+                    address, state = pending.pop()
+                    state_key = (address, state)
+                    if state_key in seen:
+                        continue
+                    seen.add(state_key)
+                    iterations += 1
+                    self.limits.check("max_summary_iterations", iterations)
+                    if len(seen) > state_cap:
+                        return None
+                    (
+                        registers,
+                        stack,
+                        current_head,
+                        predicate,
+                        last_selector,
+                        pending_rotation,
+                        events,
+                        instruction_addresses,
+                    ) = state
+                    instruction_addresses = append_instruction(
+                        instruction_addresses,
+                        address,
+                    )
+                    decoded = self._owned_decoded(address)
+                    groups = self._owned_decoded_groups(decoded)
+                    next_registers = registers
+                    next_stack = stack
+                    next_head = current_head
+                    next_predicate = predicate
+                    next_last_selector = last_selector
+                    next_pending_rotation = pending_rotation
+                    next_events = events
+                    outputs = []
+
+                    if decoded.id == X86_INS_MOV and len(decoded.operands) == 2:
+                        destination, source = decoded.operands
+                        source_value = read_operand(
+                            address,
+                            source,
+                            registers,
+                            current_head,
+                        )
+                        if source_value is None:
+                            return None
+                        if destination.type == X86_OP_REG:
+                            if (
+                                source.type == X86_OP_IMM
+                                and request_value(
+                                    family_value(registers, destination.reg)
+                                )
+                                and family_value(
+                                    registers,
+                                    destination.reg,
+                                ).startswith("request-normalized:")
+                            ):
+                                source_value = (
+                                    f"request-floor:{source.imm & 0xFFFF_FFFF}"
+                                )
+                            next_registers = set_register_operand(
+                                registers,
+                                destination,
+                                source_value,
+                            )
+                            if next_registers is None:
+                                return None
+                        elif destination.type == X86_OP_MEM:
+                            absolute = self._absolute_memory_operand(destination)
+                            if (
+                                absolute != head_slot
+                                or not head_overlap(destination)
+                                or destination.size != 4
+                            ):
+                                return None
+                            if source_value not in page_values:
+                                return None
+                            if next_pending_rotation is not None:
+                                call_address, selected_page = (
+                                    next_pending_rotation
+                                )
+                                if not (
+                                    next_last_selector
+                                    == (
+                                        call_address,
+                                        selected_page,
+                                        "success",
+                                        True,
+                                    )
+                                    and source_value == selected_page
+                                ):
+                                    return None
+                                event = (
+                                    "rotation",
+                                    call_address,
+                                    address,
+                                    0,
+                                    source_value,
+                                )
+                                next_events = append_event(next_events, event)
+                                if next_events is None:
+                                    return None
+                                next_pending_rotation = None
+                            elif not (
+                                next_last_selector is not None
+                                and next_last_selector[2:] == (
+                                    "success",
+                                    True,
+                                )
+                                and next_last_selector[1] == provider_page
+                                and source_value == provider_page
+                            ):
+                                return None
+                            event = (
+                                "head-write",
+                                address,
+                                0,
+                                source_value,
+                            )
+                            next_events = append_event(next_events, event)
+                            if next_events is None:
+                                return None
+                            next_head = source_value
+                        else:
+                            return None
+                    elif decoded.id == X86_INS_LEA and len(decoded.operands) == 2:
+                        destination, source = decoded.operands
+                        if not (
+                            destination.type == X86_OP_REG
+                            and destination.size == 4
+                            and source.type == X86_OP_MEM
+                            and source.mem.segment == X86_REG_INVALID
+                            and source.mem.base != X86_REG_INVALID
+                            and source.mem.index == X86_REG_INVALID
+                        ):
+                            return None
+                        base = family_value(registers, source.mem.base)
+                        if isinstance(base, str) and base.startswith(
+                            ("request-input:", "request-adjusted:")
+                        ):
+                            value = f"request-adjusted:{source.mem.disp}"
+                        elif base in page_values:
+                            if source.mem.disp != 0:
+                                return None
+                            value = base
+                        else:
+                            value = unknown_value
+                        next_registers = set_register_operand(
+                            registers,
+                            destination,
+                            value,
+                        )
+                        if next_registers is None:
+                            return None
+                    elif (
+                        decoded.mnemonic == "and"
+                        and len(decoded.operands) == 2
+                        and decoded.operands[0].type == X86_OP_REG
+                        and decoded.operands[1].type == X86_OP_IMM
+                    ):
+                        destination = decoded.operands[0]
+                        prior = family_value(registers, destination.reg)
+                        mask = decoded.operands[1].imm & 0xFFFF_FFFF
+                        if prior in page_values:
+                            return None
+                        value = (
+                            f"request-normalized:{mask}"
+                            if destination.size == 4
+                            and mask == expected_mask
+                            and isinstance(prior, str)
+                            and prior.startswith(
+                                ("request-input:", "request-adjusted:")
+                            )
+                            else unknown_value
+                        )
+                        next_registers = set_register_operand(
+                            registers,
+                            destination,
+                            value,
+                        )
+                        if next_registers is None:
+                            return None
+                        next_predicate = None
+                    elif (
+                        decoded.mnemonic == "add"
+                        and len(decoded.operands) == 2
+                        and decoded.operands[0].type == X86_OP_REG
+                        and decoded.operands[1].type == X86_OP_IMM
+                    ):
+                        destination = decoded.operands[0]
+                        prior = family_value(registers, destination.reg)
+                        if prior in page_values:
+                            return None
+                        value = (
+                            f"request-adjusted:{decoded.operands[1].imm}"
+                            if destination.size == 4
+                            and isinstance(prior, str)
+                            and prior.startswith(
+                                ("request-input:", "request-adjusted:")
+                            )
+                            else scalar_value
+                        )
+                        next_registers = set_register_operand(
+                            registers,
+                            destination,
+                            value,
+                        )
+                        if next_registers is None:
+                            return None
+                        next_predicate = None
+                    elif decoded.id == X86_INS_XOR and len(decoded.operands) == 2:
+                        destination, source = decoded.operands
+                        if not (
+                            destination.type == X86_OP_REG
+                            and source.type == X86_OP_REG
+                            and self._register_family(destination.reg)
+                            == self._register_family(source.reg)
+                        ):
+                            return None
+                        next_registers = set_register_operand(
+                            registers,
+                            destination,
+                            (
+                                zero_value
+                                if destination.size == source.size == 4
+                                else unknown_value
+                            ),
+                        )
+                        if next_registers is None:
+                            return None
+                        next_predicate = None
+                    elif decoded.mnemonic in {"cmp", "test"}:
+                        next_predicate = exact_predicate(
+                            decoded,
+                            address,
+                            registers,
+                            current_head,
+                        )
+                    elif decoded.id == X86_INS_PUSH:
+                        if (
+                            len(decoded.operands) != 1
+                            or decoded.operands[0].size != 4
+                            or decoded.addr_size != 4
+                        ):
+                            return None
+                        value = read_operand(
+                            address,
+                            decoded.operands[0],
+                            registers,
+                            current_head,
+                        )
+                        if value is None:
+                            return None
+                        next_stack = (*stack, value)
+                    elif decoded.mnemonic == "pop":
+                        if (
+                            len(decoded.operands) != 1
+                            or decoded.operands[0].type != X86_OP_REG
+                            or decoded.operands[0].size != 4
+                            or decoded.addr_size != 4
+                            or self._register_family(decoded.operands[0].reg)
+                            == "esp"
+                            or not stack
+                        ):
+                            return None
+                        next_registers = set_register_operand(
+                            registers,
+                            decoded.operands[0],
+                            stack[-1],
+                        )
+                        if next_registers is None:
+                            return None
+                        next_stack = stack[:-1]
+                    elif CS_GRP_CALL in groups:
+                        target = self.direct_call_targets_by_source.get(address)
+                        if (
+                            target not in {provider_entry, selector_entry}
+                            or next_pending_rotation is not None
+                        ):
+                            return None
+                        clobbered = list(registers)
+                        for family in ("eax", "ecx", "edx"):
+                            clobbered[_REGISTER_FAMILIES.index(family)] = (
+                                unknown_value
+                            )
+                        next_predicate = None
+                        if target == provider_entry:
+                            if not stack or not request_value(stack[-1]):
+                                return None
+                            next_events = append_event(
+                                events,
+                                ("provider", address),
+                            )
+                            if next_events is None:
+                                return None
+                            for result in (zero_value, provider_page):
+                                result_registers = list(clobbered)
+                                result_registers[
+                                    _REGISTER_FAMILIES.index("eax")
+                                ] = result
+                                outputs.append(
+                                    (
+                                        tuple(result_registers),
+                                        stack,
+                                        (
+                                            provider_page
+                                            if result == provider_page
+                                            else current_head
+                                        ),
+                                        None,
+                                        None,
+                                        None,
+                                        next_events,
+                                        instruction_addresses,
+                                    )
+                                )
+                        else:
+                            if len(stack) < 2:
+                                return None
+                            page = stack[-1]
+                            request = stack[-2]
+                            if page not in page_values or not request_value(
+                                request
+                            ):
+                                return None
+                            origin = (
+                                "provider"
+                                if page == provider_page
+                                else "ring"
+                            )
+                            next_events = append_event(
+                                events,
+                                (
+                                    "selector",
+                                    address,
+                                    origin,
+                                    request,
+                                    page,
+                                ),
+                            )
+                            if next_events is None:
+                                return None
+                            for outcome, result in (
+                                ("failure", zero_value),
+                                ("success", selector_success(address)),
+                            ):
+                                result_registers = list(clobbered)
+                                result_registers[
+                                    _REGISTER_FAMILIES.index("eax")
+                                ] = result
+                                outputs.append(
+                                    (
+                                        tuple(result_registers),
+                                        stack,
+                                        current_head,
+                                        None,
+                                        (address, page, outcome, False),
+                                        (
+                                            (address, page)
+                                            if outcome == "success"
+                                            and origin == "ring"
+                                            else None
+                                        ),
+                                        next_events,
+                                        instruction_addresses,
+                                    )
+                                )
+                    elif decoded.group(CS_GRP_RET):
+                        if not (
+                            decoded.mnemonic == "ret"
+                            and not decoded.operands
+                            and not stack
+                            and pending_rotation is None
+                        ):
+                            return None
+                        returns.append((events, instruction_addresses))
+                        continue
+                    elif decoded.mnemonic not in {
+                        "je",
+                        "jz",
+                        "jne",
+                        "jnz",
+                        "ja",
+                        "jae",
+                        "jb",
+                        "jbe",
+                        "jmp",
+                    }:
+                        return None
+
+                    if not outputs:
+                        outputs.append(
+                            (
+                                next_registers,
+                                next_stack,
+                                next_head,
+                                next_predicate,
+                                next_last_selector,
+                                next_pending_rotation,
+                                next_events,
+                                instruction_addresses,
+                            )
+                        )
+                    successors = self._summary_successors(
+                        address,
+                        function_entry,
+                        following_entry,
+                    )
+                    if decoded.mnemonic == "jmp":
+                        if (
+                            len(successors) != 1
+                            or len(decoded.operands) != 1
+                            or decoded.operands[0].type != X86_OP_IMM
+                        ):
+                            return None
+                    elif decoded.group(CS_GRP_JUMP):
+                        if (
+                            len(successors) != 2
+                            or len(decoded.operands) != 1
+                            or decoded.operands[0].type != X86_OP_IMM
+                        ):
+                            return None
+                        target = decoded.operands[0].imm & 0xFFFF_FFFF
+                        fallthrough = address + decoded.size
+                        if set(successors) != {target, fallthrough}:
+                            return None
+                    elif len(successors) != 1:
+                        return None
+
+                    for output in outputs:
+                        (
+                            output_registers,
+                            output_stack,
+                            output_head,
+                            output_predicate,
+                            output_last_selector,
+                            output_pending_rotation,
+                            output_events,
+                            output_instructions,
+                        ) = output
+                        feasible_successors = list(successors)
+                        if decoded.group(CS_GRP_JUMP) and decoded.mnemonic != "jmp":
+                            known = (
+                                output_predicate[3]
+                                if output_predicate is not None
+                                and output_predicate[0] in {"zero", "equal"}
+                                else None
+                            )
+                            if known is not None:
+                                feasible_successors = [
+                                    successor
+                                    for successor in successors
+                                    if branch_relation(decoded, successor)
+                                    is known
+                                ]
+                        for successor in feasible_successors:
+                            relation = branch_relation(decoded, successor)
+                            cyclic_backedge = bool(
+                                successor <= address
+                                and self._reachable_within_function(
+                                    successor,
+                                    address,
+                                    function_entry,
+                                    following_entry,
+                                )
+                            )
+                            if cyclic_backedge and not (
+                                output_predicate is not None
+                                and output_predicate[0] == "ring-anchor"
+                                and relation is False
+                            ):
+                                return None
+                            successor_last_selector = output_last_selector
+                            if (
+                                output_predicate is not None
+                                and output_predicate[0] == "zero"
+                                and output_predicate[1] == "eax"
+                                and successor_last_selector is not None
+                                and not successor_last_selector[3]
+                            ):
+                                call_address, page, outcome, _proved = (
+                                    successor_last_selector
+                                )
+                                expected_result = (
+                                    zero_value
+                                    if outcome == "failure"
+                                    else selector_success(call_address)
+                                )
+                                if (
+                                    output_predicate[2] == expected_result
+                                    and output_predicate[3] is not None
+                                ):
+                                    successor_last_selector = (
+                                        call_address,
+                                        page,
+                                        outcome,
+                                        True,
+                                    )
+                            pending.append(
+                                (
+                                    successor,
+                                    (
+                                        output_registers,
+                                        output_stack,
+                                        output_head,
+                                        None
+                                        if decoded.group(CS_GRP_JUMP)
+                                        else output_predicate,
+                                        successor_last_selector,
+                                        output_pending_rotation,
+                                        output_events,
+                                        output_instructions,
+                                    ),
+                                )
+                            )
+                if not returns:
+                    return None
+                scenario_returns.extend(
+                    (scenario, events, instructions)
+                    for events, instructions in returns
+                )
+
+            selector_events = {
+                event
+                for _scenario, events, _instructions in scenario_returns
+                for event in events
+                if event[0] == "selector"
+            }
+            provider_events = {
+                event[1]
+                for _scenario, events, _instructions in scenario_returns
+                for event in events
+                if event[0] == "provider"
+            }
+            rotation_events = {
+                event
+                for _scenario, events, _instructions in scenario_returns
+                for event in events
+                if event[0] == "rotation"
+            }
+            head_write_events = {
+                event
+                for _scenario, events, _instructions in scenario_returns
+                for event in events
+                if event[0] == "head-write"
+            }
+            event_selector_calls = {event[1] for event in selector_events}
+            if (
+                event_selector_calls != static_selector_calls
+                or provider_events != static_provider_calls
+                or not rotation_events
+                or len({event[1:3] for event in head_write_events}) != 1
+            ):
+                return None
+            origins_by_call = {
+                call_address: tuple(
+                    origin
+                    for origin in ("provider", "ring")
+                    if any(
+                        event[1] == call_address and event[2] == origin
+                        for event in selector_events
+                    )
+                )
+                for call_address in sorted(static_selector_calls)
+            }
+            lineages_by_call = {
+                call_address: frozenset(
+                    event[3]
+                    for event in selector_events
+                    if event[1] == call_address
+                )
+                for call_address in sorted(static_selector_calls)
+            }
+            if (
+                any(not origins for origins in origins_by_call.values())
+                or {
+                    origin
+                    for origins in origins_by_call.values()
+                    for origin in origins
+                }
+                != {"provider", "ring"}
+                or len(set(lineages_by_call.values())) != 1
+            ):
+                return None
+            ring_calls = {
+                call_address
+                for call_address, origins in origins_by_call.items()
+                if "ring" in origins
+            }
+            rotation_calls = {event[1] for event in rotation_events}
+            if rotation_calls != ring_calls:
+                return None
+            head_write_address, head_write_operand = next(
+                iter({event[1:3] for event in head_write_events})
+            )
+            head_write_origins = frozenset(
+                "provider" if event[3] == provider_page else "ring"
+                for event in head_write_events
+            )
+            rotation_write = (
+                head_write_address,
+                head_write_operand,
+                "write",
+                head_write_origins,
+                4,
+            )
+            instruction_addresses = tuple(
+                sorted(
+                    {
+                        address
+                        for _scenario, _events, instructions in scenario_returns
+                        for address in instructions
+                    }
+                )
+            )
+            return {
+                "selector_rows": tuple(origins_by_call.items()),
+                "request_lineage": next(iter(lineages_by_call.values())),
+                "provider_calls": tuple(sorted(provider_events)),
+                "rotation_write": rotation_write,
+                "rotation_calls": tuple(sorted(rotation_calls)),
+                "instruction_addresses": instruction_addresses,
+            }
+
         def prove_publisher_transfer(
             function_entry: int,
             head_slot: int,
@@ -24579,9 +25493,6 @@ class _DirectCfgRecovery:
         if large is None or large["indirect_control"]:
             return None
         large_calls = self._function_direct_calls(contract.large_allocator)
-        large_provider_calls = tuple(
-            call for call in large_calls if call.target == contract.page_provider
-        )
         selector_groups: dict[int, list[DirectCall]] = defaultdict(list)
         for call in large_calls:
             if call.target != contract.page_provider:
@@ -24596,68 +25507,35 @@ class _DirectCfgRecovery:
                 or not self._incoming_call_domain_is_closed(selector_entry)
             ):
                 continue
-            rows = []
-            lineages = []
-            valid = True
-            for call in sorted(calls, key=lambda item: item.address):
-                page = self._pushed_call_argument(call.address, 0)
-                request = self._pushed_call_argument(call.address, 1)
-                if page is None or request is None:
-                    valid = False
-                    break
-                page_state = large["states"].get(page[0].address)
-                request_state = large["states"].get(request[0].address)
-                if page_state is None or request_state is None:
-                    valid = False
-                    break
-                page_value = large["value"](
-                    page[0].address,
-                    page[1],
-                    page_state,
-                )
-                request_value = large["value"](
-                    request[0].address,
-                    request[1],
-                    request_state,
-                )
-                if not page_value or not set(page_value) <= {"provider", "ring"}:
-                    valid = False
-                    break
-                if not request_value or not all(
-                    value.startswith("request-") for value in request_value
-                ):
-                    valid = False
-                    break
-                origins = tuple(
-                    origin for origin in ("provider", "ring") if origin in page_value
-                )
-                if not origins:
-                    valid = False
-                    break
-                context = "selector-ring" if "ring" in origins else "selector-provider"
-                rows.append(
-                    _PublicationPrivateArenaInvocation(
-                        caller_entry=contract.large_allocator,
-                        call_address=call.address,
-                        callee_entry=selector_entry,
-                        role="select",
-                        context=context,
-                        page_origins=origins,
-                        block_state=none_state,
-                    )
-                )
-                lineages.append(request_value)
-            if (
-                valid
-                and rows
-                and len(set(lineages)) == 1
-                and {origin for row in rows for origin in row.page_origins}
-                == {"provider", "ring"}
-            ):
-                selector_candidates.append((selector_entry, tuple(rows), lineages[0]))
+            proof = prove_selector_origins_and_rotation(
+                contract.large_allocator,
+                contract.page_provider,
+                selector_entry,
+                head_slot,
+                link_offsets,
+            )
+            if proof is not None:
+                selector_candidates.append((selector_entry, proof))
         if len(selector_candidates) != 1:
             return None
-        selector_entry, selector_invocations, request_lineage = selector_candidates[0]
+        selector_entry, selector_proof = selector_candidates[0]
+        selector_invocations = tuple(
+            _PublicationPrivateArenaInvocation(
+                caller_entry=contract.large_allocator,
+                call_address=call_address,
+                callee_entry=selector_entry,
+                role="select",
+                context=(
+                    "selector-ring"
+                    if "ring" in origins
+                    else "selector-provider"
+                ),
+                page_origins=origins,
+                block_state=none_state,
+            )
+            for call_address, origins in selector_proof["selector_rows"]
+        )
+        request_lineage = selector_proof["request_lineage"]
         expected_mask = (~layout.size_flag_mask) & 0xFFFF_FFFF
         normalized = {f"request-normalized:{expected_mask}"}
         floors = {
@@ -24673,81 +25551,18 @@ class _DirectCfgRecovery:
         ):
             return None
 
-        if len(large["head_writes"]) != 1:
+        rotation_write = selector_proof["rotation_write"]
+        if (
+            len(large["head_writes"]) != 1
+            or large["head_writes"][0] != rotation_write
+        ):
             return None
-        rotation_write = large["head_writes"][0]
-        rotation_source = rotation_write[3]
+        large_provider_calls = selector_proof["provider_calls"]
+        rotation_calls = frozenset(selector_proof["rotation_calls"])
         ring_invocations = tuple(
             row for row in selector_invocations if "ring" in row.page_origins
         )
-        provider_only_invocations = tuple(
-            row for row in selector_invocations if row.page_origins == ("provider",)
-        )
-        following_large = self._following_function_entry(contract.large_allocator)
-        guarded_rotation_calls = []
-        for invocation in ring_invocations:
-            if not self._reachable_within_function(
-                invocation.call_address,
-                rotation_write[0],
-                contract.large_allocator,
-                following_large,
-            ):
-                continue
-            for address in self._function_instruction_addresses_between(
-                contract.large_allocator,
-                invocation.call_address,
-                rotation_write[0],
-            ):
-                decoded = self._owned_decoded(address)
-                successors = self._summary_successors(
-                    address,
-                    contract.large_allocator,
-                    following_large,
-                )
-                if not (decoded.group(CS_GRP_JUMP) and len(successors) == 2):
-                    continue
-                reaches = tuple(
-                    self._reachable_within_function(
-                        successor,
-                        rotation_write[0],
-                        contract.large_allocator,
-                        following_large,
-                        excluded=frozenset(
-                            row.call_address for row in selector_invocations
-                        ),
-                    )
-                    for successor in successors
-                )
-                guard = flag_guard_before(
-                    address,
-                    contract.large_allocator,
-                )
-                if (
-                    reaches.count(True) == 1
-                    and guard is not None
-                    and guard.mnemonic in {"cmp", "test"}
-                    and any(
-                        operand.type == X86_OP_REG
-                        and self._register_family(operand.reg) == "eax"
-                        for operand in guard.operands
-                    )
-                ):
-                    guarded_rotation_calls.append(invocation.call_address)
-                    break
-        if (
-            not guarded_rotation_calls
-            or not set(rotation_source) <= {"provider", "ring"}
-            or "ring" not in rotation_source
-            or any(
-                self._reachable_within_function(
-                    invocation.call_address,
-                    rotation_write[0],
-                    contract.large_allocator,
-                    following_large,
-                )
-                for invocation in provider_only_invocations
-            )
-        ):
+        if {row.call_address for row in ring_invocations} != rotation_calls:
             return None
 
         allowed_head_owners = {
@@ -24876,7 +25691,7 @@ class _DirectCfgRecovery:
         rotate_invocations = tuple(
             replace(row, role="ring-rotate")
             for row in ring_invocations
-            if row.call_address in guarded_rotation_calls
+            if row.call_address in rotation_calls
         )
         transfers = (
             _PublicationPrivateArenaTransfer(
@@ -24906,7 +25721,7 @@ class _DirectCfgRecovery:
                 role="ring-rotate",
                 invocations=rotate_invocations,
                 state_transitions=(),
-                instruction_addresses=(rotation_write[0],),
+                instruction_addresses=selector_proof["instruction_addresses"],
                 span_keys=span_keys(contract.large_allocator),
                 function_sha256=self._producer_function_fingerprint(
                     contract.large_allocator
@@ -24919,7 +25734,7 @@ class _DirectCfgRecovery:
             provider_entry=contract.page_provider,
             inserter_entry=publisher_call.target,
             remover_entry=remover_entry,
-            provider_calls=tuple(call.address for call in large_provider_calls),
+            provider_calls=large_provider_calls,
             selector_page_calls=tuple(row.call_address for row in selector_invocations),
             selector_request_calls=tuple(
                 row.call_address for row in selector_invocations
