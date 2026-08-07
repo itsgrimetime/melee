@@ -1941,11 +1941,23 @@ class _PublicationPrivateArenaStateTransition:
 
 
 @dataclass(frozen=True, slots=True)
+class _PublicationPrivateRemovalCallObligation:
+    caller_entry: int
+    call_address: int
+    remover_entry: int
+    caller_function_sha256: str
+    proof_instruction_addresses: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _PublicationPrivatePageRingRole:
     head_slot: int
     provider_entry: int
     inserter_entry: int
     remover_entry: int | None
+    remover_call_obligations: tuple[
+        _PublicationPrivateRemovalCallObligation, ...
+    ]
     provider_calls: tuple[int, ...]
     selector_page_calls: tuple[int, ...]
     selector_request_calls: tuple[int, ...]
@@ -25707,20 +25719,349 @@ class _DirectCfgRecovery:
         publisher_call, head_slot, publisher = publisher_candidates[0]
         link_offsets = publisher["link_offsets"]
 
-        deallocator_entries = set()
+        deallocator_paths: dict[int, tuple[int, ...]] = {}
         if contract.deallocator_root is not None:
-            pending_entries = [contract.deallocator_root]
+            pending_entries = [
+                (contract.deallocator_root, (contract.deallocator_root,))
+            ]
             while pending_entries:
-                entry = pending_entries.pop()
-                if entry in deallocator_entries or entry not in self.function_addresses:
+                entry, path = pending_entries.pop()
+                if entry in deallocator_paths or entry not in self.function_addresses:
                     continue
-                deallocator_entries.add(entry)
-                self.limits.check("max_summary_iterations", len(deallocator_entries))
+                deallocator_paths[entry] = path
+                self.limits.check(
+                    "max_summary_iterations",
+                    len(deallocator_paths),
+                )
                 pending_entries.extend(
-                    call.target
+                    (call.target, (*path, call.target))
                     for call in self._function_direct_calls(entry)
                     if call.target in self.function_addresses
                 )
+        deallocator_entries = frozenset(deallocator_paths)
+
+        def reconciled_direct_domain(target: int) -> tuple[int, ...] | None:
+            if not self._least_reachable_incoming_call_domain_is_closed(
+                target
+            ):
+                return None
+            decoded = tuple(
+                sorted(self.direct_call_sources_by_target.get(target, ()))
+            )
+            raw = self._raw_direct_call_sites(target)
+            if (
+                not decoded
+                or not set(decoded) <= raw
+                or any(
+                    self.direct_call_targets_by_source.get(address) != target
+                    or self._registrar_function_entry(address) is None
+                    for address in decoded
+                )
+                or any(
+                    kind != "direct-call"
+                    for _source, kind in self.incoming_edges.get(target, ())
+                )
+            ):
+                return None
+            provisional = raw - set(decoded)
+            if any(
+                any(
+                    self.byte_owners.get(address) is not None
+                    for address in range(source, source + 5)
+                )
+                for source in provisional
+            ):
+                return None
+            if provisional != set(
+                self.provisional_unowned_raw_callers_by_target.get(
+                    target,
+                    (),
+                )
+            ):
+                return None
+            return decoded
+
+        def prove_owned_argument_slot(
+            call_address: int,
+            caller_entry: int,
+        ) -> tuple[int, ...] | None:
+            call_instruction = self._owned_decoded(call_address)
+            if (
+                CS_GRP_CALL not in call_instruction.groups
+                or call_instruction.addr_size != 4
+                or self.direct_call_targets_by_source.get(call_address)
+                is None
+            ):
+                return None
+            pushed = self._pushed_call_argument(call_address, 0)
+            if pushed is None or pushed[2] != caller_entry:
+                return None
+            push_instruction = self._owned_decoded(pushed[0].address)
+            if (
+                push_instruction.id != X86_INS_PUSH
+                or len(push_instruction.operands) != 1
+                or push_instruction.operands[0].size != 4
+                or push_instruction.addr_size != 4
+            ):
+                return None
+
+            function_addresses = frozenset(
+                self._function_instruction_addresses(caller_entry)
+            )
+            following_entry = min(
+                (
+                    entry
+                    for entry in self.function_addresses
+                    if entry > caller_entry
+                ),
+                default=0x1_0000_0000,
+            )
+
+            def successors(address: int) -> tuple[int, ...]:
+                return self._summary_successors(
+                    address,
+                    caller_entry,
+                    following_entry,
+                )
+
+            if (
+                call_address not in function_addresses
+                or pushed[0].address not in function_addresses
+            ):
+                return None
+            predecessors: dict[int, set[int]] = defaultdict(set)
+            for address in function_addresses:
+                for successor in successors(address):
+                    if successor in function_addresses:
+                        predecessors[successor].add(address)
+            relevant = {call_address}
+            pending_addresses = [call_address]
+            while pending_addresses:
+                address = pending_addresses.pop()
+                for predecessor in predecessors.get(address, ()):
+                    if predecessor not in relevant:
+                        relevant.add(predecessor)
+                        pending_addresses.append(predecessor)
+                        self.limits.check(
+                            "max_summary_iterations",
+                            len(relevant),
+                        )
+            if (
+                caller_entry not in relevant
+                or pushed[0].address not in relevant
+            ):
+                return None
+
+            # The recovered argument PUSH must dominate this exact call.  A
+            # bypass would make the linear stack-slot recovery vacuous.
+            bypass_pending = [caller_entry]
+            bypass_seen = set()
+            while bypass_pending:
+                address = bypass_pending.pop()
+                if address == pushed[0].address or address in bypass_seen:
+                    continue
+                if address == call_address:
+                    return None
+                bypass_seen.add(address)
+                self.limits.check(
+                    "max_summary_iterations",
+                    len(bypass_seen),
+                )
+                bypass_pending.extend(
+                    successor
+                    for successor in successors(address)
+                    if successor in relevant
+                )
+
+            pending_states = [(caller_entry, 0)]
+            seen_states = set()
+            proof_addresses = set()
+            reached_call = False
+            while pending_states:
+                address, stack_depth = pending_states.pop()
+                state = (address, stack_depth)
+                if state in seen_states:
+                    continue
+                seen_states.add(state)
+                self.limits.check(
+                    "max_summary_iterations",
+                    len(seen_states),
+                )
+                if address not in relevant:
+                    continue
+                proof_addresses.add(address)
+                if address == call_address:
+                    reached_call = True
+                    continue
+                decoded = self._owned_decoded(address)
+                next_depth = stack_depth
+                groups = set(decoded.groups)
+                if decoded.id == X86_INS_PUSH:
+                    if (
+                        len(decoded.operands) != 1
+                        or decoded.operands[0].size != 4
+                        or decoded.addr_size != 4
+                    ):
+                        return None
+                    next_depth += 1
+                elif decoded.mnemonic == "pop":
+                    if (
+                        len(decoded.operands) != 1
+                        or decoded.operands[0].type != X86_OP_REG
+                        or decoded.operands[0].size != 4
+                        or decoded.addr_size != 4
+                        or self._register_family(decoded.operands[0].reg)
+                        == "esp"
+                        or next_depth == 0
+                    ):
+                        return None
+                    next_depth -= 1
+                elif (
+                    decoded.mnemonic in {"add", "sub"}
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_REG
+                    and self._register_family(decoded.operands[0].reg)
+                    == "esp"
+                    and decoded.operands[0].size == 4
+                    and decoded.operands[1].type == X86_OP_IMM
+                ):
+                    amount = decoded.operands[1].imm & 0xFFFF_FFFF
+                    if amount % 4:
+                        return None
+                    slots = amount // 4
+                    if decoded.mnemonic == "add":
+                        if slots > next_depth:
+                            return None
+                        next_depth -= slots
+                    else:
+                        next_depth += slots
+                elif CS_GRP_CALL in groups:
+                    if (
+                        self.direct_call_targets_by_source.get(address) is None
+                        or decoded.addr_size != 4
+                    ):
+                        return None
+                    cleanup = self._closed_call_stack_cleanup(address)
+                    if cleanup is None or cleanup % 4:
+                        return None
+                    slots = cleanup // 4
+                    if slots > next_depth:
+                        return None
+                    next_depth -= slots
+                elif any(
+                    self._register_family(register) == "esp"
+                    for register in decoded.regs_write
+                ):
+                    return None
+                if next_depth > 64:
+                    return None
+                pending_states.extend(
+                    (successor, next_depth)
+                    for successor in successors(address)
+                    if successor in relevant
+                )
+            if not reached_call:
+                return None
+            return tuple(sorted(proof_addresses))
+
+        def prove_remover_call_domain(
+            remover_entry: int,
+        ) -> tuple[_PublicationPrivateRemovalCallObligation, ...] | None:
+            """Retain only opaque calls from the closed deallocator context."""
+            if contract.deallocator_root is None:
+                return None
+            decoded = reconciled_direct_domain(remover_entry)
+            if decoded is None:
+                return None
+            owners = {
+                address: self._registrar_function_entry(address)
+                for address in decoded
+            }
+            if any(
+                owner is None or owner not in deallocator_entries
+                for owner in owners.values()
+            ):
+                return None
+
+            context_entries = {
+                entry
+                for owner in owners.values()
+                if owner is not None
+                for entry in deallocator_paths[owner]
+            }
+            pending_context = list(context_entries)
+            context_call_addresses = set()
+            while pending_context:
+                entry = pending_context.pop()
+                self._note_producer_dependency(entry)
+                if entry == contract.deallocator_root:
+                    continue
+                incoming = reconciled_direct_domain(entry)
+                if incoming is None:
+                    return None
+                for source in incoming:
+                    parent = self._registrar_function_entry(source)
+                    decoded_source = self._owned_decoded(source)
+                    cleanup = self._closed_call_stack_cleanup(source)
+                    if (
+                        parent is None
+                        or parent not in deallocator_entries
+                        or CS_GRP_CALL not in decoded_source.groups
+                        or decoded_source.addr_size != 4
+                        or len(decoded_source.operands) != 1
+                        or decoded_source.operands[0].size != 4
+                        or cleanup is None
+                        or cleanup % 4
+                    ):
+                        return None
+                    context_call_addresses.add(source)
+                    if parent not in context_entries:
+                        context_entries.add(parent)
+                        pending_context.append(parent)
+                        self.limits.check(
+                            "max_summary_iterations",
+                            len(context_entries),
+                        )
+            if contract.deallocator_root not in context_entries:
+                return None
+
+            obligations = []
+            for call_address in decoded:
+                caller_entry = owners[call_address]
+                if caller_entry is None:
+                    return None
+                proof_addresses = prove_owned_argument_slot(
+                    call_address,
+                    caller_entry,
+                )
+                if proof_addresses is None:
+                    return None
+                self._note_producer_dependency(caller_entry)
+                obligations.append(
+                    _PublicationPrivateRemovalCallObligation(
+                        caller_entry=caller_entry,
+                        call_address=call_address,
+                        remover_entry=remover_entry,
+                        caller_function_sha256=(
+                            self._producer_function_fingerprint(caller_entry)
+                        ),
+                        proof_instruction_addresses=tuple(
+                            sorted(
+                                {
+                                    *proof_addresses,
+                                    *context_call_addresses,
+                                }
+                            )
+                        ),
+                    )
+                )
+            result = tuple(obligations)
+            if (
+                not result
+                or {row.call_address for row in result} != set(decoded)
+            ):
+                return None
+            return result
 
         head_writer_entries = {
             owner
@@ -25736,15 +26077,15 @@ class _DirectCfgRecovery:
                 head_slot,
                 link_offsets,
             )
-            if (
-                proof is None
-                or not self._least_reachable_incoming_call_domain_is_closed(entry)
-            ):
+            obligations = prove_remover_call_domain(entry)
+            if proof is None or obligations is None:
                 continue
-            remover_candidates.append((entry, proof))
+            remover_candidates.append((entry, proof, obligations))
         if len(remover_candidates) != 1:
             return None
-        remover_entry, remover = remover_candidates[0]
+        remover_entry, remover, remover_call_obligations = (
+            remover_candidates[0]
+        )
 
         large = summarize(
             contract.large_allocator,
@@ -25937,20 +26278,9 @@ class _DirectCfgRecovery:
             page_origins=("provider",),
             block_state=none_state,
         )
-        remover_invocations = tuple(
-            _PublicationPrivateArenaInvocation(
-                caller_entry=self._registrar_function_entry(call_address) or 0,
-                call_address=call_address,
-                callee_entry=remover_entry,
-                role="ring-remove",
-                context="deallocator",
-                page_origins=("ring",),
-                block_state=none_state,
-            )
-            for call_address in sorted(
-                self.direct_call_sources_by_target.get(remover_entry, ())
-            )
-        )
+        remover_invocations: tuple[
+            _PublicationPrivateArenaInvocation, ...
+        ] = ()
         rotate_invocations = tuple(
             replace(row, role="ring-rotate")
             for row in ring_invocations
@@ -25997,6 +26327,7 @@ class _DirectCfgRecovery:
             provider_entry=contract.page_provider,
             inserter_entry=publisher_call.target,
             remover_entry=remover_entry,
+            remover_call_obligations=remover_call_obligations,
             provider_calls=large_provider_calls,
             selector_page_calls=tuple(row.call_address for row in selector_invocations),
             selector_request_calls=tuple(
