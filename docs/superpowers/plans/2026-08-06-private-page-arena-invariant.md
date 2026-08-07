@@ -122,6 +122,7 @@ def test_private_page_arena_still_requires_an_inductive_witness():
         body.function_entry for body in closure.bodies
     }
     assert effects.bounded_spans  # The induction base is real, not a fake bridge.
+    assert effects.symbolic_writes  # Layout facts came from that execution.
 
     assert recovery._publication_body_address_domains(
         fixture.arena.callback_slot, closure, (bridge,)
@@ -230,14 +231,17 @@ def _publication_private_page_layout(
     """Recover initializer layout from the certified provider/initializer."""
 ```
 
-Replay contract, extent, and effect fingerprints. Decode the exact certified
-provider/initializer body together with its effect spans to derive `P+8`
+Replay contract, extent, and effect fingerprints. Consume the canonical
+symbolic-write rows retained by the exact certified provider/initializer
+execution together with its operand-keyed effect spans to derive `P+8`
 largest-free, `P+0xc` extent/flag word (`E | 3`), first block `P+0x10`, page
 end tag `P+E-8`, block boundary tag `B+S-4`, sentinel `P+E-4`, and block
 size/page-flags/prev/next fields `+0/+4/+8/+0xc`. Derive extent and block
 alignment separately (the exact retail assertions are `0x1000` and `8`);
 neither establishes alignment of `P`.
 Reject duplicate layouts, wrap, or any initializer span outside `[P, P+E)`.
+Reject malformed, duplicate, unknown, unexecuted, or unfingerprinted symbolic
+write rows rather than reinterpreting familiar decoded bytes independently.
 Set `page_link_offsets=None`: exact `P+0`/`P+4` links are not part of the
 initializer effect evidence and Task 3 alone may bind them. The split threshold
 remains absent until Task 4 binds its unique selector guard, so represent it as
@@ -265,7 +269,8 @@ Expected: all selected tests pass before the commit.
 **Interfaces:**
 - Consumes: allocator contract, extent witness, and recovered layout.
 - Produces: an updated `_PublicationPrivatePageLayout` with the publisher's
-  link offsets and `_PublicationPrivatePageRingRole` from
+  link offsets, `_PublicationPrivatePageRingRole`, operand-keyed ring spans,
+  and durable ring transfers from
   `_publication_private_page_ring_role(contract, extent, layout)`.
 
 - [ ] **Step 1: Write the RED role-discovery test**
@@ -281,7 +286,7 @@ def test_private_page_ring_proves_both_selector_page_arguments():
         contract, extent, layout
     )
     assert ring_result is not None
-    layout, ring = ring_result
+    layout, ring, ring_transfers, ring_spans = ring_result
     assert layout.page_link_offsets == (0, 4)
     assert ring.head_slot == fixture.page_head_slot
     assert ring.provider_entry == fixture.page_provider
@@ -289,6 +294,8 @@ def test_private_page_ring_proves_both_selector_page_arguments():
     assert set(ring.selector_page_calls) == set(fixture.selector_calls)
     assert ring.head_writes
     assert ring.ring_link_writes
+    assert {row.role for row in ring_transfers} >= {"ring-insert"}
+    assert ring_spans
 ```
 
 The ring dataclass keeps `selector_page_calls` distinct from `provider_calls`;
@@ -319,6 +326,8 @@ def _publication_private_page_ring_role(
 ) -> tuple[
     _PublicationPrivatePageLayout,
     _PublicationPrivatePageRingRole,
+    tuple[_PublicationPrivateArenaTransfer, ...],
+    tuple[_PublicationPrivateArenaSpan, ...],
 ] | None:
     """Prove a closed circular ring containing only provider pages."""
 ```
@@ -333,7 +342,10 @@ callee whose complete incoming inventory receives a page from the provider arm
 or ring arm. Require one structurally coherent pair of distinct publisher link
 writes, then return an immutable copy of `layout` with those derived offsets;
 no earlier task may populate them. The synthetic and exact retail integration
-tests assert that the derived pair is `(0, 4)`.
+tests assert that the derived pair is `(0, 4)`. Type every head/link operand,
+emit exact spans for it, and serialize the successful insertion/removal/rotation
+checks as `_PublicationPrivateArenaTransfer` rows. Instruction addresses in the
+ring role are an inventory, not authorization.
 
 - [ ] **Step 4: Run ring/allocator tests and commit**
 
@@ -451,7 +463,8 @@ Expected: the positive selector and all hostiles pass before the commit.
 **Interfaces:**
 - Consumes: Task 4 abstract domain and selector role.
 - Produces: `_PublicationPrivateArenaTransfer` rows and complete span
-  inventories for split, unlink, insert, and coalescing roles.
+  inventories for split, unlink, insert, and coalescing roles, plus a durable
+  binding to the allocator contract's certified companion deallocator closure.
 
 - [ ] **Step 1: Write RED positive transfer tests**
 
@@ -538,7 +551,12 @@ def _publication_private_block_arena_role(
     """Discover and close every live metadata transfer role."""
 ```
 
-Seed formals with types proved at the complete incoming-call inventory.
+Seed formals with types proved at the complete incoming-call inventory. Start
+free/coalesce discovery only at `contract.deallocator_root`; require its
+complete dependency function and raw/decoded call-edge inventories and store
+them in `_PublicationPrivateBlockArenaRole`. A null deallocator is allowed only
+when no certified returning path or inventoried metadata writer needs a free
+transfer.
 Interpret both successors of an inexact branch; refine only relations proved by
 the comparison. Require the invariant at every return and an exact span for
 every real memory operand. Discover callees by structural transfer success,
@@ -566,7 +584,8 @@ Expected: all selected tests pass before the commit.
 - Modify: `tools/melee-agent/tests/test_retro_x86_cfg.py:11500-12350`
 
 **Interfaces:**
-- Consumes: layout, ring, block role, transfers, and spans from Tasks 2-5.
+- Consumes: layout, ring, block role, all ring/block transfers, and all spans
+  from Tasks 2-5.
 - Produces: `_PublicationPrivatePageArenaInvariant`, its builder, and its
   dependency replay validator.
 
@@ -633,7 +652,8 @@ classifications; copy the complete allocator dependency fingerprint tuple;
 fingerprint every additional transfer function; and note producer dependencies
 for every function and concrete state slot. Replay raw/decoded direct edges,
 complete incoming calls, state dependencies, layout, transfers, and exact span
-keys. Reject final assembly unless `layout.page_link_offsets` contains two
+keys, including every ring-publisher/remover span and the certified deallocator
+closure. Reject final assembly unless `layout.page_link_offsets` contains two
 distinct derived offsets and `layout.minimum_split_remainder` is positive. Do
 not add a standalone arena cache.
 

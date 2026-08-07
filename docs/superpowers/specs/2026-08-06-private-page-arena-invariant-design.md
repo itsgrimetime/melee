@@ -16,8 +16,12 @@ The existing `_PrivateHeapAllocatorContract` remains the prerequisite for
 allocator identity, call-graph closure, factory identity, mutable image-state
 inventory, and protected-slot-disjoint concrete writes. The existing
 `_PublicationPrivateHeapEffectClosure` remains the base-state proof for the
-initializer call context. Neither is widened: a plain
-`_PublicationPrivateHeapAddressDomain` still cannot authorize a dereference.
+initializer call context. It retains the exact symbolic writes already computed
+by that bounded execution so layout recovery consumes the same selected paths,
+call contexts, affine destinations, values, and masks as the effect proof. This
+widens serialized evidence, not authority: a plain
+`_PublicationPrivateHeapAddressDomain` still cannot authorize a dereference,
+and the existing operand-keyed bounded spans remain unchanged.
 
 ## Why a Separate Certificate Is Required
 
@@ -99,6 +103,9 @@ class _PublicationPrivatePageRingRole:
 class _PublicationPrivateBlockArenaRole:
     selector_entry: int
     selector_calls: tuple[int, ...]
+    deallocator_root: int | None
+    deallocator_function_entries: tuple[int, ...]
+    deallocator_call_edges: tuple[tuple[int, int], ...]
     splitter_entries: tuple[int, ...]
     unlink_entries: tuple[int, ...]
     insert_entries: tuple[int, ...]
@@ -190,6 +197,13 @@ size at `+0`, page/flags at `+4`, and predecessor/successor links at
 initial `B=P+0x10`, `S=E-0x18` block). The page publisher, not the initializer
 effect closure, writes the page-ring links at `P+0` and `P+4`.
 
+The initializer effect closure carries one canonical immutable symbolic-write
+row per executed memory write: function/instruction/operand identity, width,
+affine destination, operation, value before/after, and exact immediate when a
+mask/tag operation uses one. Rows must belong to the closure's executed and
+fingerprinted function inventory. Unknown values are retained and make any
+layout fact that depends on them fail closed; they are never silently omitted.
+
 ## Structural Role Discovery
 
 Discovery begins with a non-null `_PrivateHeapAllocatorContract` and its exact
@@ -213,10 +227,12 @@ bounded-interior extent/effect witness.
    a member obtained from the discovered ring, and whose other argument is the
    normalized request size. Raw bytes, decoded direct targets, source/target
    indexes, and the complete incoming-call inventory must agree.
-5. Discover split, unlink, insert, and coalesce roles only from calls reachable
-   from the selector or companion deallocator and only when their transfer
-   shapes type-check against the recovered layout. Unknown or conflicting role
-   assignments reject the whole certificate.
+5. Recover the companion deallocator only from `contract.deallocator_root` and
+   its complete dependency/call closure. Discover split, unlink, insert, and
+   coalesce roles only from calls reachable from the selector or that certified
+   deallocator closure, and only when their transfer shapes type-check against
+   the recovered layout. Unknown or conflicting role assignments reject the
+   whole certificate.
 
 Exactly one coherent role graph is required. Missing roles may be absent only
 when no certified path needs their transfer; duplicate candidates, unresolved
@@ -274,6 +290,11 @@ invariant:
   both sides of every modified link;
 - coalescing requires an adjacent-block or boundary-tag proof, performs a
   checked size sum, and cannot extend past the original page boundary.
+
+Ring discovery emits the same operand-keyed arena spans and durable transfer
+rows as block discovery. Publisher/remover/rotation link operands therefore
+enter the final span inventory and are replayed before publication-body use;
+instruction-address inventories alone are never dereference authority.
 
 The certificate covers allocator metadata accesses only. It does not prove
 client payload correctness, admit external mutation of allocator metadata, or
