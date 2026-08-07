@@ -24095,7 +24095,10 @@ class _DirectCfgRecovery:
                         _value, next_events = read
                         next_stack_delta -= 4
                     elif decoded.mnemonic == "pop":
-                        if not supported_stack_transfer(decoded, pop=True):
+                        if (
+                            not supported_stack_transfer(decoded, pop=True)
+                            or stack_delta >= 0
+                        ):
                             return None
                         next_registers = set_register_operand(
                             registers,

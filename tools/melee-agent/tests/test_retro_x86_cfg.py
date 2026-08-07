@@ -14751,6 +14751,20 @@ def test_private_page_ring_remover_path_rejects_stack_width(
     assert private_page_ring_remover_path_evidence(hostile) is None
 
 
+def test_private_page_ring_remover_path_rejects_entry_return_slot_pop():
+    """A later push cannot repair a POP that consumed the return address."""
+    control = private_page_ring_remover_stack_image("53 58 90")
+    hostile = private_page_ring_remover_stack_image("58 53 90")
+
+    assert private_page_image_changed_addresses(control, hostile) == {
+        control.page_remover,
+        control.page_remover + 1,
+    }
+    assert private_page_ring_remover_path_evidence(control) is not None
+
+    assert private_page_ring_remover_path_evidence(hostile) is None
+
+
 @pytest.mark.parametrize("prefix", ("50 90 5b", "50 5b 90"))
 def test_private_page_ring_remover_path_accepts_balanced_full_width_stack(
     prefix,
