@@ -1,5 +1,13 @@
 # Allocator Transaction Slice Design
 
+> **Superseded 2026-08-06:** Exact retail graph measurements showed that a
+> bidirectional call-graph slice is not a bounded proof boundary. Cycles make
+> 970 functions target-reachable even after context-restoring terminals are
+> cut, while choosing only shortest paths would omit valid executions. The
+> replacement is `2026-08-06-allocator-session-capability-seal-design.md`.
+> This document is retained as rejected-design evidence; its implementation
+> must not be promoted as the Task 4 closure.
+
 **Date:** 2026-08-06
 
 **Issue:** Melee tooling #1240
@@ -65,12 +73,37 @@ the solution rather than the primary boundary.
 
 ### Exact interprocedural transaction slice
 
-This is the selected approach. The full closure continues to establish backend
-identity and caller membership. A separate bidirectional CFG/callgraph slice
-defines the semantic-write transaction. It excludes unrelated branches by
-proof of non-reachability, not by trusting their effects.
+This was the selected approach in this historical design. The full closure
+would have continued to establish backend identity and caller membership. A
+separate bidirectional CFG/callgraph slice would have defined the
+semantic-write transaction, excluding unrelated branches by proof of
+non-reachability rather than by trusting their effects.
 
-## Design
+## Historical Disposition
+
+Retail graph hydration invalidated the proposed boundary before it could become
+accepted Task 4 proof evidence. The sound target-reachable set remains large
+because of recursive call-graph cycles; the much smaller shortest-path set is
+not complete over valid executions. Accordingly, transaction-specific records,
+construction, memo payloads, and tests are historical scaffolding and should be
+removed or migrated once they have no live production consumer.
+
+That removal is proof-preserving rather than a relaxation. The rejected slice
+does not supply a positive allocator-totality fact. The replacement design
+keeps the already validated full-closure identity/caller inventory,
+private-heap and finalized-handle contracts, typed domains, and dependency
+replay, then admits totality only from the conjunction of the structural
+session certificate, exact returning-publication closure, protected-state
+capability seal, and returning-closure allocator-state audit. See
+`2026-08-06-allocator-session-capability-seal-design.md` for the current proof
+boundary and `2026-08-06-allocator-session-capability-seal.md` for its active
+implementation plan.
+
+The remaining sections are preserved as rejected-design rationale. Their
+present-tense requirements describe the proposal and must not be read as the
+current implementation contract.
+
+## Rejected Design (Historical)
 
 ### Transaction goals
 

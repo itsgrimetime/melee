@@ -42,6 +42,8 @@ from tools.mwcc_retro.x86_cfg import (  # noqa: E402
     ProducerCheckpointIncomplete,
     SeedRecord,
     _AbstractObjectIdentity,
+    _AllocatorSessionCertificate,
+    _AllocatorTotalityCertificate,
     _DirectCfgRecovery,
     _DynamicFieldWrite,
     _GlobalSlotWrite,
@@ -3258,6 +3260,827 @@ class ReturnPathPublicationFixture:
     longjmp_target: int
 
 
+@dataclass(frozen=True)
+class FinalizedHandleArenaFixture:
+    image: pe_mod.Image
+    grow_target: int
+    allocator_targets: tuple[int, int]
+    finalizer_target: int
+    payload_initializer: int
+    handle_constructor: int
+    private_allocator: int
+    private_factory: int
+    private_free: int
+    callback_slot: int
+    descriptor: int
+    publication_body: int
+    publication_body_private_call: int
+    private_page_helper: int
+
+
+def finalized_handle_arena_image(
+    *, mutation: str | None = None
+) -> FinalizedHandleArenaFixture:
+    """Retail-shaped handle allocation finalized into a payload arena."""
+    assert mutation in {
+        None,
+        "wrong-payload-field",
+        "wrong-size-field",
+        "partial-observed-write",
+        "missing-finalizer-write",
+        "mixed-handle-identity",
+        "mismatched-grow-size",
+        "wrong-capacity-subtraction",
+        "wrong-cursor-offset",
+        "private-factory-overrun",
+        "private-factory-foreign-write",
+        "private-factory-nonzero-failure",
+        "private-heap-nonzero-state",
+        "private-heap-nonzero-indexed-state",
+        "private-heap-protected-write",
+        "private-heap-mixed-factory",
+        "private-heap-cycle",
+        "private-heap-arbitrary-return",
+        "private-heap-external-state-writer",
+        "private-heap-foreign-free-input",
+        "private-heap-unbounded-free-index",
+        "payload-global-alloc-moveable",
+        "payload-global-alloc-extra-argument",
+        "private-heap-bounded-helper",
+        "private-heap-bounded-helper-redefined-extent",
+        "private-heap-bounded-helper-extra-incoming",
+        "private-heap-bounded-helper-normalized",
+        "private-heap-bounded-helper-normalized-redefined-extent",
+        "private-heap-bounded-helper-spans",
+        "private-heap-bounded-helper-spans-scaled",
+        "private-heap-bounded-helper-spans-out-of-range",
+        "private-heap-bounded-helper-metadata",
+        "private-heap-bounded-helper-metadata-clobber",
+        "private-heap-bounded-helper-metadata-mask",
+        "private-heap-bounded-helper-effect",
+        "private-heap-bounded-helper-effect-clobber",
+        "private-heap-bounded-helper-effect-pruned-call",
+        "private-heap-bounded-helper-effect-unknown-branch",
+    }
+    text_va = 0x00401000
+    data_va = 0x00403000
+    grow_target = text_va
+    allocator_a = text_va + 0x100
+    allocator_b = text_va + 0x140
+    core_allocator = text_va + 0x180
+    payload_initializer = text_va + 0x220
+    private_factory = text_va + 0x280
+    handle_constructor = text_va + 0x2C0
+    finalizer_target = text_va + 0x340
+    query_target = text_va + 0x380
+    writer_target = text_va + 0x3C0
+    private_allocator = text_va + 0x400
+    private_small = text_va + 0x450
+    private_large = text_va + 0x4D0
+    private_page = text_va + 0x550
+    private_selector = text_va + 0x5C0
+    private_insert = text_va + 0x600
+    private_bin_init = text_va + 0x640
+    private_page_init = text_va + 0x680
+    second_factory = text_va + 0x6C0
+    private_free = text_va + 0x700
+    private_small_free = text_va + 0x750
+    private_os_free = text_va + 0x7A0
+    private_effect_helper = text_va + 0x7C0
+    private_page_helper = (
+        second_factory
+        if mutation
+        in {
+            "private-heap-bounded-helper-effect",
+            "private-heap-bounded-helper-effect-clobber",
+            "private-heap-bounded-helper-effect-pruned-call",
+            "private-heap-bounded-helper-effect-unknown-branch",
+        }
+        else private_effect_helper
+    )
+    publication_body = text_va + 0x7E0
+    descriptor = data_va
+    callback_slot = data_va + 0x20
+    private_page_root = data_va + 0x30
+    private_bins = data_va + 0x40
+    private_counts = data_va + 0x60
+    private_size_table = data_va + 0x80
+    global_alloc_iat = data_va + 0x100
+    global_free_iat = data_va + 0x104
+    enter_critical_section_iat = data_va + 0x108
+    leave_critical_section_iat = data_va + 0x10C
+    data = bytearray(0xC00)
+    text = memoryview(data)[:0x800]
+
+    def emit(address: int, encoded: str) -> int:
+        raw = bytes.fromhex(encoded)
+        offset = address - text_va
+        text[offset : offset + len(raw)] = raw
+        return address + len(raw)
+
+    def emit_call(address: int, target: int) -> int:
+        offset = address - text_va
+        text[offset] = 0xE8
+        displacement = target - (address + 5)
+        text[offset + 1 : offset + 5] = displacement.to_bytes(
+            4, "little", signed=True
+        )
+        return address + 5
+
+    def emit_abs(address: int, prefix: str, absolute: int) -> int:
+        raw = bytes.fromhex(prefix) + absolute.to_bytes(4, "little")
+        return emit(address, raw.hex())
+
+    def patch_short(branch: int, target: int) -> None:
+        offset = branch - text_va
+        text[offset + 1] = (target - (branch + 2)) & 0xFF
+
+    # Three handle-return attempts followed by one required finalizer.  The
+    # successful arm installs payload+0x10 as the cursor with size-0x10 bytes.
+    cursor = emit(grow_target, "53 56 8b 74 24 0c 57 8b 5c 24 14")
+    cursor = emit(
+        cursor,
+        "8d 43 04 50" if mutation == "mismatched-grow-size" else "53",
+    )
+    cursor = emit_call(cursor, allocator_a)
+    cursor = emit(cursor, "89 c7 59 85 ff")
+    first_success = cursor
+    cursor = emit(cursor, "75 00 53")
+    cursor = emit_call(cursor, allocator_a)
+    cursor = emit(cursor, "89 c7 59 85 ff")
+    second_success = cursor
+    cursor = emit(cursor, "75 00 53")
+    cursor = emit_call(cursor, allocator_b)
+    cursor = emit(cursor, "89 c7 59 85 ff")
+    third_success = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit_abs(cursor, "83 3d", callback_slot)
+    cursor = emit(cursor, "00")
+    no_callback = cursor
+    cursor = emit(cursor, "74 00")
+    cursor = emit_abs(cursor, "ff 15", callback_slot)
+    failure = cursor
+    cursor = emit(cursor, "5f 5e 5b c3")
+    success = cursor
+    cursor = emit(cursor, "57")
+    cursor = emit_call(cursor, finalizer_target)
+    cursor = emit(cursor, "59")
+    cursor = emit(
+        cursor,
+        "8b 4f 04" if mutation == "mixed-handle-identity" else "8b 0f",
+    )
+    cursor = emit(
+        cursor,
+        "89 4e 08 89 79 04 89 59 08 "
+        + (
+            "8d 43 f4"
+            if mutation == "wrong-capacity-subtraction"
+            else "8d 43 f0"
+        )
+        + " 89 41 0c 89 46 10 "
+        + (
+            "8d 41 0c"
+            if mutation == "wrong-cursor-offset"
+            else "8d 41 10"
+        )
+        + " 89 46 0c 5f 5e 5b c3",
+    )
+    for branch in (first_success, second_success, third_success):
+        patch_short(branch, success)
+    patch_short(no_callback, failure)
+
+    for wrapper in (allocator_a, allocator_b):
+        cursor = emit(wrapper, "ff 74 24 04")
+        cursor = emit_call(cursor, core_allocator)
+        emit(cursor, "59 c3")
+
+    # Core allocator uses one private stack pair: payload at +0, size at +4.
+    cursor = emit(core_allocator, "83 ec 08 8d 0c 24 51 ff 74 24 10")
+    cursor = emit_call(cursor, payload_initializer)
+    cursor = emit(cursor, "85 c0")
+    payload_failure = cursor
+    cursor = emit(cursor, "75 00 8d 04 24 50")
+    cursor = emit_call(cursor, handle_constructor)
+    cursor = emit(cursor, "59 83 c4 08 c3")
+    core_failure = cursor
+    cursor = emit(cursor, "31 c0 83 c4 08 c3")
+    patch_short(payload_failure, core_failure)
+
+    # payload_initializer(size, out): exact GlobalAlloc(0, size), followed by
+    # the complete out[0]/out[1] publication.
+    cursor = emit(
+        payload_initializer,
+        "57 55 8b 6c 24 0c 8b 7c 24 10 "
+        + (
+            "6a 7f 55 6a 00"
+            if mutation == "payload-global-alloc-extra-argument"
+            else "55 6a 02"
+            if mutation == "payload-global-alloc-moveable"
+            else "55 6a 00"
+        ),
+    )
+    cursor = emit_abs(cursor, "ff 15", global_alloc_iat)
+    cursor = emit(cursor, "89 07 89 6f 04 85 c0")
+    payload_ok = cursor
+    cursor = emit(cursor, "75 00 b8 01 00 00 00 5d 5f c2 08 00")
+    payload_success = cursor
+    cursor = emit(cursor, "31 c0 5d 5f c2 08 00")
+    patch_short(payload_ok, payload_success)
+
+    # private_allocator(size) is the leaf shape beneath the retail pool: it
+    # reserves an eight-byte header, then returns one of two aligned interior
+    # pointers or null.  It is deliberately not a raw GlobalAlloc wrapper.
+    cursor = emit(private_factory, "8b 44 24 04 83 c0 08 50 6a 00")
+    cursor = emit_abs(cursor, "ff 15", global_alloc_iat)
+    cursor = emit(cursor, "59 59 85 c0")
+    private_ok = cursor
+    cursor = emit(
+        cursor,
+        (
+            "75 00 b8 01 00 00 00 c3 89 c1 83 e1 07"
+            if mutation == "private-factory-nonzero-failure"
+            else "75 00 31 c0 c3 89 c1 83 e1 07"
+        ),
+    )
+    private_success = (
+        private_ok + 8
+        if mutation == "private-factory-nonzero-failure"
+        else private_ok + 5
+    )
+    private_aligned = cursor
+    cursor = emit(cursor, "75 00 83 c0 04 c7 00 00 00 00 00")
+    private_done = cursor
+    cursor = emit(cursor, "eb 00")
+    private_unaligned = cursor
+    cursor = emit(cursor, "c7 00 01 00 00 00")
+    private_finish = cursor
+    cursor = emit(
+        cursor,
+        "83 c0 0c"
+        if mutation == "private-factory-overrun"
+        else "83 c0 04",
+    )
+    if mutation == "private-factory-foreign-write":
+        cursor = emit_abs(cursor, "a3", callback_slot)
+    cursor = emit(cursor, "c3")
+    patch_short(private_ok, private_success)
+    patch_short(private_aligned, private_unaligned)
+    patch_short(private_done, private_finish)
+
+    # Constructor copies payload/size from the stack pair into a fresh
+    # 12-byte handle and returns either that one identity or null.
+    cursor = emit(handle_constructor, "53 56 6a 0c 8b 74 24 10")
+    cursor = emit_call(cursor, private_allocator)
+    cursor = emit(cursor, "89 c3 59 85 db")
+    handle_ok = cursor
+    cursor = emit(cursor, "75 00 5e 5b 31 c0 c3")
+    handle_success = cursor
+    cursor = emit(cursor, "8b 06 89 43")
+    cursor = emit(
+        cursor,
+        "08" if mutation == "wrong-payload-field" else "04",
+    )
+    cursor = emit(cursor, "8b 46 04 89 43")
+    cursor = emit(
+        cursor,
+        "04" if mutation == "wrong-size-field" else "08",
+    )
+    cursor = emit(cursor, "c7 03 00 00 00 00 89 d8 5e 5b c3")
+    patch_short(handle_ok, handle_success)
+
+    # Finalizer wrapper/query/writer chain.  The query returns payload or
+    # null; the writer must install a complete dword at handle+0.
+    cursor = emit(finalizer_target, "53 8b 5c 24 08 8d 43 04 50")
+    cursor = emit_call(cursor, query_target)
+    cursor = emit(cursor, "50 53")
+    cursor = emit_call(cursor, writer_target)
+    emit(cursor, "59 59 5b c3")
+    cursor = emit(query_target, "8b 4c 24 04 8b 01 85 c0")
+    query_nonnull = cursor
+    cursor = emit(cursor, "75 00 31 c0 c2 04 00")
+    query_success = cursor
+    cursor = emit(cursor, "8b 01 c2 04 00")
+    patch_short(query_nonnull, query_success)
+    if mutation == "missing-finalizer-write":
+        emit(writer_target, "c3")
+    elif mutation == "partial-observed-write":
+        emit(writer_target, "8b 44 24 08 8b 4c 24 04 66 89 01 c3")
+    else:
+        emit(writer_target, "8b 44 24 08 8b 4c 24 04 89 01 c3")
+
+    # Private heap dispatcher.  Its two allocation branches share the same
+    # page factory but return through distinct large/small allocator roles.
+    cursor = emit(private_allocator, "8b 44 24 04 85 c0")
+    root_nonzero = cursor
+    cursor = emit(cursor, "75 00 31 c0 c3")
+    root_nonzero_target = cursor
+    cursor = emit(cursor, "83 f8 44")
+    root_large = cursor
+    cursor = emit(cursor, "77 00 50")
+    cursor = emit_call(cursor, private_small)
+    cursor = emit(cursor, "59 c3")
+    root_large_target = cursor
+    cursor = emit(cursor, "50")
+    cursor = emit_call(cursor, private_large)
+    emit(cursor, "59 c3")
+    patch_short(root_nonzero, root_nonzero_target)
+    patch_short(root_large, root_large_target)
+
+    # Finite size-class selection and one exact indexed freelist pop.
+    cursor = emit(private_small, "31 c9 8b 54 24 04")
+    class_loop = cursor
+    cursor = emit_abs(cursor, "3b 14 8d", private_size_table)
+    class_found = cursor
+    cursor = emit(cursor, "76 00 41")
+    class_back = cursor
+    cursor = emit(cursor, "eb 00")
+    class_ready = cursor
+    cursor = emit_abs(cursor, "83 3c 8d", private_bins)
+    cursor = emit(cursor, "00")
+    bin_ready = cursor
+    cursor = emit(cursor, "75 00 68 00 01 00 00")
+    cursor = emit_call(cursor, private_large)
+    cursor = emit(cursor, "59 85 c0")
+    small_failure = cursor
+    cursor = emit(cursor, "74 00 51 50")
+    cursor = emit_call(cursor, private_bin_init)
+    cursor = emit(cursor, "59 59")
+    bin_pop = cursor
+    if mutation == "private-heap-arbitrary-return":
+        cursor = emit(cursor, "8b 44 24 04 8b 40 08")
+    else:
+        cursor = emit_abs(cursor, "8b 04 8d", private_bins)
+    cursor = emit(cursor, "8b 50 04")
+    cursor = emit_abs(cursor, "89 14 8d", private_bins)
+    cursor = emit_abs(cursor, "ff 04 8d", private_counts)
+    cursor = emit(cursor, "83 c0 04 c3")
+    small_failure_target = cursor
+    emit(cursor, "31 c0 c3")
+    patch_short(class_found, class_ready)
+    patch_short(class_back, class_loop)
+    patch_short(bin_ready, bin_pop)
+    patch_short(small_failure, small_failure_target)
+
+    # Large allocations obtain a page on demand, select one block, and
+    # expose its payload at a fixed positive offset.
+    cursor = emit_abs(private_large, "83 3d", private_page_root)
+    cursor = emit(cursor, "00")
+    page_ready = cursor
+    cursor = emit(cursor, "75 00 ff 74 24 04")
+    cursor = emit_call(cursor, private_page)
+    cursor = emit(cursor, "59 85 c0")
+    large_failure = cursor
+    cursor = emit(cursor, "74 00")
+    page_ready_target = cursor
+    cursor = emit_abs(cursor, "ff 35", private_page_root)
+    cursor = emit_call(cursor, private_selector)
+    cursor = emit(cursor, "59 85 c0")
+    large_select_failure = cursor
+    cursor = emit(cursor, "74 00 83 c0 08 c3")
+    large_failure_target = cursor
+    emit(cursor, "31 c0 c3")
+    patch_short(page_ready, page_ready_target)
+    patch_short(large_failure, large_failure_target)
+    patch_short(large_select_failure, large_failure_target)
+
+    # Page provider preserves one factory identity through metadata setup and
+    # publication into the zero-initialized page root.
+    cursor = emit(private_page, "53")
+    if mutation in {
+        "private-heap-bounded-helper-normalized",
+        "private-heap-bounded-helper-normalized-redefined-extent",
+        "private-heap-bounded-helper-metadata",
+        "private-heap-bounded-helper-metadata-clobber",
+        "private-heap-bounded-helper-metadata-mask",
+        "private-heap-bounded-helper-effect",
+        "private-heap-bounded-helper-effect-clobber",
+        "private-heap-bounded-helper-effect-pruned-call",
+        "private-heap-bounded-helper-effect-unknown-branch",
+    }:
+        # Normalize the incoming extent to a page boundary, then enforce the
+        # retail-shaped 64 KiB floor on the alternate arm.
+        cursor = emit(
+            cursor,
+            "8b 5c 24 08 8d 9b 17 10 00 00 55 81 e3 00 f0 ff ff "
+            "81 fb 00 00 01 00 73 05 bb 00 00 01 00 53",
+        )
+    else:
+        cursor = emit(cursor, "ff 74 24 08")
+    cursor = emit_call(cursor, private_factory)
+    cursor = emit(
+        cursor,
+        "89 c7 59 85 ff"
+        if mutation
+        in {
+            "private-heap-bounded-helper-normalized",
+            "private-heap-bounded-helper-normalized-redefined-extent",
+            "private-heap-bounded-helper-metadata",
+            "private-heap-bounded-helper-metadata-clobber",
+            "private-heap-bounded-helper-metadata-mask",
+            "private-heap-bounded-helper-effect",
+            "private-heap-bounded-helper-effect-clobber",
+            "private-heap-bounded-helper-effect-pruned-call",
+            "private-heap-bounded-helper-effect-unknown-branch",
+        }
+        else "89 c3 59 85 db",
+    )
+    page_success = cursor
+    cursor = emit(cursor, "75 00 5b 31 c0 c3")
+    page_success_target = cursor
+    if mutation in {
+        "private-heap-bounded-helper",
+        "private-heap-bounded-helper-redefined-extent",
+        "private-heap-bounded-helper-extra-incoming",
+        "private-heap-bounded-helper-normalized",
+        "private-heap-bounded-helper-normalized-redefined-extent",
+        "private-heap-bounded-helper-metadata",
+        "private-heap-bounded-helper-metadata-clobber",
+        "private-heap-bounded-helper-metadata-mask",
+        "private-heap-bounded-helper-effect",
+        "private-heap-bounded-helper-effect-clobber",
+        "private-heap-bounded-helper-effect-pruned-call",
+        "private-heap-bounded-helper-effect-unknown-branch",
+    }:
+        if mutation == "private-heap-bounded-helper-redefined-extent":
+            cursor = emit(cursor, "8b 44 24 08 83 c0 04 50")
+        elif mutation == "private-heap-bounded-helper-normalized-redefined-extent":
+            cursor = emit(cursor, "bb 04 00 00 00 53")
+        elif mutation in {
+            "private-heap-bounded-helper-normalized",
+            "private-heap-bounded-helper-metadata",
+            "private-heap-bounded-helper-metadata-clobber",
+            "private-heap-bounded-helper-metadata-mask",
+            "private-heap-bounded-helper-effect",
+            "private-heap-bounded-helper-effect-clobber",
+            "private-heap-bounded-helper-effect-pruned-call",
+            "private-heap-bounded-helper-effect-unknown-branch",
+        }:
+            cursor = emit(cursor, "53")
+        else:
+            cursor = emit(cursor, "ff 74 24 08")
+        cursor = emit(
+            cursor,
+            "57"
+            if mutation
+            in {
+                "private-heap-bounded-helper-normalized",
+                "private-heap-bounded-helper-normalized-redefined-extent",
+                "private-heap-bounded-helper-metadata",
+                "private-heap-bounded-helper-metadata-clobber",
+                "private-heap-bounded-helper-metadata-mask",
+                "private-heap-bounded-helper-effect",
+                "private-heap-bounded-helper-effect-clobber",
+                "private-heap-bounded-helper-effect-pruned-call",
+                "private-heap-bounded-helper-effect-unknown-branch",
+            }
+            else "53",
+        )
+        cursor = emit_call(cursor, private_page_helper)
+        cursor = emit(cursor, "83 c4 08")
+    cursor = emit(
+        cursor,
+        "57"
+        if mutation
+        in {
+            "private-heap-bounded-helper-normalized",
+            "private-heap-bounded-helper-normalized-redefined-extent",
+            "private-heap-bounded-helper-metadata",
+            "private-heap-bounded-helper-metadata-clobber",
+            "private-heap-bounded-helper-metadata-mask",
+            "private-heap-bounded-helper-effect",
+            "private-heap-bounded-helper-effect-clobber",
+            "private-heap-bounded-helper-effect-pruned-call",
+            "private-heap-bounded-helper-effect-unknown-branch",
+        }
+        else "53",
+    )
+    cursor = emit_call(cursor, private_page_init)
+    cursor = emit(
+        cursor,
+        "59 57"
+        if mutation
+        in {
+            "private-heap-bounded-helper-normalized",
+            "private-heap-bounded-helper-normalized-redefined-extent",
+            "private-heap-bounded-helper-metadata",
+            "private-heap-bounded-helper-metadata-clobber",
+            "private-heap-bounded-helper-metadata-mask",
+            "private-heap-bounded-helper-effect",
+            "private-heap-bounded-helper-effect-clobber",
+            "private-heap-bounded-helper-effect-pruned-call",
+            "private-heap-bounded-helper-effect-unknown-branch",
+        }
+        else "59 53",
+    )
+    cursor = emit_call(cursor, private_insert)
+    cursor = emit(cursor, "59")
+    if mutation == "private-heap-mixed-factory":
+        cursor = emit(cursor, "ff 74 24 08")
+        cursor = emit_call(cursor, second_factory)
+        cursor = emit(cursor, "59")
+    if mutation == "private-heap-cycle":
+        cursor = emit(cursor, "ff 74 24 08")
+        cursor = emit_call(cursor, private_allocator)
+        cursor = emit(cursor, "59")
+    cursor = emit(
+        cursor,
+        "89 f8 5b c3"
+        if mutation
+        in {
+            "private-heap-bounded-helper-normalized",
+            "private-heap-bounded-helper-normalized-redefined-extent",
+            "private-heap-bounded-helper-metadata",
+            "private-heap-bounded-helper-metadata-clobber",
+            "private-heap-bounded-helper-metadata-mask",
+            "private-heap-bounded-helper-effect",
+            "private-heap-bounded-helper-effect-clobber",
+            "private-heap-bounded-helper-effect-pruned-call",
+            "private-heap-bounded-helper-effect-unknown-branch",
+        }
+        else "89 d8 5b c3",
+    )
+    patch_short(page_success, page_success_target)
+
+    cursor = emit_abs(private_selector, "a1", private_page_root)
+    emit(cursor, "c3")
+    cursor = emit(private_insert, "8b 44 24 04")
+    if mutation == "private-heap-protected-write":
+        cursor = emit_abs(cursor, "a3", callback_slot)
+    cursor = emit_abs(cursor, "a3", private_page_root)
+    emit(cursor, "c3")
+    cursor = emit(private_bin_init, "8b 44 24 04 8b 4c 24 08 8d 50 0c")
+    cursor = emit_abs(cursor, "89 14 8d", private_bins)
+    emit(cursor, "89 02 c7 42 04 00 00 00 00 c3")
+    emit(
+        private_page_init,
+        "8b 44 24 04 c7 00 00 01 00 00 c7 40 04 00 00 00 00 c3",
+    )
+
+    if mutation == "private-heap-mixed-factory":
+        cursor = emit(
+            second_factory,
+            "8b 44 24 04 83 c0 08 50 6a 00",
+        )
+        cursor = emit_abs(cursor, "ff 15", global_alloc_iat)
+        cursor = emit(cursor, "59 59 85 c0")
+        second_success = cursor
+        cursor = emit(cursor, "75 00 31 c0 c3")
+        second_success_target = cursor
+        emit(cursor, "83 c0 04 c3")
+        patch_short(second_success, second_success_target)
+    # Companion deallocator: one null-safe, lock-protected root, one matching
+    # finite size selector that returns nodes to the bins, and one exact OS
+    # release wrapper.  A foreign state value must invalidate the contract.
+    cursor = emit(private_free, "53 8b 5c 24 08 85 db")
+    free_nonnull = cursor
+    cursor = emit(cursor, "75 00 5b c3 6a 01")
+    free_nonnull_target = cursor
+    cursor = emit_abs(cursor, "ff 15", enter_critical_section_iat)
+    cursor = emit(cursor, "6a 0c")
+    cursor = emit(
+        cursor,
+        (
+            "68" + callback_slot.to_bytes(4, "little").hex()
+            if mutation == "private-heap-foreign-free-input"
+            else "53"
+        ),
+    )
+    cursor = emit_call(cursor, private_small_free)
+    cursor = emit(cursor, "59 59 53")
+    cursor = emit_call(cursor, private_os_free)
+    cursor = emit(cursor, "59 6a 01")
+    cursor = emit_abs(cursor, "ff 15", leave_critical_section_iat)
+    emit(cursor, "5b c3")
+    patch_short(free_nonnull, free_nonnull_target)
+
+    cursor = emit(private_small_free, "31 c9 8b 44 24 08")
+    free_class_loop = cursor
+    cursor = emit_abs(cursor, "3b 04 8d", private_size_table)
+    free_class_found = cursor
+    cursor = emit(cursor, "76 00 41")
+    free_class_back = cursor
+    free_class_ready = cursor + 2
+    cursor = emit(cursor, "eb 00 8b 54 24 04 83 ea 04")
+    if mutation == "private-heap-external-state-writer":
+        cursor = emit(
+            cursor,
+            (
+                "c7048d"
+                + private_bins.to_bytes(4, "little").hex()
+                + callback_slot.to_bytes(4, "little").hex()
+            ),
+        )
+    elif mutation == "private-heap-unbounded-free-index":
+        cursor = emit_abs(cursor, "89 14 85", private_bins)
+    else:
+        cursor = emit_abs(cursor, "89 14 8d", private_bins)
+    cursor = emit_abs(cursor, "ff 0c 8d", private_counts)
+    emit(cursor, "c3")
+    patch_short(free_class_found, free_class_ready)
+    patch_short(free_class_back, free_class_loop)
+
+    cursor = emit(private_os_free, "ff 74 24 04")
+    cursor = emit_abs(cursor, "ff 15", global_free_iat)
+    emit(cursor, "c3")
+
+    # The helper is intentionally trivial in this Task 2 fixture: its memory
+    # spans are not authorized until Task 3.  A second raw caller is a hostile
+    # for the complete incoming-call closure requirement.
+    if mutation in {
+        "private-heap-bounded-helper-effect",
+        "private-heap-bounded-helper-effect-clobber",
+        "private-heap-bounded-helper-effect-pruned-call",
+        "private-heap-bounded-helper-effect-unknown-branch",
+    }:
+        cursor = emit(
+            private_page_helper,
+            "53 8b 5c 24 08 8b 44 24 0c 89 c2 83 ca 03 89 53 0c",
+        )
+        cursor = emit(
+            cursor,
+            "6a 01"
+            if mutation == "private-heap-bounded-helper-effect-clobber"
+            else "6a 00",
+        )
+        cursor = emit(cursor, "50 53")
+        cursor = emit_call(cursor, private_effect_helper)
+        emit(
+            cursor,
+            "83 c4 0c 8b 43 0c 83 e0 f8 8d 44 03 fc "
+            "c7 00 00 00 00 00 5b c3",
+        )
+        if mutation == "private-heap-bounded-helper-effect-unknown-branch":
+            emit(
+                private_effect_helper,
+                "8b 44 24 04 8b 4c 24 08 89 48 10 39 c1 "
+                "75 01 c3 89 48 0c c3",
+            )
+        elif mutation == "private-heap-bounded-helper-effect-pruned-call":
+            cursor = emit(
+                private_effect_helper,
+                "8b 44 24 04 8b 4c 24 08 89 48 10 83 7c 24 0c 00",
+            )
+            pruned_branch = cursor
+            cursor = emit(cursor, "75 00 c3")
+            pruned_target = cursor
+            cursor = emit_call(cursor, private_selector)
+            emit(cursor, "c3")
+            patch_short(pruned_branch, pruned_target)
+        else:
+            emit(
+                private_effect_helper,
+                "8b 44 24 04 8b 4c 24 08 89 48 10 83 7c 24 0c 00 "
+                "75 01 c3 89 48 0c c3",
+            )
+    elif mutation in {"private-heap-bounded-helper-spans", "private-heap-bounded-helper-normalized"}:
+        emit(private_page_helper, "8b 44 24 04 8b 4c 24 08 89 48 0c 8d 54 08 f8 89 0a c3")
+    elif mutation == "private-heap-bounded-helper-spans-scaled":
+        emit(private_page_helper, "8b 44 24 04 8b 4c 24 08 8d 54 48 f8 89 0a c3")
+    elif mutation == "private-heap-bounded-helper-spans-out-of-range":
+        emit(private_page_helper, "8b 44 24 04 8b 4c 24 08 89 88 00 00 01 00 c3")
+    elif mutation in {
+        "private-heap-bounded-helper-metadata",
+        "private-heap-bounded-helper-metadata-clobber",
+        "private-heap-bounded-helper-metadata-mask",
+    }:
+        # P = eax, E = ecx.  Round-trip E|3 through P+0xc, recover E with
+        # the page-alignment consequence E&7==0, then write at P+E-4.
+        metadata = (
+            "8b 44 24 04 8b 4c 24 08 89 ca 83 ca 03 89 50 0c "
+            + (
+                "89 58 0c "
+                if mutation == "private-heap-bounded-helper-metadata-clobber"
+                else ""
+            )
+            + "8b 50 0c "
+            + (
+                "83 e2 f0 "
+                if mutation == "private-heap-bounded-helper-metadata-mask"
+                else "83 e2 f8 "
+            )
+            + "8d 54 02 fc 89 0a c3"
+        )
+        emit(private_page_helper, metadata)
+    else:
+        emit(private_page_helper, "c3")
+
+    # One returning body whose only dynamic memory access is the exact
+    # zero-offset result of the closed private allocator.  This is the
+    # smallest body-domain regression for the typed private-heap result.
+    cursor = emit(publication_body, "6a 10")
+    if mutation == "private-heap-bounded-helper-extra-incoming":
+        cursor = emit(cursor, "6a 10 6a 00")
+        cursor = emit_call(cursor, private_page_helper)
+        cursor = emit(cursor, "83 c4 08")
+    publication_body_private_call = cursor
+    cursor = emit_call(cursor, private_allocator)
+    cursor = emit(cursor, "59 8d 08 8b 11 c3")
+
+    struct.pack_into("<I", data, 0x800 + 0x20, 0)
+    struct.pack_into(
+        "<I",
+        data,
+        0x800 + (private_page_root - data_va),
+        1 if mutation == "private-heap-nonzero-state" else 0,
+    )
+    if mutation == "private-heap-nonzero-indexed-state":
+        struct.pack_into(
+            "<I",
+            data,
+            0x800 + (private_bins - data_va) + 4,
+            1,
+        )
+    struct.pack_into(
+        "<4I",
+        data,
+        0x800 + (private_size_table - data_va),
+        12,
+        20,
+        36,
+        68,
+    )
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=grow_target,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text", text_va, 0, 0x800, 0x800, 0x60000020
+            ),
+            pe_mod.Section(
+                ".data", data_va, 0x800, 0x400, 0x400, 0xC0000040
+            ),
+        ),
+        imports=(
+            pe_mod.Import(
+                dll="KERNEL32.dll",
+                name="GlobalAlloc",
+                ordinal=None,
+                hint=1,
+                iat_va=global_alloc_iat,
+            ),
+            pe_mod.Import(
+                dll="KERNEL32.dll",
+                name="GlobalFree",
+                ordinal=None,
+                hint=2,
+                iat_va=global_free_iat,
+            ),
+            pe_mod.Import(
+                dll="KERNEL32.dll",
+                name="EnterCriticalSection",
+                ordinal=None,
+                hint=3,
+                iat_va=enter_critical_section_iat,
+            ),
+            pe_mod.Import(
+                dll="KERNEL32.dll",
+                name="LeaveCriticalSection",
+                ordinal=None,
+                hint=4,
+                iat_va=leave_critical_section_iat,
+            ),
+        ),
+        exports=(
+            pe_mod.Export(
+                "private_free",
+                1,
+                private_free,
+                None,
+            ),
+            pe_mod.Export(
+                "publication_private_heap_body",
+                2,
+                publication_body,
+                None,
+            ),
+        ),
+        relocations=(),
+        executable_ranges=((text_va, text_va + 0x800),),
+    )
+    return FinalizedHandleArenaFixture(
+        image=image,
+        grow_target=grow_target,
+        allocator_targets=(allocator_a, allocator_b),
+        finalizer_target=finalizer_target,
+        payload_initializer=payload_initializer,
+        handle_constructor=handle_constructor,
+        private_allocator=private_allocator,
+        private_factory=private_factory,
+        private_free=private_free,
+        callback_slot=callback_slot,
+        descriptor=descriptor,
+        publication_body=publication_body,
+        publication_body_private_call=publication_body_private_call,
+        private_page_helper=private_page_helper,
+    )
+
+
 _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
     {
         "alternate-slice-entry",
@@ -3335,6 +4158,7 @@ _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
         "backend-unresolved-indexed-indirect",
         "backend-helper-df-leak",
         "backend-helper-df-restored",
+        "backend-helper-transitive-df-leak",
         "backend-df-set-before-helper-write",
         "deferred-lifecycle-target-df-leak",
         "deferred-lifecycle-target-callback-overwrite",
@@ -3379,6 +4203,34 @@ _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
         "outside-residue-slot-reference",
         "overlapping-residue-slot-reference",
         "ownership-growth-into-returning-closure",
+        "prior-callback-generation",
+        "flags-query-prologue-save",
+        "finite-sync-wrapper",
+        "transaction-unreachable-untrusted-call",
+        "transaction-reconverging-untrusted-call",
+        "transaction-reconverging-protected-write",
+        "transaction-reconverging-unresolved-jump",
+        "transaction-tail-before-dead-goal",
+        "seal-external-owned-literal-writer",
+        "seal-external-owned-dynamic-partial-writer",
+        "seal-external-owned-capability-escape",
+        "seal-external-owned-arithmetic-capability-escape",
+        "seal-external-owned-arithmetic-capability-store",
+        "seal-external-owned-arithmetic-destination",
+        "seal-external-owned-xchg-capability-store",
+        "seal-external-owned-cmpxchg-capability-store",
+        "seal-external-owned-stos-capability-store",
+        "seal-grow-forbidden-callback-write",
+        "seal-allocator-sibling-descriptor-write",
+        "seal-session-reset-writer",
+        "seal-initializer-unrolled-zero",
+        "seal-initializer-unrolled-zero-df-set",
+        "seal-descriptor-rebuild",
+        "seal-descriptor-rebuild-wrong-source",
+        "seal-descriptor-rebuild-extra-write",
+        "seal-descriptor-rebuild-wrong-loop",
+        "seal-sibling-descriptor-allocator",
+        "seal-sibling-descriptor-initializer",
     }
 )
 
@@ -3414,6 +4266,7 @@ def return_path_publication_lifecycle_image(
     second_session_helper = 0x004017C0
     helper_target = 0x00401800
     helper_forwarder = 0x00401880
+    sync_wrapper = 0x004018C0
     allocator = 0x00401900
     grow_target = 0x00401980
     context_save = 0x00401A80
@@ -3422,6 +4275,8 @@ def return_path_publication_lifecycle_image(
     default_callback = 0x00401B40
     system_allocator = 0x00401B80
     system_allocator_helper = 0x00401BC0
+    prior_callback_initializer = 0x00401BE0
+    transaction_untrusted_helper = 0x00401400
     publication_slot = 0x00403000
     callback_slot = 0x00403004
     branch_flag = 0x00403008
@@ -3689,6 +4544,20 @@ def return_path_publication_lifecycle_image(
     # removing another exact incoming owner, or split the two owners across
     # individually valid roots whose union is insufficient.
     cursor = backend_root
+    transaction_bad_branch = None
+    if mutation and mutation.startswith("transaction-"):
+        cursor = emit_abs(cursor, "83 3d", branch_flag, "00")
+        transaction_bad_branch = cursor
+        cursor = emit(cursor, "75 00")
+        if mutation == "transaction-reconverging-untrusted-call":
+            cursor = emit_call(cursor, transaction_untrusted_helper)
+            patch_short(transaction_bad_branch, cursor)
+        elif mutation == "transaction-reconverging-protected-write":
+            cursor = emit_abs(cursor, "c7 05", callback_slot, "00 00 00 00")
+            patch_short(transaction_bad_branch, cursor)
+        elif mutation == "transaction-reconverging-unresolved-jump":
+            cursor = emit(cursor, "31 c0 ff e0")
+            patch_short(transaction_bad_branch, cursor)
     if mutation in {"callback-slot-overwrite"}:
         start = cursor
         cursor = emit_abs(cursor, "c7 05", callback_slot)
@@ -3785,6 +4654,7 @@ def return_path_publication_lifecycle_image(
     if mutation in {
         "backend-helper-df-leak",
         "backend-helper-df-restored",
+        "backend-helper-transitive-df-leak",
         "session-helper-df-leak-before-backend",
         "session-helper-df-restored-before-backend",
     }:
@@ -3804,7 +4674,154 @@ def return_path_publication_lifecycle_image(
         cursor = emit(cursor, "b9 02 00 00 00 f3 ab fc")
     if mutation == "lifecycle-root-outside-backend":
         cursor = emit_call(cursor, publishing_consumer)
-    emit(cursor, "c3")
+    cursor = emit(cursor, "c3")
+    if mutation == "transaction-unreachable-untrusted-call":
+        assert transaction_bad_branch is not None
+        patch_short(transaction_bad_branch, cursor)
+        cursor = emit_call(cursor, transaction_untrusted_helper)
+        emit(cursor, "c3")
+    elif mutation == "transaction-tail-before-dead-goal":
+        assert transaction_bad_branch is not None
+        patch_short(transaction_bad_branch, cursor)
+        cursor = emit_jump(cursor, transaction_untrusted_helper)
+        cursor = emit_call(cursor, incoming_owners[0])
+        emit(cursor, "c3")
+
+    if mutation in {
+        "transaction-unreachable-untrusted-call",
+        "transaction-reconverging-untrusted-call",
+        "transaction-tail-before-dead-goal",
+    }:
+        cursor = emit_abs(
+            transaction_untrusted_helper,
+            "ff 15",
+            unlisted_iat,
+        )
+        emit(cursor, "c3")
+    elif mutation == "seal-external-owned-literal-writer":
+        cursor = emit_abs(
+            transaction_untrusted_helper,
+            "c7 05",
+            callback_slot,
+            "00 00 00 00",
+        )
+        emit(cursor, "c3")
+    elif mutation == "seal-external-owned-dynamic-partial-writer":
+        cursor = emit_abs(
+            transaction_untrusted_helper,
+            "b8",
+            callback_slot - 1,
+        )
+        cursor = emit(cursor, "40 c6 00 00")
+        emit(cursor, "c3")
+    elif mutation == "seal-external-owned-capability-escape":
+        cursor = emit_abs(transaction_untrusted_helper, "68", callback_slot)
+        cursor = emit_abs(cursor, "ff 15", unlisted_iat)
+        emit(cursor, "59 c3")
+    elif mutation in {
+        "seal-external-owned-arithmetic-capability-escape",
+        "seal-external-owned-arithmetic-capability-store",
+    }:
+        cursor = emit_abs(
+            transaction_untrusted_helper, "b8", callback_slot - 1
+        )
+        cursor = emit(cursor, "40")
+        if mutation == "seal-external-owned-arithmetic-capability-escape":
+            cursor = emit(cursor, "50")
+            cursor = emit_abs(cursor, "ff 15", unlisted_iat)
+            emit(cursor, "59 c3")
+        else:
+            cursor = emit_abs(cursor, "a3", unrelated_write_slot)
+            emit(cursor, "c3")
+    elif mutation == "seal-external-owned-arithmetic-destination":
+        cursor = emit(transaction_untrusted_helper, "31 c0")
+        cursor = emit_abs(cursor, "05", callback_slot - 1)
+        cursor = emit(cursor, "40 c7 00 00 00 00 00 c3")
+    elif mutation == "seal-external-owned-xchg-capability-store":
+        cursor = emit_abs(
+            transaction_untrusted_helper, "b8", callback_slot - 1
+        )
+        cursor = emit_abs(cursor, "40 87 05", unrelated_write_slot)
+        emit(cursor, "c3")
+    elif mutation == "seal-external-owned-cmpxchg-capability-store":
+        cursor = emit_abs(
+            transaction_untrusted_helper, "b9", callback_slot - 1
+        )
+        cursor = emit(cursor, "41 31 c0")
+        cursor = emit_abs(cursor, "0f b1 0d", unrelated_write_slot)
+        emit(cursor, "c3")
+    elif mutation == "seal-external-owned-stos-capability-store":
+        cursor = emit_abs(transaction_untrusted_helper, "bf", unrelated_write_slot)
+        cursor = emit_abs(cursor, "b8", callback_slot - 1)
+        emit(cursor, "40 ab c3")
+    elif mutation == "backend-helper-transitive-df-leak":
+        emit(transaction_untrusted_helper, "fd c3")
+    elif mutation in {
+        "seal-descriptor-rebuild",
+        "seal-descriptor-rebuild-wrong-source",
+        "seal-descriptor-rebuild-extra-write",
+        "seal-descriptor-rebuild-wrong-loop",
+    }:
+        descriptor = second_heap_descriptor
+        cursor = emit_abs(transaction_untrusted_helper, "8b 15", descriptor)
+        cursor = emit(cursor, "89 d0")
+        cursor = emit_abs(
+            cursor,
+            "89 0d" if mutation == "seal-descriptor-rebuild-wrong-source" else "a3",
+            descriptor + 8,
+        )
+        cursor = emit(cursor, "8d 4a 10")
+        cursor = emit_abs(cursor, "89 0d", descriptor + 12)
+        cursor = emit(cursor, "8b 42 08 83 c0 f0 85 d2")
+        cursor = emit_abs(cursor, "a3", descriptor + 16)
+        rebuild_empty = cursor
+        cursor = emit(cursor, "74 00")
+        rebuild_loop = cursor
+        cursor = emit(cursor, "8b 42 08 83 c0 f0")
+        cursor = emit(
+            cursor,
+            "89 42 08"
+            if mutation == "seal-descriptor-rebuild-wrong-loop"
+            else "89 42 0c",
+        )
+        cursor = emit(cursor, "8b 12 85 d2")
+        rebuild_back = cursor
+        cursor = emit(cursor, "75 00")
+        if mutation == "seal-descriptor-rebuild-extra-write":
+            cursor = emit_abs(cursor, "c7 05", callback_slot, "00 00 00 00")
+        emit(cursor, "c3")
+        patch_short(rebuild_empty, cursor)
+        patch_short(rebuild_back, rebuild_loop)
+    elif mutation == "seal-sibling-descriptor-allocator":
+        descriptor = second_heap_descriptor
+        cursor = emit(
+            transaction_untrusted_helper,
+            "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08",
+        )
+        cursor = emit_abs(cursor, "39 1d", descriptor + 16)
+        enough_space = cursor
+        cursor = emit(cursor, "7d 00 53")
+        cursor = emit_abs(cursor, "68", descriptor)
+        cursor = emit_call(cursor, grow_target)
+        cursor = emit(cursor, "59 59")
+        allocation = cursor
+        cursor = emit_abs(cursor, "29 1d", descriptor + 16)
+        cursor = emit_abs(cursor, "a1", descriptor + 12)
+        cursor = emit_abs(cursor, "01 1d", descriptor + 12)
+        emit(cursor, "5b c3")
+        patch_short(enough_space, allocation)
+    elif mutation == "seal-sibling-descriptor-initializer":
+        cursor = emit(transaction_untrusted_helper, "31 c0 57")
+        cursor = emit_abs(cursor, "bf", heap_descriptor)
+        cursor = emit_abs(cursor, "c7 05", callback_slot, "00 00 00 00")
+        cursor = emit(cursor, "ab ab ab ab ab")
+        cursor = emit_abs(cursor, "bf", second_heap_descriptor)
+        cursor = emit(cursor, "ab ab ab ab ab 6a 00")
+        cursor = emit_abs(cursor, "68", heap_descriptor)
+        cursor = emit_call(cursor, grow_target)
+        cursor = emit(cursor, "59 59 8b 44 24 08")
+        cursor = emit_abs(cursor, "a3", callback_slot)
+        emit(cursor, "5f c3")
 
     # Checked session root: init, context-save, backend, context-restore.
     session_callback = (
@@ -3882,6 +4899,26 @@ def return_path_publication_lifecycle_image(
     # Checked initializer grows two descriptors with the callback disabled,
     # installs its argument exactly once, and checks both descriptor arenas.
     cursor = initializer
+    if mutation in {
+        "seal-initializer-unrolled-zero",
+        "seal-initializer-unrolled-zero-df-set",
+    }:
+        cursor = emit(cursor, "31 c0")
+        if mutation == "seal-initializer-unrolled-zero-df-set":
+            cursor = emit(cursor, "fd")
+        for descriptor in (heap_descriptor, second_heap_descriptor):
+            cursor = emit_abs(cursor, "bf", descriptor)
+            cursor = emit(cursor, "ab")
+            if descriptor == heap_descriptor:
+                cursor = emit_abs(
+                    cursor,
+                    "c7 05",
+                    unrelated_write_slot,
+                    "00 00 00 00",
+                )
+            cursor = emit(cursor, "ab ab ab ab")
+        if mutation == "seal-initializer-unrolled-zero-df-set":
+            cursor = emit(cursor, "fc")
     cursor = emit_abs(cursor, "c7 05", callback_slot, "00 00 00 00")
     for descriptor in (heap_descriptor, second_heap_descriptor):
         cursor = emit(cursor, "6a 00")
@@ -3904,7 +4941,9 @@ def return_path_publication_lifecycle_image(
     # The helper receives the scalar loaded from root+0x16. It copies that
     # opaque value to an unrelated global and exercises the exact import set.
     cursor = helper_target
-    if mutation == "returning-unresolved-indirect":
+    if mutation == "flags-query-prologue-save":
+        cursor = emit(cursor, "53 8b 44 24 08")
+    elif mutation == "returning-unresolved-indirect":
         cursor = emit(cursor, "8b 44 24 04 ff d0")
     elif mutation == "extra-finite-returning-target":
         cursor = emit_abs(cursor, "ff 15", finite_target_slot)
@@ -3934,7 +4973,8 @@ def return_path_publication_lifecycle_image(
             "closure-absolute-overlap-at-slot-plus-one": publication_slot + 1,
             "closure-absolute-overlap-from-left": publication_slot - 3,
             "closure-absolute-boundary-left": publication_slot - 4,
-            "closure-absolute-boundary-right": publication_slot + 4,
+            # +4 is the allocator callback slot in this combined fixture.
+            "closure-absolute-boundary-right": publication_slot + 8,
         }[mutation]
         cursor = emit(cursor, "8b 44 24 04")
         cursor = emit_abs(cursor, "8b 1d", absolute_address)
@@ -3999,7 +5039,9 @@ def return_path_publication_lifecycle_image(
         iat_vas["EnterCriticalSection"],
     )
     cursor = emit(cursor, "59")
+    cursor = emit_abs(cursor, "68", sync_handle)
     cursor = emit_abs(cursor, "ff 15", iat_vas["GlobalFlags"])
+    cursor = emit(cursor, "59")
     cursor = emit(cursor, "6a 10 6a 00")
     if mutation == "extra-tainted-import-argument":
         cursor = emit(cursor, "ff 74 24 0c")
@@ -4016,22 +5058,38 @@ def return_path_publication_lifecycle_image(
     cursor = emit_abs(cursor, "ff 15", iat_vas["GetLastError"])
     if mutation == "imported-last-error-return-dereference":
         cursor = emit(cursor, "8b 00")
-    if sync_actual is None:
-        cursor = emit_abs(cursor, "68", sync_pointer)
+    if mutation == "finite-sync-wrapper":
+        cursor = emit(cursor, "6a 00")
+        cursor = emit_call(cursor, sync_wrapper)
+        cursor = emit(cursor, "59")
     else:
-        cursor = emit(cursor, sync_actual)
+        if sync_actual is None:
+            cursor = emit_abs(cursor, "68", sync_pointer)
+        else:
+            cursor = emit(cursor, sync_actual)
+        cursor = emit_abs(
+            cursor,
+            "ff 15",
+            iat_vas["LeaveCriticalSection"],
+        )
+        cursor = emit(cursor, "59")
+    if returning_allocator:
+        cursor = emit(cursor, "6a 20")
+        cursor = emit_call(cursor, allocator)
+        cursor = emit(cursor, "59")
+    if mutation == "flags-query-prologue-save":
+        cursor = emit(cursor, "5b")
+    cursor = emit(cursor, "c3")
+    emit(helper_forwarder, "8b 44 24 04 ff d0 c3")
+    cursor = emit(sync_wrapper, "8b 44 24 04 6b c0 18")
+    cursor = emit_abs(cursor, "05", sync_handle)
+    cursor = emit(cursor, "50")
     cursor = emit_abs(
         cursor,
         "ff 15",
         iat_vas["LeaveCriticalSection"],
     )
-    cursor = emit(cursor, "59")
-    if returning_allocator:
-        cursor = emit(cursor, "6a 20")
-        cursor = emit_call(cursor, allocator)
-        cursor = emit(cursor, "59")
-    cursor = emit(cursor, "c3")
-    emit(helper_forwarder, "8b 44 24 04 ff d0 c3")
+    emit(cursor, "c3")
 
     # Owned fixed bump allocator and checked grow callback seam.
     cursor = emit(
@@ -4046,6 +5104,10 @@ def return_path_publication_lifecycle_image(
     cursor = emit_abs(cursor, "29 1d", heap_remaining)
     cursor = emit_abs(cursor, "a1", heap_cursor)
     cursor = emit_abs(cursor, "01 1d", heap_cursor)
+    if mutation == "seal-allocator-sibling-descriptor-write":
+        cursor = emit_abs(
+            cursor, "c7 05", second_heap_descriptor + 8, "00 00 00 00"
+        )
     emit(cursor, "5b c3")
 
     cursor = emit(grow_target, "53 8b 5c 24 08")
@@ -4060,6 +5122,8 @@ def return_path_publication_lifecycle_image(
     no_callback = cursor
     cursor = emit(cursor, "5b c3")
     grow_success = cursor
+    if mutation == "seal-grow-forbidden-callback-write":
+        cursor = emit_abs(cursor, "c7 05", callback_slot, "00 00 00 00")
     if mutation == "system-arena-partial-register-splice":
         cursor = emit(
             cursor,
@@ -4175,6 +5239,9 @@ def return_path_publication_lifecycle_image(
     }:
         cursor = emit_abs(cursor, "0f b1 05", callback_slot)
         emit(cursor, "c3")
+    elif mutation == "seal-session-reset-writer":
+        cursor = emit_abs(cursor, "c7 05", heap_remaining, "00 00 00 00")
+        emit(cursor, "c3")
     else:
         emit(cursor, "c3")
     if mutation in {
@@ -4188,18 +5255,35 @@ def return_path_publication_lifecycle_image(
             "00 00",
         )
         emit(cursor, "c3")
-    elif mutation in {"backend-helper-df-leak", "backend-helper-df-restored"}:
+    elif mutation in {
+        "backend-helper-df-leak",
+        "backend-helper-df-restored",
+    }:
         emit(
             second_session_helper,
             "fd fc c3"
             if mutation == "backend-helper-df-restored"
             else "fd c3",
         )
+    elif mutation == "backend-helper-transitive-df-leak":
+        cursor = emit_call(
+            second_session_helper,
+            transaction_untrusted_helper,
+        )
+        emit(cursor, "c3")
     elif mutation == "backend-df-set-before-helper-write":
         cursor = emit_abs(second_session_helper, "bf", callback_slot + 4)
         emit(cursor, "b9 02 00 00 00 f3 ab c3")
     else:
         emit(second_session_helper, "c3")
+
+    if mutation == "prior-callback-generation":
+        start = prior_callback_initializer
+        cursor = emit_abs(start, "c7 05", callback_slot)
+        relocation_vas.add(start + 6)
+        cursor = emit(cursor, default_callback.to_bytes(4, "little").hex())
+        cursor = emit_abs(cursor, "c7 05", callback_slot)
+        emit(cursor, "00 00 00 00 c3")
 
     if mutation == "unowned-raw-incoming-call":
         emit_call(0x00401700, publishing_consumer)
@@ -4284,17 +5368,63 @@ def return_path_publication_lifecycle_image(
             )
         )
 
-    exports = (
-        (
-            pe_mod.Export(
-                name="PublishedConsumer",
-                ordinal=1,
-                va=publishing_consumer,
-                forwarded_to=None,
+    exports = tuple(
+        [
+            *(
+                [
+                    pe_mod.Export(
+                        name="PublishedConsumer",
+                        ordinal=1,
+                        va=publishing_consumer,
+                        forwarded_to=None,
+                    )
+                ]
+                if mutation == "exported-lifecycle-caller"
+                else []
             ),
-        )
-        if mutation == "exported-lifecycle-caller"
-        else ()
+            *(
+                [
+                    pe_mod.Export(
+                        name="PriorCallbackInitializer",
+                        ordinal=2,
+                        va=prior_callback_initializer,
+                        forwarded_to=None,
+                    )
+                ]
+                if mutation == "prior-callback-generation"
+                else []
+            ),
+            *(
+                [
+                    pe_mod.Export(
+                        name="TransactionUntrustedHelper",
+                        ordinal=3,
+                        va=transaction_untrusted_helper,
+                        forwarded_to=None,
+                    )
+                ]
+                if mutation
+                in {
+                    "transaction-tail-before-dead-goal",
+                    "seal-external-owned-literal-writer",
+                    "seal-external-owned-dynamic-partial-writer",
+                    "seal-external-owned-capability-escape",
+                    "seal-external-owned-arithmetic-capability-escape",
+                    "seal-external-owned-arithmetic-capability-store",
+                    "seal-external-owned-arithmetic-destination",
+                    "seal-external-owned-xchg-capability-store",
+                    "seal-external-owned-cmpxchg-capability-store",
+                    "seal-external-owned-stos-capability-store",
+                    "seal-descriptor-rebuild",
+                    "seal-descriptor-rebuild-wrong-source",
+                    "seal-descriptor-rebuild-extra-write",
+                    "seal-descriptor-rebuild-wrong-loop",
+                    "seal-sibling-descriptor-allocator",
+                    "seal-sibling-descriptor-initializer",
+                }
+                else []
+            ),
+        ]
     )
     image = pe_mod.Image(
         data=bytes(data),
@@ -9685,6 +10815,28 @@ def test_return_path_publication_split_backend_union_has_no_complete_root():
     assert all(not required <= closure for closure in closures)
 
 
+def test_allocator_session_evidence_is_not_totality():
+    fixture = return_path_publication_lifecycle_image()
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+
+    session = recovery._allocator_session_certificate(
+        fixture.allocator,
+        fixture.publishing_consumer,
+        lifetime_roots=frozenset({fixture.publishing_consumer}),
+    )
+
+    assert isinstance(session, _AllocatorSessionCertificate)
+    assert not isinstance(session, _AllocatorTotalityCertificate)
+    assert fixture.publishing_consumer in recovery._direct_function_call_closure(
+        next(iter(session.backend_roots))
+    )
+
+
 @pytest.mark.parametrize(
     "mutation",
     (
@@ -9711,8 +10863,8 @@ def test_return_path_publication_split_backend_union_has_no_complete_root():
         "backend-unresolved-indirect",
         "backend-unresolved-indexed-indirect",
         "backend-helper-df-leak",
+        "backend-helper-transitive-df-leak",
         "backend-df-set-before-helper-write",
-        "deferred-lifecycle-target-df-leak",
         "deferred-lifecycle-target-callback-overwrite",
         "deferred-lifecycle-target-stack-pivot-overwrite",
         "deferred-lifecycle-target-iret",
@@ -9773,6 +10925,9 @@ def test_return_path_publication_failure_callback_requires_bound_session(
         "session-helper-df-restored-before-backend",
         "system-arena-before-protected",
         "system-arena-after-protected",
+        # This historical target is excluded by the installed callback
+        # generation before its body can affect a returning execution.
+        "deferred-lifecycle-target-df-leak",
     ),
 )
 def test_return_path_publication_accepts_disjoint_semantic_backend_write(
@@ -9800,11 +10955,10 @@ def test_backend_bridge_binds_finite_indirect_semantic_scope():
 
     assert result.certificate is not None
     bridge = result.certificate.backend_bridges[0]
-    assert fixture.session_helpers[1] in {
-        body.function_entry for body in bridge.backend_bodies
-    }
+    seal = bridge.allocator_certificate.capability_seal
+    assert seal is not None
     assert fixture.session_helpers[1] in (
-        bridge.allocator_certificate.stability_scope_functions
+        seal.session_relevant_functions
     )
 
 
@@ -9864,9 +11018,9 @@ def test_publication_discovers_allocator_from_returning_closure():
     # This fixture's deliberately tiny allocator uses an address-arithmetic
     # shape outside the later body-domain proof. Discovery and totality must
     # nevertheless happen before that independent fail-closed boundary.
-    matching_totality = [
+    matching_sessions = [
         entry
-        for key, entry in result.recovery.allocator_totality_cache.items()
+        for key, entry in result.recovery.allocator_session_cache.items()
         if key[:3]
         == (
             fixture.allocator,
@@ -9874,8 +11028,14 @@ def test_publication_discovers_allocator_from_returning_closure():
             frozenset({fixture.publishing_consumer}),
         )
     ]
-    assert len(matching_totality) == 1
-    assert matching_totality[0] is not None
+    assert len(matching_sessions) == 1
+    assert matching_sessions[0] is not None
+    assert isinstance(
+        matching_sessions[0].result, _AllocatorSessionCertificate
+    )
+    assert not isinstance(
+        matching_sessions[0].result, _AllocatorTotalityCertificate
+    )
     assert fixture.allocator in {
         call.target
         for call in result.recovery._function_direct_calls(
@@ -9990,6 +11150,806 @@ def test_allocator_totality_accepts_nested_owned_typed_return():
     assert ("function", fixture.system_allocator_helper) in dependencies
 
 
+def test_finalized_handle_arena_binds_payload_size_and_finalizer():
+    fixture = finalized_handle_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    fact = x86_cfg_module._OwnedBumpAllocatorFact(
+        size_argument=0,
+        cursor_slot=fixture.descriptor + 12,
+        remaining_slot=fixture.descriptor + 16,
+        grow_target=fixture.grow_target,
+        descriptor=fixture.descriptor,
+    )
+    shape = recovery._allocator_grow_shape(fact)
+
+    assert shape is not None
+    contracts = {
+        target: recovery._exact_system_allocator_handle_contract(
+            target,
+            frozenset(
+                {
+                    fixture.callback_slot,
+                    fact.cursor_slot,
+                    fact.remaining_slot,
+                }
+            ),
+        )
+        for target in fixture.allocator_targets
+    }
+    assert all(contract is not None for contract in contracts.values())
+    assert {
+        contract.payload_offset
+        for contract in contracts.values()
+        if contract is not None
+    } == {4}
+    assert {
+        contract.size_offset
+        for contract in contracts.values()
+        if contract is not None
+    } == {8}
+    assert all(
+        fixture.private_free in contract.dependency_functions
+        for contract in contracts.values()
+        if contract is not None
+    )
+    assert recovery._finalized_handle_arena_is_disjoint(
+        shape,
+        frozenset(
+            {
+                fixture.callback_slot,
+                fact.cursor_slot,
+                fact.remaining_slot,
+            }
+        ),
+        {
+            call.address: contracts[call.target]
+            for call in shape.allocator_calls
+            if contracts[call.target] is not None
+        },
+    )
+    typed = recovery._allocator_call_return_domains(
+        0x0040F000,
+        shape,
+        frozenset(
+            {
+                fixture.callback_slot,
+                fact.cursor_slot,
+                fact.remaining_slot,
+            }
+        ),
+    )
+    assert typed is not None
+    domains, storage = typed
+    assert storage == frozenset()
+    assert {
+        domains[call.address][0] for call in shape.allocator_calls
+    } == {"private-heap"}
+
+
+def test_private_region_factory_binds_bounded_interior_returns():
+    fixture = finalized_handle_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+
+    factory = recovery._private_region_factory_shape(
+        fixture.private_factory,
+        frozenset({fixture.callback_slot}),
+    )
+
+    assert factory is not None
+    assert factory.size_argument == 0
+    assert factory.header_size == 8
+    assert factory.return_offsets == frozenset({4, 8})
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "private-factory-overrun",
+        "private-factory-foreign-write",
+        "private-factory-nonzero-failure",
+    ),
+)
+def test_private_region_factory_rejects_open_shapes(mutation):
+    fixture = finalized_handle_arena_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+
+    assert (
+        recovery._private_region_factory_shape(
+            fixture.private_factory,
+            frozenset({fixture.callback_slot}),
+        )
+        is None
+    )
+
+
+def test_private_heap_allocator_binds_one_factory_and_zeroed_state():
+    fixture = finalized_handle_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator,
+        frozenset({fixture.callback_slot}),
+    )
+
+    assert contract is not None
+    assert contract.factory.function_entry == fixture.private_factory
+    assert contract.root == fixture.private_allocator
+    assert contract.deallocator_root == fixture.private_free
+    assert fixture.private_free in contract.dependency_functions
+    assert contract.mutable_state
+    assert fixture.callback_slot not in contract.mutable_state
+
+
+@pytest.mark.parametrize(
+    "mutation, expected",
+    [
+        ("private-heap-bounded-helper", False),
+        ("private-heap-bounded-helper-normalized", True),
+        ("private-heap-bounded-helper-redefined-extent", False),
+        (
+            "private-heap-bounded-helper-normalized-redefined-extent",
+            False,
+        ),
+        ("private-heap-bounded-helper-extra-incoming", False),
+    ],
+    ids=(
+        "missing-min-guard",
+        "normalized-forwarding",
+        "redefined-extent",
+        "normalized-redefined-extent",
+        "incomplete-incoming",
+    ),
+)
+def test_bounded_private_heap_provider_helper_forwarding(
+    mutation, expected
+):
+    fixture = finalized_handle_arena_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator,
+        frozenset({fixture.callback_slot}),
+    )
+    assert contract is not None
+
+    witness = recovery._publication_private_heap_extent_witness(
+        contract,
+        fixture.private_page_helper,
+    )
+
+    assert (witness is not None) is expected
+    if witness is not None:
+        assert witness.factory_entry == fixture.private_factory
+        assert witness.helper_entry == fixture.private_page_helper
+        assert witness.extent_argument_index == 1
+        assert witness.payload_argument_index == 0
+        assert witness.minimum_extent == 0x10000
+        assert len(witness.extent_definition_addresses) == 2
+        assert len(witness.extent_witness_addresses) == 8
+        assert len(witness.extent_token_sha256) == 64
+        assert len(witness.provider_function_sha256) == 64
+        assert len(witness.helper_function_sha256) == 64
+
+
+def test_bounded_private_heap_helper_spans_are_within_extent():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-normalized"
+    )
+    recovery = _DirectCfgRecovery(fixture.image, build_seed_inventory(fixture.image, ()), generous_limits(fixture.image))
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(fixture.private_allocator, frozenset({fixture.callback_slot}))
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(contract, fixture.private_page_helper)
+    assert witness is not None
+    spans = recovery._publication_private_heap_bounded_span(witness)
+    assert spans is not None
+    assert {span.position for span in spans} == {"base-relative", "end-relative"}
+
+
+@pytest.mark.parametrize(
+    "mutation, expected",
+    (
+        ("private-heap-bounded-helper-metadata", True),
+        ("private-heap-bounded-helper-metadata-clobber", False),
+        ("private-heap-bounded-helper-metadata-mask", False),
+    ),
+)
+def test_bounded_private_heap_helper_metadata_round_trip(mutation, expected):
+    fixture = finalized_handle_arena_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract, fixture.private_page_helper
+    )
+    assert witness is not None
+
+    spans = recovery._publication_private_heap_bounded_span(witness)
+
+    assert (spans is not None) is expected
+    if spans is not None:
+        assert any(
+            span.position == "end-relative"
+            and span.displacement == -4
+            and span.width == 4
+            for span in spans
+        )
+
+
+def test_publication_body_uses_call_free_bounded_private_heap_spans():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-normalized"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    body = recovery._publication_function_body(fixture.private_page_helper)
+    assert body is not None
+    closure = x86_cfg_module._ReturningPublicationClosure(
+        bodies=(body,),
+        call_edges=(),
+        candidate_targets=frozenset(),
+        imports=(),
+    )
+    bridge = SimpleNamespace(
+        allocator_certificate=SimpleNamespace(
+            call_return_domains=(
+                (
+                    fixture.publication_body_private_call,
+                    "private-heap",
+                    frozenset(),
+                ),
+            )
+        )
+    )
+
+    witnesses = recovery._publication_body_address_domains(
+        fixture.callback_slot,
+        closure,
+        (bridge,),
+    )
+
+    assert witnesses is not None
+    bounded = tuple(
+        witness.bounded_private_heap_span
+        for witness in witnesses
+        if witness.bounded_private_heap_span is not None
+    )
+    assert len(bounded) == 2
+    assert {span.position for span in bounded} == {
+        "base-relative",
+        "end-relative",
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation, expected",
+    (
+        ("private-heap-bounded-helper-effect", True),
+        ("private-heap-bounded-helper-effect-clobber", False),
+        ("private-heap-bounded-helper-effect-unknown-branch", False),
+    ),
+)
+def test_private_heap_effect_closure_preserves_metadata(mutation, expected):
+    fixture = finalized_handle_arena_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract, fixture.private_page_helper
+    )
+    assert witness is not None
+
+    effects = recovery._publication_private_heap_effect_closure(witness)
+
+    assert (effects is not None) is expected
+    if effects is not None:
+        assert effects.root_helper == fixture.private_page_helper
+        assert len(effects.function_entries) == 2
+        assert len(effects.call_edges) == 1
+        assert len(effects.preserved_metadata_calls) == 1
+        assert any(
+            span.position == "base-relative" and span.displacement == 0x10
+            for span in effects.bounded_spans
+        )
+
+
+def test_private_heap_bounded_witness_rejects_stale_function_fingerprint():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-normalized"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract, fixture.private_page_helper
+    )
+    assert witness is not None
+
+    stale = replace(witness, helper_function_sha256="0" * 64)
+
+    assert recovery._publication_private_heap_bounded_span(stale) is None
+    assert recovery._publication_private_heap_effect_closure(stale) is None
+
+
+def test_private_heap_effect_closure_replays_allocator_dependencies():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-effect"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract, fixture.private_page_helper
+    )
+    assert witness is not None
+    assert witness.allocator_dependency_fingerprints
+
+    entry, _sha256 = witness.allocator_dependency_fingerprints[-1]
+    stale = replace(
+        witness,
+        allocator_dependency_fingerprints=(
+            *witness.allocator_dependency_fingerprints[:-1],
+            (entry, "0" * 64),
+        ),
+    )
+
+    assert recovery._publication_private_heap_effect_closure(stale) is None
+
+
+def test_private_heap_effect_closure_certifies_pruned_call_branch():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-effect-pruned-call"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract, fixture.private_page_helper
+    )
+    assert witness is not None
+
+    effects = recovery._publication_private_heap_effect_closure(witness)
+
+    assert effects is not None
+    assert len(effects.pruned_call_sites) == 1
+    assert any(
+        branch.function_entry != fixture.private_page_helper
+        and branch.excluded_successor == effects.pruned_call_sites[0]
+        for branch in effects.pruned_branches
+    )
+
+
+def test_private_heap_effect_closure_reconciles_direct_call_target_index():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-effect"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract, fixture.private_page_helper
+    )
+    assert witness is not None
+    effects = recovery._publication_private_heap_effect_closure(witness)
+    assert effects is not None
+    call_site, original_target = effects.call_edges[0]
+
+    recovery.direct_call_targets_by_source[call_site] = (
+        fixture.private_page_helper
+    )
+    recovery.direct_call_sources_by_target[original_target].remove(call_site)
+    recovery.direct_call_sources_by_target.setdefault(
+        fixture.private_page_helper, set()
+    ).add(call_site)
+
+    assert recovery._publication_private_heap_effect_closure(witness) is None
+
+
+def test_publication_body_uses_recursive_private_heap_effect_closure():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-effect"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert contract is not None
+    extent = recovery._publication_private_heap_extent_witness(
+        contract, fixture.private_page_helper
+    )
+    assert extent is not None
+    effects = recovery._publication_private_heap_effect_closure(extent)
+    assert effects is not None
+    bodies = tuple(
+        recovery._publication_function_body(entry)
+        for entry in effects.function_entries
+    )
+    assert all(body is not None for body in bodies)
+    closure = x86_cfg_module._ReturningPublicationClosure(
+        bodies=tuple(body for body in bodies if body is not None),
+        call_edges=(),
+        candidate_targets=frozenset(),
+        imports=(),
+    )
+    bridge = SimpleNamespace(
+        allocator_certificate=SimpleNamespace(
+            call_return_domains=(
+                (
+                    fixture.publication_body_private_call,
+                    "private-heap",
+                    frozenset(),
+                ),
+            )
+        )
+    )
+
+    witnesses = recovery._publication_body_address_domains(
+        fixture.callback_slot,
+        closure,
+        (bridge,),
+    )
+
+    assert witnesses is not None
+    bounded = tuple(
+        witness
+        for witness in witnesses
+        if witness.bounded_private_heap_span is not None
+    )
+    assert bounded
+    assert {
+        witness.returning_body.function_entry for witness in bounded
+    } == set(effects.function_entries)
+    assert all(
+        witness.private_heap_effect_closure == effects
+        for witness in bounded
+    )
+
+
+def test_publication_body_rejects_unbounded_typed_private_heap_base():
+    fixture = finalized_handle_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    body = recovery._publication_function_body(fixture.publication_body)
+    assert body is not None
+    closure = x86_cfg_module._ReturningPublicationClosure(
+        bodies=(body,),
+        call_edges=(),
+        candidate_targets=frozenset(),
+        imports=(),
+    )
+    bridge = SimpleNamespace(
+        allocator_certificate=SimpleNamespace(
+            call_return_domains=(
+                (
+                    fixture.publication_body_private_call,
+                    "private-heap",
+                    frozenset(),
+                ),
+            )
+        )
+    )
+
+    witnesses = recovery._publication_body_address_domains(
+        fixture.callback_slot,
+        closure,
+        (bridge,),
+    )
+
+    # A typed heap-return identity is not an extent proof.  Until a complete
+    # page-provider/helper closure supplies a no-wrap capacity witness, even a
+    # zero-displacement dereference remains unavailable to publication audit.
+    assert witnesses is None
+
+
+def test_publication_body_rejects_untyped_private_heap_call():
+    fixture = finalized_handle_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    body = recovery._publication_function_body(fixture.publication_body)
+    assert body is not None
+    closure = x86_cfg_module._ReturningPublicationClosure(
+        bodies=(body,),
+        call_edges=(),
+        candidate_targets=frozenset(),
+        imports=(),
+    )
+    bridge = SimpleNamespace(
+        allocator_certificate=SimpleNamespace(call_return_domains=())
+    )
+
+    assert (
+        recovery._publication_body_address_domains(
+            fixture.callback_slot,
+            closure,
+            (bridge,),
+        )
+        is None
+    )
+
+
+def test_publication_body_rejects_private_heap_contract_overlapping_slot():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-protected-write"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    body = recovery._publication_function_body(fixture.publication_body)
+    assert body is not None
+    closure = x86_cfg_module._ReturningPublicationClosure(
+        bodies=(body,),
+        call_edges=(),
+        candidate_targets=frozenset(),
+        imports=(),
+    )
+    bridge = SimpleNamespace(
+        allocator_certificate=SimpleNamespace(
+            call_return_domains=(
+                (
+                    fixture.publication_body_private_call,
+                    "private-heap",
+                    frozenset(),
+                ),
+            )
+        )
+    )
+
+    assert (
+        recovery._publication_body_address_domains(
+            fixture.callback_slot,
+            closure,
+            (bridge,),
+        )
+        is None
+    )
+
+
+def test_private_heap_allocator_cache_tracks_free_writer_and_protected_slots():
+    fixture = finalized_handle_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    protected_slots = frozenset({fixture.callback_slot})
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator,
+        protected_slots,
+    )
+    assert contract is not None
+    entry = next(
+        row
+        for row in recovery.private_heap_allocator_contract_cache.values()
+        if row is not None and row.result == contract
+    )
+
+    instruction_address = recovery._function_instruction_addresses(
+        fixture.private_free
+    )[0]
+    instruction = recovery.instructions[instruction_address]
+    changed = bytearray.fromhex(instruction.bytes_hex)
+    changed[-1] ^= 1
+    recovery.instructions[instruction_address] = replace(
+        instruction,
+        bytes_hex=changed.hex(),
+    )
+    recovery.producer_function_fingerprint_cache.pop(
+        fixture.private_free,
+        None,
+    )
+
+    assert not recovery._dependency_memo_hit(entry)
+    recomputed = recovery._private_heap_allocator_contract(
+        fixture.private_allocator,
+        protected_slots,
+    )
+    assert recomputed == contract
+    replacement_entry = next(
+        row
+        for row in recovery.private_heap_allocator_contract_cache.values()
+        if row is not None and row.result == recomputed
+    )
+    assert replacement_entry is not entry
+    assert recovery._dependency_memo_hit(replacement_entry)
+
+    expanded_slots = protected_slots | {
+        fixture.callback_slot + 0x100
+    }
+    expanded = recovery._private_heap_allocator_contract(
+        fixture.private_allocator,
+        expanded_slots,
+    )
+    assert expanded == contract
+    assert len(
+        [
+            row
+            for row in recovery.private_heap_allocator_contract_cache.values()
+            if row is not None and row.result == contract
+        ]
+    ) == 2
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "private-heap-nonzero-state",
+        "private-heap-nonzero-indexed-state",
+        "private-heap-protected-write",
+        "private-heap-mixed-factory",
+        "private-heap-cycle",
+        "private-heap-arbitrary-return",
+        "private-heap-external-state-writer",
+        "private-heap-foreign-free-input",
+        "private-heap-unbounded-free-index",
+    ),
+)
+def test_private_heap_allocator_rejects_open_shapes(mutation):
+    fixture = finalized_handle_arena_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+
+    assert (
+        recovery._private_heap_allocator_contract(
+            fixture.private_allocator,
+            frozenset({fixture.callback_slot}),
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "wrong-payload-field",
+        "wrong-size-field",
+        "partial-observed-write",
+        "missing-finalizer-write",
+        "mixed-handle-identity",
+        "mismatched-grow-size",
+        "wrong-capacity-subtraction",
+        "wrong-cursor-offset",
+    ),
+)
+def test_finalized_handle_arena_rejects_open_relations(mutation):
+    fixture = finalized_handle_arena_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    fact = x86_cfg_module._OwnedBumpAllocatorFact(
+        size_argument=0,
+        cursor_slot=fixture.descriptor + 12,
+        remaining_slot=fixture.descriptor + 16,
+        grow_target=fixture.grow_target,
+        descriptor=fixture.descriptor,
+    )
+    shape = recovery._allocator_grow_shape(fact)
+
+    if shape is None:
+        return
+    contracts = {
+        call.address: contract
+        for call in shape.allocator_calls
+        if (
+            contract := recovery._exact_system_allocator_handle_contract(
+                call.target,
+                frozenset(
+                    {
+                        fixture.callback_slot,
+                        fact.cursor_slot,
+                        fact.remaining_slot,
+                    }
+                ),
+            )
+        )
+        is not None
+    }
+    assert not recovery._finalized_handle_arena_is_disjoint(
+        shape,
+        frozenset(
+            {
+                fixture.callback_slot,
+                fact.cursor_slot,
+                fact.remaining_slot,
+            }
+        ),
+        contracts,
+    )
+
+
 def test_allocator_totality_rejects_recursive_owned_typed_return():
     fixture = return_path_publication_lifecycle_image(
         mutation="system-allocator-return-cycle"
@@ -10008,6 +11968,394 @@ def test_allocator_totality_rejects_recursive_owned_typed_return():
     )
 
     assert certificate is None
+
+
+def _allocator_transaction_fixture_slice(mutation):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    owner_calls = frozenset(
+        call.address
+        for call in recovery._function_direct_calls(fixture.backend_root)
+        if call.target in fixture.incoming_owners
+    )
+    assert owner_calls
+    return fixture, recovery, owner_calls
+
+
+def test_allocator_transaction_slice_excludes_unreachable_untrusted_branch():
+    fixture, recovery, owner_calls = _allocator_transaction_fixture_slice(
+        "transaction-unreachable-untrusted-call"
+    )
+
+    sliced = recovery._intraprocedural_goal_slice(
+        fixture.backend_root,
+        owner_calls,
+    )
+
+    assert sliced is not None
+    assert sliced.goal_call_sites == owner_calls
+    assert sliced.retained_call_sites >= owner_calls
+    all_backend_calls = frozenset(
+        address
+        for address in recovery._function_instruction_addresses(
+            fixture.backend_root
+        )
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_CALL)
+    )
+    assert len(all_backend_calls - sliced.retained_call_sites) == 1
+
+
+def test_allocator_transaction_slice_retains_reconverging_untrusted_call():
+    fixture, recovery, owner_calls = _allocator_transaction_fixture_slice(
+        "transaction-reconverging-untrusted-call"
+    )
+
+    sliced = recovery._intraprocedural_goal_slice(
+        fixture.backend_root,
+        owner_calls,
+    )
+
+    assert sliced is not None
+    untrusted_calls = frozenset(
+        address
+        for address in recovery._function_instruction_addresses(
+            fixture.backend_root
+        )
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_CALL)
+        and address not in owner_calls
+    )
+    assert untrusted_calls
+    assert untrusted_calls <= sliced.retained_call_sites
+
+
+def test_allocator_transaction_slice_retains_reconverging_protected_write():
+    fixture, recovery, owner_calls = _allocator_transaction_fixture_slice(
+        "transaction-reconverging-protected-write"
+    )
+
+    sliced = recovery._intraprocedural_goal_slice(
+        fixture.backend_root,
+        owner_calls,
+    )
+
+    assert sliced is not None
+    protected_writes = frozenset(
+        address
+        for address in recovery._function_instruction_addresses(
+            fixture.backend_root
+        )
+        if any(
+            recovery._absolute_memory_operand(operand)
+            == fixture.callback_slot
+            for operand in recovery._owned_decoded(address).operands
+        )
+    )
+    assert protected_writes
+    assert protected_writes <= sliced.retained_addresses
+
+
+def test_allocator_transaction_slice_rejects_reachable_unresolved_jump():
+    fixture, recovery, owner_calls = _allocator_transaction_fixture_slice(
+        "transaction-reconverging-unresolved-jump"
+    )
+
+    assert (
+        recovery._intraprocedural_goal_slice(
+            fixture.backend_root,
+            owner_calls,
+        )
+        is None
+    )
+
+
+def test_session_capability_seal_ignores_unreachable_untrusted_backend_branch():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="transaction-unreachable-untrusted-call"
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+    seal = result.certificate.backend_bridges[0].allocator_certificate.capability_seal
+    assert seal is not None
+    assert 0x00401400 not in seal.session_relevant_functions
+
+
+def test_session_capability_seal_excludes_tail_before_dead_residue():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="transaction-tail-before-dead-goal"
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+    recovery = result.recovery
+    owner_calls = frozenset(
+        call.address
+        for call in recovery._function_direct_calls(fixture.backend_root)
+        if call.target in fixture.incoming_owners
+    )
+    backend_slice = recovery._intraprocedural_goal_slice(
+        fixture.backend_root, owner_calls
+    )
+    assert backend_slice is not None
+    backend_addresses = frozenset(
+        recovery._function_instruction_addresses(fixture.backend_root)
+    )
+    tail_jumps = frozenset(
+        address
+        for address in backend_addresses
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_JUMP)
+        and any(
+            target in recovery.function_addresses
+            and target not in backend_addresses
+            for target in recovery.non_call_successors.get(address, ())
+        )
+    )
+    assert len(tail_jumps) == 1
+    assert tail_jumps.isdisjoint(backend_slice.retained_transfer_sites)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "transaction-reconverging-protected-write",
+        "transaction-reconverging-unresolved-jump",
+    ),
+)
+def test_session_capability_seal_rejects_hostile_reconverging_effect(
+    mutation,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is None
+
+
+def test_session_capability_seal_accepts_untrusted_call_without_capability():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="transaction-reconverging-untrusted-call"
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+    seal = result.certificate.backend_bridges[0].allocator_certificate.capability_seal
+    assert seal is not None
+    assert seal.assumption.endswith("abi-direction-clear-v1")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "seal-external-owned-literal-writer",
+        "seal-external-owned-dynamic-partial-writer",
+        "seal-external-owned-capability-escape",
+        "seal-external-owned-arithmetic-capability-escape",
+        "seal-external-owned-arithmetic-capability-store",
+        "seal-external-owned-arithmetic-destination",
+        "seal-external-owned-xchg-capability-store",
+        "seal-external-owned-cmpxchg-capability-store",
+        "seal-external-owned-stos-capability-store",
+    ),
+)
+def test_session_capability_seal_rejects_external_owned_protected_writer(
+    mutation,
+):
+    """A recovered but out-of-session owner cannot retain state write power."""
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is None
+
+
+def test_session_capability_seal_rejects_allocator_sibling_descriptor_write():
+    """The bump role owns only its bound cursor and remaining slots."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-allocator-sibling-descriptor-write"
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is None
+
+
+def test_session_capability_seal_rejects_allowed_grow_state_clobber():
+    """Role membership does not permit arbitrary protected-state writes."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-grow-forbidden-callback-write"
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is None
+
+
+def test_session_capability_seal_rejects_prebackend_reset_writer():
+    """A reset-like pre-backend helper cannot clobber remaining capacity."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-session-reset-writer"
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is None
+
+
+def test_session_capability_seal_accepts_bounded_initializer_zero_stores():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-initializer-unrolled-zero"
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+    assert (
+        result.certificate.backend_bridges[0]
+        .allocator_certificate.capability_seal
+        is not None
+    )
+
+
+def test_session_capability_seal_rejects_df_set_initializer_zero_store():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-initializer-unrolled-zero-df-set"
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is None
+
+
+def test_session_capability_seal_accepts_exact_descriptor_rebuild_role():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-descriptor-rebuild"
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+    seal = (
+        result.certificate.backend_bridges[0]
+        .allocator_certificate.capability_seal
+    )
+    assert seal is not None
+    assert len(seal.descriptor_rebuild_roles) == 1
+    role = seal.descriptor_rebuild_roles[0]
+    assert role.descriptor == 0x00403050
+    assert role.function_entry == 0x00401400
+    assert len(role.protected_write_addresses) == 3
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "seal-descriptor-rebuild-wrong-source",
+        "seal-descriptor-rebuild-extra-write",
+        "seal-descriptor-rebuild-wrong-loop",
+    ),
+)
+def test_session_capability_seal_rejects_malformed_descriptor_rebuild_role(
+    mutation,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is None
+
+
+def test_session_capability_seal_accepts_sibling_descriptor_allocator_role():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-sibling-descriptor-allocator"
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+    seal = (
+        result.certificate.backend_bridges[0]
+        .allocator_certificate.capability_seal
+    )
+    assert seal is not None
+    assert {
+        (role.function_entry, role.descriptor)
+        for role in seal.descriptor_allocator_roles
+    } >= {
+        (fixture.allocator, fixture.heap_cursor - 12),
+        (0x00401400, 0x00403050),
+    }
+    assert {
+        (role.function_entry, role.descriptor)
+        for role in seal.descriptor_allocation_site_roles
+    } >= {
+        (fixture.allocator, fixture.heap_cursor - 12),
+        (0x00401400, 0x00403050),
+    }
+
+
+def test_descriptor_initializer_role_accepts_sibling_entry_point():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-sibling-descriptor-initializer"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    descriptors = frozenset(
+        {fixture.heap_cursor - 12, 0x00403050}
+    )
+    protected_slots = frozenset(
+        {
+            fixture.callback_slot,
+            *(
+                descriptor + offset
+                for descriptor in descriptors
+                for offset in (8, 12, 16)
+            ),
+        }
+    )
+
+    role = recovery._descriptor_initializer_role(
+        0x00401400,
+        descriptors,
+        fixture.grow_target,
+        fixture.callback_slot,
+        protected_slots,
+    )
+
+    assert role is not None
+    assert role.function_entry == 0x00401400
+    assert role.descriptors == descriptors
+    assert len(role.protected_write_addresses) == 8
+
+
+def test_phase_a_rejects_instead_of_pruning_rewritten_returning_callback():
+    """A pre-backend rewrite cannot silently remove its returning target."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="session-callback-overwrite"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+
+    session = recovery._allocator_session_certificate(
+        fixture.allocator,
+        fixture.publishing_consumer,
+        lifetime_roots=frozenset({fixture.publishing_consumer}),
+    )
+
+    assert session is None
+    result = _direct_return_path_publication_certificate(fixture)
+    assert result.certificate is None
 
 
 @pytest.mark.parametrize(
@@ -10064,7 +12412,13 @@ def test_return_path_publication_backend_bridge_binds_exact_session_and_callers(
     assert len(result.certificate.backend_bridges) == 1
     bridge = result.certificate.backend_bridges[0]
     assert bridge.consumer_entry == fixture.publishing_consumer
-    assert bridge.allocator_certificate == totality
+    assert bridge.allocator_certificate.capability_seal is not None
+    assert bridge.allocator_certificate.transaction_slices == ()
+    assert bridge.allocator_certificate.session_root == totality.session_root
+    assert (
+        bridge.allocator_certificate.callback_target
+        == totality.callback_target
+    )
     assert totality.session_root == fixture.session_root
     assert totality.callback_slot == fixture.callback_slot
     assert totality.callback_target == fixture.callback_targets[0]
@@ -10088,6 +12442,7 @@ def test_return_path_publication_backend_bridge_binds_exact_session_and_callers(
     assert totality.return_storage_slots == frozenset({0x004030C0})
     assert totality.init_call_site < totality.setjmp_call_site
     assert totality.setjmp_call_site < min(totality.backend_call_sites)
+    assert totality.transaction_slices == ()
     assert fixture.session_helper in totality.session_scope_functions
     assert totality.setjmp_call_site in totality.session_slice_addresses
     assert set(totality.backend_call_sites) <= set(
@@ -10122,6 +12477,35 @@ def test_return_path_publication_backend_bridge_binds_exact_session_and_callers(
     )
     assert "no-escape" not in result.certificate.provenance
     assert "does-not-escape" not in result.certificate.provenance
+
+
+def test_allocator_totality_binds_installed_callback_generation():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="prior-callback-generation"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+
+    certificate = recovery._allocator_totality_certificate(
+        fixture.allocator,
+        fixture.publishing_consumer,
+        lifetime_roots=frozenset({fixture.publishing_consumer}),
+    )
+
+    assert certificate is not None
+    assert certificate.callback_target == fixture.callback_targets[0]
+    assert certificate.callback_candidate_targets == frozenset(
+        fixture.callback_targets
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+    assert result.certificate is not None
+    assert fixture.callback_targets[1] not in {
+        row.function_entry for row in result.certificate.returning_bodies
+    }
 
 
 def test_allocator_totality_cache_tracks_reachable_session_helper():
@@ -10170,6 +12554,95 @@ def test_allocator_totality_cache_tracks_reachable_session_helper():
         lifetime_roots=frozenset({fixture.publishing_consumer}),
     )
     assert recomputed == certificate
+    replacement_entry = next(
+        row
+        for row in recovery.allocator_totality_cache.values()
+        if row is not None and row.result == recomputed
+    )
+    assert replacement_entry is not entry
+    assert recovery._dependency_memo_hit(replacement_entry)
+
+
+@pytest.mark.parametrize("surface", ("retained", "excluded-full-body"))
+def test_allocator_transaction_cache_tracks_slice_and_full_body_dependencies(
+    surface,
+):
+    fixture = return_path_publication_lifecycle_image(
+        mutation="transaction-unreachable-untrusted-call"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    certificate = recovery._allocator_totality_certificate(
+        fixture.allocator,
+        fixture.publishing_consumer,
+        lifetime_roots=frozenset({fixture.publishing_consumer}),
+    )
+    assert certificate is not None
+    transaction = next(
+        row
+        for row in certificate.transaction_slices
+        if row.root == fixture.backend_root
+    )
+    entry = next(
+        row
+        for row in recovery.allocator_totality_cache.values()
+        if row is not None and row.result == certificate
+    )
+    if surface == "retained":
+        function_entry = fixture.backend_root
+        instruction_address = min(
+            next(
+                row.retained_addresses
+                for row in transaction.function_slices
+                if row.function_entry == function_entry
+            )
+        )
+    else:
+        excluded_functions = (
+            recovery._direct_function_call_closure(fixture.backend_root)
+            - transaction.function_entries
+        )
+        function_entry = next(
+            candidate
+            for candidate in sorted(excluded_functions)
+            if any(
+                recovery._owned_decoded(address).group(
+                    capstone.CS_GRP_CALL
+                )
+                and not recovery.call_targets_by_source.get(address)
+                and not any(
+                    edge.source == address
+                    for edge in recovery.terminal_external_edges
+                )
+                for address in recovery._function_instruction_addresses(
+                    candidate
+                )
+            )
+        )
+        instruction_address = recovery._function_instruction_addresses(
+            function_entry
+        )[0]
+    instruction = recovery.instructions[instruction_address]
+    changed = bytearray.fromhex(instruction.bytes_hex)
+    changed[-1] ^= 1
+    recovery.instructions[instruction_address] = replace(
+        instruction,
+        bytes_hex=changed.hex(),
+    )
+    recovery.producer_function_fingerprint_cache.pop(function_entry, None)
+
+    assert not recovery._dependency_memo_hit(entry)
+    recomputed = recovery._allocator_totality_certificate(
+        fixture.allocator,
+        fixture.publishing_consumer,
+        lifetime_roots=frozenset({fixture.publishing_consumer}),
+    )
+    assert recomputed is not None
+    assert recomputed.transaction_slices == certificate.transaction_slices
     replacement_entry = next(
         row
         for row in recovery.allocator_totality_cache.values()
@@ -10629,6 +13102,144 @@ def test_return_path_publication_accepts_disjoint_sync_span_boundary(
     assert cfg.publication_noninterference_certificates[0].imports
 
 
+def test_return_path_publication_accepts_flags_query_after_prologue_save():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="flags-query-prologue-save"
+    )
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert cfg.publication_noninterference_certificates[0].imports
+
+
+def test_publication_import_accepts_finite_global_alloc_size_after_prologue_save():
+    fixture = finalized_handle_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    call_address = next(
+        edge.source
+        for edge in recovery.terminal_external_edges
+        if edge.name == "GlobalAlloc"
+        and recovery._registrar_function_entry(edge.source)
+        == fixture.payload_initializer
+    )
+
+    witness = recovery._exact_publication_import_effect(
+        call_address,
+        fixture.callback_slot,
+        argument_domains={0: ("finite", frozenset({0x20}))},
+    )
+
+    assert witness is not None
+    assert tuple(row.effect for row in witness.argument_effects) == (
+        "scalar",
+        "fresh-size",
+    )
+
+
+def test_publication_import_accepts_opaque_scalar_global_alloc_size():
+    fixture = finalized_handle_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    call_address = next(
+        edge.source
+        for edge in recovery.terminal_external_edges
+        if edge.name == "GlobalAlloc"
+        and recovery._registrar_function_entry(edge.source)
+        == fixture.payload_initializer
+    )
+
+    witness = recovery._exact_publication_import_effect(
+        call_address,
+        fixture.callback_slot,
+    )
+
+    assert witness is not None
+    assert tuple(row.effect for row in witness.argument_effects) == (
+        "scalar",
+        "fresh-size",
+    )
+
+
+def test_pushed_call_argument_ignores_contiguous_callee_saved_prologue():
+    fixture = finalized_handle_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    call_address = next(
+        edge.source
+        for edge in recovery.terminal_external_edges
+        if edge.name == "GlobalAlloc"
+        and recovery._registrar_function_entry(edge.source)
+        == fixture.payload_initializer
+    )
+
+    assert recovery._pushed_call_argument(call_address, 2) is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "payload-global-alloc-moveable",
+        "payload-global-alloc-extra-argument",
+    ),
+)
+def test_publication_import_rejects_nonfixed_or_extra_global_alloc_actual(
+    mutation,
+):
+    fixture = finalized_handle_arena_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    call_address = next(
+        edge.source
+        for edge in recovery.terminal_external_edges
+        if edge.name == "GlobalAlloc"
+        and recovery._registrar_function_entry(edge.source)
+        == fixture.payload_initializer
+    )
+
+    assert (
+        recovery._exact_publication_import_effect(
+            call_address,
+            fixture.callback_slot,
+        )
+        is None
+    )
+
+
+def test_return_path_publication_accepts_finite_sync_wrapper_argument():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="finite-sync-wrapper"
+    )
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert cfg.publication_noninterference_certificates[0].imports
+
+
 def test_return_path_publication_records_closed_effect_evidence():
     fixture = return_path_publication_lifecycle_image(
         mutation="outside-residue-slot-reference"
@@ -10711,7 +13322,7 @@ def test_return_path_publication_records_disjoint_body_address_domain():
     ("mutation", "expected_address"),
     (
         ("closure-absolute-boundary-left", -4),
-        ("closure-absolute-boundary-right", 4),
+        ("closure-absolute-boundary-right", 8),
     ),
 )
 def test_return_path_publication_records_disjoint_absolute_memory_boundary(
@@ -17119,7 +19730,9 @@ def test_allocator_totality_accepts_reset_outside_closed_lifetime():
     recovery.recover()
     lifetime_roots = frozenset({0x00401080, 0x00401140})
 
-    assert recovery._allocator_totality_certificate(0x00401380, 0x00401300) is None
+    assert recovery._allocator_totality_certificate(
+        0x00401380, 0x00401300
+    ) is None
     certificate = recovery._allocator_totality_certificate(
         0x00401380,
         0x00401300,
@@ -25283,6 +27896,65 @@ def test_fresh_allocation_proof_discards_dead_partial_pointer_alias():
 
     assert result is not None
     assert result[0] == frozenset({0x32})
+
+
+def test_partial_pointer_death_reuses_suffix_state_cache():
+    image, _return_address = fresh_nested_return_allocation_image(
+        dead_partial_outer_eax=True
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    partial = next(
+        address
+        for address in recovery._function_instruction_addresses(
+            image.entrypoint
+        )
+        if (
+            (decoded := recovery._owned_decoded(address)).id
+            == capstone.x86_const.X86_INS_MOV
+            and decoded.operands[0].type
+            == capstone.x86_const.X86_OP_REG
+            and decoded.operands[0].size == 1
+            and recovery._register_family(decoded.operands[0].reg) == "eax"
+        )
+    )
+    following = recovery._following_function_entry(image.entrypoint)
+    successors = recovery._summary_successors(
+        partial,
+        image.entrypoint,
+        following,
+    )
+    assert len(successors) == 1
+
+    assert recovery._partial_register_alias_is_dead_before_pointer_use(
+        partial,
+        "eax",
+        image.entrypoint,
+        following,
+    )
+    cached_states = dict(recovery.partial_alias_death_state_cache)
+    assert cached_states
+
+    assert recovery._partial_register_alias_is_dead_before_pointer_use(
+        successors[0],
+        "eax",
+        image.entrypoint,
+        following,
+    )
+    assert recovery.partial_alias_death_state_cache == cached_states
+
+    prior = recovery._previous_instruction(partial)
+    assert prior is not None
+    assert not recovery._partial_register_alias_is_dead_before_pointer_use(
+        prior.address,
+        "eax",
+        image.entrypoint,
+        following,
+    )
 
 
 def test_fresh_allocation_proof_rejects_used_partial_pointer_alias():

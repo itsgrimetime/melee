@@ -538,6 +538,27 @@ then run recovery on the returned `Image`.
 
 ## Allocator failure and backend-context bridge
 
+> **2026-08-06 amendment:** The allocator-totality construction described in
+> this section is refined by
+> `2026-08-06-allocator-session-capability-seal-design.md`. Exact retail graph
+> measurements rejected whole-backend semantic expansion and the proposed
+> transaction slice. A structural session certificate may prune only the exact
+> paired context-restoring failure arm; final totality additionally requires a
+> protected-state capability seal and semantic audit over the exact returning
+> closure. The resulting claim is session-scoped under an explicit
+> non-forgeable/no-external-pointer-injection assumption, not process-global
+> isolation. Descriptor rebuild, sibling allocator, bounded initializer, and
+> inline allocation-site activity are admitted only as exact use-based role
+> witnesses: each role permits its recorded protected writes, not every write
+> by its owning function, and rebuild/initializer activity is excluded from
+> returning bodies. Transaction-slice records and construction are therefore
+> superseded implementation scaffolding and may be removed once they have no
+> live consumer. Their removal does not weaken this proof: a transaction slice
+> is not accepted as allocator totality, and the final totality certificate is
+> created only after the replacement session, returning-closure, capability-
+> seal, and allocator-state-audit evidence all succeed and replay their
+> dependencies.
+
 Allocator failure is pruned only by the existing context-bound
 `_AllocatorTotalityCertificate`. The publication proof discovers the owned
 bump allocator and allocation caller from the returning closure, requests a

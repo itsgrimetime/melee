@@ -1,12 +1,40 @@
 # Allocator Transaction Slice Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Superseded 2026-08-06:** Do not continue this plan. Exact retail graph
+> measurements invalidated its bounded-slice premise. Continue with
+> `2026-08-06-allocator-session-capability-seal.md`.
+
+> **Historical execution note (inactive):** The original plan required
+> superpowers:subagent-driven-development or superpowers:executing-plans. The
+> unchecked steps below are an archive of the rejected approach, not pending
+> work.
 
 **Goal:** Replace whole-backend semantic-write expansion with an exact, dependency-bound interprocedural slice from each checked backend/lifetime root to every owned call of the proved allocator.
 
 **Architecture:** Keep the complete direct call closure for Task 5 backend identity, caller membership, body inventory, and dependency fingerprints. Add a separate bidirectional CFG/callgraph transaction slice for semantic-write auditing; it retains all reconverging branches and side calls that can execute before an allocator goal, but excludes branches whose exact successors cannot reach a goal.
 
 **Tech Stack:** Python 3.12, Capstone x86-32 detail mode, immutable dataclasses, recovered PE CFG/call-target indexes, pytest, Ruff.
+
+## Historical Disposition
+
+The transaction-slice prototype never became accepted Task 4 proof evidence.
+Exact retail measurements showed that the sound target-reachable slice expands
+through recursive call-graph cycles, while restricting it to shortest paths
+would omit valid executions. Any transaction-specific records, construction,
+fixture mutations, and tests are therefore removal or migration work under
+Task 5 of the replacement plan, not implementation tasks from this checklist.
+
+Removing that scaffolding does not weaken the live proof. No positive
+allocator-totality claim may depend on the rejected slice. The replacement
+retains the validated full-closure identity and caller-membership inventory,
+private-heap and finalized-handle contracts, typed return propagation, and
+dependency replay. It then requires the stronger conjunction of a structural
+session certificate, an exact returning-publication closure, a protected-state
+capability seal, and a semantic allocator-state audit over that closure.
+
+Everything below this section is retained only to document the rejected
+proposal, its intended fail-closed properties, and the measurements that led to
+its replacement.
 
 ## Global Constraints
 
