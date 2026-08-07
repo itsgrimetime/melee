@@ -5387,7 +5387,13 @@ _PRIVATE_PAGE_RING_HOSTILES = (
     "foreign-head-writer",
     "partial-head-writer",
     "indexed-head-writer",
+    "publisher-inverted-empty-branch",
+    "publisher-missing-new-link-a",
+    "publisher-missing-new-link-b",
     "missing-publisher-reciprocal-link",
+    "publisher-missing-other-reciprocal-link",
+    "publisher-swapped-reciprocal-fields",
+    "publisher-head-before-link-repair",
     "broken-singleton-self-link",
     "unresolved-indirect-mutation",
     "raw-decoded-call-disagreement",
@@ -5405,6 +5411,38 @@ _PRIVATE_PAGE_RING_HOSTILES = (
     "rotation-before-success",
     "rotation-different-page",
 )
+
+_PRIVATE_PAGE_PUBLISHER_HOSTILE_CHANGED_OFFSETS = {
+    "publisher-inverted-empty-branch": frozenset({0x0B}),
+    "publisher-missing-new-link-a": frozenset({0x15, 0x16}),
+    "publisher-missing-new-link-b": frozenset({0x1A, 0x1B, 0x1C}),
+    "missing-publisher-reciprocal-link": frozenset({0x17, 0x18, 0x19}),
+    "publisher-missing-other-reciprocal-link": frozenset({0x1D, 0x1E}),
+    "publisher-swapped-reciprocal-fields": frozenset(
+        range(0x18, 0x1F)
+    ),
+    "publisher-head-before-link-repair": frozenset(
+        {
+            0x13,
+            0x14,
+            0x15,
+            0x16,
+            0x17,
+            0x18,
+            0x19,
+            0x1A,
+            0x1B,
+            0x1C,
+            0x1E,
+            0x1F,
+            0x20,
+            0x21,
+            0x22,
+            0x23,
+            0x24,
+        }
+    ),
+}
 
 
 def private_page_ring_hostile(mutation: str) -> PrivatePageArenaFixture:
@@ -5464,8 +5502,28 @@ def private_page_ring_hostile(mutation: str) -> PrivatePageArenaFixture:
             "c7 05 " + head + " 00 00 00 00",
             "89 34 35 " + head + " 90 90 90",
         )
+    elif mutation == "publisher-inverted-empty-branch":
+        patch(publisher + 0x0B, "74 1a", "75 1a")
+    elif mutation == "publisher-missing-new-link-a":
+        patch(publisher + 0x15, "89 02", "90 90")
+    elif mutation == "publisher-missing-new-link-b":
+        patch(publisher + 0x1A, "89 4a 04", "90 90 90")
     elif mutation == "missing-publisher-reciprocal-link":
         patch(publisher + 0x17, "89 50 04", "90 90 90")
+    elif mutation == "publisher-missing-other-reciprocal-link":
+        patch(publisher + 0x1D, "89 11", "90 90")
+    elif mutation == "publisher-swapped-reciprocal-fields":
+        patch(
+            publisher + 0x17,
+            "89 50 04 89 4a 04 89 11",
+            "89 10 89 4a 04 89 51 04",
+        )
+    elif mutation == "publisher-head-before-link-repair":
+        patch(
+            publisher + 0x13,
+            "8b 01 89 02 89 50 04 89 4a 04 89 11 89 15 " + head,
+            "89 15 " + head + " 8b 01 89 02 89 50 04 89 4a 04 89 11",
+        )
     elif mutation == "unresolved-indirect-mutation":
         patch(publisher + 0x32, "c3 90 90", "ff d0 c3")
     elif mutation == "raw-decoded-call-disagreement":
@@ -13995,6 +14053,27 @@ def test_private_page_ring_proves_both_selector_page_arguments():
         "ring-remove",
         "ring-rotate",
     }
+    insert = next(
+        transfer
+        for transfer in ring_evidence.transfers
+        if transfer.role == "ring-insert"
+    )
+    assert insert.function_entry == fixture.page_inserter
+    publisher_spans = tuple(
+        span
+        for span in ring_evidence.spans
+        if span.function_entry == fixture.page_inserter
+    )
+    assert {span.displacement for span in publisher_spans} == {0, 4}
+    assert {span.access for span in publisher_spans} == {"read", "write"}
+    assert insert.span_keys == tuple(
+        (
+            span.function_entry,
+            span.instruction_address,
+            span.operand_index,
+        )
+        for span in publisher_spans
+    )
     assert all(
         invocation.page_origins
         and invocation.block_state.allocation == "none"
@@ -14090,6 +14169,21 @@ def test_private_page_ring_accepts_flag_preserving_rotation_cleanup():
 @pytest.mark.parametrize("mutation", _PRIVATE_PAGE_RING_HOSTILES)
 def test_private_page_ring_rejects_one_fact_hostiles(mutation):
     fixture = private_page_ring_hostile(mutation)
+    publisher_offsets = (
+        _PRIVATE_PAGE_PUBLISHER_HOSTILE_CHANGED_OFFSETS.get(mutation)
+    )
+    if publisher_offsets is not None:
+        default = private_page_arena_image()
+        changed_addresses = {
+            address
+            for section in default.arena.image.sections
+            for address in range(section.va, section.va + section.raw_size)
+            if default.arena.image.read(address, 1)
+            != fixture.arena.image.read(address, 1)
+        }
+        assert changed_addresses == {
+            default.page_inserter + offset for offset in publisher_offsets
+        }
     if mutation == "unresolved-indirect-mutation":
         recovery = _DirectCfgRecovery(
             fixture.arena.image,
@@ -14110,12 +14204,21 @@ def test_private_page_ring_rejects_one_fact_hostiles(mutation):
         )
         return
     recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    if publisher_offsets is not None:
+        assert contract is not None
+        assert extent is not None
+        assert effects is not None
+        assert recovery._publication_private_heap_effect_closure_is_current(
+            effects
+        )
     layout = recovery._publication_private_page_layout(
         contract,
         extent,
         effects,
     )
     assert layout is not None
+    if publisher_offsets is not None:
+        assert layout.page_link_offsets is None
 
     assert (
         recovery._publication_private_page_ring_role(
