@@ -4220,6 +4220,19 @@ _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
         "seal-external-owned-xchg-capability-store",
         "seal-external-owned-cmpxchg-capability-store",
         "seal-external-owned-stos-capability-store",
+        "seal-external-owned-sub-negative-destination",
+        "seal-external-owned-xor-mask-capability-escape",
+        "seal-external-owned-call-pop-capability-store",
+        "seal-external-owned-address-taken-call-pop-capability-store",
+        "seal-external-owned-xor-mask-xchg-capability-store",
+        "seal-external-owned-partial-register-capability-escape",
+        "seal-external-owned-cross-block-partial-capability-escape",
+        "seal-external-owned-xor-mask-capability-return",
+        "seal-external-owned-xor-mask-disjoint-return",
+        "seal-external-owned-capability-stack-spill-escape",
+        "seal-external-owned-disjoint-stack-spill",
+        "seal-external-owned-unknown-join-capability-destination",
+        "seal-external-owned-xor-mask-disjoint-destination",
         "seal-grow-forbidden-callback-write",
         "seal-allocator-sibling-descriptor-write",
         "seal-session-reset-writer",
@@ -4754,6 +4767,158 @@ def return_path_publication_lifecycle_image(
         cursor = emit_abs(transaction_untrusted_helper, "bf", unrelated_write_slot)
         cursor = emit_abs(cursor, "b8", callback_slot - 1)
         emit(cursor, "40 ab c3")
+    elif mutation == "seal-external-owned-sub-negative-destination":
+        negative_slot = (-callback_slot) & 0xFFFF_FFFF
+        cursor = emit(
+            transaction_untrusted_helper,
+            "31 c0 2d " + negative_slot.to_bytes(4, "little").hex(),
+        )
+        emit(cursor, "c7 00 00 00 00 00 c3")
+    elif mutation == "seal-external-owned-xor-mask-capability-escape":
+        left = 0x1357_9BDF
+        cursor = emit(
+            transaction_untrusted_helper,
+            "b8 "
+            + left.to_bytes(4, "little").hex()
+            + " 35 "
+            + (left ^ callback_slot).to_bytes(4, "little").hex()
+            + " 50",
+        )
+        cursor = emit_abs(cursor, "ff 15", unlisted_iat)
+        emit(cursor, "59 c3")
+    elif mutation in {
+        "seal-external-owned-call-pop-capability-store",
+        "seal-external-owned-address-taken-call-pop-capability-store",
+    }:
+        return_address = transaction_untrusted_helper + 5
+        cursor = emit_call(transaction_untrusted_helper, return_address)
+        assert cursor == return_address
+        cursor = emit(
+            cursor,
+            "58 05 "
+            + ((callback_slot - return_address) & 0xFFFF_FFFF)
+            .to_bytes(4, "little")
+            .hex(),
+        )
+        cursor = emit_abs(cursor, "a3", unrelated_write_slot)
+        emit(cursor, "c3")
+        if mutation == "seal-external-owned-address-taken-call-pop-capability-store":
+            struct.pack_into(
+                "<I",
+                data,
+                0xC00 + unrelated_write_slot - data_va,
+                return_address,
+            )
+            relocation_vas.add(unrelated_write_slot)
+    elif mutation == "seal-external-owned-xor-mask-xchg-capability-store":
+        left = 0x2468_ACF0
+        cursor = emit(
+            transaction_untrusted_helper,
+            "b8 "
+            + left.to_bytes(4, "little").hex()
+            + " 35 "
+            + (left ^ callback_slot).to_bytes(4, "little").hex(),
+        )
+        cursor = emit_abs(cursor, "87 05", unrelated_write_slot)
+        emit(cursor, "c3")
+    elif mutation == "seal-external-owned-partial-register-capability-escape":
+        precursor = (callback_slot & 0xFFFF_FF00) | 0xFF
+        cursor = emit(
+            transaction_untrusted_helper,
+            "b8 "
+            + precursor.to_bytes(4, "little").hex()
+            + " b0 "
+            + bytes((callback_slot & 0xFF,)).hex()
+            + " 50",
+        )
+        cursor = emit_abs(cursor, "ff 15", unlisted_iat)
+        emit(cursor, "59 c3")
+    elif mutation == "seal-external-owned-cross-block-partial-capability-escape":
+        precursor = (callback_slot & 0xFFFF_FF00) | 0xFF
+        cursor = emit(
+            transaction_untrusted_helper,
+            "b8 "
+            + precursor.to_bytes(4, "little").hex()
+            + " b0 "
+            + bytes((callback_slot & 0xFF,)).hex()
+            + " eb 00 50",
+        )
+        cursor = emit_abs(cursor, "ff 15", unlisted_iat)
+        emit(cursor, "59 c3")
+    elif mutation in {
+        "seal-external-owned-xor-mask-capability-return",
+        "seal-external-owned-xor-mask-disjoint-return",
+    }:
+        returned = (
+            callback_slot
+            if mutation == "seal-external-owned-xor-mask-capability-return"
+            else unrelated_write_slot
+        )
+        left = 0x6A09_E667
+        emit(
+            transaction_untrusted_helper,
+            "b8 "
+            + left.to_bytes(4, "little").hex()
+            + " 35 "
+            + (left ^ returned).to_bytes(4, "little").hex()
+            + " c3",
+        )
+    elif mutation in {
+        "seal-external-owned-capability-stack-spill-escape",
+        "seal-external-owned-disjoint-stack-spill",
+    }:
+        spilled = (
+            callback_slot
+            if mutation == "seal-external-owned-capability-stack-spill-escape"
+            else unrelated_write_slot
+        )
+        left = 0xBB67_AE85
+        cursor = emit(
+            transaction_untrusted_helper,
+            "b8 "
+            + left.to_bytes(4, "little").hex()
+            + " 35 "
+            + (left ^ spilled).to_bytes(4, "little").hex()
+            + " 83 ec 04 89 04 24",
+        )
+        if mutation == "seal-external-owned-capability-stack-spill-escape":
+            cursor = emit(cursor, "8b 0c 24 51")
+            cursor = emit_abs(cursor, "ff 15", unlisted_iat)
+            cursor = emit(cursor, "83 c4 04")
+        emit(cursor, "83 c4 04 31 c0 c3")
+    elif mutation == "seal-external-owned-unknown-join-capability-destination":
+        cursor = emit_abs(
+            transaction_untrusted_helper,
+            "83 3d",
+            branch_flag,
+            "00",
+        )
+        unknown_branch = cursor
+        cursor = emit(cursor, "74 00")
+        left = 0x3C6E_F372
+        cursor = emit(
+            cursor,
+            "b8 "
+            + left.to_bytes(4, "little").hex()
+            + " 35 "
+            + (left ^ callback_slot).to_bytes(4, "little").hex(),
+        )
+        join_branch = cursor
+        cursor = emit(cursor, "eb 00")
+        patch_short(unknown_branch, cursor)
+        cursor = emit_abs(cursor, "ff 15", unlisted_iat)
+        patch_short(join_branch, cursor)
+        emit(cursor, "c7 00 00 00 00 00 c3")
+    elif mutation == "seal-external-owned-xor-mask-disjoint-destination":
+        left = 0x0BAD_F00D
+        cursor = emit(
+            transaction_untrusted_helper,
+            "b8 "
+            + left.to_bytes(4, "little").hex()
+            + " 35 "
+            + (left ^ unrelated_write_slot).to_bytes(4, "little").hex(),
+        )
+        emit(cursor, "c7 00 00 00 00 00 c3")
     elif mutation == "backend-helper-transitive-df-leak":
         emit(transaction_untrusted_helper, "fd c3")
     elif mutation in {
@@ -5415,6 +5580,19 @@ def return_path_publication_lifecycle_image(
                     "seal-external-owned-xchg-capability-store",
                     "seal-external-owned-cmpxchg-capability-store",
                     "seal-external-owned-stos-capability-store",
+                    "seal-external-owned-sub-negative-destination",
+                    "seal-external-owned-xor-mask-capability-escape",
+                    "seal-external-owned-call-pop-capability-store",
+                    "seal-external-owned-address-taken-call-pop-capability-store",
+                    "seal-external-owned-xor-mask-xchg-capability-store",
+                    "seal-external-owned-partial-register-capability-escape",
+                    "seal-external-owned-cross-block-partial-capability-escape",
+                    "seal-external-owned-xor-mask-capability-return",
+                    "seal-external-owned-xor-mask-disjoint-return",
+                    "seal-external-owned-capability-stack-spill-escape",
+                    "seal-external-owned-disjoint-stack-spill",
+                    "seal-external-owned-unknown-join-capability-destination",
+                    "seal-external-owned-xor-mask-disjoint-destination",
                     "seal-descriptor-rebuild",
                     "seal-descriptor-rebuild-wrong-source",
                     "seal-descriptor-rebuild-extra-write",
@@ -12159,6 +12337,16 @@ def test_session_capability_seal_accepts_untrusted_call_without_capability():
         "seal-external-owned-xchg-capability-store",
         "seal-external-owned-cmpxchg-capability-store",
         "seal-external-owned-stos-capability-store",
+        "seal-external-owned-sub-negative-destination",
+        "seal-external-owned-xor-mask-capability-escape",
+        "seal-external-owned-call-pop-capability-store",
+        "seal-external-owned-address-taken-call-pop-capability-store",
+        "seal-external-owned-xor-mask-xchg-capability-store",
+        "seal-external-owned-partial-register-capability-escape",
+        "seal-external-owned-cross-block-partial-capability-escape",
+        "seal-external-owned-xor-mask-capability-return",
+        "seal-external-owned-capability-stack-spill-escape",
+        "seal-external-owned-unknown-join-capability-destination",
     ),
 )
 def test_session_capability_seal_rejects_external_owned_protected_writer(
@@ -12170,6 +12358,35 @@ def test_session_capability_seal_rejects_external_owned_protected_writer(
     result = _direct_return_path_publication_certificate(fixture)
 
     assert result.certificate is None
+
+
+def test_session_capability_seal_accepts_disjoint_synthesized_destination():
+    """Exact mapped-image arithmetic remains usable away from protected state."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-external-owned-xor-mask-disjoint-destination"
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "seal-external-owned-xor-mask-disjoint-return",
+        "seal-external-owned-disjoint-stack-spill",
+    ),
+)
+def test_session_capability_seal_accepts_disjoint_synthesized_transport(
+    mutation,
+):
+    """Mapped but unprotected values remain ordinary scalars."""
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
 
 
 def test_session_capability_seal_rejects_allocator_sibling_descriptor_write():

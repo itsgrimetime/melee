@@ -16578,6 +16578,7 @@ class _DirectCfgRecovery:
             ],
         ] | None = None,
         protected_slots: frozenset[int] = frozenset(),
+        direction_clear_addresses: frozenset[int] = frozenset(),
     ) -> tuple[Literal["finite", "private-stack", "fresh-allocation", "private-heap"], frozenset[int], int] | None:
         stack_implicit_writes = {
             "enter-frame-link",
@@ -16640,7 +16641,7 @@ class _DirectCfgRecovery:
                 "ins-external-input",
                 "movs",
                 "stos",
-            }:
+            } and decoded.address not in direction_clear_addresses:
                 direction_states = self._direction_flag_clear_states(
                     function_entry,
                     protected_slots,
@@ -48423,6 +48424,19 @@ class _DirectCfgRecovery:
         descriptor_initializer_functions = frozenset(
             role.function_entry for role in descriptor_initializer_roles
         )
+        certified_initializer_stos_addresses = frozenset(
+            address
+            for role in descriptor_initializer_roles
+            for address in self._function_instruction_addresses(
+                role.function_entry
+            )
+            if any(
+                write.classification == "stos"
+                for write in self._instruction_value_flow(
+                    self._owned_decoded(address)
+                ).memory_writes
+            )
+        )
         if (
             session.init_target not in descriptor_initializer_functions
             or descriptor_initializer_functions & returning_body_functions
@@ -48552,6 +48566,22 @@ class _DirectCfgRecovery:
             )
             | session.grow_call_sites
         )
+        # The session certificate proves DF clear at every selected backend
+        # entry.  Preserve that generation-specific fact locally: a dormant
+        # callback from an older generation must not taint an earlier string
+        # write in the installed backend.
+        backend_direction_clear_addresses = frozenset(
+            address
+            for backend_root in session.backend_roots
+            for address, clear in (
+                self._local_direction_flag_clear_states(
+                    backend_root,
+                    entry_clear=True,
+                )
+                or {}
+            ).items()
+            if clear
+        )
         for backend_root in sorted(session.backend_roots):
             goal_calls = frozenset(
                 call.address
@@ -48638,24 +48668,346 @@ class _DirectCfgRecovery:
         image_capability_lineage_memo: dict[
             tuple[int, str, int], bool
         ] = {}
+        singleton_constant_memo: dict[
+            tuple[int, str, int], int | None
+        ] = {}
+        singleton_fallback_barriers: set[tuple[int, str, int]] = set()
+        reaching_partial_write_memo: dict[tuple[int, str, int], bool] = {}
+
+        def straight_line_singleton_constant_before(
+            use_address: int,
+            register_family: str,
+            function_entry: int,
+        ) -> int | None:
+            """Fold one exact 32-bit register value inside an owned block.
+
+            Entry register state, memory loads, joins, partial writes, and
+            unsupported arithmetic remain unknown.  The sole cross-block
+            seed is the exact ``call next; pop reg`` instruction-pointer
+            idiom, whose raw and recovered incoming domains must both close.
+            """
+            key = (use_address, register_family, function_entry)
+            if key in singleton_constant_memo:
+                return singleton_constant_memo[key]
+            if (
+                register_family not in _REGISTER_FAMILIES
+                or use_address not in self.instructions
+                or self._registrar_function_entry(use_address)
+                != function_entry
+            ):
+                singleton_constant_memo[key] = None
+                return None
+            block_start = self._block_start_at_or_before(
+                use_address, function_entry
+            )
+            addresses = self._function_instruction_addresses_between(
+                function_entry,
+                block_start,
+                use_address,
+            )
+            if len(addresses) > 64:
+                singleton_fallback_barriers.add(key)
+                singleton_constant_memo[key] = None
+                return None
+
+            values: dict[str, int] = {}
+            fallback_barrier_families: set[str] = set()
+            contiguous = True
+
+            def operand_value(operand) -> int | None:
+                if operand.type == X86_OP_IMM:
+                    return operand.imm & 0xFFFF_FFFF
+                if operand.type == X86_OP_REG and operand.size == 4:
+                    return values.get(self._register_family(operand.reg))
+                return None
+
+            expected_address = block_start
+            for row_address in addresses:
+                if row_address != expected_address:
+                    values.clear()
+                    contiguous = False
+                    break
+                decoded = self._owned_decoded(row_address)
+                expected_address = row_address + decoded.size
+                operands = decoded.operands
+                handled: set[str] = set()
+
+                canonical_call_pop = False
+                if (
+                    row_address == block_start
+                    and decoded.id == x86_const.X86_INS_POP
+                    and len(operands) == 1
+                    and operands[0].type == X86_OP_REG
+                    and operands[0].size == 4
+                ):
+                    previous = self._previous_instruction(row_address)
+                    if previous is not None:
+                        call = self._owned_decoded(previous.address)
+                        canonical_call_pop = (
+                            call.group(CS_GRP_CALL)
+                            and call.address + call.size == row_address
+                            and self._direct_target(call) == row_address
+                            and set(
+                                self.call_targets_by_source.get(
+                                    call.address, ()
+                                )
+                            )
+                            == {row_address}
+                            and set(
+                                self.direct_call_sources_by_target.get(
+                                    row_address, ()
+                                )
+                            )
+                            == {call.address}
+                            and self._raw_direct_call_sites(row_address)
+                            == frozenset({call.address})
+                            and self._direct_call_domain_is_closed(
+                                row_address
+                            )
+                            and len(
+                                pop_seeds := self._producer_seed_records_at(
+                                    row_address
+                                )
+                            )
+                            == 1
+                            and pop_seeds[0].category
+                            == "direct-call-target"
+                            and pop_seeds[0].provenance_address
+                            == call.address
+                            and pop_seeds[0].is_function
+                            and self.incoming_edges.get(row_address, set())
+                            == {
+                                (call.address, "direct-call"),
+                                (call.address, "call-fallthrough"),
+                            }
+                            and not any(
+                                export.va == row_address
+                                for export in self.image.exports
+                            )
+                        )
+                    if canonical_call_pop:
+                        family = self._register_family(operands[0].reg)
+                        values[family] = row_address
+                        handled.add(family)
+                    elif previous is not None and (
+                        call.group(CS_GRP_CALL)
+                        and call.address + call.size == row_address
+                        and self._direct_target(call) == row_address
+                    ):
+                        fallback_barrier_families.add(
+                            self._register_family(operands[0].reg)
+                        )
+
+                if (
+                    not canonical_call_pop
+                    and decoded.id == X86_INS_MOV
+                    and len(operands) == 2
+                    and operands[0].type == X86_OP_REG
+                    and operands[0].size == 4
+                ):
+                    family = self._register_family(operands[0].reg)
+                    value = operand_value(operands[1])
+                    if value is None:
+                        values.pop(family, None)
+                    else:
+                        values[family] = value
+                    handled.add(family)
+                elif (
+                    decoded.id == X86_INS_LEA
+                    and len(operands) == 2
+                    and operands[0].type == X86_OP_REG
+                    and operands[0].size == 4
+                    and operands[1].type == X86_OP_MEM
+                    and operands[1].mem.segment == X86_REG_INVALID
+                ):
+                    family = self._register_family(operands[0].reg)
+                    memory = operands[1].mem
+                    base = (
+                        0
+                        if memory.base == X86_REG_INVALID
+                        else values.get(self._register_family(memory.base))
+                    )
+                    index = (
+                        0
+                        if memory.index == X86_REG_INVALID
+                        else values.get(self._register_family(memory.index))
+                    )
+                    if base is None or index is None:
+                        values.pop(family, None)
+                    else:
+                        values[family] = (
+                            base + index * memory.scale + memory.disp
+                        ) & 0xFFFF_FFFF
+                    handled.add(family)
+                elif (
+                    decoded.mnemonic in {"xor", "sub"}
+                    and len(operands) == 2
+                    and all(
+                        operand.type == X86_OP_REG and operand.size == 4
+                        for operand in operands
+                    )
+                    and self._register_family(operands[0].reg)
+                    == self._register_family(operands[1].reg)
+                ):
+                    family = self._register_family(operands[0].reg)
+                    values[family] = 0
+                    handled.add(family)
+                elif (
+                    decoded.mnemonic
+                    in {"add", "sub", "xor", "and", "or"}
+                    and len(operands) == 2
+                    and operands[0].type == X86_OP_REG
+                    and operands[0].size == 4
+                ):
+                    family = self._register_family(operands[0].reg)
+                    left = values.get(family)
+                    right = operand_value(operands[1])
+                    if left is None or right is None:
+                        values.pop(family, None)
+                    elif decoded.mnemonic == "add":
+                        values[family] = (left + right) & 0xFFFF_FFFF
+                    elif decoded.mnemonic == "sub":
+                        values[family] = (left - right) & 0xFFFF_FFFF
+                    elif decoded.mnemonic == "xor":
+                        values[family] = left ^ right
+                    elif decoded.mnemonic == "and":
+                        values[family] = left & right
+                    else:
+                        values[family] = left | right
+                    handled.add(family)
+                elif (
+                    decoded.mnemonic in {"inc", "dec", "neg", "not"}
+                    and len(operands) == 1
+                    and operands[0].type == X86_OP_REG
+                    and operands[0].size == 4
+                ):
+                    family = self._register_family(operands[0].reg)
+                    prior = values.get(family)
+                    if prior is None:
+                        values.pop(family, None)
+                    elif decoded.mnemonic == "inc":
+                        values[family] = (prior + 1) & 0xFFFF_FFFF
+                    elif decoded.mnemonic == "dec":
+                        values[family] = (prior - 1) & 0xFFFF_FFFF
+                    elif decoded.mnemonic == "neg":
+                        values[family] = (-prior) & 0xFFFF_FFFF
+                    else:
+                        values[family] = (~prior) & 0xFFFF_FFFF
+                    handled.add(family)
+                elif (
+                    row_address in certified_initializer_stos_addresses
+                    and decoded.mnemonic == "stosd"
+                ):
+                    # The descriptor-initializer role independently proves
+                    # DF-clear execution and the exact five-dword span.
+                    prior = values.get("edi")
+                    if prior is None:
+                        values.pop("edi", None)
+                    else:
+                        values["edi"] = (prior + 4) & 0xFFFF_FFFF
+                    handled.add("edi")
+
+                written_families = {
+                    self._register_family(register)
+                    for register in decoded.regs_write
+                    if self._register_family(register) in _REGISTER_FAMILIES
+                } | {
+                    self._register_family(operand.reg)
+                    for operand in operands
+                    if operand.type == X86_OP_REG
+                    and operand.access & CS_AC_WRITE
+                    and self._register_family(operand.reg)
+                    in _REGISTER_FAMILIES
+                }
+                partial_written_families = {
+                    self._register_family(operand.reg)
+                    for operand in operands
+                    if operand.type == X86_OP_REG
+                    and operand.access & CS_AC_WRITE
+                    and operand.size != 4
+                    and self._register_family(operand.reg)
+                    in _REGISTER_FAMILIES
+                }
+                fallback_barrier_families.difference_update(
+                    family
+                    for family in handled
+                    if family in values
+                )
+                fallback_barrier_families.update(
+                    partial_written_families - handled
+                )
+                for family in written_families - handled:
+                    values.pop(family, None)
+                if (
+                    decoded.group(CS_GRP_CALL)
+                    or decoded.group(CS_GRP_JUMP)
+                    or decoded.group(CS_GRP_RET)
+                ):
+                    values.clear()
+
+            result = values.get(register_family)
+            if (
+                not contiguous
+                or register_family in fallback_barrier_families
+            ):
+                singleton_fallback_barriers.add(key)
+            singleton_constant_memo[key] = result
+            return result
+
+        def has_singleton_fallback_barrier(
+            use_address: int,
+            register_family: str,
+            function_entry: int,
+        ) -> bool:
+            key = (use_address, register_family, function_entry)
+            straight_line_singleton_constant_before(
+                use_address,
+                register_family,
+                function_entry,
+            )
+            return key in singleton_fallback_barriers
+
+        def has_reaching_partial_write(
+            use_address: int,
+            register_family: str,
+            function_entry: int,
+        ) -> bool:
+            """Reject generic full-register fallback across a partial write."""
+            key = (use_address, register_family, function_entry)
+            cached = reaching_partial_write_memo.get(key)
+            if cached is not None:
+                return cached
+            definitions = self._register_definitions_across_blocks(
+                use_address,
+                register_family,
+                function_entry,
+            )
+            if definitions is None:
+                reaching_partial_write_memo[key] = False
+                return False
+            result = any(
+                operand.type == X86_OP_REG
+                and operand.access & CS_AC_WRITE
+                and operand.size != 4
+                and self._register_family(operand.reg) == register_family
+                for definition_address in definitions
+                for operand in self._owned_decoded(
+                    definition_address
+                ).operands
+            )
+            reaching_partial_write_memo[key] = result
+            return result
 
         def is_image_capability_literal(value: int) -> bool:
             """Recognize literals that can name image-owned authority.
 
             The seal assumes protected addresses are non-forgeable.  Track
-            mapped image addresses (and one-byte-adjacent protected values
-            used by hostile arithmetic fixtures), rather than every scalar
-            literal participating in byte packing.
+            mapped image addresses rather than every scalar literal
+            participating in byte packing.  Exact local arithmetic is folded
+            at the use instead of seeding ad hoc neighboring values.
             """
             value &= 0xFFFF_FFFF
-            return _is_mapped_span(self.image, value, 1) or any(
-                value in {
-                    (slot - 1) & 0xFFFF_FFFF,
-                    slot,
-                    (slot + 1) & 0xFFFF_FFFF,
-                }
-                for slot in protected_slots
-            )
+            return _is_mapped_span(self.image, value, 1)
 
         def has_image_capability_lineage_before(
             use_address: int,
@@ -48669,46 +49021,82 @@ class _DirectCfgRecovery:
                 return cached
             if key in active:
                 return False
+            singleton = straight_line_singleton_constant_before(
+                use_address,
+                register_family,
+                function_entry,
+            )
+            if singleton is not None and is_image_capability_literal(
+                singleton
+            ):
+                image_capability_lineage_memo[key] = True
+                return True
+            if has_singleton_fallback_barrier(
+                use_address,
+                register_family,
+                function_entry,
+            ) or has_reaching_partial_write(
+                use_address,
+                register_family,
+                function_entry,
+            ):
+                image_capability_lineage_memo[key] = True
+                return True
             definitions = self._register_definitions_across_blocks(
                 use_address,
                 register_family,
                 function_entry,
             )
-            if not definitions:
-                cursor = use_address
-                linear_definition = None
-                for _ in range(64):
-                    previous = self._previous_instruction(cursor)
-                    if (
-                        previous is None
-                        or previous.address < function_entry
-                    ):
-                        break
-                    prior = self._owned_decoded(previous.address)
-                    written_families = {
+            if definitions is None:
+                # Unknown entry state is outside the non-injection boundary.
+                # Once this function has written the family, however, an
+                # unknown join may hide a mapped definition on one incoming
+                # edge.  Inspect every prior local definition at its own
+                # straight-line use boundary rather than choosing the
+                # lexically nearest, potentially non-dominating definition.
+                result = False
+                for address in self._function_instruction_addresses_between(
+                    function_entry,
+                    function_entry,
+                    use_address,
+                ):
+                    decoded = self._owned_decoded(address)
+                    writes_family = any(
                         self._register_family(register)
-                        for register in prior.regs_write
-                    } | {
-                        self._register_family(operand.reg)
-                        for operand in prior.operands
-                        if operand.type == X86_OP_REG
+                        == register_family
+                        for register in decoded.regs_write
+                    ) or any(
+                        operand.type == X86_OP_REG
                         and operand.access & CS_AC_WRITE
-                    }
-                    if register_family in written_families:
-                        linear_definition = previous.address
-                        break
+                        and self._register_family(operand.reg)
+                        == register_family
+                        for operand in decoded.operands
+                    )
+                    next_address = address + decoded.size
                     if (
-                        prior.group(CS_GRP_CALL)
-                        or prior.group(CS_GRP_JUMP)
-                        or prior.group(CS_GRP_RET)
+                        not writes_family
+                        or next_address not in self.instructions
+                        or self._registrar_function_entry(next_address)
+                        != function_entry
                     ):
+                        continue
+                    candidate = straight_line_singleton_constant_before(
+                        next_address,
+                        register_family,
+                        function_entry,
+                    )
+                    if (
+                        candidate is not None
+                        and is_image_capability_literal(candidate)
+                    ) or has_singleton_fallback_barrier(
+                        next_address,
+                        register_family,
+                        function_entry,
+                    ):
+                        result = True
                         break
-                    cursor = previous.address
-                definitions = (
-                    None
-                    if linear_definition is None
-                    else frozenset({linear_definition})
-                )
+                image_capability_lineage_memo[key] = result
+                return result
             if not definitions:
                 image_capability_lineage_memo[key] = False
                 return False
@@ -48729,14 +49117,26 @@ class _DirectCfgRecovery:
                     and len(operands) == 2
                 ):
                     source = operands[1]
-                    if source.type == X86_OP_IMM:
-                        result = is_image_capability_literal(source.imm)
-                    elif source.type == X86_OP_REG:
+                    partial_destination = operands[0].size != 4
+                    if partial_destination:
                         result = has_image_capability_lineage_before(
                             definition.address,
-                            self._register_family(source.reg),
+                            register_family,
                             function_entry,
                             next_active,
+                        )
+                    if source.type == X86_OP_IMM:
+                        result = result or is_image_capability_literal(
+                            source.imm
+                        )
+                    elif source.type == X86_OP_REG:
+                        result = result or (
+                            has_image_capability_lineage_before(
+                                definition.address,
+                                self._register_family(source.reg),
+                                function_entry,
+                                next_active,
+                            )
                         )
                 elif (
                     definition.id == X86_INS_LEA
@@ -48776,6 +49176,7 @@ class _DirectCfgRecovery:
                     "inc",
                     "dec",
                     "imul",
+                    "xor",
                 }:
                     result = any(
                         operand.type == X86_OP_IMM
@@ -48803,12 +49204,64 @@ class _DirectCfgRecovery:
             image_capability_lineage_memo[key] = result
             return result
 
-        def dependency_has_protected_address(
+        def exact_register_values_before(
+            use_address: int,
+            register_family: str,
+            function_entry: int,
+        ) -> frozenset[int] | None:
+            singleton = straight_line_singleton_constant_before(
+                use_address,
+                register_family,
+                function_entry,
+            )
+            if singleton is not None:
+                return frozenset({singleton})
+            if has_singleton_fallback_barrier(
+                use_address,
+                register_family,
+                function_entry,
+            ) or has_reaching_partial_write(
+                use_address,
+                register_family,
+                function_entry,
+            ):
+                return None
+            finite = self._finite_register_values_before(
+                use_address,
+                register_family,
+                function_entry,
+                frozenset(),
+            )
+            return None if finite is None else finite[0]
+
+        def singleton_register_domains(
+            use_address: int,
+            register_families: tuple[str, ...],
+            function_entry: int,
+        ) -> dict[
+            str,
+            tuple[
+                Literal["finite"],
+                frozenset[int],
+            ],
+        ]:
+            result = {}
+            for family in register_families:
+                value = straight_line_singleton_constant_before(
+                    use_address,
+                    family,
+                    function_entry,
+                )
+                if value is not None:
+                    result[family] = ("finite", frozenset({value}))
+            return result
+
+        def dependency_protected_address_state(
             use_address: int,
             dependency: _ValueDependency,
             function_entry: int,
-        ) -> bool:
-            """Check one modeled memory-payload dependency at its use."""
+        ) -> bool | None:
+            """Classify one modeled memory payload as disjoint/overlap/unknown."""
             if dependency.kind == "immediate":
                 return (
                     dependency.value is not None
@@ -48824,14 +49277,15 @@ class _DirectCfgRecovery:
                 use_address, family, function_entry
             ):
                 return False
-            values = self._finite_register_values_before(
+            values = exact_register_values_before(
                 use_address,
                 family,
                 function_entry,
-                frozenset(),
             )
-            return values is not None and any(
-                overlaps_protected(value, 1) for value in values[0]
+            if values is None:
+                return None
+            return any(
+                overlaps_protected(value, 1) for value in values
             )
 
         for function_entry in sorted(self.function_addresses):
@@ -48902,17 +49356,40 @@ class _DirectCfgRecovery:
                         )
                     ):
                         continue
+                    if any(
+                        has_singleton_fallback_barrier(
+                            address,
+                            family,
+                            function_entry,
+                        )
+                        or has_reaching_partial_write(
+                            address,
+                            family,
+                            function_entry,
+                        )
+                        for family in address_families
+                    ):
+                        return None
                     destination = self._semantic_write_destination_domain(
                         decoded,
                         write,
                         function_entry,
                         call_return_domains={},
                         argument_domains={},
+                        register_domains=singleton_register_domains(
+                            address,
+                            address_families,
+                            function_entry,
+                        ),
                         protected_slots=protected_slots,
+                        direction_clear_addresses=(
+                            backend_direction_clear_addresses
+                        ),
                     )
+                    if destination is None:
+                        return None
                     if (
-                        destination is not None
-                        and destination[0] == "finite"
+                        destination[0] == "finite"
                         and (
                             any(
                                 value
@@ -48933,6 +49410,7 @@ class _DirectCfgRecovery:
                     ):
                         return None
                 transfer_operand = None
+                transfer_family = None
                 transfer_kind = None
                 transfer_write = None
                 if decoded.id == X86_INS_PUSH and len(decoded.operands) == 1:
@@ -48945,6 +49423,9 @@ class _DirectCfgRecovery:
                 ):
                     transfer_operand = decoded.operands[1]
                     transfer_kind = "store"
+                elif decoded.group(CS_GRP_RET):
+                    transfer_family = "eax"
+                    transfer_kind = "return"
                 else:
                     transfer_write = next(
                         (
@@ -48959,70 +49440,75 @@ class _DirectCfgRecovery:
                         ),
                         None,
                     )
-                    if transfer_write is not None and any(
-                        dependency_has_protected_address(
-                            address, dependency, function_entry
+                    if transfer_write is not None:
+                        dependency_states = tuple(
+                            dependency_protected_address_state(
+                                address, dependency, function_entry
+                            )
+                            for dependency in transfer_write.dependencies
                         )
-                        for dependency in transfer_write.dependencies
-                    ):
-                        transfer_kind = "store"
-                store_destination = None
-                if transfer_kind == "store":
-                    if len(writes) != 1:
-                        return None
-                    store_destination = (
-                        self._semantic_write_destination_domain(
-                            decoded,
-                            writes[0],
-                            function_entry,
-                            call_return_domains={},
-                            argument_domains={},
-                            protected_slots=protected_slots,
-                        )
-                    )
-                    if (
-                        store_destination is not None
-                        and store_destination[0] == "private-stack"
-                    ):
-                        # A private-stack spill is not a capability export.
-                        # Classify the destination before enumerating the
-                        # stored scalar: packed numeric data can otherwise
-                        # exceed the finite-value budget needlessly.
-                        continue
+                        if None in dependency_states:
+                            return None
+                        if any(dependency_states):
+                            transfer_kind = "store"
                 if transfer_operand is not None:
                     if transfer_operand.type == X86_OP_IMM:
                         transfer_has_literal_lineage = True
+                        transfer_values = frozenset(
+                            {transfer_operand.imm & 0xFFFF_FFFF}
+                        )
                     elif transfer_operand.type == X86_OP_REG:
+                        transfer_family = self._register_family(
+                            transfer_operand.reg
+                        )
                         transfer_has_literal_lineage = (
                             has_image_capability_lineage_before(
                                 address,
-                                self._register_family(transfer_operand.reg),
+                                transfer_family,
                                 function_entry,
                             )
                         )
+                        transfer_values = exact_register_values_before(
+                            address,
+                            transfer_family,
+                            function_entry,
+                        )
                     else:
                         transfer_has_literal_lineage = False
+                        transfer_values = None
                     if not transfer_has_literal_lineage:
                         continue
-                    transfer_values = self._finite_operand_values_before(
-                        address,
-                        transfer_operand,
-                        function_entry,
-                        frozenset(),
-                    )
-                    if transfer_values is None or not any(
+                    if transfer_values is None:
+                        return None
+                    if not any(
                         overlaps_protected(value, 1)
-                        for value in transfer_values[0]
+                        for value in transfer_values
+                    ):
+                        continue
+                elif transfer_family is not None:
+                    if not has_image_capability_lineage_before(
+                        address,
+                        transfer_family,
+                        function_entry,
+                    ):
+                        continue
+                    transfer_values = exact_register_values_before(
+                        address,
+                        transfer_family,
+                        function_entry,
+                    )
+                    if transfer_values is None:
+                        return None
+                    if not any(
+                        overlaps_protected(value, 1)
+                        for value in transfer_values
                     ):
                         continue
                 elif transfer_kind is None:
                     continue
-                if transfer_kind == "push":
+                if transfer_kind in {"push", "return"}:
                     return None
-                if (
-                    store_destination is None
-                    or store_destination[0] != "private-stack"
-                ):
+                if transfer_kind == "store":
                     return None
 
         excluded_role_functions = frozenset(
