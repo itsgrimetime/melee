@@ -1859,6 +1859,160 @@ class _PublicationPrivatePageLayout:
 
 
 @dataclass(frozen=True, slots=True)
+class _PublicationPrivateArenaBlockState:
+    allocation: Literal["none", "free", "allocated"]
+    membership: Literal["none", "unlisted", "listed"]
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationPrivateArenaInvocation:
+    caller_entry: int
+    call_address: int
+    callee_entry: int
+    role: Literal[
+        "ring-insert",
+        "ring-remove",
+        "ring-rotate",
+        "select",
+        "block-initialize",
+        "split",
+        "unlink",
+        "insert",
+        "coalesce-prev",
+        "coalesce-next",
+        "arena-free",
+        "resize",
+    ]
+    context: Literal[
+        "provider",
+        "initializer-base",
+        "selector-ring",
+        "selector-provider",
+        "selector-split",
+        "deallocator",
+        "resize-split",
+        "resize-grow",
+        "resize-shrink",
+    ]
+    page_origins: tuple[Literal["provider", "ring"], ...]
+    block_state: _PublicationPrivateArenaBlockState
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationPrivateArenaStateTransition:
+    function_entry: int
+    role: Literal[
+        "block-initialize",
+        "split",
+        "unlink",
+        "insert",
+        "coalesce-prev",
+        "coalesce-next",
+        "arena-free",
+        "select",
+        "resize",
+    ]
+    context: Literal[
+        "initializer-base",
+        "selector-split",
+        "selector-ring",
+        "selector-provider",
+        "deallocator",
+        "resize-split",
+        "resize-grow",
+        "resize-shrink",
+    ]
+    subject: Literal[
+        "initial-block",
+        "selected-block",
+        "split-block",
+        "remainder-block",
+        "predecessor-block",
+        "successor-block",
+        "payload-block",
+        "released-page",
+    ]
+    before: _PublicationPrivateArenaBlockState
+    after: _PublicationPrivateArenaBlockState
+    restoration_role: Literal[
+        "none", "initializer-base", "select", "resize", "deallocator"
+    ]
+    restoration_entry: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationPrivatePageRingRole:
+    head_slot: int
+    provider_entry: int
+    inserter_entry: int
+    remover_entry: int | None
+    provider_calls: tuple[int, ...]
+    selector_page_calls: tuple[int, ...]
+    selector_request_calls: tuple[int, ...]
+    selector_invocations: tuple[_PublicationPrivateArenaInvocation, ...]
+    head_reads: tuple[int, ...]
+    head_writes: tuple[int, ...]
+    ring_link_reads: tuple[int, ...]
+    ring_link_writes: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationPrivateArenaSpan:
+    function_entry: int
+    instruction_address: int
+    operand_index: int
+    access: Literal["read", "write", "read-write"]
+    region: Literal["page", "page-end", "block", "block-end", "successor"]
+    field: Literal[
+        "page-link",
+        "largest-free",
+        "extent",
+        "page-end-tag",
+        "sentinel",
+        "block-header",
+        "block-page-flags",
+        "block-prev",
+        "block-next",
+        "boundary-tag",
+        "successor-header",
+    ]
+    displacement: int
+    width: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationPrivateArenaTransfer:
+    function_entry: int
+    role: Literal[
+        "ring-insert",
+        "ring-remove",
+        "ring-rotate",
+        "select",
+        "block-initialize",
+        "split",
+        "unlink",
+        "insert",
+        "coalesce-prev",
+        "coalesce-next",
+        "arena-free",
+        "resize",
+    ]
+    invocations: tuple[_PublicationPrivateArenaInvocation, ...]
+    state_transitions: tuple[_PublicationPrivateArenaStateTransition, ...]
+    instruction_addresses: tuple[int, ...]
+    span_keys: tuple[tuple[int, int, int], ...]
+    function_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationPrivatePageRingEvidence:
+    layout: _PublicationPrivatePageLayout
+    role: _PublicationPrivatePageRingRole
+    transfers: tuple[_PublicationPrivateArenaTransfer, ...]
+    spans: tuple[_PublicationPrivateArenaSpan, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _PublicationPrivateStackAddressDomain:
     kind: Literal["private-stack"]
     function_entry: int
@@ -22343,6 +22497,957 @@ class _DirectCfgRecovery:
             size_flag_mask=size_flag_mask,
             minimum_split_remainder=None,
         )
+
+    def _publication_private_page_ring_role(
+        self,
+        contract: _PrivateHeapAllocatorContract,
+        extent: _PublicationPrivateHeapExtentWitness,
+        layout: _PublicationPrivatePageLayout,
+    ) -> _PublicationPrivatePageRingEvidence | None:
+        """Prove one closed provider-page ring and its selector arguments."""
+        if not (
+            isinstance(contract, _PrivateHeapAllocatorContract)
+            and isinstance(extent, _PublicationPrivateHeapExtentWitness)
+            and isinstance(layout, _PublicationPrivatePageLayout)
+            and layout.page_link_offsets is None
+        ):
+            return None
+        current_contract = self._private_heap_allocator_contract(
+            contract.root,
+            contract.protected_slots,
+        )
+        effects = self._publication_private_heap_effect_closure(extent)
+        if (
+            current_contract != contract
+            or effects is None
+            or self._publication_private_page_layout(
+                contract,
+                extent,
+                effects,
+            )
+            != layout
+        ):
+            return None
+
+        Value = frozenset[str]
+        unknown: Value = frozenset({"unknown"})
+        none_state = _PublicationPrivateArenaBlockState("none", "none")
+
+        def access_name(operand, operand_index: int, mnemonic: str) -> str | None:
+            reads = bool(operand.access & CS_AC_READ)
+            writes = bool(operand.access & CS_AC_WRITE)
+            if not reads and not writes:
+                if mnemonic == "mov":
+                    writes = operand_index == 0
+                    reads = operand_index != 0
+                else:
+                    reads = True
+            if reads and writes:
+                return "read-write"
+            if writes:
+                return "write"
+            if reads:
+                return "read"
+            return None
+
+        def flag_guard_before(
+            branch_address: int,
+            function_entry: int,
+        ):
+            """Find the nearest flag writer across bounded cleanup only."""
+            cursor = branch_address
+            for _ in range(8):
+                previous = self._previous_instruction(cursor)
+                if (
+                    previous is None
+                    or previous.address < function_entry
+                    or previous.address + previous.size != cursor
+                ):
+                    return None
+                candidate = self._owned_decoded(previous.address)
+                if x86_const.X86_REG_EFLAGS in candidate.regs_write:
+                    return candidate
+                if (
+                    candidate.group(CS_GRP_CALL)
+                    or candidate.group(CS_GRP_JUMP)
+                    or candidate.group(CS_GRP_RET)
+                    or previous.address in self.block_starts
+                ):
+                    return None
+                cursor = previous.address
+            return None
+
+        def summarize(
+            function_entry: int,
+            head_slot: int,
+            link_offsets: tuple[int, int] | None,
+            *,
+            page_argument: bool,
+            provider_entry: int | None = None,
+        ) -> dict[str, Any] | None:
+            """Run a finite null/provider/ring/request register lattice."""
+            if function_entry not in self.function_addresses:
+                return None
+            following_entry = self._following_function_entry(function_entry)
+            empty_registers = tuple(unknown for _ in _REGISTER_FAMILIES)
+            states: dict[int, tuple[Value, ...]] = {function_entry: empty_registers}
+            pending = [function_entry]
+            queued = {function_entry}
+            iterations = 0
+
+            def family_value(state: tuple[Value, ...], register: int) -> Value:
+                return state[_REGISTER_FAMILIES.index(self._register_family(register))]
+
+            def operand_value(
+                address: int,
+                operand,
+                state: tuple[Value, ...],
+            ) -> Value:
+                if operand.type == X86_OP_REG:
+                    return family_value(state, operand.reg)
+                if operand.type == X86_OP_IMM:
+                    immediate = operand.imm & 0xFFFF_FFFF
+                    return frozenset(
+                        {"zero" if immediate == 0 else f"scalar:{immediate}"}
+                    )
+                if operand.type != X86_OP_MEM:
+                    return unknown
+                argument = self._stack_argument_index_at(
+                    address,
+                    operand,
+                    function_entry,
+                )
+                if argument is not None:
+                    if argument == 0 and page_argument:
+                        return frozenset({"page"})
+                    return frozenset({f"request-input:{argument}"})
+                absolute = self._absolute_memory_operand(operand)
+                if absolute is not None:
+                    return frozenset({"ring"}) if absolute == head_slot else unknown
+                memory = operand.mem
+                if (
+                    memory.segment != X86_REG_INVALID
+                    or memory.base == X86_REG_INVALID
+                    or memory.index != X86_REG_INVALID
+                ):
+                    return unknown
+                bases = family_value(state, memory.base)
+                page_values = {"page", "provider", "ring"}
+                if bases and set(bases) <= page_values:
+                    if link_offsets is None or memory.disp in link_offsets:
+                        return frozenset({"ring"})
+                return unknown
+
+            while pending:
+                address = heapq.heappop(pending)
+                queued.remove(address)
+                state = states[address]
+                output = list(state)
+                decoded = self._owned_decoded(address)
+                groups = self._owned_decoded_groups(decoded)
+                handled_family: str | None = None
+                if decoded.id == X86_INS_MOV and len(decoded.operands) == 2:
+                    destination, source = decoded.operands
+                    if destination.type == X86_OP_REG:
+                        handled_family = self._register_family(destination.reg)
+                        value = operand_value(address, source, state)
+                        if source.type == X86_OP_IMM and any(
+                            item.startswith("request-normalized:")
+                            for item in family_value(state, destination.reg)
+                        ):
+                            immediate = source.imm & 0xFFFF_FFFF
+                            value = frozenset({f"request-floor:{immediate}"})
+                        output[_REGISTER_FAMILIES.index(handled_family)] = value
+                elif decoded.id == X86_INS_LEA and len(decoded.operands) == 2:
+                    destination, source = decoded.operands
+                    if destination.type == X86_OP_REG and source.type == X86_OP_MEM:
+                        handled_family = self._register_family(destination.reg)
+                        value = unknown
+                        if (
+                            source.mem.segment == X86_REG_INVALID
+                            and source.mem.base != X86_REG_INVALID
+                            and source.mem.index == X86_REG_INVALID
+                        ):
+                            bases = family_value(state, source.mem.base)
+                            if all(
+                                item.startswith("request-input:")
+                                or item.startswith("request-adjusted:")
+                                for item in bases
+                            ):
+                                value = frozenset(
+                                    {f"request-adjusted:{source.mem.disp}"}
+                                )
+                            elif set(bases) <= {"page", "provider", "ring"}:
+                                value = (
+                                    bases
+                                    if source.mem.disp == 0
+                                    else frozenset({"adjusted-page"})
+                                )
+                        output[_REGISTER_FAMILIES.index(handled_family)] = value
+                elif (
+                    decoded.mnemonic == "and"
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_REG
+                    and decoded.operands[1].type == X86_OP_IMM
+                ):
+                    destination = decoded.operands[0]
+                    handled_family = self._register_family(destination.reg)
+                    prior = family_value(state, destination.reg)
+                    mask = decoded.operands[1].imm & 0xFFFF_FFFF
+                    expected = (~layout.size_flag_mask) & 0xFFFF_FFFF
+                    output[_REGISTER_FAMILIES.index(handled_family)] = (
+                        frozenset({f"request-normalized:{mask}"})
+                        if mask == expected
+                        and prior
+                        and all(
+                            item.startswith("request-adjusted:")
+                            or item.startswith("request-input:")
+                            for item in prior
+                        )
+                        else unknown
+                    )
+                elif (
+                    decoded.id == X86_INS_XOR
+                    and len(decoded.operands) == 2
+                    and all(item.type == X86_OP_REG for item in decoded.operands)
+                    and self._register_family(decoded.operands[0].reg)
+                    == self._register_family(decoded.operands[1].reg)
+                ):
+                    handled_family = self._register_family(decoded.operands[0].reg)
+                    output[_REGISTER_FAMILIES.index(handled_family)] = frozenset(
+                        {"zero"}
+                    )
+                elif CS_GRP_CALL in groups:
+                    for family in ("eax", "ecx", "edx"):
+                        output[_REGISTER_FAMILIES.index(family)] = unknown
+                    target = self.direct_call_targets_by_source.get(address)
+                    output[_REGISTER_FAMILIES.index("eax")] = (
+                        frozenset({"provider"})
+                        if target == provider_entry
+                        else frozenset({"scalar-return"})
+                    )
+                else:
+                    written = {
+                        self._register_family(register)
+                        for register in decoded.regs_write
+                        if self._register_family(register) in _REGISTER_FAMILIES
+                    }
+                    written.update(
+                        self._register_family(operand.reg)
+                        for operand in decoded.operands
+                        if operand.type == X86_OP_REG and operand.access & CS_AC_WRITE
+                    )
+                    for family in written:
+                        if family != "esp" and family != handled_family:
+                            output[_REGISTER_FAMILIES.index(family)] = unknown
+
+                successors = self._summary_successors(
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+                guarded_family: str | None = None
+                zero_successor: int | None = None
+                nonzero_successor: int | None = None
+                if (
+                    decoded.mnemonic in {"je", "jz", "jne", "jnz"}
+                    and len(successors) == 2
+                    and len(decoded.operands) == 1
+                    and decoded.operands[0].type == X86_OP_IMM
+                ):
+                    guard = flag_guard_before(address, function_entry)
+                    if (
+                        guard is not None
+                        and guard.mnemonic == "test"
+                        and len(guard.operands) == 2
+                        and all(
+                            operand.type == X86_OP_REG for operand in guard.operands
+                        )
+                        and self._register_family(guard.operands[0].reg)
+                        == self._register_family(guard.operands[1].reg)
+                    ):
+                        guarded_family = self._register_family(guard.operands[0].reg)
+                        target = decoded.operands[0].imm & 0xFFFF_FFFF
+                        fallthrough = address + decoded.size
+                        if decoded.mnemonic in {"je", "jz"}:
+                            zero_successor = target
+                            nonzero_successor = fallthrough
+                        else:
+                            zero_successor = fallthrough
+                            nonzero_successor = target
+
+                for successor in successors:
+                    outgoing_values = list(output)
+                    if guarded_family is not None:
+                        family_index = _REGISTER_FAMILIES.index(guarded_family)
+                        guarded = outgoing_values[family_index]
+                        if (
+                            "unknown" not in guarded
+                            and "zero" in guarded
+                            and len(guarded) > 1
+                        ):
+                            if successor == zero_successor:
+                                outgoing_values[family_index] = frozenset({"zero"})
+                            elif successor == nonzero_successor:
+                                refined = guarded - {"zero"}
+                                if not refined:
+                                    continue
+                                outgoing_values[family_index] = refined
+                    outgoing = tuple(outgoing_values)
+                    previous = states.get(successor)
+                    if previous is None:
+                        updated = outgoing
+                    else:
+                        updated_values = []
+                        for old, new in zip(previous, outgoing):
+                            joined = old | new
+                            if len(joined) > 8:
+                                return None
+                            updated_values.append(joined)
+                        updated = tuple(updated_values)
+                    if previous == updated:
+                        continue
+                    states[successor] = updated
+                    if successor not in queued:
+                        heapq.heappush(pending, successor)
+                        queued.add(successor)
+                iterations += 1
+                self.limits.check("max_summary_iterations", iterations)
+
+            relative = []
+            head_reads = []
+            head_writes = []
+            indirect_control = []
+            comparisons = []
+            for address in self._function_instruction_addresses(function_entry):
+                state = states.get(address)
+                if state is None:
+                    continue
+                decoded = self._owned_decoded(address)
+                if (decoded.group(CS_GRP_CALL) or decoded.group(CS_GRP_JUMP)) and (
+                    self.direct_call_targets_by_source.get(address) is None
+                    and any(
+                        operand.type in {X86_OP_REG, X86_OP_MEM}
+                        for operand in decoded.operands
+                    )
+                ):
+                    indirect_control.append(address)
+                if decoded.mnemonic in {"cmp", "test"} and len(decoded.operands) == 2:
+                    comparisons.append(
+                        (
+                            address,
+                            operand_value(address, decoded.operands[0], state),
+                            operand_value(address, decoded.operands[1], state),
+                            tuple(
+                                self._absolute_memory_operand(operand)
+                                for operand in decoded.operands
+                            ),
+                        )
+                    )
+                for operand_index, operand in enumerate(decoded.operands):
+                    if operand.type != X86_OP_MEM:
+                        continue
+                    access = access_name(operand, operand_index, decoded.mnemonic)
+                    if access is None:
+                        continue
+                    absolute = self._absolute_memory_operand(operand)
+                    source = (
+                        operand_value(address, decoded.operands[1], state)
+                        if access in {"write", "read-write"}
+                        and decoded.id == X86_INS_MOV
+                        and len(decoded.operands) == 2
+                        else unknown
+                    )
+                    if absolute == head_slot:
+                        row = (address, operand_index, access, source, operand.size)
+                        if access in {"read", "read-write"}:
+                            head_reads.append(row)
+                        if access in {"write", "read-write"}:
+                            head_writes.append(row)
+                        continue
+                    memory = operand.mem
+                    if (
+                        memory.segment != X86_REG_INVALID
+                        or memory.base == X86_REG_INVALID
+                        or memory.index != X86_REG_INVALID
+                    ):
+                        continue
+                    bases = family_value(state, memory.base)
+                    if not bases or "unknown" in bases:
+                        continue
+                    if set(bases) <= {"page", "provider"}:
+                        base_kind = "page"
+                    elif set(bases) <= {"ring"}:
+                        base_kind = "ring"
+                    elif set(bases) <= {"page", "provider", "ring"}:
+                        base_kind = "page"
+                    else:
+                        continue
+                    relative.append(
+                        (
+                            address,
+                            operand_index,
+                            access,
+                            base_kind,
+                            memory.disp,
+                            source,
+                            operand.size,
+                        )
+                    )
+            return {
+                "states": states,
+                "relative": tuple(relative),
+                "head_reads": tuple(head_reads),
+                "head_writes": tuple(head_writes),
+                "comparisons": tuple(comparisons),
+                "indirect_control": tuple(indirect_control),
+                "value": operand_value,
+            }
+
+        provider_calls = self._function_direct_calls(contract.page_provider)
+        factory_calls = tuple(
+            call
+            for call in provider_calls
+            if call.target == contract.factory.function_entry
+        )
+        if len(factory_calls) != 1:
+            return None
+        factory_call = factory_calls[0]
+        provider_states = self._relative_pointer_states(
+            contract.page_provider,
+            root_call=factory_call.address,
+            propagate_call_returns=False,
+        )
+        if provider_states is None:
+            return None
+        publisher_candidates = []
+        for call in provider_calls:
+            if call.target in {contract.factory.function_entry, extent.helper_entry}:
+                continue
+            pushed = self._pushed_call_argument(call.address, 0)
+            if (
+                pushed is None
+                or self._relative_operand_offsets(
+                    pushed[0].address,
+                    pushed[1],
+                    contract.page_provider,
+                    None,
+                    provider_states,
+                )
+                != frozenset({0})
+                or not self._incoming_call_domain_is_closed(call.target)
+            ):
+                continue
+            slots = {
+                absolute
+                for address in self._function_instruction_addresses(call.target)
+                for operand in self._owned_decoded(address).operands
+                if (absolute := self._absolute_memory_operand(operand))
+                in contract.mutable_state
+            }
+            for slot in slots:
+                summary = summarize(
+                    call.target,
+                    slot,
+                    None,
+                    page_argument=True,
+                )
+                if summary is None or summary["indirect_control"]:
+                    continue
+                page_self_writes = {
+                    row[4]
+                    for row in summary["relative"]
+                    if row[2] == "write"
+                    and row[3] == "page"
+                    and row[5] == frozenset({"page"})
+                    and row[6] == 4
+                }
+                ring_page_writes = {
+                    row[4]
+                    for row in summary["relative"]
+                    if row[2] == "write"
+                    and row[3] == "ring"
+                    and row[5] == frozenset({"page"})
+                    and row[6] == 4
+                }
+                links = tuple(sorted(page_self_writes & ring_page_writes))
+                if (
+                    len(links) != 2
+                    or links[0] == links[1]
+                    or any(offset % 4 for offset in links)
+                    or not summary["head_reads"]
+                    or not summary["head_writes"]
+                    or any(
+                        row[3] != frozenset({"page"}) or row[4] != 4
+                        for row in summary["head_writes"]
+                    )
+                    or any(
+                        row[4] not in links or row[6] != 4
+                        for row in summary["relative"]
+                    )
+                ):
+                    continue
+                publisher_candidates.append((call, slot, links, summary))
+        if len(publisher_candidates) != 1:
+            return None
+        publisher_call, head_slot, link_offsets, publisher = publisher_candidates[0]
+
+        deallocator_entries = set()
+        if contract.deallocator_root is not None:
+            pending_entries = [contract.deallocator_root]
+            while pending_entries:
+                entry = pending_entries.pop()
+                if entry in deallocator_entries or entry not in self.function_addresses:
+                    continue
+                deallocator_entries.add(entry)
+                self.limits.check("max_summary_iterations", len(deallocator_entries))
+                pending_entries.extend(
+                    call.target
+                    for call in self._function_direct_calls(entry)
+                    if call.target in self.function_addresses
+                )
+
+        head_writer_entries = {
+            owner
+            for address in self.absolute_memory_writes.get(head_slot, ())
+            if (owner := self._registrar_function_entry(address)) is not None
+        }
+        remover_candidates = []
+        for entry in sorted(head_writer_entries & deallocator_entries):
+            if entry in {publisher_call.target, contract.large_allocator}:
+                continue
+            summary = summarize(
+                entry,
+                head_slot,
+                link_offsets,
+                page_argument=True,
+            )
+            if summary is None or summary["indirect_control"]:
+                continue
+            page_reads = {
+                row[4]
+                for row in summary["relative"]
+                if row[2] in {"read", "read-write"} and row[3] == "page" and row[6] == 4
+            }
+            page_zero_writes = {
+                row[4]
+                for row in summary["relative"]
+                if row[2] == "write"
+                and row[3] == "page"
+                and row[5] == frozenset({"zero"})
+                and row[6] == 4
+            }
+            reciprocal_writes = {
+                row[4]
+                for row in summary["relative"]
+                if row[2] == "write"
+                and row[3] == "ring"
+                and row[5] == frozenset({"ring"})
+                and row[6] == 4
+            }
+            head_sources = {value for row in summary["head_writes"] for value in row[3]}
+            has_singleton_compare = any(
+                {"page", "ring"} <= set(left | right)
+                for _address, left, right, _absolute in summary["comparisons"]
+            )
+            if (
+                page_reads != set(link_offsets)
+                or page_zero_writes != set(link_offsets)
+                or reciprocal_writes != set(link_offsets)
+                or head_sources != {"zero", "ring"}
+                or not has_singleton_compare
+                or any(
+                    row[4] not in link_offsets or row[6] != 4
+                    for row in summary["relative"]
+                )
+                or not self._least_reachable_incoming_call_domain_is_closed(entry)
+            ):
+                continue
+            remover_candidates.append((entry, summary))
+        if len(remover_candidates) != 1:
+            return None
+        remover_entry, remover = remover_candidates[0]
+
+        large = summarize(
+            contract.large_allocator,
+            head_slot,
+            link_offsets,
+            page_argument=False,
+            provider_entry=contract.page_provider,
+        )
+        if large is None or large["indirect_control"]:
+            return None
+        large_calls = self._function_direct_calls(contract.large_allocator)
+        large_provider_calls = tuple(
+            call for call in large_calls if call.target == contract.page_provider
+        )
+        selector_groups: dict[int, list[DirectCall]] = defaultdict(list)
+        for call in large_calls:
+            if call.target != contract.page_provider:
+                selector_groups[call.target].append(call)
+        selector_candidates = []
+        for selector_entry, calls in selector_groups.items():
+            call_addresses = {call.address for call in calls}
+            if (
+                set(self.direct_call_sources_by_target.get(selector_entry, ()))
+                != call_addresses
+                or self._raw_direct_call_sites(selector_entry) != call_addresses
+                or not self._incoming_call_domain_is_closed(selector_entry)
+            ):
+                continue
+            rows = []
+            lineages = []
+            valid = True
+            for call in sorted(calls, key=lambda item: item.address):
+                page = self._pushed_call_argument(call.address, 0)
+                request = self._pushed_call_argument(call.address, 1)
+                if page is None or request is None:
+                    valid = False
+                    break
+                page_state = large["states"].get(page[0].address)
+                request_state = large["states"].get(request[0].address)
+                if page_state is None or request_state is None:
+                    valid = False
+                    break
+                page_value = large["value"](
+                    page[0].address,
+                    page[1],
+                    page_state,
+                )
+                request_value = large["value"](
+                    request[0].address,
+                    request[1],
+                    request_state,
+                )
+                if not page_value or not set(page_value) <= {"provider", "ring"}:
+                    valid = False
+                    break
+                if not request_value or not all(
+                    value.startswith("request-") for value in request_value
+                ):
+                    valid = False
+                    break
+                origins = tuple(
+                    origin for origin in ("provider", "ring") if origin in page_value
+                )
+                if not origins:
+                    valid = False
+                    break
+                context = "selector-ring" if "ring" in origins else "selector-provider"
+                rows.append(
+                    _PublicationPrivateArenaInvocation(
+                        caller_entry=contract.large_allocator,
+                        call_address=call.address,
+                        callee_entry=selector_entry,
+                        role="select",
+                        context=context,
+                        page_origins=origins,
+                        block_state=none_state,
+                    )
+                )
+                lineages.append(request_value)
+            if (
+                valid
+                and rows
+                and len(set(lineages)) == 1
+                and {origin for row in rows for origin in row.page_origins}
+                == {"provider", "ring"}
+            ):
+                selector_candidates.append((selector_entry, tuple(rows), lineages[0]))
+        if len(selector_candidates) != 1:
+            return None
+        selector_entry, selector_invocations, request_lineage = selector_candidates[0]
+        expected_mask = (~layout.size_flag_mask) & 0xFFFF_FFFF
+        normalized = {f"request-normalized:{expected_mask}"}
+        floors = {
+            int(value.rsplit(":", 1)[1])
+            for value in request_lineage
+            if value.startswith("request-floor:")
+        }
+        if (
+            not normalized <= set(request_lineage)
+            or len(floors) != 1
+            or next(iter(floors)) <= 0
+            or next(iter(floors)) % layout.block_alignment
+        ):
+            return None
+
+        if len(large["head_writes"]) != 1:
+            return None
+        rotation_write = large["head_writes"][0]
+        rotation_source = rotation_write[3]
+        ring_invocations = tuple(
+            row for row in selector_invocations if "ring" in row.page_origins
+        )
+        provider_only_invocations = tuple(
+            row for row in selector_invocations if row.page_origins == ("provider",)
+        )
+        following_large = self._following_function_entry(contract.large_allocator)
+        guarded_rotation_calls = []
+        for invocation in ring_invocations:
+            if not self._reachable_within_function(
+                invocation.call_address,
+                rotation_write[0],
+                contract.large_allocator,
+                following_large,
+            ):
+                continue
+            for address in self._function_instruction_addresses_between(
+                contract.large_allocator,
+                invocation.call_address,
+                rotation_write[0],
+            ):
+                decoded = self._owned_decoded(address)
+                successors = self._summary_successors(
+                    address,
+                    contract.large_allocator,
+                    following_large,
+                )
+                if not (decoded.group(CS_GRP_JUMP) and len(successors) == 2):
+                    continue
+                reaches = tuple(
+                    self._reachable_within_function(
+                        successor,
+                        rotation_write[0],
+                        contract.large_allocator,
+                        following_large,
+                        excluded=frozenset(
+                            row.call_address for row in selector_invocations
+                        ),
+                    )
+                    for successor in successors
+                )
+                guard = flag_guard_before(
+                    address,
+                    contract.large_allocator,
+                )
+                if (
+                    reaches.count(True) == 1
+                    and guard is not None
+                    and guard.mnemonic in {"cmp", "test"}
+                    and any(
+                        operand.type == X86_OP_REG
+                        and self._register_family(operand.reg) == "eax"
+                        for operand in guard.operands
+                    )
+                ):
+                    guarded_rotation_calls.append(invocation.call_address)
+                    break
+        if (
+            not guarded_rotation_calls
+            or not set(rotation_source) <= {"provider", "ring"}
+            or "ring" not in rotation_source
+            or any(
+                self._reachable_within_function(
+                    invocation.call_address,
+                    rotation_write[0],
+                    contract.large_allocator,
+                    following_large,
+                )
+                for invocation in provider_only_invocations
+            )
+        ):
+            return None
+
+        allowed_head_owners = {
+            contract.large_allocator,
+            publisher_call.target,
+            remover_entry,
+        }
+        head_reads = set()
+        head_writes = set()
+        for address in sorted(self.instructions):
+            owner = self._registrar_function_entry(address)
+            decoded = self._owned_decoded(address)
+            for operand_index, operand in enumerate(decoded.operands):
+                if operand.type != X86_OP_MEM:
+                    continue
+                memory = operand.mem
+                absolute = self._absolute_memory_operand(operand)
+                overlaps = (
+                    absolute is not None
+                    and absolute < head_slot + 4
+                    and head_slot < absolute + max(operand.size, 1)
+                )
+                indexed = (
+                    memory.segment == X86_REG_INVALID
+                    and memory.base == X86_REG_INVALID
+                    and memory.index != X86_REG_INVALID
+                    and memory.disp & 0xFFFF_FFFF == head_slot
+                )
+                if not overlaps and not indexed:
+                    continue
+                if (
+                    indexed
+                    or absolute != head_slot
+                    or operand.size != 4
+                    or owner not in allowed_head_owners
+                ):
+                    return None
+                access = access_name(operand, operand_index, decoded.mnemonic)
+                if access in {"read", "read-write"}:
+                    head_reads.add(address)
+                if access in {"write", "read-write"}:
+                    head_writes.add(address)
+        if not head_reads or not head_writes:
+            return None
+        self._note_producer_global_slot_dependency(head_slot)
+        for entry in allowed_head_owners | {selector_entry}:
+            self._note_producer_dependency(entry)
+
+        def spans_for(summary: dict[str, Any], function_entry: int):
+            rows = []
+            for (
+                address,
+                operand_index,
+                access,
+                _base,
+                displacement,
+                _source,
+                width,
+            ) in summary["relative"]:
+                if displacement not in link_offsets or width != 4:
+                    continue
+                rows.append(
+                    _PublicationPrivateArenaSpan(
+                        function_entry=function_entry,
+                        instruction_address=address,
+                        operand_index=operand_index,
+                        access=access,
+                        region="page",
+                        field="page-link",
+                        displacement=displacement,
+                        width=width,
+                    )
+                )
+            return tuple(rows)
+
+        publisher_spans = spans_for(publisher, publisher_call.target)
+        remover_spans = spans_for(remover, remover_entry)
+        large_spans = spans_for(large, contract.large_allocator)
+        spans = tuple(
+            sorted(
+                {*publisher_spans, *remover_spans, *large_spans},
+                key=lambda row: (
+                    row.function_entry,
+                    row.instruction_address,
+                    row.operand_index,
+                ),
+            )
+        )
+
+        def span_keys(function_entry: int) -> tuple[tuple[int, int, int], ...]:
+            return tuple(
+                (
+                    span.function_entry,
+                    span.instruction_address,
+                    span.operand_index,
+                )
+                for span in spans
+                if span.function_entry == function_entry
+            )
+
+        insert_invocation = _PublicationPrivateArenaInvocation(
+            caller_entry=contract.page_provider,
+            call_address=publisher_call.address,
+            callee_entry=publisher_call.target,
+            role="ring-insert",
+            context="provider",
+            page_origins=("provider",),
+            block_state=none_state,
+        )
+        remover_invocations = tuple(
+            _PublicationPrivateArenaInvocation(
+                caller_entry=self._registrar_function_entry(call_address) or 0,
+                call_address=call_address,
+                callee_entry=remover_entry,
+                role="ring-remove",
+                context="deallocator",
+                page_origins=("ring",),
+                block_state=none_state,
+            )
+            for call_address in sorted(
+                self.direct_call_sources_by_target.get(remover_entry, ())
+            )
+        )
+        rotate_invocations = tuple(
+            replace(row, role="ring-rotate")
+            for row in ring_invocations
+            if row.call_address in guarded_rotation_calls
+        )
+        transfers = (
+            _PublicationPrivateArenaTransfer(
+                function_entry=publisher_call.target,
+                role="ring-insert",
+                invocations=(insert_invocation,),
+                state_transitions=(),
+                instruction_addresses=self._function_instruction_addresses(
+                    publisher_call.target
+                ),
+                span_keys=span_keys(publisher_call.target),
+                function_sha256=self._producer_function_fingerprint(
+                    publisher_call.target
+                ),
+            ),
+            _PublicationPrivateArenaTransfer(
+                function_entry=remover_entry,
+                role="ring-remove",
+                invocations=remover_invocations,
+                state_transitions=(),
+                instruction_addresses=self._function_instruction_addresses(
+                    remover_entry
+                ),
+                span_keys=span_keys(remover_entry),
+                function_sha256=self._producer_function_fingerprint(remover_entry),
+            ),
+            _PublicationPrivateArenaTransfer(
+                function_entry=contract.large_allocator,
+                role="ring-rotate",
+                invocations=rotate_invocations,
+                state_transitions=(),
+                instruction_addresses=(rotation_write[0],),
+                span_keys=span_keys(contract.large_allocator),
+                function_sha256=self._producer_function_fingerprint(
+                    contract.large_allocator
+                ),
+            ),
+        )
+        updated_layout = replace(layout, page_link_offsets=link_offsets)
+        role = _PublicationPrivatePageRingRole(
+            head_slot=head_slot,
+            provider_entry=contract.page_provider,
+            inserter_entry=publisher_call.target,
+            remover_entry=remover_entry,
+            provider_calls=tuple(call.address for call in large_provider_calls),
+            selector_page_calls=tuple(row.call_address for row in selector_invocations),
+            selector_request_calls=tuple(
+                row.call_address for row in selector_invocations
+            ),
+            selector_invocations=selector_invocations,
+            head_reads=tuple(sorted(head_reads)),
+            head_writes=tuple(sorted(head_writes)),
+            ring_link_reads=tuple(
+                sorted(
+                    span.instruction_address
+                    for span in spans
+                    if span.access in {"read", "read-write"}
+                )
+            ),
+            ring_link_writes=tuple(
+                sorted(
+                    span.instruction_address
+                    for span in spans
+                    if span.access in {"write", "read-write"}
+                )
+            ),
+        )
+        return _PublicationPrivatePageRingEvidence(
+            layout=updated_layout,
+            role=role,
+            transfers=transfers,
+            spans=spans,
+        )
+
 
     def _publication_private_heap_effect_closure_replay(
         self,
