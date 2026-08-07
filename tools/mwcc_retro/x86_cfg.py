@@ -4781,14 +4781,7 @@ class _DirectCfgRecovery:
             self.producer_dependency_collectors[-1].add(("dynamic-field", displacement))
 
     def _note_producer_absolute_reference_dependency(self, slot: int) -> None:
-        if (
-            self.producer_dependency_collectors
-            and self.object_tag_lifecycle_evaluation_contexts
-            and self.object_tag_lifecycle_evaluation_contexts[
-                -1
-            ].analysis_semantics
-            == _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS
-        ):
+        if self.producer_dependency_collectors:
             self.producer_dependency_collectors[-1].add(
                 ("absolute-reference", slot)
             )
@@ -26296,7 +26289,11 @@ class _DirectCfgRecovery:
                     head_writes.add(address)
         if not head_reads or not head_writes:
             return None
+        reference_inventory = self._publication_reference_inventory(head_slot)
+        if reference_inventory is None:
+            return None
         self._note_producer_global_slot_dependency(head_slot)
+        self._note_producer_absolute_reference_dependency(head_slot)
         for entry in allowed_head_owners | {selector_entry}:
             self._note_producer_dependency(entry)
 

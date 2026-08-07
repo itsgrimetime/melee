@@ -5380,6 +5380,60 @@ def private_page_arena_image(
     )
 
 
+def private_page_ring_absolute_reference_image(
+    mutation: str,
+) -> PrivatePageArenaFixture:
+    """Change only an exact or unrelated page-head reference seam."""
+    assert mutation in {
+        "typed-data-reference",
+        "typed-data-reference-removed",
+        "unowned-executable-reference",
+        "unrelated-data-value",
+    }
+    fixture = private_page_arena_image()
+    image = fixture.arena.image
+    raw = bytearray(image.data)
+    relocations = list(image.relocations)
+
+    if mutation == "unowned-executable-reference":
+        reference = fixture.page_inserter + 0x34
+        section = next(
+            row
+            for row in image.sections
+            if row.va <= reference < row.va + row.raw_size
+        )
+        raw_offset = section.raw_offset + reference - section.va
+        assert raw[raw_offset : raw_offset + 4] == b"\x90" * 4
+        raw[raw_offset : raw_offset + 4] = fixture.page_head_slot.to_bytes(
+            4,
+            "little",
+        )
+    else:
+        data_section = next(
+            row for row in image.sections if row.name == ".data"
+        )
+        reference = data_section.va + 0x300
+        assert reference + 4 <= data_section.va + data_section.raw_size
+        raw_offset = data_section.raw_offset + reference - data_section.va
+        assert raw[raw_offset : raw_offset + 4] == b"\x00" * 4
+        value = (
+            fixture.page_head_slot + 4
+            if mutation == "unrelated-data-value"
+            else fixture.page_head_slot
+        )
+        raw[raw_offset : raw_offset + 4] = value.to_bytes(4, "little")
+        if mutation in {"typed-data-reference", "unrelated-data-value"}:
+            relocations.append(pe_mod.Relocation(reference, 3))
+
+    updated_image = replace(
+        image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+        relocations=tuple(sorted(relocations, key=lambda row: (row.va, row.type))),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=updated_image))
+
+
 def private_page_ring_register_head_image(
     *,
     partial_head_test: bool = False,
@@ -6723,6 +6777,129 @@ def private_page_ring_task3_evidence(fixture):
         extent,
         layout,
     )
+
+
+def private_page_ring_absolute_reference_prerequisites(fixture):
+    """Prove a reference-only mutation reaches the unchanged Task 3 seam."""
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    assert recovery._publication_private_heap_effect_closure_is_current(
+        effects
+    )
+    assert len(effects.symbolic_writes) == 13
+    assert len(effects.terminal_symbolic_memory) == 9
+    layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert layout is not None
+    assert layout.page_link_offsets is None
+
+    baseline = private_page_arena_image()
+    baseline_recovery, baseline_contract, baseline_extent, baseline_effects = (
+        private_page_arena_contract(baseline)
+    )
+    baseline_layout = baseline_recovery._publication_private_page_layout(
+        baseline_contract,
+        baseline_extent,
+        baseline_effects,
+    )
+    assert baseline_layout is not None
+    assert layout == baseline_layout
+    assert extent == baseline_extent
+    for function_entry, baseline_entry in (
+        (fixture.page_inserter, baseline.page_inserter),
+        (fixture.selector, baseline.selector),
+        (fixture.page_remover, baseline.page_remover),
+    ):
+        addresses = recovery._function_instruction_addresses(function_entry)
+        baseline_addresses = baseline_recovery._function_instruction_addresses(
+            baseline_entry
+        )
+        assert tuple(addresses) == tuple(baseline_addresses)
+        assert tuple(
+            recovery.instructions[address].bytes_hex for address in addresses
+        ) == tuple(
+            baseline_recovery.instructions[address].bytes_hex
+            for address in baseline_addresses
+        )
+        assert recovery._producer_function_fingerprint(
+            function_entry
+        ) == baseline_recovery._producer_function_fingerprint(baseline_entry)
+        assert recovery._raw_direct_call_sites(
+            function_entry
+        ) == baseline_recovery._raw_direct_call_sites(baseline_entry)
+        assert set(
+            recovery.direct_call_sources_by_target.get(function_entry, ())
+        ) == set(
+            baseline_recovery.direct_call_sources_by_target.get(
+                baseline_entry,
+                (),
+            )
+        )
+
+    def head_accesses(candidate):
+        accesses = []
+        for address in sorted(candidate.instructions):
+            decoded = candidate._owned_decoded(address)
+            for operand_index, operand in enumerate(decoded.operands):
+                if operand.type != capstone.x86.X86_OP_MEM:
+                    continue
+                absolute = candidate._absolute_memory_operand(operand)
+                memory = operand.mem
+                overlaps = (
+                    absolute is not None
+                    and absolute < fixture.page_head_slot + 4
+                    and fixture.page_head_slot
+                    < absolute + max(operand.size, 1)
+                )
+                indexed = (
+                    memory.segment == capstone.x86.X86_REG_INVALID
+                    and memory.base == capstone.x86.X86_REG_INVALID
+                    and memory.index != capstone.x86.X86_REG_INVALID
+                    and memory.disp & 0xFFFF_FFFF
+                    == fixture.page_head_slot
+                )
+                if overlaps or indexed:
+                    accesses.append(
+                        (
+                            address,
+                            operand_index,
+                            operand.size,
+                            operand.access,
+                            absolute,
+                            indexed,
+                        )
+                    )
+        return tuple(accesses)
+
+    assert head_accesses(recovery) == head_accesses(baseline_recovery)
+    baseline_evidence = (
+        baseline_recovery._publication_private_page_ring_role(
+            baseline_contract,
+            baseline_extent,
+            baseline_layout,
+        )
+    )
+    assert baseline_evidence is not None
+    return recovery, contract, extent, effects, layout, baseline_evidence
+
+
+def private_page_ring_absolute_reference_evidence(fixture):
+    """Collect the durable dependencies emitted by Task 3 ring recovery."""
+    prerequisites = private_page_ring_absolute_reference_prerequisites(fixture)
+    recovery, contract, extent, _, layout, baseline_evidence = prerequisites
+    dependencies = set()
+    recovery.producer_dependency_collectors.append(dependencies)
+    try:
+        evidence = recovery._publication_private_page_ring_role(
+            contract,
+            extent,
+            layout,
+        )
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is dependencies
+    return recovery, evidence, baseline_evidence, dependencies
 
 
 def private_page_ring_link_offset_bounds_prerequisites(fixture):
@@ -15542,6 +15719,249 @@ def test_private_page_ring_proves_both_selector_page_arguments():
     assert ring_evidence.spans
     span_keys = {(span.function_entry, span.instruction_address, span.operand_index) for span in ring_evidence.spans}
     assert all(key in span_keys for transfer in ring_evidence.transfers for key in transfer.span_keys)
+
+
+def test_private_page_ring_absolute_reference_dependency_tracks_exact_inventory():
+    """Task 3 retains distinct slot-writer and exact-reference keys."""
+    baseline = private_page_arena_image()
+    typed = private_page_ring_absolute_reference_image(
+        "typed-data-reference"
+    )
+    baseline_result = private_page_ring_absolute_reference_evidence(baseline)
+    typed_result = private_page_ring_absolute_reference_evidence(typed)
+    baseline_recovery, baseline_evidence, baseline_expected, baseline_deps = (
+        baseline_result
+    )
+    typed_recovery, typed_evidence, typed_expected, typed_deps = typed_result
+    assert baseline_evidence is not None
+    assert typed_evidence is not None
+    assert baseline_evidence == baseline_expected
+    assert typed_evidence == typed_expected == baseline_evidence
+    assert {field.name for field in fields(baseline_evidence)} == {
+        "layout",
+        "role",
+        "transfers",
+        "spans",
+    }
+
+    data_section = next(
+        row for row in typed.arena.image.sections if row.name == ".data"
+    )
+    reference = data_section.va + 0x300
+    assert private_page_image_changed_addresses(baseline, typed) == {
+        reference,
+        reference + 1,
+        reference + 2,
+    }
+    assert set(typed.arena.image.relocations) - set(
+        baseline.arena.image.relocations
+    ) == {pe_mod.Relocation(reference, 3)}
+
+    baseline_inventory = baseline_recovery._publication_reference_inventory(
+        baseline.page_head_slot
+    )
+    typed_inventory = typed_recovery._publication_reference_inventory(
+        typed.page_head_slot
+    )
+    assert baseline_inventory is not None
+    assert typed_inventory is not None
+    assert len(typed_inventory.rows) == len(baseline_inventory.rows) + 1
+    added = next(
+        row
+        for row in typed_inventory.rows
+        if row.reference_start == reference
+    )
+    assert added.relocation_type == 3
+    assert added.reference_class == "type-3-relocation"
+    assert added.source.kind == "typed-data"
+
+    expected_keys = {
+        ("global-slot", baseline.page_head_slot),
+        ("absolute-reference", baseline.page_head_slot),
+    }
+    assert expected_keys <= baseline_deps
+    assert expected_keys <= typed_deps
+    baseline_recovery.producer_dependency_collectors.append(baseline_deps)
+    try:
+        baseline_recovery._note_producer_absolute_reference_dependency(
+            baseline.page_head_slot
+        )
+        baseline_recovery._note_producer_absolute_reference_dependency(
+            baseline.page_head_slot
+        )
+    finally:
+        assert (
+            baseline_recovery.producer_dependency_collectors.pop()
+            is baseline_deps
+        )
+    assert sum(
+        dependency == ("absolute-reference", baseline.page_head_slot)
+        for dependency in baseline_deps
+    ) == 1
+
+    baseline_snapshot = baseline_recovery._producer_dependency_snapshot(
+        baseline_deps
+    )
+    typed_snapshot = typed_recovery._producer_dependency_snapshot(typed_deps)
+    assert baseline_snapshot == tuple(sorted(set(baseline_snapshot)))
+    assert typed_snapshot == tuple(sorted(set(typed_snapshot)))
+    baseline_head = {
+        kind: fingerprint
+        for kind, identifier, fingerprint in baseline_snapshot
+        if identifier == baseline.page_head_slot
+        and kind in {"global-slot", "absolute-reference"}
+    }
+    typed_head = {
+        kind: fingerprint
+        for kind, identifier, fingerprint in typed_snapshot
+        if identifier == typed.page_head_slot
+        and kind in {"global-slot", "absolute-reference"}
+    }
+    assert baseline_head["absolute-reference"] == baseline_inventory.sha256
+    assert typed_head["absolute-reference"] == typed_inventory.sha256
+    assert baseline_head["global-slot"] == typed_head["global-slot"]
+    assert (
+        baseline_head["absolute-reference"]
+        != typed_head["absolute-reference"]
+    )
+
+
+def test_private_page_ring_absolute_reference_dependency_binds_relocation():
+    """Removing only reference typing restores the prior inventory digest."""
+    baseline = private_page_arena_image()
+    typed = private_page_ring_absolute_reference_image(
+        "typed-data-reference"
+    )
+    removed = private_page_ring_absolute_reference_image(
+        "typed-data-reference-removed"
+    )
+    data_section = next(
+        row for row in typed.arena.image.sections if row.name == ".data"
+    )
+    reference = data_section.va + 0x300
+    assert typed.arena.image.read(reference, 4) == removed.arena.image.read(
+        reference,
+        4,
+    )
+    assert set(typed.arena.image.relocations) - set(
+        removed.arena.image.relocations
+    ) == {pe_mod.Relocation(reference, 3)}
+
+    baseline_recovery, baseline_evidence, _, baseline_deps = (
+        private_page_ring_absolute_reference_evidence(baseline)
+    )
+    removed_recovery, removed_evidence, _, removed_deps = (
+        private_page_ring_absolute_reference_evidence(removed)
+    )
+    typed_recovery, typed_evidence, _, typed_deps = (
+        private_page_ring_absolute_reference_evidence(typed)
+    )
+    assert baseline_evidence == removed_evidence == typed_evidence
+    baseline_inventory = baseline_recovery._publication_reference_inventory(
+        baseline.page_head_slot
+    )
+    removed_inventory = removed_recovery._publication_reference_inventory(
+        removed.page_head_slot
+    )
+    typed_inventory = typed_recovery._publication_reference_inventory(
+        typed.page_head_slot
+    )
+    assert baseline_inventory is not None
+    assert removed_inventory is not None
+    assert typed_inventory is not None
+    assert removed_inventory.sha256 == baseline_inventory.sha256
+    assert typed_inventory.sha256 != baseline_inventory.sha256
+    for recovery, dependencies, inventory in (
+        (baseline_recovery, baseline_deps, baseline_inventory),
+        (removed_recovery, removed_deps, removed_inventory),
+        (typed_recovery, typed_deps, typed_inventory),
+    ):
+        snapshot = recovery._producer_dependency_snapshot(dependencies)
+        absolute = next(
+            row
+            for row in snapshot
+            if row[:2] == ("absolute-reference", baseline.page_head_slot)
+        )
+        assert absolute[2] == inventory.sha256
+
+
+def test_private_page_ring_absolute_reference_dependency_rejects_ambiguity():
+    """Unowned executable bytes equal to the head slot fail closed."""
+    fixture = private_page_ring_absolute_reference_image(
+        "unowned-executable-reference"
+    )
+    recovery, contract, extent, _, layout, baseline_evidence = (
+        private_page_ring_absolute_reference_prerequisites(fixture)
+    )
+    reference = fixture.page_inserter + 0x34
+    assert fixture.arena.image.read(reference, 4) == (
+        fixture.page_head_slot.to_bytes(4, "little")
+    )
+    assert all(
+        address not in recovery.byte_owners
+        for address in range(reference, reference + 4)
+    )
+    assert all(
+        row.va != reference for row in fixture.arena.image.relocations
+    )
+    assert recovery._publication_reference_inventory(
+        fixture.page_head_slot
+    ) is None
+    assert baseline_evidence is not None
+
+    dependencies = set()
+    recovery.producer_dependency_collectors.append(dependencies)
+    try:
+        evidence = recovery._publication_private_page_ring_role(
+            contract,
+            extent,
+            layout,
+        )
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is dependencies
+    assert evidence is None
+    assert (
+        "absolute-reference",
+        fixture.page_head_slot,
+    ) not in dependencies
+    with pytest.raises(CfgRecoveryError, match="inventory is ambiguous"):
+        recovery._producer_dependency_fingerprint(
+            "absolute-reference",
+            fixture.page_head_slot,
+        )
+
+
+def test_private_page_ring_absolute_reference_dependency_ignores_other_value():
+    """A relocated word not equal to the head slot is not a dependency row."""
+    baseline = private_page_arena_image()
+    unrelated = private_page_ring_absolute_reference_image(
+        "unrelated-data-value"
+    )
+    baseline_recovery, baseline_evidence, _, baseline_deps = (
+        private_page_ring_absolute_reference_evidence(baseline)
+    )
+    unrelated_recovery, unrelated_evidence, _, unrelated_deps = (
+        private_page_ring_absolute_reference_evidence(unrelated)
+    )
+    baseline_inventory = baseline_recovery._publication_reference_inventory(
+        baseline.page_head_slot
+    )
+    unrelated_inventory = unrelated_recovery._publication_reference_inventory(
+        unrelated.page_head_slot
+    )
+    assert baseline_inventory is not None
+    assert unrelated_inventory is not None
+    assert unrelated_inventory.sha256 == baseline_inventory.sha256
+    assert unrelated_evidence == baseline_evidence
+    assert baseline_recovery._producer_dependency_fingerprint(
+        "absolute-reference",
+        baseline.page_head_slot,
+    ) == unrelated_recovery._producer_dependency_fingerprint(
+        "absolute-reference",
+        unrelated.page_head_slot,
+    )
+    assert ("absolute-reference", baseline.page_head_slot) in baseline_deps
+    assert ("absolute-reference", unrelated.page_head_slot) in unrelated_deps
 
 
 @pytest.mark.parametrize(
