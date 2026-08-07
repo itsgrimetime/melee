@@ -1858,6 +1858,78 @@ class _PublicationPrivatePageLayout:
     minimum_split_remainder: int | None
 
 
+def _publication_private_page_link_offsets_are_bounded(
+    offsets: tuple[int, int],
+    layout: _PublicationPrivatePageLayout,
+    extent: _PublicationPrivateHeapExtentWitness,
+) -> bool:
+    """Keep exact width-four page links inside unclaimed header space."""
+    field_width = 4
+    if (
+        len(offsets) != 2
+        or any(type(offset) is not int for offset in offsets)
+        or any(
+            type(value) is not int
+            or value < 0
+            or value > 0x1_0000_0000
+            for value in (layout.first_block_offset, extent.minimum_extent)
+        )
+        or any(
+            type(value) is not int
+            or value < 0
+            or value > 0x1_0000_0000 - field_width
+            for value in (
+                layout.page_largest_free_offset,
+                layout.page_extent_offset,
+            )
+        )
+    ):
+        return False
+
+    def span(offset: int) -> tuple[int, int] | None:
+        if (
+            offset < 0
+            or offset % field_width
+            or offset > 0x1_0000_0000 - field_width
+        ):
+            return None
+        end = offset + field_width
+        if (
+            end > layout.first_block_offset
+            or end > extent.minimum_extent
+        ):
+            return None
+        return offset, end
+
+    def overlaps(
+        left: tuple[int, int],
+        right: tuple[int, int],
+    ) -> bool:
+        return left[0] < right[1] and right[0] < left[1]
+
+    link_spans = tuple(span(offset) for offset in offsets)
+    if any(row is None for row in link_spans):
+        return False
+    exact_link_spans = tuple(row for row in link_spans if row is not None)
+    if overlaps(exact_link_spans[0], exact_link_spans[1]):
+        return False
+    fixed_spans = (
+        (
+            layout.page_largest_free_offset,
+            layout.page_largest_free_offset + field_width,
+        ),
+        (
+            layout.page_extent_offset,
+            layout.page_extent_offset + field_width,
+        ),
+    )
+    return not any(
+        overlaps(link_span, fixed_span)
+        for link_span in exact_link_spans
+        for fixed_span in fixed_spans
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _PublicationPrivateArenaBlockState:
     allocation: Literal["none", "free", "allocated"]
@@ -25700,10 +25772,10 @@ class _DirectCfgRecovery:
                     and row[6] == 4
                 }
                 links = tuple(sorted(page_self_writes & ring_page_writes))
-                if (
-                    len(links) != 2
-                    or links[0] == links[1]
-                    or any(offset % 4 for offset in links)
+                if not _publication_private_page_link_offsets_are_bounded(
+                    links,
+                    layout,
+                    extent,
                 ):
                     continue
                 for oriented_links in (links, (links[1], links[0])):
@@ -25712,12 +25784,25 @@ class _DirectCfgRecovery:
                         slot,
                         oriented_links,
                     )
-                    if proof is not None:
+                    if (
+                        proof is not None
+                        and _publication_private_page_link_offsets_are_bounded(
+                            proof["link_offsets"],
+                            layout,
+                            extent,
+                        )
+                    ):
                         publisher_candidates.append((call, slot, proof))
         if len(publisher_candidates) != 1:
             return None
         publisher_call, head_slot, publisher = publisher_candidates[0]
         link_offsets = publisher["link_offsets"]
+        if not _publication_private_page_link_offsets_are_bounded(
+            link_offsets,
+            layout,
+            extent,
+        ):
+            return None
 
         deallocator_paths: dict[int, tuple[int, ...]] = {}
         if contract.deallocator_root is not None:

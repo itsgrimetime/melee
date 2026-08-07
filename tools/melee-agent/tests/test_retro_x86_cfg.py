@@ -6111,6 +6111,308 @@ def private_page_ring_remover_invocation_image(
     return updated
 
 
+def private_page_ring_link_offsets_image(
+    previous_offset: int,
+    next_offset: int,
+) -> PrivatePageArenaFixture:
+    """Rebuild every ring role with one coherent pair of link offsets."""
+    assert type(previous_offset) is int
+    assert type(next_offset) is int
+    assert all(
+        -(1 << 31) <= value < (1 << 31)
+        for value in (previous_offset, next_offset)
+    )
+    fixture = private_page_arena_image()
+    raw = bytearray(fixture.arena.image.data)
+    register = {
+        "eax": 0,
+        "ecx": 1,
+        "edx": 2,
+        "ebx": 3,
+        "esi": 6,
+    }
+
+    def memory_instruction(
+        opcode: int,
+        register_name: str,
+        base_name: str,
+        displacement: int,
+        trailing: bytes = b"",
+    ) -> bytes:
+        base = register[base_name]
+        if displacement == 0:
+            mode = 0
+            encoded_displacement = b""
+        elif -0x80 <= displacement <= 0x7F:
+            mode = 1
+            encoded_displacement = displacement.to_bytes(
+                1, "little", signed=True
+            )
+        else:
+            mode = 2
+            encoded_displacement = displacement.to_bytes(
+                4, "little", signed=True
+            )
+        modrm = (mode << 6) | (register[register_name] << 3) | base
+        return bytes((opcode, modrm)) + encoded_displacement + trailing
+
+    def load(
+        destination: str,
+        base: str,
+        displacement: int,
+    ) -> bytes:
+        return memory_instruction(
+            0x8B,
+            destination,
+            base,
+            displacement,
+        )
+
+    def store(base: str, displacement: int, source: str) -> bytes:
+        return memory_instruction(
+            0x89,
+            source,
+            base,
+            displacement,
+        )
+
+    def store_immediate(base: str, displacement: int, value: int) -> bytes:
+        return memory_instruction(
+            0xC7,
+            "eax",
+            base,
+            displacement,
+            value.to_bytes(4, "little"),
+        )
+
+    def build_function(
+        entry: int,
+        limit: int,
+        build,
+    ) -> tuple[bytes, dict[str, int]]:
+        code = bytearray()
+        labels: dict[str, int] = {}
+        branches: list[tuple[int, str]] = []
+
+        def emit(value: str | bytes) -> int:
+            start = len(code)
+            code.extend(
+                bytes.fromhex(value) if isinstance(value, str) else value
+            )
+            return start
+
+        def mark(label: str) -> None:
+            assert label not in labels
+            labels[label] = len(code)
+
+        def branch(opcode: int, label: str) -> None:
+            start = emit(bytes((opcode, 0)))
+            branches.append((start, label))
+
+        def call(target: int, calls: list[int]) -> None:
+            address = entry + len(code)
+            displacement = target - address - 5
+            emit(b"\xe8" + displacement.to_bytes(4, "little", signed=True))
+            calls.append(address)
+
+        build(emit, mark, branch, call)
+        for start, label in branches:
+            displacement = labels[label] - start - 2
+            assert -0x80 <= displacement <= 0x7F
+            code[start + 1] = displacement & 0xFF
+        assert len(code) <= limit - entry
+        return bytes(code), labels
+
+    head = fixture.page_head_slot.to_bytes(4, "little")
+    selector_calls = []
+    provider_calls = []
+
+    def build_large(emit, mark, branch, call) -> None:
+        emit("53 56 57 8b 5c 24 10")
+        emit("8d 5b 0f 83 e3 f8 83 fb 50")
+        branch(0x73, "request-ready")
+        emit("bb 50 00 00 00")
+        mark("request-ready")
+        emit(b"\x8b\x35" + head)
+        emit("85 f6")
+        branch(0x75, "have-ring")
+        emit("53")
+        call(fixture.page_provider, provider_calls)
+        emit("59 85 c0")
+        branch(0x74, "failure")
+        emit("89 c6 31 ff")
+        branch(0xEB, "selector-join")
+        mark("have-ring")
+        emit("89 f7")
+        mark("selector-join")
+        emit("53 56")
+        call(fixture.selector, selector_calls)
+        emit("59 59 85 c0")
+        branch(0x75, "ring-rotate")
+        emit("85 ff")
+        branch(0x74, "failure")
+        emit(load("esi", "esi", next_offset))
+        emit("39 fe")
+        branch(0x75, "selector-join")
+        emit("53")
+        call(fixture.page_provider, provider_calls)
+        emit("59 85 c0")
+        branch(0x74, "failure")
+        emit("89 c6 53 56")
+        call(fixture.selector, selector_calls)
+        emit("59 59 85 c0")
+        branch(0x74, "failure")
+        mark("success")
+        emit("83 c0 08 5f 5e 5b c3")
+        mark("ring-rotate")
+        emit(b"\x89\x35" + head)
+        branch(0xEB, "success")
+        mark("failure")
+        emit("31 c0 5f 5e 5b c3")
+
+    def build_publisher(emit, mark, branch, _call) -> None:
+        emit(b"\x83\x3d" + head + b"\x00")
+        emit("8b 54 24 04")
+        branch(0x74, "singleton")
+        emit(b"\x8b\x0d" + head)
+        emit(load("eax", "ecx", previous_offset))
+        emit(store("edx", previous_offset, "eax"))
+        emit(store("eax", next_offset, "edx"))
+        emit(store("edx", next_offset, "ecx"))
+        emit(store("ecx", previous_offset, "edx"))
+        emit(b"\x89\x15" + head)
+        branch(0xEB, "done")
+        mark("singleton")
+        emit(b"\x89\x15" + head)
+        emit(store("edx", previous_offset, "edx"))
+        emit(store("edx", next_offset, "edx"))
+        mark("done")
+        emit("c3")
+
+    def build_remover(emit, mark, branch, _call) -> None:
+        emit("53 8b 5c 24 08")
+        emit(load("eax", "ebx", previous_offset))
+        emit("39 d8")
+        branch(0x75, "nonempty")
+        emit(b"\xc7\x05" + head + b"\x00\x00\x00\x00")
+        branch(0xEB, "removed")
+        mark("nonempty")
+        emit(load("edx", "ebx", next_offset))
+        emit(store("edx", previous_offset, "eax"))
+        emit(store("eax", next_offset, "edx"))
+        emit(b"\x3b\x1d" + head)
+        branch(0x75, "removed")
+        emit(b"\xa3" + head)
+        mark("removed")
+        emit(store_immediate("ebx", previous_offset, 0))
+        emit(store_immediate("ebx", next_offset, 0))
+        emit("5b c3")
+
+    replacements = (
+        (
+            fixture.large_allocator,
+            fixture.page_provider,
+            build_function(
+                fixture.large_allocator,
+                fixture.page_provider,
+                build_large,
+            )[0],
+        ),
+        (
+            fixture.page_inserter,
+            fixture.page_inserter + 0x40,
+            build_function(
+                fixture.page_inserter,
+                fixture.page_inserter + 0x40,
+                build_publisher,
+            )[0],
+        ),
+        (
+            fixture.page_remover,
+            fixture.page_remover + 0x80,
+            build_function(
+                fixture.page_remover,
+                fixture.page_remover + 0x80,
+                build_remover,
+            )[0],
+        ),
+    )
+    for entry, limit, code in replacements:
+        section = next(
+            section
+            for section in fixture.arena.image.sections
+            if section.va <= entry < section.va + section.raw_size
+        )
+        raw_offset = section.raw_offset + entry - section.va
+        slot_size = limit - entry
+        raw[raw_offset : raw_offset + slot_size] = code + b"\x90" * (
+            slot_size - len(code)
+        )
+
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    updated = replace(
+        fixture,
+        arena=replace(fixture.arena, image=image),
+        selector_calls=tuple(selector_calls),
+    )
+    changed = private_page_image_changed_addresses(fixture, updated)
+    assert changed <= {
+        *range(fixture.large_allocator, fixture.page_provider),
+        *range(fixture.page_inserter, fixture.page_inserter + 0x40),
+        *range(fixture.page_remover, fixture.page_remover + 0x80),
+    }
+
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        replace(
+            generous_limits(image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+
+    def relative_displacements(entry: int) -> tuple[int, ...]:
+        return tuple(
+            operand.mem.disp
+            for address in recovery._function_instruction_addresses(entry)
+            for decoded in (recovery._owned_decoded(address),)
+            if decoded.mnemonic == "mov"
+            for operand in decoded.operands
+            if operand.type == capstone.x86.X86_OP_MEM
+            and operand.size == 4
+            and operand.mem.segment == capstone.x86.X86_REG_INVALID
+            and operand.mem.base != capstone.x86.X86_REG_INVALID
+            and recovery._register_family(operand.mem.base) != "esp"
+        )
+
+    assert Counter(relative_displacements(fixture.page_inserter)) == Counter(
+        [previous_offset] * 4 + [next_offset] * 3
+    )
+    assert Counter(relative_displacements(fixture.large_allocator)) == Counter(
+        [next_offset]
+    )
+    assert Counter(relative_displacements(fixture.page_remover)) == Counter(
+        [previous_offset] * 3 + [next_offset] * 3
+    )
+    assert tuple(
+        call.address
+        for call in recovery._function_direct_calls(fixture.large_allocator)
+        if call.target == fixture.selector
+    ) == tuple(selector_calls)
+    assert tuple(
+        call.address
+        for call in recovery._function_direct_calls(fixture.large_allocator)
+        if call.target == fixture.page_provider
+    ) == tuple(provider_calls)
+    return updated
+
+
 def private_page_ring_remover_path_image(
     mutation: str | None = None,
 ) -> PrivatePageArenaFixture:
@@ -6421,6 +6723,53 @@ def private_page_ring_task3_evidence(fixture):
         extent,
         layout,
     )
+
+
+def private_page_ring_link_offset_bounds_prerequisites(fixture):
+    """Require intact Task 1/2 and exact incoming remover call facts."""
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    assert recovery._publication_private_heap_effect_closure_is_current(
+        effects
+    )
+    assert len(effects.symbolic_writes) == 13
+    assert len(effects.terminal_symbolic_memory) == 9
+    layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert layout is not None
+    assert layout.page_link_offsets is None
+
+    baseline = private_page_arena_image()
+    baseline_recovery, baseline_contract, baseline_extent, baseline_effects = (
+        private_page_arena_contract(baseline)
+    )
+    baseline_layout = baseline_recovery._publication_private_page_layout(
+        baseline_contract,
+        baseline_extent,
+        baseline_effects,
+    )
+    assert baseline_layout is not None
+    assert layout == baseline_layout
+    assert extent.minimum_extent == baseline_extent.minimum_extent
+
+    decoded = tuple(
+        sorted(
+            recovery.direct_call_sources_by_target.get(
+                fixture.page_remover,
+                (),
+            )
+        )
+    )
+    raw = tuple(sorted(recovery._raw_direct_call_sites(fixture.page_remover)))
+    assert decoded == (fixture.arena_free + 0x45,)
+    assert raw == decoded
+    pushed = recovery._pushed_call_argument(decoded[0], 0)
+    assert pushed is not None
+    assert pushed[0].address == fixture.arena_free + 0x44
+    assert pushed[1].size == 4
+    return recovery, contract, extent, effects, layout
 
 
 def private_page_ring_remover_invocation_prerequisites(fixture):
@@ -15322,6 +15671,196 @@ def test_private_page_ring_selector_selected_page_identity_accepts_same_node(
     assert tuple(row.call_address for row in rotation.invocations) == (
         fixture.selector_calls[0],
     )
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "negative-aligned",
+        "largest-free-overlap",
+        "extent-overlap",
+        "first-block-start",
+        "initial-block-header",
+        "initial-block-page-flags",
+        "initial-block-prev",
+        "initial-block-next",
+        "block-arena-interior",
+        "minimum-extent-tail",
+        "minimum-extent-end",
+        "dynamic-end-tag",
+        "dynamic-sentinel",
+    ),
+)
+def test_private_page_ring_link_offset_bounds_rejects_spatial_collision(case):
+    """A coherent ring relation cannot overlap non-link page storage."""
+    baseline = private_page_ring_link_offsets_image(0, 4)
+    _, _, baseline_extent, _, baseline_layout = (
+        private_page_ring_link_offset_bounds_prerequisites(baseline)
+    )
+    offsets = {
+        "negative-aligned": -4,
+        "largest-free-overlap": baseline_layout.page_largest_free_offset,
+        "extent-overlap": baseline_layout.page_extent_offset,
+        "first-block-start": baseline_layout.first_block_offset,
+        "initial-block-header": (
+            baseline_layout.first_block_offset
+            + baseline_layout.block_header_offset
+        ),
+        "initial-block-page-flags": (
+            baseline_layout.first_block_offset
+            + baseline_layout.block_page_flags_offset
+        ),
+        "initial-block-prev": (
+            baseline_layout.first_block_offset
+            + baseline_layout.block_prev_offset
+        ),
+        "initial-block-next": (
+            baseline_layout.first_block_offset
+            + baseline_layout.block_next_offset
+        ),
+        "block-arena-interior": baseline_layout.first_block_offset + 0x6C,
+        "minimum-extent-tail": baseline_extent.minimum_extent - 4,
+        "minimum-extent-end": baseline_extent.minimum_extent,
+        "dynamic-end-tag": (
+            baseline_extent.minimum_extent
+            + baseline_layout.page_end_tag_displacement
+        ),
+        "dynamic-sentinel": (
+            baseline_extent.minimum_extent
+            + baseline_layout.end_sentinel_displacement
+        ),
+    }
+    hostile_offset = offsets[case]
+    assert hostile_offset % 4 == 0
+    if case == "block-arena-interior":
+        assert (
+            baseline_layout.first_block_offset
+            < hostile_offset
+            < baseline_extent.minimum_extent
+        )
+    hostile = private_page_ring_link_offsets_image(0, hostile_offset)
+    changed = private_page_image_changed_addresses(baseline, hostile)
+    assert changed
+    if -0x80 <= hostile_offset <= 0x7F:
+        assert changed == {
+            baseline.large_allocator + 0x47,
+            baseline.page_inserter + 0x19,
+            baseline.page_inserter + 0x1C,
+            baseline.page_inserter + 0x31,
+            baseline.page_remover + 0x19,
+            baseline.page_remover + 0x1E,
+            baseline.page_remover + 0x34,
+        }
+    recovery, contract, extent, _, layout = (
+        private_page_ring_link_offset_bounds_prerequisites(hostile)
+    )
+
+    assert recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    ) is None
+
+
+def test_private_page_ring_link_offset_bounds_interval_validator():
+    """The width-four half-open rule is symmetric and non-overlapping."""
+    fixture = private_page_arena_image()
+    _, _, extent, _, layout = (
+        private_page_ring_link_offset_bounds_prerequisites(fixture)
+    )
+    validate = x86_cfg_module._publication_private_page_link_offsets_are_bounded
+    assert validate((0, 4), layout, extent)
+    for hostile in {
+        -4,
+        layout.page_largest_free_offset,
+        layout.page_extent_offset,
+        layout.first_block_offset,
+        layout.first_block_offset + layout.block_header_offset,
+        layout.first_block_offset + layout.block_page_flags_offset,
+        layout.first_block_offset + layout.block_prev_offset,
+        layout.first_block_offset + layout.block_next_offset,
+        layout.first_block_offset + 0x6C,
+        extent.minimum_extent + layout.page_end_tag_displacement,
+        extent.minimum_extent + layout.end_sentinel_displacement,
+        extent.minimum_extent - 4,
+        extent.minimum_extent,
+    }:
+        assert not validate((0, hostile), layout, extent)
+        assert not validate((hostile, 0), layout, extent)
+    assert not validate((0, 0), layout, extent)
+    assert not validate((0, 2), layout, extent)
+    assert not validate((False, 4), layout, extent)
+    assert not validate(
+        (0, 4),
+        replace(layout, first_block_offset=-1),
+        extent,
+    )
+    assert not validate(
+        (0, 4),
+        layout,
+        replace(extent, minimum_extent=-1),
+    )
+    assert not validate(
+        (0, layout.first_block_offset - 2),
+        layout,
+        extent,
+    )
+
+
+def test_private_page_ring_link_offset_bounds_preserves_canonical_evidence():
+    """Retail-like offsets remain structurally derived with exact evidence."""
+    fixture = private_page_arena_image()
+    recovery, contract, extent, effects, layout = (
+        private_page_ring_link_offset_bounds_prerequisites(fixture)
+    )
+
+    evidence = recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    )
+
+    assert evidence is not None
+    assert len(effects.symbolic_writes) == 13
+    assert len(effects.terminal_symbolic_memory) == 9
+    assert layout.page_link_offsets is None
+    assert evidence.layout.page_link_offsets == (0, 4)
+    assert len(evidence.spans) == 14
+    assert {row.role for row in evidence.transfers} == {
+        "ring-insert",
+        "ring-remove",
+        "ring-rotate",
+    }
+    remover = next(
+        row for row in evidence.transfers if row.role == "ring-remove"
+    )
+    assert remover.invocations == ()
+    assert tuple(
+        row.call_address for row in evidence.role.remover_call_obligations
+    ) == (fixture.arena_free + 0x45,)
+
+
+def test_private_page_ring_link_offset_bounds_accepts_swapped_orientation():
+    """Spatial validation does not choose previous/next semantic order."""
+    fixture = private_page_ring_link_offsets_image(4, 0)
+    recovery, contract, extent, _, layout = (
+        private_page_ring_link_offset_bounds_prerequisites(fixture)
+    )
+
+    evidence = recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    )
+
+    assert evidence is not None
+    assert evidence.layout.page_link_offsets == (4, 0)
+    assert len(evidence.spans) == 14
+    remover = next(
+        row for row in evidence.transfers if row.role == "ring-remove"
+    )
+    assert remover.invocations == ()
+    assert len(evidence.role.remover_call_obligations) == 1
 
 
 def assert_private_page_ring_remover_obligations(
