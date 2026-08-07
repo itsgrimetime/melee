@@ -22904,6 +22904,658 @@ class _DirectCfgRecovery:
                 "value": operand_value,
             }
 
+        def prove_publisher_transfer(
+            function_entry: int,
+            head_slot: int,
+            link_offsets: tuple[int, int],
+        ) -> dict[str, Any] | None:
+            """Prove both exact insertion arms and return their typed accesses."""
+            if (
+                function_entry not in self.function_addresses
+                or len(link_offsets) != 2
+                or link_offsets[0] == link_offsets[1]
+            ):
+                return None
+            link_a, link_b = link_offsets
+            following_entry = self._following_function_entry(function_entry)
+            page_identities = frozenset({"P", "H", "N"})
+            zero: Value = frozenset({"zero"})
+            page: Value = frozenset({"P"})
+            old_head: Value = frozenset({"H"})
+            next_page: Value = frozenset({"N"})
+            head_domain: Value = zero | old_head
+            scalar: Value = frozenset({"scalar"})
+            empty_registers = tuple(unknown for _ in _REGISTER_FAMILIES)
+            # State: initial head, registers, tracked memory, ordered events,
+            # last exact flag predicate, and the discriminator addresses.
+            initial_state = (
+                "unrefined",
+                empty_registers,
+                (),
+                (),
+                None,
+                (),
+            )
+            pending = [(function_entry, initial_state)]
+            seen = set()
+            returns = []
+            iterations = 0
+            state_cap = 256
+
+            def family_value(registers, register: int) -> Value:
+                family = self._register_family(register)
+                if family not in _REGISTER_FAMILIES:
+                    return unknown
+                return registers[_REGISTER_FAMILIES.index(family)]
+
+            def set_family(registers, register: int, value: Value):
+                family = self._register_family(register)
+                if family not in _REGISTER_FAMILIES or len(value) > 2:
+                    return None
+                output = list(registers)
+                output[_REGISTER_FAMILIES.index(family)] = value
+                return tuple(output)
+
+            def memory_value(memory, base: str, displacement: int):
+                return next(
+                    (
+                        value
+                        for row_base, row_displacement, value in memory
+                        if (row_base, row_displacement)
+                        == (base, displacement)
+                    ),
+                    None,
+                )
+
+            def set_memory(memory, base: str, displacement: int, value: Value):
+                rows = {
+                    (row_base, row_displacement): row_value
+                    for row_base, row_displacement, row_value in memory
+                }
+                rows[(base, displacement)] = value
+                return tuple(
+                    (row_base, row_displacement, row_value)
+                    for (row_base, row_displacement), row_value in sorted(
+                        rows.items()
+                    )
+                )
+
+            def exact_identity(value: Value) -> str | None:
+                if len(value) != 1:
+                    return None
+                identity = next(iter(value))
+                return identity if identity in page_identities else None
+
+            def initial_head_value(initial_head: str) -> Value:
+                if initial_head == "zero":
+                    return zero
+                if initial_head == "ring":
+                    return old_head
+                return head_domain
+
+            def head_overlap(operand) -> bool:
+                absolute = self._absolute_memory_operand(operand)
+                return bool(
+                    absolute is not None
+                    and absolute < head_slot + 4
+                    and head_slot < absolute + max(operand.size, 1)
+                )
+
+            def read_operand(
+                address: int,
+                operand_index: int,
+                operand,
+                initial_head: str,
+                registers,
+                memory,
+                events,
+            ):
+                if operand.type == X86_OP_REG:
+                    return family_value(registers, operand.reg), events
+                if operand.type == X86_OP_IMM:
+                    value = operand.imm & 0xFFFF_FFFF
+                    return (zero if value == 0 else scalar), events
+                if operand.type != X86_OP_MEM:
+                    return None
+                argument = self._stack_argument_index_at(
+                    address,
+                    operand,
+                    function_entry,
+                )
+                if argument is not None:
+                    return (page if argument == 0 else scalar), events
+                absolute = self._absolute_memory_operand(operand)
+                if head_overlap(operand):
+                    if absolute != head_slot or operand.size != 4:
+                        return None
+                    value = memory_value(memory, "head", 0)
+                    if value is None:
+                        value = initial_head_value(initial_head)
+                    return value, events + (
+                        (
+                            address,
+                            operand_index,
+                            "read",
+                            "head",
+                            0,
+                            value,
+                        ),
+                    )
+                memory_operand = operand.mem
+                if (
+                    memory_operand.base == X86_REG_INVALID
+                    and memory_operand.index != X86_REG_INVALID
+                    and memory_operand.disp & 0xFFFF_FFFF == head_slot
+                ):
+                    return None
+                if memory_operand.base == X86_REG_INVALID:
+                    return unknown, events
+                base_value = family_value(registers, memory_operand.base)
+                base = exact_identity(base_value)
+                if base is None:
+                    if base_value & page_identities:
+                        return None
+                    return unknown, events
+                if (
+                    memory_operand.segment != X86_REG_INVALID
+                    or memory_operand.index != X86_REG_INVALID
+                    or operand.size != 4
+                    or memory_operand.disp not in link_offsets
+                ):
+                    return None
+                value = memory_value(memory, base, memory_operand.disp)
+                if value is None and (base, memory_operand.disp) == (
+                    "H",
+                    link_a,
+                ):
+                    value = next_page
+                if value is None or value == unknown:
+                    return None
+                return value, events + (
+                    (
+                        address,
+                        operand_index,
+                        "read",
+                        base,
+                        memory_operand.disp,
+                        value,
+                    ),
+                )
+
+            while pending:
+                address, state = pending.pop()
+                state_key = (address, state)
+                if state_key in seen:
+                    continue
+                seen.add(state_key)
+                iterations += 1
+                self.limits.check("max_summary_iterations", iterations)
+                if len(seen) > state_cap:
+                    return None
+                (
+                    initial_head,
+                    registers,
+                    memory,
+                    events,
+                    predicate,
+                    discriminators,
+                ) = state
+                decoded = self._owned_decoded(address)
+                groups = self._owned_decoded_groups(decoded)
+                if CS_GRP_CALL in groups:
+                    return None
+                for operand in decoded.operands:
+                    if operand.type != X86_OP_MEM:
+                        continue
+                    absolute = self._absolute_memory_operand(operand)
+                    if head_overlap(operand) and (
+                        absolute != head_slot or operand.size != 4
+                    ):
+                        return None
+                    memory_operand = operand.mem
+                    if (
+                        memory_operand.base == X86_REG_INVALID
+                        and memory_operand.index != X86_REG_INVALID
+                        and memory_operand.disp & 0xFFFF_FFFF == head_slot
+                    ):
+                        return None
+                    if memory_operand.base != X86_REG_INVALID:
+                        base_value = family_value(
+                            registers,
+                            memory_operand.base,
+                        )
+                        if base_value & page_identities and (
+                            exact_identity(base_value) is None
+                            or memory_operand.segment != X86_REG_INVALID
+                            or memory_operand.index != X86_REG_INVALID
+                            or operand.size != 4
+                            or memory_operand.disp not in link_offsets
+                        ):
+                            return None
+
+                next_registers = registers
+                next_memory = memory
+                next_events = events
+                next_predicate = predicate
+                if decoded.id == X86_INS_MOV and len(decoded.operands) == 2:
+                    destination, source = decoded.operands
+                    read = read_operand(
+                        address,
+                        1,
+                        source,
+                        initial_head,
+                        registers,
+                        memory,
+                        next_events,
+                    )
+                    if read is None:
+                        return None
+                    source_value, next_events = read
+                    if destination.type == X86_OP_REG:
+                        next_registers = set_family(
+                            registers,
+                            destination.reg,
+                            source_value,
+                        )
+                        if next_registers is None:
+                            return None
+                    elif destination.type == X86_OP_MEM:
+                        absolute = self._absolute_memory_operand(destination)
+                        if head_overlap(destination):
+                            if absolute != head_slot or destination.size != 4:
+                                return None
+                            next_memory = set_memory(
+                                memory,
+                                "head",
+                                0,
+                                source_value,
+                            )
+                            next_events += (
+                                (
+                                    address,
+                                    0,
+                                    "write",
+                                    "head",
+                                    0,
+                                    source_value,
+                                ),
+                            )
+                        else:
+                            memory_operand = destination.mem
+                            if memory_operand.base == X86_REG_INVALID:
+                                return None
+                            base = exact_identity(
+                                family_value(registers, memory_operand.base)
+                            )
+                            if (
+                                base is None
+                                or memory_operand.segment != X86_REG_INVALID
+                                or memory_operand.index != X86_REG_INVALID
+                                or destination.size != 4
+                                or memory_operand.disp not in link_offsets
+                            ):
+                                return None
+                            next_memory = set_memory(
+                                memory,
+                                base,
+                                memory_operand.disp,
+                                source_value,
+                            )
+                            next_events += (
+                                (
+                                    address,
+                                    0,
+                                    "write",
+                                    base,
+                                    memory_operand.disp,
+                                    source_value,
+                                ),
+                            )
+                    else:
+                        return None
+                elif decoded.mnemonic in {"cmp", "test"}:
+                    if len(decoded.operands) != 2 or initial_head != "unrefined":
+                        return None
+                    reads = []
+                    for operand_index, operand in enumerate(decoded.operands):
+                        read = read_operand(
+                            address,
+                            operand_index,
+                            operand,
+                            initial_head,
+                            registers,
+                            memory,
+                            next_events,
+                        )
+                        if read is None:
+                            return None
+                        value, next_events = read
+                        reads.append(value)
+                    if decoded.mnemonic == "cmp":
+                        exact_head_guard = (
+                            (reads[0] == head_domain and reads[1] == zero)
+                            or (reads[1] == head_domain and reads[0] == zero)
+                        )
+                    else:
+                        exact_head_guard = bool(
+                            decoded.operands[0].type == X86_OP_REG
+                            and decoded.operands[1].type == X86_OP_REG
+                            and self._register_family(decoded.operands[0].reg)
+                            == self._register_family(decoded.operands[1].reg)
+                            and reads[0] == head_domain
+                            and reads[1] == head_domain
+                        )
+                    if not exact_head_guard:
+                        return None
+                    next_predicate = "head-zero"
+                elif (
+                    decoded.id == X86_INS_XOR
+                    and len(decoded.operands) == 2
+                    and all(
+                        operand.type == X86_OP_REG
+                        for operand in decoded.operands
+                    )
+                    and self._register_family(decoded.operands[0].reg)
+                    == self._register_family(decoded.operands[1].reg)
+                ):
+                    next_registers = set_family(
+                        registers,
+                        decoded.operands[0].reg,
+                        zero,
+                    )
+                    if next_registers is None:
+                        return None
+                    next_predicate = None
+                elif decoded.id == X86_INS_PUSH:
+                    if len(decoded.operands) != 1:
+                        return None
+                    read = read_operand(
+                        address,
+                        0,
+                        decoded.operands[0],
+                        initial_head,
+                        registers,
+                        memory,
+                        next_events,
+                    )
+                    if read is None:
+                        return None
+                    _value, next_events = read
+                elif decoded.mnemonic == "pop":
+                    if (
+                        len(decoded.operands) != 1
+                        or decoded.operands[0].type != X86_OP_REG
+                    ):
+                        return None
+                    next_registers = set_family(
+                        registers,
+                        decoded.operands[0].reg,
+                        unknown,
+                    )
+                    if next_registers is None:
+                        return None
+                elif decoded.mnemonic == "nop":
+                    pass
+                elif decoded.group(CS_GRP_RET):
+                    if (
+                        initial_head == "unrefined"
+                        or len(discriminators) != 1
+                    ):
+                        return None
+                    returns.append(
+                        (
+                            initial_head,
+                            next_memory,
+                            next_events,
+                            discriminators,
+                        )
+                    )
+                    continue
+                elif decoded.mnemonic not in {
+                    "je",
+                    "jz",
+                    "jne",
+                    "jnz",
+                    "jmp",
+                }:
+                    return None
+
+                successors = self._summary_successors(
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+                if decoded.mnemonic in {"je", "jz", "jne", "jnz"}:
+                    if (
+                        initial_head != "unrefined"
+                        or next_predicate != "head-zero"
+                        or discriminators
+                        or len(successors) != 2
+                        or len(decoded.operands) != 1
+                        or decoded.operands[0].type != X86_OP_IMM
+                    ):
+                        return None
+                    target = decoded.operands[0].imm & 0xFFFF_FFFF
+                    fallthrough = address + decoded.size
+                    if set(successors) != {target, fallthrough}:
+                        return None
+                    zero_successor = (
+                        target
+                        if decoded.mnemonic in {"je", "jz"}
+                        else fallthrough
+                    )
+                    for successor in successors:
+                        if successor <= address:
+                            return None
+                        refined_head = (
+                            "zero"
+                            if successor == zero_successor
+                            else "ring"
+                        )
+                        refined_value = (
+                            zero if refined_head == "zero" else old_head
+                        )
+                        refined_registers = tuple(
+                            refined_value if value == head_domain else value
+                            for value in next_registers
+                        )
+                        pending.append(
+                            (
+                                successor,
+                                (
+                                    refined_head,
+                                    refined_registers,
+                                    next_memory,
+                                    next_events,
+                                    None,
+                                    (address,),
+                                ),
+                            )
+                        )
+                    continue
+                if decoded.mnemonic == "jmp":
+                    if (
+                        len(successors) != 1
+                        or len(decoded.operands) != 1
+                        or decoded.operands[0].type != X86_OP_IMM
+                    ):
+                        return None
+                elif decoded.group(CS_GRP_JUMP):
+                    return None
+                if len(successors) != 1 or successors[0] <= address:
+                    return None
+                pending.append(
+                    (
+                        successors[0],
+                        (
+                            initial_head,
+                            next_registers,
+                            next_memory,
+                            next_events,
+                            next_predicate,
+                            discriminators,
+                        ),
+                    )
+                )
+
+            if not returns or {row[0] for row in returns} != {"zero", "ring"}:
+                return None
+
+            def singleton_is_valid(memory, events) -> bool:
+                if (
+                    memory_value(memory, "head", 0) != page
+                    or memory_value(memory, "P", link_a) != page
+                    or memory_value(memory, "P", link_b) != page
+                ):
+                    return False
+                relative_writes = sorted(
+                    (base, displacement, next(iter(value)))
+                    for _address, _operand, access, base, displacement, value in events
+                    if access == "write" and base != "head"
+                )
+                if relative_writes != sorted(
+                    (("P", link_a, "P"), ("P", link_b, "P"))
+                ):
+                    return False
+                head_writes = tuple(
+                    event
+                    for event in events
+                    if event[2] == "write" and event[3] == "head"
+                )
+                return bool(
+                    len(head_writes) == 1
+                    and head_writes[0][5] == page
+                    and not any(event[3] in {"H", "N"} for event in events)
+                )
+
+            def nonempty_is_valid(memory, events) -> bool:
+                expected_memory = {
+                    ("P", link_a): next_page,
+                    ("N", link_b): page,
+                    ("P", link_b): old_head,
+                    ("H", link_a): page,
+                }
+                if memory_value(memory, "head", 0) != page or any(
+                    memory_value(memory, base, displacement) != value
+                    for (base, displacement), value in expected_memory.items()
+                ):
+                    return False
+                relative_writes = sorted(
+                    (base, displacement, next(iter(value)))
+                    for _address, _operand, access, base, displacement, value in events
+                    if access == "write" and base != "head"
+                )
+                expected_writes = sorted(
+                    (base, displacement, next(iter(value)))
+                    for (base, displacement), value in expected_memory.items()
+                )
+                if relative_writes != expected_writes:
+                    return False
+                required_read = any(
+                    access == "read"
+                    and base == "H"
+                    and displacement == link_a
+                    and value == next_page
+                    for _address, _operand, access, base, displacement, value in events
+                )
+                head_writes = tuple(
+                    (index, event)
+                    for index, event in enumerate(events)
+                    if event[2] == "write" and event[3] == "head"
+                )
+                link_write_indices = tuple(
+                    index
+                    for index, event in enumerate(events)
+                    if event[2] == "write" and event[3] != "head"
+                )
+                return bool(
+                    required_read
+                    and len(head_writes) == 1
+                    and head_writes[0][1][5] == page
+                    and len(link_write_indices) == 4
+                    and max(link_write_indices) < head_writes[0][0]
+                )
+
+            singleton_events = []
+            nonempty_events = []
+            for initial_head, memory, events, _discriminators in returns:
+                if initial_head == "zero":
+                    if not singleton_is_valid(memory, events):
+                        return None
+                    singleton_events.extend(events)
+                else:
+                    if not nonempty_is_valid(memory, events):
+                        return None
+                    nonempty_events.extend(events)
+
+            all_events = tuple(
+                sorted(
+                    {*singleton_events, *nonempty_events},
+                    key=lambda row: (row[0], row[1], row[2], row[3], row[4]),
+                )
+            )
+            flat = summarize(
+                function_entry,
+                head_slot,
+                link_offsets,
+                page_argument=True,
+            )
+            if flat is None or flat["indirect_control"]:
+                return None
+            proved_relative_keys = {
+                (address, operand_index)
+                for address, operand_index, _access, base, _disp, _value in all_events
+                if base != "head"
+            }
+            complete_relative_keys = {
+                (row[0], row[1]) for row in flat["relative"]
+            }
+            if proved_relative_keys != complete_relative_keys:
+                return None
+
+            def evidence_value(value: Value) -> Value:
+                names = set()
+                for item in value:
+                    if item == "P":
+                        names.add("page")
+                    elif item in {"H", "N"}:
+                        names.add("ring")
+                    else:
+                        names.add(item)
+                return frozenset(names)
+
+            head_reads = []
+            head_writes = []
+            relative = []
+            for address, operand_index, access, base, displacement, value in all_events:
+                source = evidence_value(value)
+                if base == "head":
+                    row = (address, operand_index, access, source, 4)
+                    if access in {"read", "read-write"}:
+                        head_reads.append(row)
+                    if access in {"write", "read-write"}:
+                        head_writes.append(row)
+                    continue
+                relative.append(
+                    (
+                        address,
+                        operand_index,
+                        access,
+                        "page" if base == "P" else "ring",
+                        displacement,
+                        source,
+                        4,
+                    )
+                )
+            return {
+                "link_offsets": link_offsets,
+                "head_reads": tuple(head_reads),
+                "head_writes": tuple(head_writes),
+                "relative": tuple(relative),
+                "singleton_events": tuple(singleton_events),
+                "nonempty_events": tuple(nonempty_events),
+            }
+
         provider_calls = self._function_direct_calls(contract.page_provider)
         factory_calls = tuple(
             call
@@ -22975,22 +23627,20 @@ class _DirectCfgRecovery:
                     len(links) != 2
                     or links[0] == links[1]
                     or any(offset % 4 for offset in links)
-                    or not summary["head_reads"]
-                    or not summary["head_writes"]
-                    or any(
-                        row[3] != frozenset({"page"}) or row[4] != 4
-                        for row in summary["head_writes"]
-                    )
-                    or any(
-                        row[4] not in links or row[6] != 4
-                        for row in summary["relative"]
-                    )
                 ):
                     continue
-                publisher_candidates.append((call, slot, links, summary))
+                for oriented_links in (links, (links[1], links[0])):
+                    proof = prove_publisher_transfer(
+                        call.target,
+                        slot,
+                        oriented_links,
+                    )
+                    if proof is not None:
+                        publisher_candidates.append((call, slot, proof))
         if len(publisher_candidates) != 1:
             return None
-        publisher_call, head_slot, link_offsets, publisher = publisher_candidates[0]
+        publisher_call, head_slot, publisher = publisher_candidates[0]
+        link_offsets = publisher["link_offsets"]
 
         deallocator_entries = set()
         if contract.deallocator_root is not None:
