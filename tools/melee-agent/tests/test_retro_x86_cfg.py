@@ -20171,6 +20171,43 @@ def test_allocator_totality_cache_invalidates_callback_slot_overwrite(
         assert changed._dependency_memo_hit(replacement_entry)
 
 
+@pytest.mark.parametrize(
+    ("mutation", "expected_totality"),
+    (
+        (None, True),
+        ("reset-reachable", True),
+        ("callback-overwritten", False),
+    ),
+)
+def test_unscoped_allocator_totality_requires_stable_phase_a_callback_generation(
+    mutation,
+    expected_totality,
+):
+    image, _movzx_address, _transfer_address = (
+        lifecycle_optional_allocation_pointee_image(mutation=mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    session = recovery._allocator_session_certificate(
+        0x00401380,
+        0x00401300,
+    )
+    certificate = recovery._allocator_totality_certificate(
+        0x00401380,
+        0x00401300,
+    )
+
+    assert (session is not None) is expected_totality
+    assert (certificate is not None) is expected_totality
+    if certificate is not None:
+        assert certificate.capability_seal is None
+
+
 def test_allocator_totality_accepts_reset_outside_closed_lifetime():
     image, _movzx_address, transfer_address = (
         lifecycle_optional_allocation_pointee_image(
