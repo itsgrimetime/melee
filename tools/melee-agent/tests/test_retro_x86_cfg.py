@@ -12479,7 +12479,7 @@ def test_return_path_publication_backend_bridge_binds_exact_session_and_callers(
     assert "does-not-escape" not in result.certificate.provenance
 
 
-def test_allocator_totality_binds_installed_callback_generation():
+def test_capability_seal_rejects_exported_prior_callback_writer():
     fixture = return_path_publication_lifecycle_image(
         mutation="prior-callback-generation"
     )
@@ -12502,10 +12502,11 @@ def test_allocator_totality_binds_installed_callback_generation():
         fixture.callback_targets
     )
     result = _direct_return_path_publication_certificate(fixture)
-    assert result.certificate is not None
-    assert fixture.callback_targets[1] not in {
-        row.function_entry for row in result.certificate.returning_bodies
-    }
+
+    # Phase A can identify the callback generation, but the final seal must
+    # reject an exported historical initializer that remains externally
+    # callable and can rewrite the live callback slot.
+    assert result.certificate is None
 
 
 def test_allocator_totality_cache_tracks_reachable_session_helper():
