@@ -26,6 +26,9 @@ hydrated raw-CFG diagnostic.
   extent/effect witness; do not create a parallel allocator recognizer.
 - Recover layout values and transfer roles from decoded evidence rather than
   symbol names, byte-string identity, or familiar constants used as selectors.
+- Keep `extent_alignment == 0x1000` distinct from `block_alignment == 8`.
+  These constrain `E` and block arithmetic; do not infer or assert that `P`
+  is page-aligned.
 - Every unresolved edge, extra caller/writer, unknown abstract value, conflicting
   role, unclassified memory operand, or stale dependency fails closed.
 - Extend the existing ignored `--private-heap-extent` diagnostic; do not add a
@@ -59,7 +62,9 @@ hydrated raw-CFG diagnostic.
 - Consumes: `finalized_handle_arena_image()`,
   `_publication_body_address_domains()`.
 - Produces: `PrivatePageArenaFixture`, `private_page_arena_image()`, and a
-  passing regression showing that the current proof bottoms on the selector.
+  non-vacuous boundary regression showing that the existing allocator,
+  extent, and initializer-effect proofs reach the selector but the current
+  body audit bottoms there.
 
 - [ ] **Step 1: Add the fixture interface and exact role graph**
 
@@ -86,41 +91,35 @@ def private_page_arena_image(
     """Return one closed synthetic page ring and block arena."""
 ```
 
-Extend the existing synthetic private allocator with both selector paths: one
-receives a member loaded from a circular page ring, and one receives the exact
-page-provider result. Its initializer writes an extent token, initial free
-block, and end sentinel. The selector iterates a circular free list, optionally
-splits and unlinks a block, and returns it. The companion free path exercises
-insertion and both coalescing directions.
+Extend the existing synthetic private allocator and its actual
+`_PublicationPrivateHeapExtentWitness` / `_PublicationPrivateHeapEffectClosure`
+producer; do not place a disconnected page-arena image beside it. Both
+selector paths must enter the same selector: one receives a member loaded from
+a circular page ring, and one receives the exact page-provider result. Its
+certified initializer must write `P+8` largest-free size, `P+0xc` as `E | 3`,
+the first block at `P+0x10`, the end boundary tag at `P+E-8`, and the sentinel
+at `P+E-4`; the first block must expose size `+0`, page/flags `+4`, and links
+`+8`/`+0xc`. The page publisher must write the ring links at `P+0`/`P+4`.
+The selector iterates a circular free list, optionally splits and unlinks a
+block, and returns it. The companion free path exercises insertion and both
+coalescing directions.
 
 - [ ] **Step 2: Add the passing boundary regression**
 
 ```python
 def test_private_page_arena_still_requires_an_inductive_witness():
     fixture = private_page_arena_image()
-    recovery = _DirectCfgRecovery(
-        fixture.arena.image,
-        build_seed_inventory(fixture.arena.image, ()),
-        generous_limits(fixture.arena.image),
+    recovery, contract, extent, effects, closure, bridge = (
+        private_page_arena_publication_inputs(fixture)
     )
-    recovery.recover()
-    body = recovery._publication_function_body(fixture.selector)
-    assert body is not None
-    closure = x86_cfg_module._ReturningPublicationClosure(
-        bodies=(body,),
-        call_edges=(),
-        candidate_targets=frozenset(),
-        imports=(),
-    )
-    bridge = SimpleNamespace(
-        allocator_certificate=SimpleNamespace(
-            call_return_domains=((
-                fixture.arena.publication_body_private_call,
-                "private-heap",
-                frozenset(),
-            ),)
-        )
-    )
+
+    assert contract is not None
+    assert extent is not None
+    assert effects is not None
+    assert fixture.selector in {
+        body.function_entry for body in closure.bodies
+    }
+    assert effects.spans  # The induction base is real, not a fake bridge.
 
     assert recovery._publication_body_address_domains(
         fixture.arena.callback_slot, closure, (bridge,)
@@ -143,6 +142,15 @@ git add tools/melee-agent/tests/test_retro_x86_cfg.py
 git commit -m "test(mwcc-retro): model private page arena"
 ```
 
+> **Plan correction note (2026-08-07):** The first Task 1 fixture audit found
+> that its page-ring graph was disconnected from the existing
+> extent/effect producer, while Task 2 assumed unavailable effect spans for
+> page links and a single overloaded alignment value. Task 1 remains unchecked
+> until the fixture is one coherent allocator/effect graph and the boundary
+> regression proves the real selector is reached with non-empty induction-base
+> evidence. Task 2 now derives only initializer layout; Task 3 binds page links
+> from publisher evidence.
+
 ---
 
 ### Task 2: Recover the Layout and Bind the Initial Invariant
@@ -153,32 +161,41 @@ git commit -m "test(mwcc-retro): model private page arena"
 - Modify: `tools/melee-agent/tests/test_retro_x86_cfg.py:11300-11750`
 
 **Interfaces:**
-- Consumes: `_PublicationPrivateHeapExtentWitness`,
-  `_PublicationPrivateHeapEffectClosure`.
+- Consumes: `_PrivateHeapAllocatorContract`,
+  `_PublicationPrivateHeapExtentWitness`, and
+  `_PublicationPrivateHeapEffectClosure` from Task 1's single coherent graph.
 - Produces: `_PublicationPrivatePageLayout` and
-  `_publication_private_page_layout(extent, effects)`.
+  `_publication_private_page_layout(contract, extent, effects)`.
 
 - [ ] **Step 1: Write the RED positive and hostile layout tests**
 
 ```python
 def test_private_page_layout_is_derived_from_initializer_effects():
     fixture = private_page_arena_image()
-    recovery, extent, effects = private_page_arena_effects(fixture)
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
 
-    layout = recovery._publication_private_page_layout(extent, effects)
+    layout = recovery._publication_private_page_layout(contract, extent, effects)
 
     assert layout is not None
-    assert layout.alignment == 8
-    assert layout.page_link_offsets == (0, 4)
+    assert layout.extent_alignment == 0x1000
+    assert layout.block_alignment == 8
+    assert layout.page_link_offsets is None
     assert layout.page_largest_free_offset == 8
     assert layout.page_extent_offset == 12
+    assert layout.first_block_offset == 0x10
     assert layout.end_sentinel_displacement == -4
+    assert layout.block_header_offset == 0
+    assert layout.block_page_flags_offset == 4
+    assert layout.block_prev_offset == 8
+    assert layout.block_next_offset == 12
 ```
 
 Add parametrized mutations for a changed extent mask, changed sentinel
 displacement, missing first-block construction, out-of-range initial boundary
-tag, and an initializer effect that omits one layout operand. Each hostile must
-assert a `None` layout result.
+tag, missing `P+8` largest-free initialization, changed block page/flag field,
+and an initializer effect that omits one layout operand. Each hostile must
+assert a `None` layout result. A page-link write is deliberately not a Task 2
+input: it belongs to the Task 3 publisher proof.
 
 - [ ] **Step 2: Verify RED**
 
@@ -200,18 +217,24 @@ evidence. Implement:
 ```python
 def _publication_private_page_layout(
     self,
+    contract: _PrivateHeapAllocatorContract,
     extent: _PublicationPrivateHeapExtentWitness,
     effects: _PublicationPrivateHeapEffectClosure,
 ) -> _PublicationPrivatePageLayout | None:
-    """Recover one layout established by exact initializer effects."""
+    """Recover initializer layout from the certified provider/initializer."""
 ```
 
-Replay extent/effect fingerprints; derive page extent, first block, boundary
-tag, and sentinel from operand-keyed effect spans; derive a nonzero power-of-two
-alignment from the exact mask; and reject duplicate layouts, wrap, or any span
-outside `[P, P+E)`. The split threshold remains absent until Task 4 binds its
-unique selector guard, so represent it as `int | None` in the layout dataclass
-and require a non-null value in the final certificate.
+Replay contract, extent, and effect fingerprints. Decode the exact certified
+provider/initializer body together with its effect spans to derive `P+8`
+largest-free, `P+0xc` extent/flag word (`E | 3`), first block `P+0x10`, end
+tag `P+E-8`, sentinel `P+E-4`, and block size/page-flags/prev/next fields
+`+0/+4/+8/+0xc`. Derive `extent_alignment == 0x1000` and
+`block_alignment == 8` separately; neither establishes alignment of `P`.
+Reject duplicate layouts, wrap, or any initializer span outside `[P, P+E)`.
+Set `page_link_offsets=None`: exact `P+0`/`P+4` links are not part of the
+initializer effect evidence and Task 3 alone may bind them. The split threshold
+remains absent until Task 4 binds its unique selector guard, so represent it as
+`int | None` and require a non-null value in the final certificate.
 
 - [ ] **Step 4: Run layout/effect tests and commit**
 
@@ -234,7 +257,8 @@ Expected: all selected tests pass before the commit.
 
 **Interfaces:**
 - Consumes: allocator contract, extent witness, and recovered layout.
-- Produces: `_PublicationPrivatePageRingRole` and
+- Produces: an updated `_PublicationPrivatePageLayout` with the publisher's
+  link offsets and `_PublicationPrivatePageRingRole` from
   `_publication_private_page_ring_role(contract, extent, layout)`.
 
 - [ ] **Step 1: Write the RED role-discovery test**
@@ -243,14 +267,15 @@ Expected: all selected tests pass before the commit.
 def test_private_page_ring_proves_both_selector_page_arguments():
     fixture = private_page_arena_image()
     recovery, contract, extent, effects = private_page_arena_contract(fixture)
-    layout = recovery._publication_private_page_layout(extent, effects)
+    layout = recovery._publication_private_page_layout(contract, extent, effects)
     assert layout is not None
 
-    ring = recovery._publication_private_page_ring_role(
+    ring_result = recovery._publication_private_page_ring_role(
         contract, extent, layout
     )
-
-    assert ring is not None
+    assert ring_result is not None
+    layout, ring = ring_result
+    assert layout.page_link_offsets == (0, 4)
     assert ring.head_slot == fixture.page_head_slot
     assert ring.provider_entry == fixture.page_provider
     assert ring.inserter_entry == fixture.page_inserter
@@ -284,7 +309,10 @@ def _publication_private_page_ring_role(
     contract: _PrivateHeapAllocatorContract,
     extent: _PublicationPrivateHeapExtentWitness,
     layout: _PublicationPrivatePageLayout,
-) -> _PublicationPrivatePageRingRole | None:
+) -> tuple[
+    _PublicationPrivatePageLayout,
+    _PublicationPrivatePageRingRole,
+] | None:
     """Prove a closed circular ring containing only provider pages."""
 ```
 
@@ -295,7 +323,9 @@ to the head or page links is null, the exact provider return, or an existing
 same-ring page. Use the finite lattice `null/provider-page/ring-page/bottom`;
 never enumerate members. Discover the selector as the unique large-allocator
 callee whose complete incoming inventory receives a page from the provider arm
-or ring arm.
+or ring arm. Require publisher writes of exactly `P+0` and `P+4`, then return
+an immutable copy of `layout` with `page_link_offsets == (0, 4)`; no earlier
+task may populate those offsets.
 
 - [ ] **Step 4: Run ring/allocator tests and commit**
 
@@ -595,7 +625,9 @@ classifications; copy the complete allocator dependency fingerprint tuple;
 fingerprint every additional transfer function; and note producer dependencies
 for every function and concrete state slot. Replay raw/decoded direct edges,
 complete incoming calls, state dependencies, layout, transfers, and exact span
-keys. Do not add a standalone arena cache.
+keys. Reject final assembly unless `layout.page_link_offsets == (0, 4)` and
+`layout.minimum_split_remainder` is positive. Do not add a standalone arena
+cache.
 
 - [ ] **Step 4: Run replay tests and commit**
 
