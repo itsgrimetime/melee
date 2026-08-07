@@ -14,7 +14,7 @@ from bisect import bisect_left, bisect_right
 from collections import OrderedDict, defaultdict
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Iterable, Literal
 
 import capstone
 from capstone import (
@@ -208,6 +208,7 @@ _OBJECT_TAG_LIFECYCLE_CERTIFICATE_SCHEMA = (
 _OBJECT_TAG_LIFECYCLE_ANALYSIS_SEMANTICS = (
     "object-tag-lifecycle-analysis-v6"
 )
+_ESP_SLOT_BINDING_ANALYSIS_SEMANTICS = "esp-slot-binding-analysis-v3"
 _RELOCATED_REJECTION_LEDGER_SCHEMA = "mwcc-retro-relocated-rejection-ledger-v1"
 _RELOCATED_REJECTION_ANALYSIS_SEMANTICS = "relocated-rejection-analysis-v1"
 
@@ -1414,6 +1415,64 @@ class _ObjectTagLifecycleQuery:
             self.source_width,
             self.consumer_bindings,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _EspSlotBindingQuery:
+    """Canonical identity of one exact saved-receiver binding proof."""
+
+    function_entry: int
+    transfer_address: int
+    transfer_bytes_hex: str
+    movzx_address: int
+    movzx_bytes_hex: str
+    source_load_address: int
+    source_load_bytes_hex: str
+    argument_push_address: int
+    argument_push_bytes_hex: str
+    slot_writer_address: int
+    slot_writer_bytes_hex: str
+    anchor_transfer_address: int
+    anchor_transfer_bytes_hex: str
+    lifecycle_transfer_address: int
+    lifecycle_guard_address: int
+    table_base: int
+    entry_width: int
+    domain_min: int
+    domain_max: int
+    control_flow_revision: int
+    producer_seed_revision: int
+    absolute_memory_write_revision: int
+    reference_classification_revision: int
+    dependency_functions: tuple[int, ...]
+    dependency_function_fingerprints: tuple[tuple[int, str], ...]
+    dependency_edges: tuple[tuple[int, int, str], ...]
+    analysis_semantics: str = _ESP_SLOT_BINDING_ANALYSIS_SEMANTICS
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(_canonical_json_bytes(self.to_dict())).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class _EspSlotBindingWitness:
+    """Bounded witness tying one exact ESP writer to a lifecycle domain."""
+
+    query_sha256: str
+    lifecycle_transfer_address: int
+    lifecycle_guard_address: int
+    domain_min: int
+    domain_max: int
+    control_flow_revision: int
+    producer_seed_revision: int
+    absolute_memory_write_revision: int
+    reference_classification_revision: int
+    dependency_functions: tuple[int, ...]
+    dependency_function_fingerprints: tuple[tuple[int, str], ...]
+    dependency_edges: tuple[tuple[int, int, str], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -3786,6 +3845,16 @@ class _DirectCfgRecovery:
             int,
             tuple[_PublicationCandidateIdentity, ...],
         ] = {}
+        self.esp_slot_binding_witnesses: dict[
+            int,
+            _EspSlotBindingWitness,
+        ] = {}
+        self.esp_slot_binding_queries: dict[int, _EspSlotBindingQuery] = {}
+        self.pending_esp_slot_binding_queries: dict[
+            int,
+            _EspSlotBindingQuery,
+        ] = {}
+        self.required_esp_slot_revalidations: set[int] = set()
         self.provisional_publication_guard_domains: dict[
             str,
             tuple[
@@ -5684,6 +5753,1950 @@ class _DirectCfgRecovery:
                 left_operand.size,
                 function_entry,
             )
+        )
+
+    def _exact_esp_slot_writer_before(
+        self,
+        address: int,
+        operand,
+        function_entry: int,
+    ):
+        """Back-propagate one ESP slot to its unique exact MOV writer."""
+        if not (
+            operand.type == X86_OP_MEM
+            and operand.size == 4
+            and operand.mem.segment == X86_REG_INVALID
+            and operand.mem.index == X86_REG_INVALID
+            and operand.mem.base != X86_REG_INVALID
+            and self._register_family(operand.mem.base) == "esp"
+        ):
+            return None
+        target_logical = self._stack_operand_logical_offset(
+            address,
+            operand,
+            function_entry,
+        )
+        stack_address_states = self._function_stack_address_states(
+            function_entry,
+            address,
+        )
+        if stack_address_states is None:
+            return None
+        following_entry = self._following_function_entry(function_entry)
+        pending = [(address, operand.mem.disp)]
+        queued = {(address, operand.mem.disp)}
+        seen = set()
+        writers = {}
+        while pending:
+            cursor, displacement = heapq.heappop(pending)
+            queued.remove((cursor, displacement))
+            state = (cursor, displacement)
+            if state in seen or cursor == function_entry:
+                if cursor == function_entry:
+                    return None
+                continue
+            seen.add(state)
+            self.limits.check("max_summary_iterations", len(seen))
+            incoming = tuple(sorted(self.incoming_edges.get(cursor, ())))
+            if not incoming:
+                previous = self._previous_instruction(cursor)
+                if previous is None:
+                    return None
+                incoming = ((previous.address, "linear"),)
+            for predecessor, edge_kind in incoming:
+                if not function_entry <= predecessor < following_entry:
+                    return None
+                decoded = self._owned_decoded(predecessor)
+                predecessor_displacement = displacement
+                handled_esp_write = False
+                if decoded.mnemonic == "push":
+                    predecessor_displacement -= 4
+                    handled_esp_write = True
+                elif decoded.mnemonic == "pop":
+                    predecessor_displacement += 4
+                    handled_esp_write = True
+                elif (
+                    decoded.mnemonic in {"add", "sub"}
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_REG
+                    and self._register_family(decoded.operands[0].reg) == "esp"
+                    and decoded.operands[1].type == X86_OP_IMM
+                ):
+                    amount = _signed_u32(decoded.operands[1].imm)
+                    predecessor_displacement += (
+                        amount if decoded.mnemonic == "add" else -amount
+                    )
+                    handled_esp_write = True
+                elif decoded.group(CS_GRP_CALL):
+                    if edge_kind != "call-fallthrough":
+                        return None
+                    cleanup = self._closed_call_stack_cleanup(predecessor)
+                    if cleanup is None:
+                        return None
+                    predecessor_displacement += cleanup
+                    handled_esp_write = True
+
+                target_start = predecessor_displacement
+                target_end = target_start + 4
+                if (
+                    decoded.mnemonic == "push"
+                    and -4 < target_end
+                    and target_start < 0
+                ):
+                    return None
+                found_writer = None
+                for operand_index, candidate in enumerate(decoded.operands):
+                    if candidate.type != X86_OP_MEM or candidate.size <= 0:
+                        continue
+                    architectural_string_destination = (
+                        self._architectural_flat_string_destination(
+                            decoded,
+                            candidate,
+                        )
+                    )
+                    candidate_start = None
+                    if (
+                        candidate.mem.segment == X86_REG_INVALID
+                        and candidate.mem.index == X86_REG_INVALID
+                        and candidate.mem.base != X86_REG_INVALID
+                        and self._register_family(candidate.mem.base) == "esp"
+                    ):
+                        candidate_start = candidate.mem.disp
+                    elif (
+                        architectural_string_destination
+                        or candidate.access & CS_AC_WRITE
+                    ):
+                        logical_ranges = (
+                            self._stack_memory_write_logical_ranges(
+                                decoded,
+                                candidate,
+                                function_entry,
+                                stack_address_states,
+                            )
+                        )
+                        if logical_ranges is None:
+                            return None
+                        if logical_ranges and (
+                            target_logical is None
+                            or any(
+                                candidate_start_logical < target_logical + 4
+                                and target_logical
+                                < candidate_end_logical
+                                for (
+                                    candidate_start_logical,
+                                    candidate_end_logical,
+                                ) in logical_ranges
+                            )
+                        ):
+                            return None
+                    elif decoded.id == X86_INS_LEA:
+                        logical_starts = self._stack_address_memory_offsets(
+                            predecessor,
+                            candidate,
+                            function_entry,
+                            stack_address_states,
+                        )
+                        if logical_starts is None:
+                            return None
+                        if logical_starts and (
+                            target_logical is None
+                            or any(
+                                candidate_logical < target_logical + 4
+                                and target_logical
+                                < candidate_logical + candidate.size
+                                for candidate_logical in logical_starts
+                            )
+                        ):
+                            return None
+                    if candidate_start is None or not (
+                        candidate_start < target_end
+                        and target_start < candidate_start + candidate.size
+                    ):
+                        continue
+                    if decoded.id == X86_INS_LEA:
+                        return None
+                    if not candidate.access & CS_AC_WRITE:
+                        continue
+                    if (
+                        decoded.id == X86_INS_MOV
+                        and len(decoded.operands) == 2
+                        and operand_index == 0
+                        and candidate_start == target_start
+                        and candidate.size == 4
+                        and decoded.operands[1].size == 4
+                    ):
+                        found_writer = decoded
+                        break
+                    return None
+                if found_writer is not None:
+                    writers[
+                        (found_writer.address, bytes(found_writer.bytes))
+                    ] = found_writer
+                    continue
+
+                written_families = {
+                    self._register_family(register)
+                    for register in decoded.regs_write
+                } | {
+                    self._register_family(candidate.reg)
+                    for candidate in decoded.operands
+                    if candidate.type == X86_OP_REG
+                    and candidate.access & CS_AC_WRITE
+                }
+                if "esp" in written_families and not handled_esp_write:
+                    return None
+                next_state = (predecessor, predecessor_displacement)
+                if next_state not in seen and next_state not in queued:
+                    heapq.heappush(pending, next_state)
+                    queued.add(next_state)
+        return next(iter(writers.values())) if len(writers) == 1 else None
+
+    def _function_stack_address_states(
+        self,
+        function_entry: int,
+        through_address: int,
+    ) -> dict[int, dict[str, frozenset[int] | None]] | None:
+        """Track registers that may hold affine addresses into this stack.
+
+        Missing families are proven non-stack values.  ``None`` is a
+        stack-derived value whose exact displacement was lost; consumers must
+        treat it as a may-alias.  Keeping this address identity separate from
+        saved receiver values prevents a copied ESP from masquerading as an
+        ordinary object pointer.
+        """
+        stack_states = self._function_stack_states(function_entry)
+        following_entry = self._following_function_entry(function_entry)
+        states: dict[int, dict[str, frozenset[int] | None]] = {
+            function_entry: {}
+        }
+        pending = [function_entry]
+        queued = {function_entry}
+        iterations = 0
+
+        def merge(
+            left: dict[str, frozenset[int] | None],
+            right: dict[str, frozenset[int] | None],
+        ) -> dict[str, frozenset[int] | None]:
+            result = {}
+            for family in left.keys() | right.keys():
+                left_value = left.get(family, frozenset())
+                right_value = right.get(family, frozenset())
+                if left_value is None or right_value is None:
+                    result[family] = None
+                    continue
+                values = left_value | right_value
+                if len(values) > 32:
+                    result[family] = None
+                elif values:
+                    result[family] = values
+            return result
+
+        while pending:
+            address = heapq.heappop(pending)
+            queued.remove(address)
+            if address not in self.instructions:
+                return None
+            decoded = self._owned_decoded(address)
+            incoming = states[address]
+            output = dict(incoming)
+            stack_state = (
+                None if stack_states is None else stack_states.get(address)
+            )
+            sp_delta, bp_delta = (
+                (None, None) if stack_state is None else stack_state
+            )
+
+            def register_value(register: int) -> frozenset[int] | None:
+                family = self._register_family(register)
+                if family == "esp":
+                    return (
+                        None
+                        if sp_delta is None
+                        else frozenset({sp_delta})
+                    )
+                if family == "ebp":
+                    return None if bp_delta is None else frozenset({bp_delta})
+                return incoming.get(family, frozenset())
+
+            handled = set()
+            operands = decoded.operands
+            if (
+                decoded.id == X86_INS_MOV
+                and len(operands) == 2
+                and operands[0].type == X86_OP_REG
+                and operands[0].size == 4
+            ):
+                family = self._register_family(operands[0].reg)
+                source = operands[1]
+                if source.type == X86_OP_REG:
+                    value = register_value(source.reg)
+                else:
+                    value = frozenset()
+                if value == frozenset():
+                    output.pop(family, None)
+                else:
+                    output[family] = value
+                handled.add(family)
+            elif (
+                decoded.id == X86_INS_LEA
+                and len(operands) == 2
+                and operands[0].type == X86_OP_REG
+                and operands[0].size == 4
+                and operands[1].type == X86_OP_MEM
+            ):
+                family = self._register_family(operands[0].reg)
+                memory = operands[1].mem
+                base = (
+                    frozenset()
+                    if memory.base == X86_REG_INVALID
+                    else register_value(memory.base)
+                )
+                index = (
+                    frozenset()
+                    if memory.index == X86_REG_INVALID
+                    else register_value(memory.index)
+                )
+                if base is None or index is None or index:
+                    value = None
+                elif base:
+                    value = frozenset(
+                        offset + memory.disp for offset in base
+                    )
+                else:
+                    value = frozenset()
+                if value == frozenset():
+                    output.pop(family, None)
+                else:
+                    output[family] = value
+                handled.add(family)
+            elif (
+                decoded.mnemonic in {"add", "sub"}
+                and len(operands) == 2
+                and operands[0].type == X86_OP_REG
+                and operands[0].size == 4
+            ):
+                family = self._register_family(operands[0].reg)
+                prior = register_value(operands[0].reg)
+                if prior != frozenset():
+                    if prior is None or operands[1].type != X86_OP_IMM:
+                        output[family] = None
+                    else:
+                        amount = _signed_u32(operands[1].imm)
+                        sign = 1 if decoded.mnemonic == "add" else -1
+                        output[family] = frozenset(
+                            offset + sign * amount for offset in prior
+                        )
+                handled.add(family)
+            elif (
+                decoded.mnemonic in {"inc", "dec"}
+                and operands
+                and operands[0].type == X86_OP_REG
+                and operands[0].size == 4
+            ):
+                family = self._register_family(operands[0].reg)
+                prior = register_value(operands[0].reg)
+                if prior != frozenset():
+                    output[family] = (
+                        None
+                        if prior is None
+                        else frozenset(
+                            offset + (1 if decoded.mnemonic == "inc" else -1)
+                            for offset in prior
+                        )
+                    )
+                handled.add(family)
+
+            written = {
+                self._register_family(register)
+                for register in decoded.regs_write
+                if register != x86_const.X86_REG_EFLAGS
+            } | {
+                self._register_family(candidate.reg)
+                for candidate in operands
+                if candidate.type == X86_OP_REG and candidate.access & CS_AC_WRITE
+            }
+            derived_input = any(
+                register_value(candidate.reg) != frozenset()
+                for candidate in operands
+                if candidate.type == X86_OP_REG
+                and candidate.access & CS_AC_READ
+            )
+            for family in written - handled - {"esp", "ebp"}:
+                if family in incoming or derived_input:
+                    output[family] = None
+                else:
+                    output.pop(family, None)
+            if decoded.group(CS_GRP_CALL):
+                for family in {"eax", "ecx", "edx"}:
+                    output.pop(family, None)
+
+            if address == through_address:
+                iterations += 1
+                self.limits.check("max_summary_iterations", iterations)
+                continue
+
+            successors = tuple(
+                successor
+                for successor in self._summary_successors(
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+                if function_entry <= successor < following_entry
+            )
+            for successor in successors:
+                if successor not in self.instructions:
+                    return None
+                updated = (
+                    output
+                    if successor not in states
+                    else merge(states[successor], output)
+                )
+                if states.get(successor) == updated:
+                    continue
+                states[successor] = updated
+                if successor not in queued:
+                    heapq.heappush(pending, successor)
+                    queued.add(successor)
+            iterations += 1
+            self.limits.check("max_summary_iterations", iterations)
+        return states
+
+    def _architectural_flat_string_destination(
+        self,
+        decoded,
+        operand,
+    ) -> bool:
+        """Recognize only an architectural flat ES string destination."""
+        return (
+            operand.type == X86_OP_MEM
+            and operand.mem.segment == x86_const.X86_REG_ES
+            and operand.mem.base == x86_const.X86_REG_EDI
+            and operand.mem.index == X86_REG_INVALID
+            and decoded.id
+            in {
+                x86_const.X86_INS_STOSB,
+                x86_const.X86_INS_STOSW,
+                x86_const.X86_INS_STOSD,
+                x86_const.X86_INS_MOVSB,
+                x86_const.X86_INS_MOVSW,
+                x86_const.X86_INS_MOVSD,
+                x86_const.X86_INS_INSB,
+                x86_const.X86_INS_INSW,
+                x86_const.X86_INS_INSD,
+            }
+        )
+
+    def _stack_address_memory_offsets(
+        self,
+        address: int,
+        operand,
+        function_entry: int,
+        states: dict[int, dict[str, frozenset[int] | None]],
+    ) -> frozenset[int] | None:
+        """Return possible logical stack offsets, or unknown may-stack-alias."""
+        if operand.type != X86_OP_MEM:
+            return frozenset()
+        decoded = self._owned_decoded(address)
+        segment = operand.mem.segment
+        if (
+            decoded.id != X86_INS_LEA
+            and segment
+            not in {X86_REG_INVALID, x86_const.X86_REG_SS}
+            and not self._architectural_flat_string_destination(decoded, operand)
+        ):
+            return None
+        direct = self._stack_operand_logical_offset(
+            address,
+            operand,
+            function_entry,
+        )
+        if direct is not None:
+            return frozenset({direct})
+        if address not in states:
+            return frozenset()
+        state = states[address]
+        base_family = (
+            None
+            if operand.mem.base == X86_REG_INVALID
+            else self._register_family(operand.mem.base)
+        )
+        index_family = (
+            None
+            if operand.mem.index == X86_REG_INVALID
+            else self._register_family(operand.mem.index)
+        )
+        base = (
+            frozenset()
+            if operand.mem.base == X86_REG_INVALID
+            else None
+            if base_family == "esp"
+            else state.get(
+                base_family,
+                frozenset(),
+            )
+        )
+        index = (
+            frozenset()
+            if operand.mem.index == X86_REG_INVALID
+            else None
+            if index_family == "esp"
+            else state.get(
+                index_family,
+                frozenset(),
+            )
+        )
+        if base is None or index is None:
+            return None
+        if index:
+            return None
+        if not base:
+            return frozenset()
+        return frozenset(offset + operand.mem.disp for offset in base)
+
+    def _stack_memory_write_logical_ranges(
+        self,
+        decoded,
+        operand,
+        function_entry: int,
+        states: dict[int, dict[str, frozenset[int] | None]],
+    ) -> tuple[tuple[int, int], ...] | None:
+        """Return complete logical stack ranges for one memory write."""
+        logical_starts = self._stack_address_memory_offsets(
+            decoded.address,
+            operand,
+            function_entry,
+            states,
+        )
+        if logical_starts is None:
+            return None
+        if not logical_starts:
+            return ()
+        repeated_string_write = (
+            self._architectural_flat_string_destination(decoded, operand)
+            and any(
+                prefix
+                in {
+                    x86_const.X86_PREFIX_REP,
+                    x86_const.X86_PREFIX_REPNE,
+                }
+                for prefix in decoded.prefix
+            )
+        )
+        if repeated_string_write:
+            return None
+        return tuple(
+            (start, start + operand.size) for start in sorted(logical_starts)
+        )
+
+    def _esp_slot_address_is_not_escaped(
+        self,
+        writer,
+        transfer_address: int,
+        function_entry: int,
+    ) -> bool:
+        """Reject materialization or escape of the saved slot's address."""
+        target = self._stack_operand_logical_offset(
+            writer.address,
+            writer.operands[0],
+            function_entry,
+        )
+        states = self._function_stack_address_states(
+            function_entry,
+            transfer_address,
+        )
+        if states is None:
+            return False
+        following_entry = self._following_function_entry(function_entry)
+
+        def register_may_be_slot(address: int, register: int) -> bool:
+            state = states.get(address)
+            if state is None:
+                return True
+            family = self._register_family(register)
+            if family == "esp":
+                stack_state = self._function_stack_states(function_entry)
+                if stack_state is None or address not in stack_state:
+                    return True
+                value = stack_state[address][0]
+                return target is None or value is None or value == target
+            if family == "ebp":
+                stack_state = self._function_stack_states(function_entry)
+                value = (
+                    None
+                    if stack_state is None or address not in stack_state
+                    else stack_state[address][1]
+                )
+                if value is not None:
+                    return target is None or value == target
+            value = state.get(family, frozenset())
+            return value is None or (
+                bool(value) if target is None else target in value
+            )
+
+        for address in self._function_instruction_addresses_between(
+            function_entry,
+            writer.address + self.instructions[writer.address].size,
+            transfer_address,
+        ):
+            if not (
+                self._reachable_within_function(
+                    writer.address,
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+                and self._reachable_within_function(
+                    address,
+                    transfer_address,
+                    function_entry,
+                    following_entry,
+                )
+            ):
+                continue
+            decoded = self._owned_decoded(address)
+            if decoded.id == X86_INS_LEA and len(decoded.operands) == 2:
+                offsets = self._stack_address_memory_offsets(
+                    address,
+                    decoded.operands[1],
+                    function_entry,
+                    states,
+                )
+                if offsets is None or (
+                    bool(offsets) if target is None else target in offsets
+                ):
+                    return False
+            if decoded.mnemonic == "push" and decoded.operands:
+                pushed = decoded.operands[0]
+                if pushed.type == X86_OP_REG and register_may_be_slot(
+                    address,
+                    pushed.reg,
+                ):
+                    return False
+            if decoded.group(CS_GRP_CALL) and any(
+                register_may_be_slot(address, register)
+                for register in (
+                    x86_const.X86_REG_EAX,
+                    x86_const.X86_REG_EBX,
+                    x86_const.X86_REG_ECX,
+                    x86_const.X86_REG_EDX,
+                    x86_const.X86_REG_ESI,
+                    x86_const.X86_REG_EDI,
+                    x86_const.X86_REG_EBP,
+                )
+            ):
+                return False
+            if decoded.id == X86_INS_MOV and len(decoded.operands) == 2:
+                destination, source = decoded.operands
+                if (
+                    destination.type == X86_OP_MEM
+                    and source.type == X86_OP_REG
+                    and register_may_be_slot(address, source.reg)
+                ):
+                    return False
+        return True
+
+    def _esp_slot_loaded_operand(
+        self,
+        address: int,
+        operand,
+        function_entry: int,
+    ):
+        """Return the exact MOV load underlying one pointer operand."""
+        if operand.type == X86_OP_MEM:
+            return address, operand
+        if operand.type != X86_OP_REG or operand.size != 4:
+            return None
+        return self._esp_slot_loaded_register(
+            address,
+            operand.reg,
+            function_entry,
+        )
+
+    def _esp_slot_loaded_register(
+        self,
+        address: int,
+        register: int,
+        function_entry: int,
+    ):
+        """Return the exact MOV load defining one pointer register."""
+        definitions = self._register_definitions_across_blocks(
+            address,
+            self._register_family(register),
+            function_entry,
+        )
+        if not definitions or len(definitions) != 1:
+            return None
+        definition = self._owned_decoded(next(iter(definitions)))
+        if not (
+            definition.id == X86_INS_MOV
+            and len(definition.operands) == 2
+            and definition.operands[0].type == X86_OP_REG
+            and definition.operands[0].size == 4
+            and definition.operands[1].type == X86_OP_MEM
+            and definition.operands[1].size == 4
+        ):
+            return None
+        return definition.address, definition.operands[1]
+
+    def _esp_slot_writer_matches_lifecycle_binding(
+        self,
+        writer,
+        raw_binding,
+    ) -> bool:
+        function_entry = raw_binding[0]
+        source_family = raw_binding[6]
+        definitions = self._register_definitions_across_blocks(
+            raw_binding[1],
+            source_family,
+            function_entry,
+        )
+        if not definitions:
+            return False
+        definition = self._owned_decoded(min(definitions))
+        if (
+            definition.operands
+            and definition.operands[0].type == X86_OP_REG
+            and self._same_closed_caller_value(
+                writer.address,
+                writer.operands[1],
+                raw_binding[1],
+                definition.operands[0],
+                function_entry,
+            )
+        ):
+            return True
+        if len(definitions) != 1:
+            return False
+        loaded = self._esp_slot_loaded_operand(
+            raw_binding[1],
+            definition.operands[0],
+            function_entry,
+        )
+        if loaded is None:
+            return False
+        anchor_writer = self._exact_esp_slot_writer_before(
+            loaded[0],
+            loaded[1],
+            function_entry,
+        )
+        return (
+            anchor_writer is not None
+            and anchor_writer.address == writer.address
+            and bytes(anchor_writer.bytes) == bytes(writer.bytes)
+        )
+
+    def _esp_slot_operand_alias_state(
+        self,
+        address: int,
+        operand,
+        writer,
+        function_entry: int,
+        incoming: dict[str, int],
+    ) -> int:
+        """Return 0 non-alias, 1 exact receiver, or 2 may receiver."""
+        if operand.type == X86_OP_REG:
+            state = incoming.get(self._register_family(operand.reg), 0)
+            if state:
+                return state
+        elif operand.type == X86_OP_MEM:
+            loaded_writer = self._exact_esp_slot_writer_before(
+                address,
+                operand,
+                function_entry,
+            )
+            if (
+                loaded_writer is not None
+                and loaded_writer.address == writer.address
+                and bytes(loaded_writer.bytes) == bytes(writer.bytes)
+            ):
+                return 1
+        if self._same_closed_caller_value(
+            writer.address,
+            writer.operands[1],
+            address,
+            operand,
+            function_entry,
+        ):
+            return 1
+        return 0
+
+    def _esp_slot_call_receives_receiver(
+        self,
+        call_address: int,
+        writer,
+        function_entry: int,
+        states: dict[int, dict[str, int]],
+    ) -> bool:
+        """Return whether one call may receive the saved receiver."""
+        call_state = states.get(call_address)
+        if call_state is None:
+            return True
+        if any(
+            call_state.get(family, 0)
+            for family in {
+                "eax",
+                "ebx",
+                "ecx",
+                "edx",
+                "esi",
+                "edi",
+                "ebp",
+            }
+        ):
+            return True
+        for argument_index in range(16):
+            pushed = self._pushed_call_argument(call_address, argument_index)
+            if pushed is None:
+                break
+            pushed_state = states.get(pushed[0].address)
+            if pushed_state is None:
+                return True
+            if self._esp_slot_operand_alias_state(
+                pushed[0].address,
+                pushed[1],
+                writer,
+                function_entry,
+                pushed_state,
+            ):
+                return True
+        return False
+
+    def _esp_slot_receiver_is_not_forwarded_to_unknown_call(
+        self,
+        writer,
+        transfer_address: int,
+        function_entry: int,
+        table_base: int,
+        entry_width: int,
+        domain: tuple[int, int],
+        lifecycle_binding_transfers: frozenset[int],
+    ) -> bool:
+        following_entry = self._following_function_entry(function_entry)
+        states = self._esp_slot_receiver_alias_states(
+            writer,
+            transfer_address,
+            function_entry,
+        )
+        if states is None:
+            return False
+        for address in self._function_instruction_addresses_between(
+            function_entry,
+            writer.address + self.instructions[writer.address].size,
+            transfer_address,
+        ):
+            decoded = self._owned_decoded(address)
+            if not decoded.group(CS_GRP_CALL) or not (
+                self._reachable_within_function(
+                    writer.address,
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+                and self._reachable_within_function(
+                    address,
+                    transfer_address,
+                    function_entry,
+                    following_entry,
+                )
+            ):
+                continue
+            forwards_receiver = self._esp_slot_call_receives_receiver(
+                address,
+                writer,
+                function_entry,
+                states,
+            )
+            if not forwards_receiver:
+                continue
+            table = self.jump_tables.get(address)
+            if not (
+                table is not None
+                and address in lifecycle_binding_transfers
+                and table.flow_kind == "call"
+                and table.base == table_base
+                and table.entry_width == entry_width
+                and (table.index_min, table.index_max) == domain
+                and table.guard_operator
+                in {
+                    "movzx-producer-domain",
+                    "movzx-lifecycle-domain",
+                    "esp-slot-binding-domain",
+                }
+            ):
+                return False
+        return True
+
+    def _esp_slot_register_aliases_writer(
+        self,
+        address: int,
+        register: int,
+        writer,
+        function_entry: int,
+    ) -> bool:
+        """Return whether a register must or may alias the saved receiver."""
+        states = self._esp_slot_receiver_alias_states(
+            writer,
+            address,
+            function_entry,
+        )
+        if states is None or address not in states:
+            return True
+        family = self._register_family(register)
+        return states[address].get(family, 0) != 0
+
+    def _esp_slot_receiver_alias_states(
+        self,
+        writer,
+        through_address: int,
+        function_entry: int,
+    ) -> dict[int, dict[str, int]] | None:
+        """Track exact (1) and possible (2) saved-receiver aliases.
+
+        Once a receiver-derived value passes through an unsupported or
+        non-identity transform it remains a may-alias.  Later inverse-looking
+        arithmetic cannot upgrade it back to non-alias or exact identity.
+        """
+        source = writer.operands[1]
+        if source.type != X86_OP_REG or source.size != 4:
+            return None
+        source_family = self._register_family(source.reg)
+        following_entry = self._following_function_entry(function_entry)
+        states: dict[int, dict[str, int]] = {
+            writer.address: {source_family: 1}
+        }
+        pending = [writer.address]
+        queued = {writer.address}
+        iterations = 0
+
+        def merge(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
+            result = {}
+            for family in left.keys() | right.keys():
+                left_value = left.get(family, 0)
+                right_value = right.get(family, 0)
+                if left_value == right_value:
+                    value = left_value
+                elif left_value or right_value:
+                    value = 2
+                else:
+                    value = 0
+                if value:
+                    result[family] = value
+            return result
+
+        while pending:
+            address = heapq.heappop(pending)
+            queued.remove(address)
+            if address not in self.instructions:
+                return None
+            decoded = self._owned_decoded(address)
+            incoming = states[address]
+            output = dict(incoming)
+            operands = decoded.operands
+            handled = set()
+            if (
+                decoded.id == X86_INS_MOV
+                and len(operands) == 2
+                and operands[0].type == X86_OP_REG
+                and operands[0].size == 4
+            ):
+                family = self._register_family(operands[0].reg)
+                value = 0
+                if operands[1].type == X86_OP_REG:
+                    value = incoming.get(
+                        self._register_family(operands[1].reg),
+                        0,
+                    )
+                elif operands[1].type == X86_OP_MEM:
+                    loaded_writer = self._exact_esp_slot_writer_before(
+                        address,
+                        operands[1],
+                        function_entry,
+                    )
+                    if (
+                        loaded_writer is not None
+                        and loaded_writer.address == writer.address
+                        and bytes(loaded_writer.bytes) == bytes(writer.bytes)
+                    ):
+                        value = 1
+                if value:
+                    output[family] = value
+                else:
+                    output.pop(family, None)
+                handled.add(family)
+            elif (
+                decoded.id == X86_INS_LEA
+                and len(operands) == 2
+                and operands[0].type == X86_OP_REG
+                and operands[0].size == 4
+                and operands[1].type == X86_OP_MEM
+            ):
+                family = self._register_family(operands[0].reg)
+                memory = operands[1].mem
+                base = (
+                    0
+                    if memory.base == X86_REG_INVALID
+                    else incoming.get(self._register_family(memory.base), 0)
+                )
+                index = (
+                    0
+                    if memory.index == X86_REG_INVALID
+                    else incoming.get(self._register_family(memory.index), 0)
+                )
+                value = 0
+                if base or index:
+                    value = (
+                        1
+                        if base == 1
+                        and not index
+                        and memory.disp == 0
+                        else 2
+                    )
+                if value:
+                    output[family] = value
+                else:
+                    output.pop(family, None)
+                handled.add(family)
+            elif (
+                decoded.mnemonic
+                in {
+                    "add",
+                    "sub",
+                    "inc",
+                    "dec",
+                    "and",
+                    "or",
+                    "xor",
+                    "shl",
+                    "shr",
+                    "sar",
+                    "rol",
+                    "ror",
+                }
+                and operands
+                and operands[0].type == X86_OP_REG
+                and operands[0].size == 4
+            ):
+                family = self._register_family(operands[0].reg)
+                prior = incoming.get(family, 0)
+                if (
+                    decoded.mnemonic == "xor"
+                    and len(operands) == 2
+                    and operands[1].type == X86_OP_REG
+                    and self._register_family(operands[1].reg) == family
+                ):
+                    output.pop(family, None)
+                elif prior:
+                    output[family] = 2
+                handled.add(family)
+
+            written = {
+                self._register_family(register)
+                for register in decoded.regs_write
+                if register != x86_const.X86_REG_EFLAGS
+            } | {
+                self._register_family(candidate.reg)
+                for candidate in operands
+                if candidate.type == X86_OP_REG and candidate.access & CS_AC_WRITE
+            }
+            derived_input = any(
+                incoming.get(self._register_family(candidate.reg), 0)
+                for candidate in operands
+                if candidate.type == X86_OP_REG
+                and candidate.access & CS_AC_READ
+            )
+            for family in written - handled - {"esp"}:
+                if family in incoming or derived_input:
+                    output[family] = 2
+                else:
+                    output.pop(family, None)
+            if decoded.group(CS_GRP_CALL):
+                forwarded = self._esp_slot_call_receives_receiver(
+                    address,
+                    writer,
+                    function_entry,
+                    states,
+                )
+                for family in {"eax", "ecx", "edx"}:
+                    if incoming.get(family, 0) or forwarded:
+                        output[family] = 2
+                    else:
+                        output.pop(family, None)
+
+            if address == through_address:
+                iterations += 1
+                self.limits.check("max_summary_iterations", iterations)
+                continue
+            successors = tuple(
+                successor
+                for successor in self._summary_successors(
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+                if function_entry <= successor < following_entry
+            )
+            for successor in successors:
+                if successor not in self.instructions:
+                    return None
+                updated = (
+                    output
+                    if successor not in states
+                    else merge(states[successor], output)
+                )
+                if states.get(successor) == updated:
+                    continue
+                states[successor] = updated
+                if successor not in queued:
+                    heapq.heappush(pending, successor)
+                    queued.add(successor)
+            iterations += 1
+            self.limits.check("max_summary_iterations", iterations)
+        return states
+
+    def _esp_slot_receiver_has_closed_local_lifetime(
+        self,
+        writer,
+        transfer_address: int,
+        function_entry: int,
+    ) -> bool:
+        """Reject local tag mutation or a second receiver publication."""
+        following_entry = self._following_function_entry(function_entry)
+        for address in self._function_instruction_addresses_between(
+            function_entry,
+            writer.address + self.instructions[writer.address].size,
+            transfer_address,
+        ):
+            if not (
+                self._reachable_within_function(
+                    writer.address,
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+                and self._reachable_within_function(
+                    address,
+                    transfer_address,
+                    function_entry,
+                    following_entry,
+                )
+            ):
+                continue
+            decoded = self._owned_decoded(address)
+            if (
+                decoded.id == X86_INS_MOV
+                and len(decoded.operands) == 2
+                and decoded.operands[0].type == X86_OP_MEM
+                and decoded.operands[1].type == X86_OP_REG
+                and self._esp_slot_register_aliases_writer(
+                    address,
+                    decoded.operands[1].reg,
+                    writer,
+                    function_entry,
+                )
+            ):
+                return False
+            for destination in decoded.operands:
+                if (
+                    destination.type != X86_OP_MEM
+                    or not destination.access & CS_AC_WRITE
+                    or destination.size <= 0
+                ):
+                    continue
+                if (
+                    destination.mem.index != X86_REG_INVALID
+                    and self._esp_slot_register_aliases_writer(
+                        address,
+                        destination.mem.index,
+                        writer,
+                        function_entry,
+                    )
+                ):
+                    return False
+                if (
+                    destination.mem.base == X86_REG_INVALID
+                    or not self._esp_slot_register_aliases_writer(
+                        address,
+                        destination.mem.base,
+                        writer,
+                        function_entry,
+                    )
+                ):
+                    continue
+                if (
+                    destination.mem.index != X86_REG_INVALID
+                    or (
+                        destination.mem.disp < 1
+                        and 0 < destination.mem.disp + destination.size
+                    )
+                ):
+                    return False
+        return True
+
+    def _esp_slot_dependency_functions(
+        self,
+        function_entry: int,
+        anchor_transfer_address: int,
+        lifecycle_transfer_address: int,
+    ) -> tuple[int, ...] | None:
+        """Return the exact function set consumed by one slot proof."""
+        dependencies = {function_entry}
+        for transfer_address in {
+            anchor_transfer_address,
+            lifecycle_transfer_address,
+        }:
+            table = self.jump_tables.get(transfer_address)
+            owner = self._registrar_function_entry(transfer_address)
+            if table is None or owner is None:
+                return None
+            dependencies.add(owner)
+            for target in table.targets:
+                target_entry = self._registrar_function_entry(target)
+                if target_entry is None:
+                    return None
+                dependencies.add(target_entry)
+        return tuple(sorted(dependencies))
+
+    def _esp_slot_dependency_edges(
+        self,
+        dependency_functions: tuple[int, ...],
+    ) -> tuple[tuple[int, int, str], ...]:
+        dependency_set = frozenset(dependency_functions)
+        return tuple(
+            sorted(
+                (edge.source, edge.target, edge.kind)
+                for edge in self.edges
+                if self._registrar_function_entry(edge.source)
+                in dependency_set
+                or self._registrar_function_entry(edge.target)
+                in dependency_set
+            )
+        )
+
+    def _esp_slot_current_dependency_inventory(
+        self,
+        function_entry: int,
+        anchor_transfer_address: int,
+        lifecycle_transfer_address: int,
+    ) -> tuple[
+        tuple[int, ...],
+        tuple[tuple[int, str], ...],
+        tuple[tuple[int, int, str], ...],
+    ] | None:
+        functions = self._esp_slot_dependency_functions(
+            function_entry,
+            anchor_transfer_address,
+            lifecycle_transfer_address,
+        )
+        if functions is None:
+            return None
+        return (
+            functions,
+            tuple(
+                (entry, self._producer_function_fingerprint(entry))
+                for entry in functions
+            ),
+            self._esp_slot_dependency_edges(functions),
+        )
+
+    def _esp_slot_binding_pair_from_provisional(
+        self,
+        provisional: _EspSlotBindingQuery,
+        revisions: tuple[int, int, int, int],
+        inventory: tuple[
+            tuple[int, ...],
+            tuple[tuple[int, str], ...],
+            tuple[tuple[int, int, str], ...],
+        ],
+    ) -> tuple[_EspSlotBindingQuery, _EspSlotBindingWitness]:
+        """Build one final pair without publishing either record."""
+        transfer_address = provisional.transfer_address
+        table = self.jump_tables.get(transfer_address)
+        if not (
+            table is not None
+            and table.guard_operator == "esp-slot-binding-domain"
+            and table.guard_address == provisional.movzx_address
+            and table.guard_bound == provisional.domain_max
+            and table.base == provisional.table_base
+            and table.entry_width == provisional.entry_width
+            and table.index_min == provisional.domain_min
+            and table.index_max == provisional.domain_max
+        ):
+            raise CfgRecoveryError(
+                "installed ESP-slot table conflicts with its provisional "
+                f"query: transfer={transfer_address:#x}"
+            )
+        current_revisions = (
+            self.control_flow_revision,
+            self.producer_seed_revision,
+            self.absolute_memory_write_revision,
+            self.reference_classification_revision,
+        )
+        if current_revisions != revisions:
+            raise CfgRecoveryError(
+                "ESP-slot revisions changed during final witness "
+                f"construction: transfer={transfer_address:#x}"
+            )
+        functions, fingerprints, edges = inventory
+        query = replace(
+            provisional,
+            control_flow_revision=revisions[0],
+            producer_seed_revision=revisions[1],
+            absolute_memory_write_revision=revisions[2],
+            reference_classification_revision=revisions[3],
+            dependency_functions=functions,
+            dependency_function_fingerprints=fingerprints,
+            dependency_edges=edges,
+        )
+        witness = _EspSlotBindingWitness(
+            query_sha256=query.sha256,
+            lifecycle_transfer_address=query.lifecycle_transfer_address,
+            lifecycle_guard_address=query.lifecycle_guard_address,
+            domain_min=query.domain_min,
+            domain_max=query.domain_max,
+            control_flow_revision=query.control_flow_revision,
+            producer_seed_revision=query.producer_seed_revision,
+            absolute_memory_write_revision=(
+                query.absolute_memory_write_revision
+            ),
+            reference_classification_revision=(
+                query.reference_classification_revision
+            ),
+            dependency_functions=query.dependency_functions,
+            dependency_function_fingerprints=(
+                query.dependency_function_fingerprints
+            ),
+            dependency_edges=query.dependency_edges,
+        )
+        if current_revisions != (
+            self.control_flow_revision,
+            self.producer_seed_revision,
+            self.absolute_memory_write_revision,
+            self.reference_classification_revision,
+        ):
+            raise CfgRecoveryError(
+                "ESP-slot revisions changed while hashing final witness: "
+                f"transfer={transfer_address:#x}"
+            )
+        return query, witness
+
+    def _store_esp_slot_binding_pairs(
+        self,
+        pairs: dict[
+            int,
+            tuple[_EspSlotBindingQuery, _EspSlotBindingWitness],
+        ],
+    ) -> None:
+        """Publish one or more already-finalized query/witness pairs."""
+        if any(
+            query.transfer_address != transfer_address
+            or witness.query_sha256 != query.sha256
+            for transfer_address, (query, witness) in pairs.items()
+        ):
+            raise CfgRecoveryError("invalid ESP-slot query/witness batch")
+        self.esp_slot_binding_queries.update(
+            {
+                transfer_address: query
+                for transfer_address, (query, _witness) in pairs.items()
+            }
+        )
+        self.esp_slot_binding_witnesses.update(
+            {
+                transfer_address: witness
+                for transfer_address, (_query, witness) in pairs.items()
+            }
+        )
+        for transfer_address in pairs:
+            self.pending_esp_slot_binding_queries.pop(
+                transfer_address,
+                None,
+            )
+            self.required_esp_slot_revalidations.discard(transfer_address)
+
+    def _install_esp_slot_binding_witness(self, transfer_address: int) -> None:
+        """Commit a provisional ESP proof against the post-install graph."""
+        provisional = self.pending_esp_slot_binding_queries.get(
+            transfer_address
+        )
+        if provisional is None:
+            raise CfgRecoveryError(
+                "installed ESP-slot table lacks a provisional binding query: "
+                f"transfer={transfer_address:#x}"
+            )
+        inventory = self._esp_slot_current_dependency_inventory(
+            provisional.function_entry,
+            provisional.anchor_transfer_address,
+            provisional.lifecycle_transfer_address,
+        )
+        if inventory is None:
+            raise CfgRecoveryError(
+                "installed ESP-slot table lost its dependency inventory: "
+                f"transfer={transfer_address:#x}"
+            )
+        revisions = (
+            self.control_flow_revision,
+            self.producer_seed_revision,
+            self.absolute_memory_write_revision,
+            self.reference_classification_revision,
+        )
+        pair = self._esp_slot_binding_pair_from_provisional(
+            provisional,
+            revisions,
+            inventory,
+        )
+        self._store_esp_slot_binding_pairs({transfer_address: pair})
+
+    def _esp_slot_binding_is_current(self, transfer_address: int) -> bool:
+        query = self.esp_slot_binding_queries.get(transfer_address)
+        witness = self.esp_slot_binding_witnesses.get(transfer_address)
+        table = self.jump_tables.get(transfer_address)
+        if (
+            query is None
+            or witness is None
+            or table is None
+            or table.guard_operator != "esp-slot-binding-domain"
+            or witness.query_sha256 != query.sha256
+        ):
+            return False
+        revisions = (
+            self.control_flow_revision,
+            self.producer_seed_revision,
+            self.absolute_memory_write_revision,
+            self.reference_classification_revision,
+        )
+        if revisions != (
+            query.control_flow_revision,
+            query.producer_seed_revision,
+            query.absolute_memory_write_revision,
+            query.reference_classification_revision,
+        ) or revisions != (
+            witness.control_flow_revision,
+            witness.producer_seed_revision,
+            witness.absolute_memory_write_revision,
+            witness.reference_classification_revision,
+        ):
+            return False
+        inventory = self._esp_slot_current_dependency_inventory(
+            query.function_entry,
+            query.anchor_transfer_address,
+            query.lifecycle_transfer_address,
+        )
+        if inventory is None:
+            return False
+        return inventory == (
+            query.dependency_functions,
+            query.dependency_function_fingerprints,
+            query.dependency_edges,
+        ) and inventory == (
+            witness.dependency_functions,
+            witness.dependency_function_fingerprints,
+            witness.dependency_edges,
+        )
+
+    def _remove_stale_esp_slot_binding(self, transfer_address: int) -> None:
+        """Withdraw every installed artifact derived from one stale proof."""
+        table = self.jump_tables.get(transfer_address)
+        had_validated_relocation = any(
+            hypothesis.transfer_address == transfer_address
+            for hypothesis in self.validated_relocated_dispatch_slot_hypotheses
+        )
+        had_esp_evidence = (
+            transfer_address in self.pending_esp_slot_binding_queries
+            or transfer_address in self.esp_slot_binding_queries
+            or transfer_address in self.esp_slot_binding_witnesses
+            or transfer_address in self.required_esp_slot_revalidations
+            or had_validated_relocation
+            or (
+                table is not None
+                and table.guard_operator == "esp-slot-binding-domain"
+            )
+        )
+        self.pending_esp_slot_binding_queries.pop(transfer_address, None)
+        self.esp_slot_binding_queries.pop(transfer_address, None)
+        self.esp_slot_binding_witnesses.pop(transfer_address, None)
+        self.validated_relocated_dispatch_slot_hypotheses = {
+            hypothesis
+            for hypothesis in self.validated_relocated_dispatch_slot_hypotheses
+            if hypothesis.transfer_address != transfer_address
+        }
+        if had_esp_evidence:
+            self.required_esp_slot_revalidations.add(transfer_address)
+        if table is None or table.guard_operator != "esp-slot-binding-domain":
+            return
+        del self.jump_tables[transfer_address]
+        self.jump_table_entry_count -= table.index_max - table.index_min + 1
+        evidence_provenance = (
+            f"guard={table.guard_address:#x};"
+            f"operator={table.guard_operator};"
+            f"bound={table.guard_bound};transfer={transfer_address:#x}"
+        )
+        self.data_evidence = {
+            row
+            for row in self.data_evidence
+            if not (
+                row.start == table.base + table.index_min * table.entry_width
+                and row.end
+                == table.base + (table.index_max + 1) * table.entry_width
+                and row.provenance == evidence_provenance
+            )
+        }
+        self.semantic_data_references = {
+            row
+            for row in self.semantic_data_references
+            if not (
+                row.address == transfer_address
+                and row.target == table.base
+                and any(
+                    f"table={table.base:#x};" in detail
+                    for detail in row.provenance
+                )
+            )
+        }
+        record_detail = f"table={transfer_address:#x};base={table.base:#x};"
+        prior_seed_count = len(self.seed_records)
+        self.seed_records = {
+            row
+            for row in self.seed_records
+            if not (
+                row.category == "callback-table-entry"
+                and record_detail in row.detail
+            )
+        }
+        if len(self.seed_records) != prior_seed_count:
+            self.producer_seed_revision += 1
+        removed_edge = False
+        edge_kind = "indirect-call-table"
+        for target in table.targets:
+            edge = CfgEdge(transfer_address, target, edge_kind)
+            if edge not in self.edges:
+                continue
+            removed_edge = True
+            self.edges.remove(edge)
+            self.edge_provenance.pop(edge, None)
+            incoming = self.incoming_edges.get(target)
+            if incoming is not None:
+                incoming.discard((transfer_address, edge_kind))
+                if not incoming:
+                    self.incoming_edges.pop(target, None)
+            targets = self.special_control_targets_by_source_kind.get(
+                (transfer_address, edge_kind)
+            )
+            if targets is not None:
+                targets.discard(target)
+                if not targets:
+                    self.special_control_targets_by_source_kind.pop(
+                        (transfer_address, edge_kind),
+                        None,
+                    )
+            call_targets = self.call_targets_by_source.get(transfer_address)
+            if call_targets is not None:
+                call_targets.discard(target)
+                if not call_targets:
+                    self.call_targets_by_source.pop(transfer_address, None)
+        if removed_edge:
+            self.control_flow_revision += 1
+        for target in set(table.targets):
+            if not any(
+                row.address == target for row in self.seed_records
+            ) and not any(edge.target == target for edge in self.edges):
+                self.finite_targets.discard(target)
+        self._record_fixpoint_update()
+
+    def _finalize_esp_slot_binding_cohort(self) -> None:
+        """Exactly reprove and atomically stamp every installed ESP table."""
+        cohort = frozenset(
+            address
+            for address, table in self.jump_tables.items()
+            if table.guard_operator == "esp-slot-binding-domain"
+        )
+        if not cohort:
+            return
+        pending = cohort & self.pending_esp_slot_binding_queries.keys()
+        if (
+            not pending
+            and not cohort & self.required_esp_slot_revalidations
+            and all(
+                self._esp_slot_binding_is_current(address)
+                for address in cohort
+            )
+        ):
+            return
+        self.required_esp_slot_revalidations.update(cohort)
+        survivors = set(cohort)
+        iterations = 0
+        while survivors:
+            iterations += 1
+            self.limits.check("max_summary_iterations", iterations)
+            if iterations > len(cohort):
+                raise CfgRecoveryError(
+                    "ESP-slot cohort revalidation did not shrink or stamp"
+                )
+            for address in survivors:
+                self.pending_esp_slot_binding_queries.pop(address, None)
+            round_revisions = (
+                self.control_flow_revision,
+                self.producer_seed_revision,
+                self.absolute_memory_write_revision,
+                self.reference_classification_revision,
+            )
+            provisional_queries: dict[int, _EspSlotBindingQuery] = {}
+            failed = set()
+            for address in sorted(survivors):
+                table = self.jump_tables.get(address)
+                decoded = self._owned_decoded(address)
+                if not (
+                    table is not None
+                    and table.guard_operator == "esp-slot-binding-domain"
+                    and len(decoded.operands) == 1
+                    and decoded.operands[0].type == X86_OP_MEM
+                ):
+                    failed.add(address)
+                    continue
+                operand = decoded.operands[0]
+                result = self._esp_slot_binding_guard_for_index(
+                    address,
+                    operand.mem.index,
+                    table.base,
+                    table.entry_width,
+                )
+                provisional = self.pending_esp_slot_binding_queries.get(
+                    address
+                )
+                if not (
+                    result is not None
+                    and result[0].address == table.guard_address
+                    and result[1] == table.guard_operator
+                    and result[2] == table.guard_bound
+                    and result[3] == table.index_min
+                    and result[4] == table.index_max
+                    and provisional is not None
+                    and provisional.transfer_address == address
+                    and provisional.movzx_address == table.guard_address
+                    and provisional.table_base == table.base
+                    and provisional.entry_width == table.entry_width
+                    and provisional.domain_min == table.index_min
+                    and provisional.domain_max == table.index_max
+                ):
+                    failed.add(address)
+                    continue
+                provisional_queries[address] = provisional
+            if round_revisions != (
+                self.control_flow_revision,
+                self.producer_seed_revision,
+                self.absolute_memory_write_revision,
+                self.reference_classification_revision,
+            ):
+                raise CfgRecoveryError(
+                    "ESP-slot graph changed during cohort exact reproof"
+                )
+            if failed:
+                prior_count = len(survivors)
+                for address in survivors:
+                    self.pending_esp_slot_binding_queries.pop(address, None)
+                for address in sorted(failed):
+                    self._remove_stale_esp_slot_binding(address)
+                survivors.difference_update(failed)
+                if len(survivors) >= prior_count:
+                    raise CfgRecoveryError(
+                        "ESP-slot cohort failure did not remove a survivor"
+                    )
+                continue
+
+            revisions = (
+                self.control_flow_revision,
+                self.producer_seed_revision,
+                self.absolute_memory_write_revision,
+                self.reference_classification_revision,
+            )
+            pairs = {}
+            for address in sorted(survivors):
+                provisional = provisional_queries[address]
+                inventory = self._esp_slot_current_dependency_inventory(
+                    provisional.function_entry,
+                    provisional.anchor_transfer_address,
+                    provisional.lifecycle_transfer_address,
+                )
+                if inventory is None:
+                    failed.add(address)
+                    continue
+                pairs[address] = self._esp_slot_binding_pair_from_provisional(
+                    provisional,
+                    revisions,
+                    inventory,
+                )
+            if failed:
+                prior_count = len(survivors)
+                for address in survivors:
+                    self.pending_esp_slot_binding_queries.pop(address, None)
+                for address in sorted(failed):
+                    self._remove_stale_esp_slot_binding(address)
+                survivors.difference_update(failed)
+                if len(survivors) >= prior_count:
+                    raise CfgRecoveryError(
+                        "ESP-slot cohort inventory failure did not remove a "
+                        "survivor"
+                    )
+                continue
+            if revisions != (
+                self.control_flow_revision,
+                self.producer_seed_revision,
+                self.absolute_memory_write_revision,
+                self.reference_classification_revision,
+            ):
+                raise CfgRecoveryError(
+                    "ESP-slot revisions changed before cohort publication"
+                )
+            self._store_esp_slot_binding_pairs(pairs)
+            stale = [
+                address
+                for address in sorted(survivors)
+                if not self._esp_slot_binding_is_current(address)
+            ]
+            if stale:
+                raise CfgRecoveryError(
+                    "ESP-slot cohort publication produced stale witness: "
+                    f"transfer={stale[0]:#x}"
+                )
+            return
+
+    def _revalidate_esp_slot_bindings(self) -> None:
+        """Withdraw and reproduce every stale ESP table as one cohort."""
+        cohort = frozenset(
+            address
+            for address, table in self.jump_tables.items()
+            if table.guard_operator == "esp-slot-binding-domain"
+        )
+        if not cohort:
+            return
+        if all(
+            self._esp_slot_binding_is_current(address) for address in cohort
+        ):
+            self._refresh_relocated_dispatch_slot_validation(
+                hypothesis
+                for hypothesis in self.relocated_dispatch_slot_hypotheses
+                if hypothesis.transfer_address in cohort
+            )
+            return
+        self.required_esp_slot_revalidations.update(cohort)
+        for address in sorted(cohort):
+            self._remove_stale_esp_slot_binding(address)
+        prior = self._allow_movzx_producer_domains
+        self._allow_movzx_producer_domains = True
+        try:
+            self._resolve_computed_flows(included_addresses=cohort)
+        finally:
+            self._allow_movzx_producer_domains = prior
+        if self.pending:
+            raise CfgRecoveryError(
+                "ESP-slot proof revalidation discovered undecoded code"
+            )
+        survivors = frozenset(
+            address
+            for address in cohort
+            if (
+                (table := self.jump_tables.get(address)) is not None
+                and table.guard_operator == "esp-slot-binding-domain"
+            )
+        )
+        stale = [
+            address
+            for address in sorted(survivors)
+            if not self._esp_slot_binding_is_current(address)
+        ]
+        if stale:
+            raise CfgRecoveryError(
+                "ESP-slot cohort resolver returned a stale witness: "
+                f"transfer={stale[0]:#x}"
+            )
+        self._refresh_relocated_dispatch_slot_validation(
+            hypothesis
+            for hypothesis in self.relocated_dispatch_slot_hypotheses
+            if hypothesis.transfer_address in survivors
+        )
+
+    def _esp_slot_binding_guard_for_index(
+        self,
+        transfer_address: int,
+        index_register: int,
+        table_base: int,
+        entry_width: int,
+    ) -> tuple[Instruction, str, int, int, int] | None:
+        """Bind a reloaded receiver and arg0 through one exact ESP writer."""
+        narrowed = self._movzx_guard_for_index(
+            transfer_address,
+            index_register,
+            producer_domain=False,
+        )
+        if narrowed is None:
+            return None
+        movzx = self._owned_decoded(narrowed[0].address)
+        source = movzx.operands[1]
+        if not (
+            source.type == X86_OP_MEM
+            and source.size == 1
+            and source.mem.segment == X86_REG_INVALID
+            and source.mem.base != X86_REG_INVALID
+            and source.mem.index == X86_REG_INVALID
+            and source.mem.disp == 0
+        ):
+            return None
+        function_entry = self._registrar_function_entry(transfer_address)
+        pushed = self._pushed_call_argument(transfer_address, 0)
+        if (
+            function_entry is None
+            or pushed is None
+            or pushed[2] != function_entry
+        ):
+            return None
+        source_load = self._esp_slot_loaded_register(
+            movzx.address,
+            source.mem.base,
+            function_entry,
+        )
+        argument_load = self._esp_slot_loaded_operand(
+            pushed[0].address,
+            pushed[1],
+            function_entry,
+        )
+        if source_load is None or argument_load is None:
+            return None
+        source_writer = self._exact_esp_slot_writer_before(
+            source_load[0],
+            source_load[1],
+            function_entry,
+        )
+        argument_writer = self._exact_esp_slot_writer_before(
+            argument_load[0],
+            argument_load[1],
+            function_entry,
+        )
+        if (
+            source_writer is None
+            or argument_writer is None
+            or source_writer.address != argument_writer.address
+            or bytes(source_writer.bytes) != bytes(argument_writer.bytes)
+        ):
+            return None
+
+        lifecycle_tables = tuple(
+            sorted(
+                (
+                    table
+                    for table in self.jump_tables.values()
+                    if table.flow_kind == "call"
+                    and table.guard_operator == "movzx-lifecycle-domain"
+                    and table.base == table_base
+                    and table.entry_width == entry_width
+                ),
+                key=lambda table: table.address,
+            )
+        )
+        lifecycle_domains = {
+            (table.index_min, table.index_max) for table in lifecycle_tables
+        }
+        if not lifecycle_tables or len(lifecycle_domains) != 1:
+            return None
+        domain = next(iter(lifecycle_domains))
+        bindings = self._object_tag_lifecycle_consumer_bindings(
+            table_base,
+            entry_width,
+        )
+        anchors = [
+            binding
+            for binding in bindings
+            if binding[0] == function_entry
+            and binding[3] != transfer_address
+            and (table := self.jump_tables.get(binding[3])) is not None
+            and table.base == table_base
+            and table.entry_width == entry_width
+            and (table.index_min, table.index_max) == domain
+            and table.guard_operator
+            in {
+                "movzx-producer-domain",
+                "movzx-lifecycle-domain",
+                "esp-slot-binding-domain",
+            }
+            and self._esp_slot_writer_matches_lifecycle_binding(
+                source_writer,
+                binding,
+            )
+        ]
+        if (
+            not anchors
+            or not self._esp_slot_address_is_not_escaped(
+                source_writer,
+                transfer_address,
+                function_entry,
+            )
+            or not self._esp_slot_receiver_has_closed_local_lifetime(
+                source_writer,
+                transfer_address,
+                function_entry,
+            )
+            or not self._esp_slot_receiver_is_not_forwarded_to_unknown_call(
+                source_writer,
+                transfer_address,
+                function_entry,
+                table_base,
+                entry_width,
+                domain,
+                frozenset(
+                    binding[3]
+                    for binding in bindings
+                    if binding[3] != transfer_address
+                ),
+            )
+        ):
+            return None
+        anchor = min(anchors, key=lambda binding: binding[3])
+        lifecycle_table = lifecycle_tables[0]
+        inventory = self._esp_slot_current_dependency_inventory(
+            function_entry,
+            anchor[3],
+            lifecycle_table.address,
+        )
+        if inventory is None:
+            return None
+        dependency_functions, dependency_fingerprints, dependency_edges = (
+            inventory
+        )
+        query = _EspSlotBindingQuery(
+            function_entry=function_entry,
+            transfer_address=transfer_address,
+            transfer_bytes_hex=self.instructions[transfer_address].bytes_hex,
+            movzx_address=movzx.address,
+            movzx_bytes_hex=bytes(movzx.bytes).hex(),
+            source_load_address=source_load[0],
+            source_load_bytes_hex=self.instructions[source_load[0]].bytes_hex,
+            argument_push_address=pushed[0].address,
+            argument_push_bytes_hex=self.instructions[pushed[0].address].bytes_hex,
+            slot_writer_address=source_writer.address,
+            slot_writer_bytes_hex=bytes(source_writer.bytes).hex(),
+            anchor_transfer_address=anchor[3],
+            anchor_transfer_bytes_hex=anchor[4],
+            lifecycle_transfer_address=lifecycle_table.address,
+            lifecycle_guard_address=lifecycle_table.guard_address,
+            table_base=table_base,
+            entry_width=entry_width,
+            domain_min=domain[0],
+            domain_max=domain[1],
+            control_flow_revision=self.control_flow_revision,
+            producer_seed_revision=self.producer_seed_revision,
+            absolute_memory_write_revision=self.absolute_memory_write_revision,
+            reference_classification_revision=(
+                self.reference_classification_revision
+            ),
+            dependency_functions=dependency_functions,
+            dependency_function_fingerprints=dependency_fingerprints,
+            dependency_edges=dependency_edges,
+        )
+        self.pending_esp_slot_binding_queries[transfer_address] = query
+        return (
+            movzx,
+            "esp-slot-binding-domain",
+            domain[1],
+            domain[0],
+            domain[1],
         )
 
     def _object_tag_lifecycle_stack_slot_values_before(
@@ -37720,7 +39733,15 @@ class _DirectCfgRecovery:
             following_entry,
         )
 
-    def _recover_indexed_table(self, decoded, instruction: Instruction, *, flow_kind: str) -> bool:
+    def _recover_indexed_table(
+        self,
+        decoded,
+        instruction: Instruction,
+        *,
+        flow_kind: str,
+        defer_esp_slot_binding_witness: bool = False,
+    ) -> bool:
+        self.pending_esp_slot_binding_queries.pop(instruction.address, None)
         if len(decoded.operands) != 1 or decoded.operands[0].type != X86_OP_MEM:
             return False
         operand = decoded.operands[0]
@@ -37782,6 +39803,26 @@ class _DirectCfgRecovery:
                 self._allow_movzx_producer_domains
                 and operator == "movzx"
             ):
+                slot_binding = self._esp_slot_binding_guard_for_index(
+                    instruction.address,
+                    memory.index,
+                    base,
+                    entry_width,
+                )
+                if slot_binding is not None:
+                    compare, operator, bound, index_min, index_max = (
+                        slot_binding
+                    )
+            if (
+                instruction.address
+                in self.required_esp_slot_revalidations
+                and operator != "esp-slot-binding-domain"
+            ):
+                return False
+            if (
+                self._allow_movzx_producer_domains
+                and operator == "movzx"
+            ):
                 narrowed = self._movzx_guard_for_index(
                     instruction.address,
                     memory.index,
@@ -37834,6 +39875,7 @@ class _DirectCfgRecovery:
             "movzx",
             "movzx-producer-domain",
             "movzx-lifecycle-domain",
+            "esp-slot-binding-domain",
         }
         for index in range(index_min, index_max + 1):
             entry_address = base + index * entry_width
@@ -37979,6 +40021,13 @@ class _DirectCfgRecovery:
                 self._record_finite_target(target)
                 self._enqueue(target, is_function=flow_kind == "call")
             self._record_fixpoint_update()
+            if (
+                operator == "esp-slot-binding-domain"
+                and not defer_esp_slot_binding_witness
+            ):
+                self._install_esp_slot_binding_witness(
+                    instruction.address
+                )
         return True
 
     @staticmethod
@@ -70603,7 +72652,12 @@ class _DirectCfgRecovery:
             round_edge_count = len(self.edges)
             for address in sorted(candidate_addresses):
                 if address in self.jump_tables:
-                    continue
+                    table = self.jump_tables[address]
+                    if table.guard_operator != "esp-slot-binding-domain":
+                        continue
+                    if self._esp_slot_binding_is_current(address):
+                        continue
+                    self._remove_stale_esp_slot_binding(address)
                 control_snapshot = (
                     len(self.pending),
                     len(self.block_starts),
@@ -70719,7 +72773,10 @@ class _DirectCfgRecovery:
                         (
                             "indexed-table",
                             lambda: self._recover_indexed_table(
-                                decoded, instruction, flow_kind=flow_kind
+                                decoded,
+                                instruction,
+                                flow_kind=flow_kind,
+                                defer_esp_slot_binding_witness=True,
                             ),
                         ),
                     )
@@ -70793,6 +72850,7 @@ class _DirectCfgRecovery:
                     # success, determines which addresses lower-priority
                     # post-finite resolvers must skip.
                     resolved_resolvers.pop(address, None)
+                self.pending_esp_slot_binding_queries.pop(address, None)
                 if any(
                     row.address == address and row.kind == "computed-flow-blocker"
                     for row in self.diagnostics
@@ -70816,6 +72874,7 @@ class _DirectCfgRecovery:
                 continue
             if new_tables == 0:
                 break
+        self._finalize_esp_slot_binding_cohort()
         if report_progress and attempted_candidates:
             slowest = sorted(
                 resolver_seconds,
@@ -72655,6 +74714,128 @@ class _DirectCfgRecovery:
             return state.get(self._register_family(operand.reg))
         return None
 
+    def _refresh_relocated_dispatch_slot_validation(
+        self,
+        hypotheses: Iterable[_RelocatedDispatchSlotHypothesis],
+    ) -> None:
+        """Revalidate explicit tentative rows without changing CFG state."""
+        candidates = frozenset(
+            hypothesis
+            for hypothesis in hypotheses
+            if hypothesis in self.relocated_dispatch_slot_hypotheses
+        )
+        non_validation_snapshot = (
+            tuple(self.pending),
+            frozenset(self.block_starts),
+            frozenset(self.edges),
+            frozenset(self.finite_targets),
+            frozenset(self.seed_records),
+            frozenset(self.data_evidence),
+            frozenset(self.semantic_data_references),
+            tuple(sorted(self.jump_tables.items())),
+            self.control_flow_revision,
+            self.producer_seed_revision,
+            self.absolute_memory_write_revision,
+            self.reference_classification_revision,
+            dict(self.pending_esp_slot_binding_queries),
+            dict(self.esp_slot_binding_queries),
+            dict(self.esp_slot_binding_witnesses),
+            frozenset(self.required_esp_slot_revalidations),
+            frozenset(self.relocated_dispatch_slot_hypotheses),
+        )
+        self.validated_relocated_dispatch_slot_hypotheses.difference_update(
+            candidates
+        )
+        replayed_records = frozenset(self.seed_records)
+        revisions = (
+            self.control_flow_revision,
+            self.producer_seed_revision,
+            self.absolute_memory_write_revision,
+            self.reference_classification_revision,
+        )
+        for hypothesis in candidates:
+            table = self.jump_tables.get(hypothesis.transfer_address)
+            query = self.esp_slot_binding_queries.get(
+                hypothesis.transfer_address
+            )
+            witness = self.esp_slot_binding_witnesses.get(
+                hypothesis.transfer_address
+            )
+            current_esp_pair = bool(
+                query is not None
+                and witness is not None
+                and witness.query_sha256 == query.sha256
+                and revisions
+                == (
+                    query.control_flow_revision,
+                    query.producer_seed_revision,
+                    query.absolute_memory_write_revision,
+                    query.reference_classification_revision,
+                )
+                and revisions
+                == (
+                    witness.control_flow_revision,
+                    witness.producer_seed_revision,
+                    witness.absolute_memory_write_revision,
+                    witness.reference_classification_revision,
+                )
+                and hypothesis.transfer_address
+                not in self.required_esp_slot_revalidations
+            )
+            if not (
+                hypothesis.records[0] in replayed_records
+                and table is not None
+                and table.flow_kind == "call"
+                and table.guard_operator
+                in {
+                    "movzx-producer-domain",
+                    "esp-slot-binding-domain",
+                }
+                and table.base == hypothesis.table_base
+                and table.entry_width == 4
+                and (
+                    table.guard_operator != "esp-slot-binding-domain"
+                    or current_esp_pair
+                )
+            ):
+                continue
+            offset = hypothesis.index - table.index_min
+            if not (
+                0 <= offset < len(table.targets)
+                and hypothesis.index <= table.index_max
+                and table.targets[offset] == hypothesis.target
+                and CfgEdge(
+                    hypothesis.transfer_address,
+                    hypothesis.target,
+                    "indirect-call-table",
+                )
+                in self.edges
+            ):
+                continue
+            self.validated_relocated_dispatch_slot_hypotheses.add(hypothesis)
+        if non_validation_snapshot != (
+            tuple(self.pending),
+            frozenset(self.block_starts),
+            frozenset(self.edges),
+            frozenset(self.finite_targets),
+            frozenset(self.seed_records),
+            frozenset(self.data_evidence),
+            frozenset(self.semantic_data_references),
+            tuple(sorted(self.jump_tables.items())),
+            self.control_flow_revision,
+            self.producer_seed_revision,
+            self.absolute_memory_write_revision,
+            self.reference_classification_revision,
+            dict(self.pending_esp_slot_binding_queries),
+            dict(self.esp_slot_binding_queries),
+            dict(self.esp_slot_binding_witnesses),
+            frozenset(self.required_esp_slot_revalidations),
+            frozenset(self.relocated_dispatch_slot_hypotheses),
+        ):
+            raise CfgRecoveryError(
+                "relocated dispatch validation refresh changed CFG state"
+            )
+
     def _record_relocated_dispatch_bootstrap_slots(self) -> None:
         """Nominate relocated indexed-call slots without accepting control.
 
@@ -72839,31 +75020,7 @@ class _DirectCfgRecovery:
             self._check_count("max_jump_table_entries", len(updated_hypotheses))
             self.relocated_dispatch_slot_hypotheses = updated_hypotheses
 
-            table = self.jump_tables.get(transfer_address)
-            if (
-                table is None
-                or table.flow_kind != "call"
-                or table.guard_operator != "movzx-producer-domain"
-                or table.base != table_base
-                or table.entry_width != 4
-            ):
-                continue
-            for hypothesis in rows:
-                offset = hypothesis.index - table.index_min
-                if (
-                    hypothesis.records[0] not in replayed_records
-                    or not 0 <= offset < len(table.targets)
-                    or hypothesis.index > table.index_max
-                    or table.targets[offset] != hypothesis.target
-                    or not any(
-                        edge.source == transfer_address
-                        and edge.target == hypothesis.target
-                        and edge.kind == "indirect-call-table"
-                        for edge in self.edges
-                    )
-                ):
-                    continue
-                self.validated_relocated_dispatch_slot_hypotheses.add(hypothesis)
+            self._refresh_relocated_dispatch_slot_validation(rows)
 
     def _record_object_callback_tables(self) -> None:
         """Seed finite callback tables proved by stores and owned dispatches."""
@@ -74966,6 +77123,7 @@ class _DirectCfgRecovery:
             f"ordinary closure relocation-validation-complete: relocations={len(self.image.relocations)}"
         )
         self._bind_seed_instruction_provenance()
+        self._revalidate_esp_slot_bindings()
         data_regions = self._merged_data_regions()
         padding_regions = self._padding_regions(data_regions)
         self._require_disjoint_ownership(data_regions, padding_regions)
@@ -74977,6 +77135,7 @@ class _DirectCfgRecovery:
         self.publication_final_padding_regions = padding_regions
         self.publication_final_residue = provisional_residue
         self.reference_classification_revision += 1
+        self._revalidate_esp_slot_bindings()
         final_publication_environment = (
             self._publication_final_reference_environment(
                 data_regions=data_regions,

@@ -7222,19 +7222,69 @@ def lifecycle_movzx_dispatch_image(
     all_entries_relocated=False,
     latent_tag_writer=False,
     first_consumer_zero_only=False,
+    esp_slot_binding=False,
+    two_esp_slot_bindings=False,
+    three_esp_slot_bindings=False,
+    shifted_esp_slot_layout=False,
+    esp_slot_mutation=None,
 ):
     """Cross-function object-tag lifecycle with a recursive forwarding SCC."""
     from tools.mwcc_retro import pe as pe_mod
+
+    assert esp_slot_mutation in {
+        None,
+        "partial-overwrite",
+        "different-predecessor",
+        "mismatched-argument",
+        "unknown-receiver-call",
+        "unknown-ecx-receiver-call",
+        "unbalanced-merge",
+        "out-of-domain-write",
+        "stack-alias-partial-overwrite",
+        "derived-stack-alias-partial-overwrite",
+        "unsupported-stack-alias-transfer",
+        "slot-address-escape",
+        "slot-address-ecx-escape",
+        "reversible-receiver-alias-call",
+        "unsupported-receiver-alias-transfer",
+        "implicit-stosb-stack-overwrite",
+        "implicit-movsd-stack-overwrite",
+        "implicit-rep-stosb-stack-write",
+        "implicit-stosb-nonoverlap",
+        "explicit-ss-stack-overwrite",
+        "explicit-es-stack-overwrite",
+        "explicit-ds-stack-overwrite",
+        "explicit-fs-stack-overwrite",
+        "explicit-gs-stack-overwrite",
+        "explicit-ss-stack-nonoverlap",
+        "accessless-insb-stack-overwrite",
+        "accessless-insw-stack-overwrite",
+        "accessless-insd-stack-overwrite",
+        "accessless-rep-insd-stack-overwrite",
+        "callee-saved-receiver-alias-call",
+        "known-callee-saved-slot-address-alias",
+        "known-call-preserved-receiver-alias-write",
+    }
 
     text_va = 0x00401000
     rdata_va = 0x00402000
     entry = 0x00
     consumer_a = 0x80
-    consumer_b = 0xB0
-    callback = 0xE0
+    consumer_b = 0xA4 if shifted_esp_slot_layout else (0xA0 if esp_slot_binding else 0xB0)
+    callback = (
+        0x118
+        if two_esp_slot_bindings or three_esp_slot_bindings
+        else 0xF4
+        if shifted_esp_slot_layout
+        else 0xF0
+        if esp_slot_binding
+        else 0xE0
+    )
     allocator = 0x120
     grow = 0x180
     data_va = 0x00403000
+    table_offset = 0x40 if shifted_esp_slot_layout else 0
+    table_va = rdata_va + table_offset
     data = bytearray(0x800)
     text = memoryview(data)[:0x200]
 
@@ -7250,6 +7300,11 @@ def lifecycle_movzx_dispatch_image(
             4, "little", signed=True
         )
         return offset + 5
+
+    def emit_table_call(offset):
+        text[offset : offset + 3] = b"\xff\x14\x9d"
+        text[offset + 3 : offset + 7] = table_va.to_bytes(4, "little")
+        return offset + 7
 
     # entry(): two variable-sized fresh objects establish the lifecycle's
     # independently finite endpoint tags, then flow to both consumers.
@@ -7366,7 +7421,7 @@ def lifecycle_movzx_dispatch_image(
         cursor = emit(cursor, "88 0e")
     cursor = emit(cursor, "56 0f b6 1e")
     transfer_a = text_va + cursor
-    cursor = emit(cursor, "ff 14 9d 00 20 40 00")
+    cursor = emit_table_call(cursor)
     emit(
         cursor,
         "59 5e 5f c3"
@@ -7378,7 +7433,125 @@ def lifecycle_movzx_dispatch_image(
     # consumer_b(arg0): a second table consumer shares the lifecycle proof but
     # has its own receiver/argument-zero binding obligation.
     cursor = emit(consumer_b, "56 8b 74 24 08")
-    if not (
+    if esp_slot_binding:
+        cursor = emit(cursor, "83 ec 04 89 34 24")
+        cursor = emit(cursor, "56 0f b6 1e")
+        if esp_slot_mutation == "known-call-preserved-receiver-alias-write":
+            cursor = emit(cursor, "89 f0")
+        transfer_b = text_va + cursor
+        cursor = emit_table_call(cursor)
+        cursor = emit(cursor, "59")
+        if esp_slot_mutation == "partial-overwrite":
+            cursor = emit(cursor, "c6 04 24 00")
+        elif esp_slot_mutation == "different-predecessor":
+            cursor = emit(cursor, "85 c0 74 03 89 0c 24")
+        elif esp_slot_mutation == "unknown-receiver-call":
+            cursor = emit(cursor, "ff 34 24")
+            cursor = emit_call(cursor, callback)
+            cursor = emit(cursor, "59")
+        elif esp_slot_mutation == "unknown-ecx-receiver-call":
+            cursor = emit(cursor, "8b 0c 24")
+            cursor = emit_call(cursor, callback)
+        elif esp_slot_mutation == "unbalanced-merge":
+            cursor = emit(cursor, "85 c0 74 01 50")
+        elif esp_slot_mutation == "out-of-domain-write":
+            cursor = emit(cursor, "c6 06 4b")
+        elif esp_slot_mutation == "stack-alias-partial-overwrite":
+            cursor = emit(cursor, "89 e7 c6 07 00")
+        elif esp_slot_mutation == "derived-stack-alias-partial-overwrite":
+            cursor = emit(cursor, "89 e7 47 4f c6 07 00")
+        elif esp_slot_mutation == "unsupported-stack-alias-transfer":
+            cursor = emit(cursor, "89 e7 97 c6 00 00")
+        elif esp_slot_mutation == "slot-address-escape":
+            cursor = emit(cursor, "54")
+            cursor = emit_call(cursor, 0x1C0)
+            cursor = emit(cursor, "59")
+        elif esp_slot_mutation == "slot-address-ecx-escape":
+            cursor = emit(cursor, "89 e1")
+            cursor = emit_call(cursor, 0x1C0)
+        elif esp_slot_mutation == "reversible-receiver-alias-call":
+            cursor = emit(cursor, "89 f7 47 4f 57")
+            cursor = emit_call(cursor, 0x1C0)
+            cursor = emit(cursor, "59")
+        elif esp_slot_mutation == "unsupported-receiver-alias-transfer":
+            cursor = emit(cursor, "89 f7 97 50")
+            cursor = emit_call(cursor, 0x1C0)
+            cursor = emit(cursor, "59")
+        elif esp_slot_mutation == "implicit-stosb-stack-overwrite":
+            cursor = emit(cursor, "89 e7 aa 90")
+        elif esp_slot_mutation == "implicit-movsd-stack-overwrite":
+            cursor = emit(cursor, "89 e7 a5 90")
+        elif esp_slot_mutation == "implicit-rep-stosb-stack-write":
+            cursor = emit(cursor, "89 e7 f3 aa")
+        elif esp_slot_mutation == "implicit-stosb-nonoverlap":
+            cursor = emit(cursor, "8d 7c 24 04 aa")
+        elif esp_slot_mutation is not None and esp_slot_mutation.startswith(
+            "explicit-"
+        ):
+            segment_prefix = {
+                "ss": "36",
+                "es": "26",
+                "ds": "3e",
+                "fs": "64",
+                "gs": "65",
+            }[esp_slot_mutation.split("-")[1]]
+            cursor = emit(
+                cursor,
+                (
+                    f"8d 7c 24 04 {segment_prefix} c6 07 00"
+                    if esp_slot_mutation == "explicit-ss-stack-nonoverlap"
+                    else f"89 e7 {segment_prefix} c6 07 00"
+                ),
+            )
+        elif esp_slot_mutation is not None and esp_slot_mutation.startswith(
+            "accessless-"
+        ):
+            ins_encoding = {
+                "accessless-insb-stack-overwrite": "6c",
+                "accessless-insw-stack-overwrite": "66 6d",
+                "accessless-insd-stack-overwrite": "6d",
+                "accessless-rep-insd-stack-overwrite": "f3 6d",
+            }[esp_slot_mutation]
+            cursor = emit(cursor, f"89 e7 {ins_encoding}")
+        elif esp_slot_mutation == "callee-saved-receiver-alias-call":
+            cursor = emit(cursor, "31 c0 31 c9 31 d2")
+            cursor = emit_call(cursor, 0x1C0)
+            cursor = emit(cursor, "c6 00 4b")
+        elif esp_slot_mutation == "known-callee-saved-slot-address-alias":
+            cursor = emit(cursor, "89 e7 83 ec 04 31 c0 31 c9 31 d2 31 f6")
+            cursor = emit_call(cursor, 0x1C0)
+            cursor = emit(cursor, "83 c4 04 8b 34 24")
+        elif esp_slot_mutation == "known-call-preserved-receiver-alias-write":
+            cursor = emit(cursor, "c6 00 4b")
+        cursor = emit(cursor, "56 8b 44 24 04 0f b6 18 6a 00 6a 00")
+        cursor = emit(
+            cursor,
+            "51"
+            if esp_slot_mutation == "mismatched-argument"
+            else "ff 74 24 0c",
+        )
+        esp_transfer = text_va + cursor
+        cursor = emit_table_call(cursor)
+        cursor = emit(cursor, "83 c4 10")
+        if two_esp_slot_bindings or three_esp_slot_bindings:
+            cursor = emit(
+                cursor,
+                "56 8b 44 24 04 0f b6 18 6a 00 6a 00 ff 74 24 0c",
+            )
+            second_esp_transfer = text_va + cursor
+            cursor = emit_table_call(cursor)
+            cursor = emit(cursor, "83 c4 10")
+        if three_esp_slot_bindings:
+            cursor = emit(
+                cursor,
+                "56 8b 44 24 04 0f b6 18 6a 00 6a 00 ff 74 24 0c",
+            )
+            third_esp_transfer = text_va + cursor
+            cursor = emit_table_call(cursor)
+            cursor = emit(cursor, "83 c4 10")
+        cursor = emit(cursor, "83 c4 04 5e c3")
+        assert cursor <= callback
+    elif not (
         second_stack_receiver_helper_mutation
         or second_stack_receiver_register_alias_mutation
         or second_stack_receiver_register_copy_alias_mutation
@@ -7388,7 +7561,9 @@ def lifecycle_movzx_dispatch_image(
         cursor = emit(cursor, "56")
         cursor = emit_call(cursor, consumer_b)
         cursor = emit(cursor, "59")
-    if second_nested_receiver:
+    if esp_slot_binding:
+        pass
+    elif second_nested_receiver:
         cursor = emit(cursor, "8b 46 0a")
         if nested_tag_write:
             cursor = emit(cursor, "88 08")
@@ -7453,12 +7628,14 @@ def lifecycle_movzx_dispatch_image(
     else:
         cursor = emit(cursor, "51" if second_argument_mismatch else "56")
         cursor = emit(cursor, "0f b6 1e")
-    transfer_b = text_va + cursor
-    cursor = emit(cursor, "ff 14 9d 00 20 40 00 59")
-    if second_stack_receiver:
-        cursor = emit(cursor, "83 c4 04")
-    cursor = emit(cursor, "5e c3")
-    assert cursor <= callback
+    if not esp_slot_binding:
+        transfer_b = text_va + cursor
+        cursor = emit_table_call(cursor)
+        cursor = emit(cursor, "59")
+        if second_stack_receiver:
+            cursor = emit(cursor, "83 c4 04")
+        cursor = emit(cursor, "5e c3")
+        assert cursor <= callback
 
     emit(callback, "c3")
     cursor = emit(
@@ -7474,6 +7651,12 @@ def lifecycle_movzx_dispatch_image(
     )
     emit(grow, "c3")
     if (
+        esp_slot_mutation in {
+            "slot-address-escape",
+            "reversible-receiver-alias-call",
+            "unsupported-receiver-alias-transfer",
+        }
+        or
         second_stack_receiver_helper_mutation
         or second_stack_receiver_register_alias_mutation
         or second_stack_receiver_register_copy_alias_mutation
@@ -7481,6 +7664,12 @@ def lifecycle_movzx_dispatch_image(
         or second_stack_receiver_alias_transport is not None
     ):
         emit(0x1C0, "8b 44 24 04 c6 00 c8 c3")
+    elif esp_slot_mutation == "slot-address-ecx-escape":
+        emit(0x1C0, "c6 01 00 c3")
+    elif esp_slot_mutation == "callee-saved-receiver-alias-call":
+        emit(0x1C0, "89 f0 c3")
+    elif esp_slot_mutation == "known-callee-saved-slot-address-alias":
+        emit(0x1C0, "c6 07 00 c3")
     elif receiver_escape_alias_mutation:
         emit(0x1C0, "a1 00 31 40 00 c6 00 c8 c3")
     elif latent_tag_writer:
@@ -7500,14 +7689,14 @@ def lifecycle_movzx_dispatch_image(
             value = rdata_va
         else:
             value = 0x1000 + callback
-        struct.pack_into("<I", data, 0x200 + index * 4, value)
+        struct.pack_into("<I", data, 0x200 + table_offset + index * 4, value)
     if (
         second_stack_receiver_register_alias_mutation
         or second_stack_receiver_register_copy_alias_mutation
         or second_stack_receiver_preallocated_argument_mutation
         or second_stack_receiver_alias_transport is not None
     ):
-        struct.pack_into("<I", data, 0x200 + 200 * 4, 0x11D0)
+        struct.pack_into("<I", data, 0x200 + table_offset + 200 * 4, 0x11D0)
     struct.pack_into("<I", data, 0x600, 0x1000)
     struct.pack_into("<I", data, 0x604, data_va + 0x100)
     if recursive_nested_association:
@@ -7515,7 +7704,7 @@ def lifecycle_movzx_dispatch_image(
 
     relocation_count = 256 if all_entries_relocated else 75
     relocations = tuple(
-        pe_mod.Relocation(rdata_va + index * 4, 3)
+        pe_mod.Relocation(table_va + index * 4, 3)
         for index in range(relocation_count)
         if index != unrelocated_index
     )
@@ -7544,7 +7733,22 @@ def lifecycle_movzx_dispatch_image(
         relocations=relocations,
         executable_ranges=((text_va, text_va + 0x200),),
     )
-    return image, (transfer_a, transfer_b)
+    return image, (
+        (
+            transfer_a,
+            transfer_b,
+            esp_transfer,
+            second_esp_transfer,
+            third_esp_transfer,
+        )
+        if three_esp_slot_bindings
+        else
+        (transfer_a, transfer_b, esp_transfer, second_esp_transfer)
+        if two_esp_slot_bindings
+        else (transfer_a, transfer_b, esp_transfer)
+        if esp_slot_binding
+        else (transfer_a, transfer_b)
+    )
 
 
 def patched_lifecycle_consumer_b(
@@ -21113,6 +21317,895 @@ def test_object_tag_lifecycle_binds_stack_reloaded_receiver():
     assert {
         cfg.jump_table_at(transfer).guard_operator for transfer in transfers
     } == {"movzx-lifecycle-domain"}
+
+
+@pytest.mark.parametrize(
+    ("shifted_layout", "expected_base"),
+    ((False, 0x00402000), (True, 0x00402040)),
+    ids=("original-addresses", "relocated-addresses"),
+)
+def test_esp_slot_binding_reuses_lifecycle_domain_without_publication(
+    shifted_layout,
+    expected_base,
+):
+    image, (lifecycle_transfer, ordinary_slot_transfer, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(
+            esp_slot_binding=True,
+            shifted_esp_slot_layout=shifted_layout,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    cfg = recovery.recover()
+
+    assert cfg.jump_table_at(lifecycle_transfer).guard_operator == (
+        "movzx-lifecycle-domain"
+    )
+    assert cfg.jump_table_at(ordinary_slot_transfer).guard_operator in {
+        "movzx-producer-domain",
+        "movzx-lifecycle-domain",
+    }
+    slot_table = cfg.jump_table_at(slot_transfer)
+    assert slot_table.guard_operator == "esp-slot-binding-domain"
+    assert slot_table.base == expected_base
+    assert slot_table.guard_bound == 74
+    assert (slot_table.index_min, slot_table.index_max) == (0, 74)
+    witness = recovery.esp_slot_binding_witnesses[slot_transfer]
+    assert len(witness.query_sha256) == 64
+    assert (witness.domain_min, witness.domain_max) == (0, 74)
+    assert slot_transfer not in recovery.publication_guard_candidates
+
+
+def esp_slot_bootstrap_record(recovery, transfer_address, index=0):
+    table = recovery.jump_tables[transfer_address]
+    slot = table.base + index * table.entry_width
+    raw = recovery.image.read(slot, table.entry_width)
+    target = table.targets[index - table.index_min]
+    return SeedRecord(
+        address=target,
+        category="relocated-dispatch-bootstrap-entry",
+        provenance_address=slot,
+        provenance_bytes=raw.hex(),
+        detail=(
+            "proof=tentative-owned-movzx-scale4-transfer+"
+            "contiguous-type3-executable-slot-run;"
+            "raw-relocation-is-not-code-root;"
+            f"transfer={transfer_address:#x};table-base={table.base:#x};"
+            f"index={index};slot={slot:#x};target={target:#x}"
+        ),
+        is_function=True,
+    )
+
+
+def test_esp_slot_binding_revalidates_relocated_bootstrap_entry():
+    image, (_lifecycle_transfer, _ordinary_transfer, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(esp_slot_binding=True)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    record = esp_slot_bootstrap_record(recovery, slot_transfer)
+    recovery.seed_records.add(record)
+
+    recovery._record_relocated_dispatch_bootstrap_slots()
+
+    assert any(
+        hypothesis.records == (record,)
+        for hypothesis in recovery.validated_relocated_dispatch_slot_hypotheses
+    )
+
+
+def test_esp_slot_binding_fresh_seeded_recovery_preserves_relocated_reproduction():
+    image, (_lifecycle_transfer, _ordinary_transfer, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(esp_slot_binding=True)
+    )
+    bootstrap = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    bootstrap.recover()
+    record = esp_slot_bootstrap_record(bootstrap, slot_transfer)
+    inventory = build_seed_inventory(image, ())
+    recovery = _DirectCfgRecovery(
+        image,
+        x86_cfg_module.SeedInventory((*inventory.records, record)),
+        generous_limits(image),
+    )
+
+    recovery.recover()
+
+    hypothesis = next(
+        row
+        for row in recovery.relocated_dispatch_slot_hypotheses
+        if row.transfer_address == slot_transfer and row.records == (record,)
+    )
+    assert recovery.jump_tables[slot_transfer].guard_operator == (
+        "esp-slot-binding-domain"
+    )
+    assert recovery._esp_slot_binding_is_current(slot_transfer)
+    assert hypothesis in recovery.validated_relocated_dispatch_slot_hypotheses
+    assert slot_transfer not in recovery.required_esp_slot_revalidations
+
+
+def test_esp_slot_binding_withdrawal_invalidates_relocated_bootstrap_validation():
+    image, (_lifecycle_transfer, _ordinary_transfer, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(esp_slot_binding=True)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    record = esp_slot_bootstrap_record(recovery, slot_transfer)
+    recovery.seed_records.add(record)
+    recovery._record_relocated_dispatch_bootstrap_slots()
+    hypothesis = next(
+        row
+        for row in recovery.validated_relocated_dispatch_slot_hypotheses
+        if row.transfer_address == slot_transfer and row.records == (record,)
+    )
+    assert hypothesis in recovery.relocated_dispatch_slot_hypotheses
+    assert hypothesis in recovery.validated_relocated_dispatch_slot_hypotheses
+
+    transfer = recovery._owned_decoded(slot_transfer)
+    raw_guard = recovery._movzx_guard_for_index(
+        slot_transfer,
+        transfer.operands[0].mem.index,
+        producer_domain=False,
+    )
+    assert raw_guard is not None
+    movzx = recovery._owned_decoded(raw_guard[0].address)
+    source_load = recovery._esp_slot_loaded_register(
+        movzx.address,
+        movzx.operands[1].mem.base,
+        recovery._registrar_function_entry(slot_transfer),
+    )
+    assert source_load is not None
+    recovery._add_edge(
+        0x00401080,
+        source_load[0],
+        "indirect-jump-table",
+    )
+
+    recovery._revalidate_esp_slot_bindings()
+
+    assert slot_transfer not in recovery.jump_tables
+    assert slot_transfer not in recovery.esp_slot_binding_queries
+    assert slot_transfer not in recovery.esp_slot_binding_witnesses
+    assert slot_transfer in recovery.required_esp_slot_revalidations
+    assert not any(
+        row.transfer_address == slot_transfer
+        for row in recovery.validated_relocated_dispatch_slot_hypotheses
+    )
+    assert hypothesis in recovery.relocated_dispatch_slot_hypotheses
+
+
+def test_esp_slot_binding_validation_only_withdrawal_requires_exact_revalidation():
+    image, (_lifecycle_transfer, _ordinary_transfer, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(esp_slot_binding=True)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    record = esp_slot_bootstrap_record(recovery, slot_transfer)
+    recovery.seed_records.add(record)
+    recovery._record_relocated_dispatch_bootstrap_slots()
+    hypothesis = next(
+        row
+        for row in recovery.validated_relocated_dispatch_slot_hypotheses
+        if row.transfer_address == slot_transfer and row.records == (record,)
+    )
+    assert hypothesis in recovery.relocated_dispatch_slot_hypotheses
+
+    recovery.jump_tables.pop(slot_transfer)
+    recovery.pending_esp_slot_binding_queries.pop(slot_transfer, None)
+    recovery.esp_slot_binding_queries.pop(slot_transfer)
+    recovery.esp_slot_binding_witnesses.pop(slot_transfer)
+    transfer = recovery._owned_decoded(slot_transfer)
+    raw_guard = recovery._movzx_guard_for_index(
+        slot_transfer,
+        transfer.operands[0].mem.index,
+        producer_domain=False,
+    )
+    assert raw_guard is not None
+    movzx = recovery._owned_decoded(raw_guard[0].address)
+    source_load = recovery._esp_slot_loaded_register(
+        movzx.address,
+        movzx.operands[1].mem.base,
+        recovery._registrar_function_entry(slot_transfer),
+    )
+    assert source_load is not None
+    recovery._add_edge(
+        0x00401080,
+        source_load[0],
+        "indirect-jump-table",
+    )
+
+    recovery._remove_stale_esp_slot_binding(slot_transfer)
+
+    assert hypothesis not in (
+        recovery.validated_relocated_dispatch_slot_hypotheses
+    )
+    assert hypothesis in recovery.relocated_dispatch_slot_hypotheses
+    recovery._allow_movzx_producer_domains = True
+    recovered = recovery._recover_indexed_table(
+        transfer,
+        recovery.instructions[slot_transfer],
+        flow_kind="call",
+    )
+    fallback = recovery.jump_tables.get(slot_transfer)
+    assert (
+        slot_transfer in recovery.required_esp_slot_revalidations,
+        recovered,
+        None if fallback is None else fallback.guard_operator,
+    ) == (True, False, None)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "partial-overwrite",
+        "different-predecessor",
+        "mismatched-argument",
+        "unknown-receiver-call",
+        "unknown-ecx-receiver-call",
+        "unbalanced-merge",
+        "out-of-domain-write",
+        "stack-alias-partial-overwrite",
+        "derived-stack-alias-partial-overwrite",
+        "unsupported-stack-alias-transfer",
+        "slot-address-escape",
+        "slot-address-ecx-escape",
+        "reversible-receiver-alias-call",
+        "unsupported-receiver-alias-transfer",
+        "implicit-stosb-stack-overwrite",
+        "implicit-movsd-stack-overwrite",
+        "implicit-rep-stosb-stack-write",
+        "known-call-preserved-receiver-alias-write",
+    ),
+)
+def test_esp_slot_binding_rejects_hostile_slot_or_receiver_shape(mutation):
+    image, (_lifecycle_transfer, _ordinary_transfer, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(
+            esp_slot_binding=True,
+            esp_slot_mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    cfg = recovery.recover()
+
+    slot_tables = [
+        table for table in cfg.jump_tables if table.address == slot_transfer
+    ]
+    assert all(
+        table.guard_operator != "esp-slot-binding-domain"
+        for table in slot_tables
+    )
+    assert slot_transfer not in recovery.esp_slot_binding_witnesses
+    assert slot_transfer not in recovery.publication_guard_candidates
+
+
+def test_esp_slot_binding_allows_nonoverlapping_implicit_string_write():
+    image, (_lifecycle_transfer, _ordinary_transfer, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(
+            esp_slot_binding=True,
+            esp_slot_mutation="implicit-stosb-nonoverlap",
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    cfg = recovery.recover()
+
+    assert cfg.jump_table_at(slot_transfer).guard_operator == (
+        "esp-slot-binding-domain"
+    )
+    assert slot_transfer in recovery.esp_slot_binding_witnesses
+
+
+@pytest.mark.parametrize("segment", ("ss", "es", "ds", "fs", "gs"))
+def test_esp_slot_binding_rejects_explicit_segment_stack_alias_write(segment):
+    image, (_lifecycle_transfer, _ordinary_transfer, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(
+            esp_slot_binding=True,
+            esp_slot_mutation=f"explicit-{segment}-stack-overwrite",
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    cfg = recovery.recover()
+
+    assert all(
+        table.guard_operator != "esp-slot-binding-domain"
+        for table in cfg.jump_tables
+        if table.address == slot_transfer
+    )
+    assert slot_transfer not in recovery.esp_slot_binding_witnesses
+
+
+def test_esp_slot_binding_allows_nonoverlapping_explicit_ss_stack_write():
+    image, (_lifecycle_transfer, _ordinary_transfer, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(
+            esp_slot_binding=True,
+            esp_slot_mutation="explicit-ss-stack-nonoverlap",
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    cfg = recovery.recover()
+
+    assert cfg.jump_table_at(slot_transfer).guard_operator == (
+        "esp-slot-binding-domain"
+    )
+    assert slot_transfer in recovery.esp_slot_binding_witnesses
+
+
+@pytest.mark.parametrize(
+    ("mutation", "instruction_id"),
+    (
+        ("accessless-insb-stack-overwrite", capstone.x86.X86_INS_INSB),
+        ("accessless-insw-stack-overwrite", capstone.x86.X86_INS_INSW),
+        ("accessless-insd-stack-overwrite", capstone.x86.X86_INS_INSD),
+        ("accessless-rep-insd-stack-overwrite", capstone.x86.X86_INS_INSD),
+    ),
+    ids=("insb", "insw", "insd", "rep-insd"),
+)
+def test_esp_slot_binding_rejects_accessless_ins_stack_destination(
+    mutation,
+    instruction_id,
+):
+    image, (_lifecycle_transfer, _ordinary_transfer, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(
+            esp_slot_binding=True,
+            esp_slot_mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    cfg = recovery.recover()
+
+    decoded = next(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(0x004010A0)
+        if recovery._owned_decoded(address).id == instruction_id
+    )
+    destination = next(
+        operand
+        for operand in decoded.operands
+        if operand.type == capstone.x86.X86_OP_MEM
+        and operand.mem.segment == capstone.x86.X86_REG_ES
+        and operand.mem.base == capstone.x86.X86_REG_EDI
+    )
+    assert destination.access == 0
+    assert all(
+        table.guard_operator != "esp-slot-binding-domain"
+        for table in cfg.jump_tables
+        if table.address == slot_transfer
+    )
+    assert slot_transfer not in recovery.esp_slot_binding_witnesses
+
+
+def test_esp_slot_binding_rejects_receiver_returned_from_live_callee_saved_alias():
+    image, (_lifecycle_transfer, _ordinary_transfer, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(
+            esp_slot_binding=True,
+            esp_slot_mutation="callee-saved-receiver-alias-call",
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    cfg = recovery.recover()
+
+    call = next(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(0x004010A0)
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_CALL)
+        and recovery._direct_target(
+            recovery._owned_decoded(address)
+        )
+        == 0x004011C0
+    )
+    writer = next(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(0x004010A0)
+        if recovery._owned_decoded(address).id == capstone.x86.X86_INS_MOV
+        and recovery._owned_decoded(address).operands[0].type
+        == capstone.x86.X86_OP_MEM
+        and recovery._register_family(
+            recovery._owned_decoded(address).operands[0].mem.base
+        )
+        == "esp"
+        and recovery._owned_decoded(address).operands[1].type
+        == capstone.x86.X86_OP_REG
+        and recovery._register_family(
+            recovery._owned_decoded(address).operands[1].reg
+        )
+        == "esi"
+    )
+    states = recovery._esp_slot_receiver_alias_states(
+        writer,
+        slot_transfer,
+        0x004010A0,
+    )
+    assert states is not None
+    assert states[call.address].get("esi") == 1
+    assert not any(states[call.address].get(family, 0) for family in ("eax", "ecx", "edx"))
+    assert recovery._pushed_call_argument(call.address, 0) is None
+    assert all(
+        table.guard_operator != "esp-slot-binding-domain"
+        for table in cfg.jump_tables
+        if table.address == slot_transfer
+    )
+    assert slot_transfer not in recovery.esp_slot_binding_witnesses
+
+
+def test_esp_slot_binding_rejects_saved_slot_address_exposed_in_edi_to_known_callee():
+    image, (_lifecycle_transfer, _ordinary_transfer, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(
+            esp_slot_binding=True,
+            esp_slot_mutation="known-callee-saved-slot-address-alias",
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+
+    cfg = recovery.recover()
+
+    call = next(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(0x004010A0)
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_CALL)
+        and recovery._direct_target(recovery._owned_decoded(address))
+        == 0x004011C0
+    )
+    writer = next(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(0x004010A0)
+        if recovery._owned_decoded(address).id == capstone.x86.X86_INS_MOV
+        and recovery._owned_decoded(address).operands[0].type
+        == capstone.x86.X86_OP_MEM
+        and recovery._register_family(
+            recovery._owned_decoded(address).operands[0].mem.base
+        )
+        == "esp"
+        and recovery._owned_decoded(address).operands[1].type
+        == capstone.x86.X86_OP_REG
+        and recovery._register_family(
+            recovery._owned_decoded(address).operands[1].reg
+        )
+        == "esi"
+    )
+    receiver_states = recovery._esp_slot_receiver_alias_states(
+        writer,
+        slot_transfer,
+        0x004010A0,
+    )
+    address_states = recovery._function_stack_address_states(
+        0x004010A0,
+        slot_transfer,
+    )
+    assert receiver_states is not None
+    assert not recovery._esp_slot_call_receives_receiver(
+        call.address,
+        writer,
+        0x004010A0,
+        receiver_states,
+    )
+    assert address_states is not None
+    assert address_states[call.address].get("edi") == frozenset({-8})
+    assert recovery._pushed_call_argument(call.address, 0) is None
+    assert all(
+        table.guard_operator != "esp-slot-binding-domain"
+        for table in cfg.jump_tables
+        if table.address == slot_transfer
+    )
+    assert slot_transfer not in recovery.esp_slot_binding_witnesses
+
+
+def test_esp_slot_binding_rejects_open_predecessor_domain():
+    image, (_lifecycle_transfer, _ordinary_transfer, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(esp_slot_binding=True)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    transfer = recovery._owned_decoded(slot_transfer)
+    raw_guard = recovery._movzx_guard_for_index(
+        slot_transfer,
+        transfer.operands[0].mem.index,
+        producer_domain=False,
+    )
+    assert raw_guard is not None
+    movzx = recovery._owned_decoded(raw_guard[0].address)
+    source_load = recovery._esp_slot_loaded_register(
+        movzx.address,
+        movzx.operands[1].mem.base,
+        recovery._registrar_function_entry(slot_transfer),
+    )
+    assert source_load is not None
+    recovery.incoming_edges[source_load[0]] = {
+        (0x00401080, "indirect-jump-table")
+    }
+
+    assert recovery._esp_slot_binding_guard_for_index(
+        slot_transfer,
+        transfer.operands[0].mem.index,
+        transfer.operands[0].mem.disp & 0xFFFF_FFFF,
+        transfer.operands[0].size,
+    ) is None
+
+
+def test_esp_slot_binding_removes_stale_table_after_predecessor_growth():
+    image, (_lifecycle_transfer, _ordinary_transfer, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(esp_slot_binding=True)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    assert recovery.jump_tables[slot_transfer].guard_operator == (
+        "esp-slot-binding-domain"
+    )
+    transfer = recovery._owned_decoded(slot_transfer)
+    raw_guard = recovery._movzx_guard_for_index(
+        slot_transfer,
+        transfer.operands[0].mem.index,
+        producer_domain=False,
+    )
+    assert raw_guard is not None
+    movzx = recovery._owned_decoded(raw_guard[0].address)
+    source_load = recovery._esp_slot_loaded_register(
+        movzx.address,
+        movzx.operands[1].mem.base,
+        recovery._registrar_function_entry(slot_transfer),
+    )
+    assert source_load is not None
+
+    recovery._add_edge(
+        0x00401080,
+        source_load[0],
+        "indirect-jump-table",
+    )
+    recovery._revalidate_esp_slot_bindings()
+
+    assert slot_transfer not in recovery.jump_tables
+    assert slot_transfer not in recovery.esp_slot_binding_witnesses
+
+
+def test_esp_slot_binding_revalidates_multiple_tables_to_one_current_snapshot():
+    image, (_life, _ordinary, slot_a, slot_b) = (
+        lifecycle_movzx_dispatch_image(
+            esp_slot_binding=True,
+            two_esp_slot_bindings=True,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    assert all(
+        recovery._esp_slot_binding_is_current(address)
+        for address in (slot_a, slot_b)
+    )
+
+    recovery.reference_classification_revision += 1
+    recovery._revalidate_esp_slot_bindings()
+
+    current_revisions = (
+        recovery.control_flow_revision,
+        recovery.producer_seed_revision,
+        recovery.absolute_memory_write_revision,
+        recovery.reference_classification_revision,
+    )
+    for address in (slot_a, slot_b):
+        assert recovery.jump_tables[address].guard_operator == (
+            "esp-slot-binding-domain"
+        )
+        assert recovery._esp_slot_binding_is_current(address)
+        query = recovery.esp_slot_binding_queries[address]
+        witness = recovery.esp_slot_binding_witnesses[address]
+        assert witness.query_sha256 == query.sha256
+        assert (
+            query.control_flow_revision,
+            query.producer_seed_revision,
+            query.absolute_memory_write_revision,
+            query.reference_classification_revision,
+        ) == current_revisions
+
+
+def test_esp_slot_binding_revalidates_three_tables_to_exact_current_snapshot():
+    image, (_life, _ordinary, slot_a, slot_b, slot_c) = (
+        lifecycle_movzx_dispatch_image(
+            esp_slot_binding=True,
+            three_esp_slot_bindings=True,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    recovery.reference_classification_revision += 1
+    recovery._revalidate_esp_slot_bindings()
+
+    current_revisions = (
+        recovery.control_flow_revision,
+        recovery.producer_seed_revision,
+        recovery.absolute_memory_write_revision,
+        recovery.reference_classification_revision,
+    )
+    for address in (slot_a, slot_b, slot_c):
+        assert recovery._esp_slot_binding_is_current(address)
+        query = recovery.esp_slot_binding_queries[address]
+        witness = recovery.esp_slot_binding_witnesses[address]
+        inventory = recovery._esp_slot_current_dependency_inventory(
+            query.function_entry,
+            query.anchor_transfer_address,
+            query.lifecycle_transfer_address,
+        )
+        assert inventory is not None
+        assert inventory == (
+            query.dependency_functions,
+            query.dependency_function_fingerprints,
+            query.dependency_edges,
+        )
+        assert inventory == (
+            witness.dependency_functions,
+            witness.dependency_function_fingerprints,
+            witness.dependency_edges,
+        )
+        assert current_revisions == (
+            query.control_flow_revision,
+            query.producer_seed_revision,
+            query.absolute_memory_write_revision,
+            query.reference_classification_revision,
+        )
+
+
+def test_esp_slot_binding_three_table_revalidation_keeps_only_good_survivor():
+    image, (_life, _ordinary, slot_a, slot_b, slot_c) = (
+        lifecycle_movzx_dispatch_image(
+            esp_slot_binding=True,
+            three_esp_slot_bindings=True,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    for slot in (slot_b, slot_c):
+        transfer = recovery._owned_decoded(slot)
+        raw_guard = recovery._movzx_guard_for_index(
+            slot,
+            transfer.operands[0].mem.index,
+            producer_domain=False,
+        )
+        assert raw_guard is not None
+        movzx = recovery._owned_decoded(raw_guard[0].address)
+        source_load = recovery._esp_slot_loaded_register(
+            movzx.address,
+            movzx.operands[1].mem.base,
+            recovery._registrar_function_entry(slot),
+        )
+        assert source_load is not None
+        recovery._add_edge(
+            0x00401080,
+            source_load[0],
+            "indirect-jump-table",
+        )
+    recovery.reference_classification_revision += 1
+
+    recovery._revalidate_esp_slot_bindings()
+
+    assert recovery._esp_slot_binding_is_current(slot_a)
+    for slot in (slot_b, slot_c):
+        assert slot not in recovery.jump_tables
+        assert slot not in recovery.esp_slot_binding_queries
+        assert slot not in recovery.esp_slot_binding_witnesses
+        assert slot in recovery.required_esp_slot_revalidations
+
+
+@pytest.mark.parametrize(
+    "drift",
+    ("reference-classification-revision", "dependency-edge-inventory"),
+)
+def test_esp_slot_binding_revalidation_rejects_immediate_post_stamp_drift(
+    monkeypatch,
+    drift,
+):
+    image, (_life, _ordinary, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(esp_slot_binding=True)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    original_store = recovery._store_esp_slot_binding_pairs
+    drifted = False
+
+    def store_then_drift(pairs):
+        nonlocal drifted
+        original_store(pairs)
+        if drifted:
+            return
+        drifted = True
+        if drift == "reference-classification-revision":
+            recovery.reference_classification_revision += 1
+        else:
+            recovery.edges.add(
+                x86_cfg_module.CfgEdge(
+                    0x004010A0,
+                    0x004010F0,
+                    "post-stamp-dependency-drift",
+                )
+            )
+
+    monkeypatch.setattr(
+        recovery,
+        "_store_esp_slot_binding_pairs",
+        store_then_drift,
+    )
+    recovery.reference_classification_revision += 1
+
+    with pytest.raises(CfgRecoveryError, match="ESP-slot"):
+        recovery._revalidate_esp_slot_bindings()
+
+    assert drifted
+    assert not recovery._esp_slot_binding_is_current(slot_transfer)
+
+
+def test_esp_slot_binding_revalidation_keeps_only_current_survivors():
+    image, (_life, _ordinary, slot_a, slot_b) = (
+        lifecycle_movzx_dispatch_image(
+            esp_slot_binding=True,
+            two_esp_slot_bindings=True,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    transfer = recovery._owned_decoded(slot_b)
+    raw_guard = recovery._movzx_guard_for_index(
+        slot_b,
+        transfer.operands[0].mem.index,
+        producer_domain=False,
+    )
+    assert raw_guard is not None
+    movzx = recovery._owned_decoded(raw_guard[0].address)
+    source_load = recovery._esp_slot_loaded_register(
+        movzx.address,
+        movzx.operands[1].mem.base,
+        recovery._registrar_function_entry(slot_b),
+    )
+    assert source_load is not None
+    recovery._add_edge(
+        0x00401080,
+        source_load[0],
+        "indirect-jump-table",
+    )
+    recovery.reference_classification_revision += 1
+
+    recovery._revalidate_esp_slot_bindings()
+
+    assert recovery.jump_tables[slot_a].guard_operator == (
+        "esp-slot-binding-domain"
+    )
+    assert recovery._esp_slot_binding_is_current(slot_a)
+    assert slot_b not in recovery.jump_tables
+    assert slot_b not in recovery.esp_slot_binding_queries
+    assert slot_b not in recovery.esp_slot_binding_witnesses
+    assert slot_b in recovery.required_esp_slot_revalidations
+    assert not any(
+        row.transfer_address == slot_b
+        for row in recovery.validated_relocated_dispatch_slot_hypotheses
+    )
+
+
+def test_esp_slot_binding_rebinds_exact_dependency_edge_inventory():
+    image, (_lifecycle_transfer, _ordinary_transfer, slot_transfer) = (
+        lifecycle_movzx_dispatch_image(esp_slot_binding=True)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    original = recovery.esp_slot_binding_witnesses[slot_transfer]
+    original_revisions = (
+        recovery.control_flow_revision,
+        recovery.producer_seed_revision,
+        recovery.absolute_memory_write_revision,
+        recovery.reference_classification_revision,
+    )
+    assert original_revisions == (
+        original.control_flow_revision,
+        original.producer_seed_revision,
+        original.absolute_memory_write_revision,
+        original.reference_classification_revision,
+    )
+    assert original.dependency_functions
+    assert original.dependency_function_fingerprints
+    assert original.dependency_edges
+
+    recovery.edges.add(
+        x86_cfg_module.CfgEdge(
+            source=0x004010A0,
+            target=0x004010F0,
+            kind="dependency-inventory-test",
+        )
+    )
+    assert original_revisions == (
+        recovery.control_flow_revision,
+        recovery.producer_seed_revision,
+        recovery.absolute_memory_write_revision,
+        recovery.reference_classification_revision,
+    )
+
+    recovery._revalidate_esp_slot_bindings()
+
+    rebound = recovery.esp_slot_binding_witnesses[slot_transfer]
+    assert rebound.query_sha256 != original.query_sha256
+    assert (
+        0x004010A0,
+        0x004010F0,
+        "dependency-inventory-test",
+    ) in rebound.dependency_edges
 
 
 def test_object_tag_lifecycle_rejects_overwritten_stack_receiver():
