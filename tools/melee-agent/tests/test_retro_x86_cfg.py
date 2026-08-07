@@ -11898,6 +11898,300 @@ def test_private_heap_effect_closure_preserves_metadata(mutation, expected):
         )
 
 
+def test_private_heap_effect_closure_retains_canonical_symbolic_writes():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-effect"
+    )
+    data = bytearray(fixture.image.data)
+    root_offset = fixture.image.va_to_offset(fixture.private_page_helper)
+    root_end = fixture.image.va_to_offset(fixture.private_page_helper + 0x40)
+    assert root_offset is not None and root_end is not None
+    root = bytes(data[root_offset:root_end])
+    original = bytes.fromhex(
+        "83 c4 0c 8b 43 0c 83 e0 f8 8d 44 03 fc c7 00 00 00 00 00 5b c3"
+    )
+    with_memory_normalization = bytes.fromhex(
+        "83 c4 0c 83 4b 0c 03 83 63 0c f8 8b 43 0c 8d 44 03 fc 5b c3"
+    )
+    rewritten = root.replace(original, with_memory_normalization, 1)
+    assert rewritten != root
+    assert len(rewritten) < len(root)
+    data[root_offset:root_end] = rewritten.ljust(len(root), b"\x90")
+    image = replace(
+        fixture.image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract, fixture.private_page_helper
+    )
+    assert witness is not None
+
+    effects = recovery._publication_private_heap_effect_closure(witness)
+
+    assert effects is not None
+    writes = effects.symbolic_writes
+    assert writes == tuple(
+        sorted(
+            writes,
+            key=lambda row: (
+                row.function_entry,
+                row.instruction_address,
+                row.operand_index,
+            ),
+        )
+    )
+    assert {row.access for row in writes} == {"write"}
+    tagged_extent = next(
+        row
+        for row in writes
+        if row.operation == "mov"
+        and row.address == ("affine", 1, 0, 0xC)
+    )
+    assert tagged_extent.function_entry == fixture.private_page_helper
+    assert tagged_extent.value_before is None
+    assert tagged_extent.value_after == ("tagged", ("affine", 0, 1, 0), 3)
+    assert tagged_extent.immediate is None
+    nested_extent = next(
+        row
+        for row in writes
+        if row.operation == "mov"
+        and row.address == ("affine", 1, 0, 0x10)
+    )
+    assert nested_extent.function_entry != fixture.private_page_helper
+    assert nested_extent.value_after == ("affine", 0, 1, 0)
+    retag = next(row for row in writes if row.operation == "or")
+    assert retag.address == ("affine", 1, 0, 0xC)
+    assert retag.value_before == ("tagged", ("affine", 0, 1, 0), 3)
+    assert retag.value_after == ("tagged", ("affine", 0, 1, 0), 3)
+    assert retag.immediate == 3
+    normalization = next(row for row in writes if row.operation == "and")
+    assert normalization.address == ("affine", 1, 0, 0xC)
+    assert normalization.value_before == ("tagged", ("affine", 0, 1, 0), 3)
+    assert normalization.value_after == ("affine", 0, 1, 0)
+    assert normalization.immediate == 0xFFFF_FFF8
+
+
+def test_private_heap_effect_closure_retains_unknown_symbolic_write():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-effect"
+    )
+    data = bytearray(fixture.image.data)
+    nested_helper = fixture.private_page_helper + 0x100
+    write_offset = fixture.image.va_to_offset(nested_helper + 8)
+    assert write_offset is not None
+    data[write_offset : write_offset + 3] = bytes.fromhex("89 50 14")
+    image = replace(
+        fixture.image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract, fixture.private_page_helper
+    )
+    assert witness is not None
+
+    effects = recovery._publication_private_heap_effect_closure(witness)
+
+    assert effects is not None
+    unknown = next(
+        row
+        for row in effects.symbolic_writes
+        if row.address == ("affine", 1, 0, 0x14)
+    )
+    assert unknown.operation == "mov"
+    assert unknown.value_before is None
+    assert unknown.value_after is None
+
+
+def test_private_heap_effect_closure_retains_mov_overwrite_input():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-effect"
+    )
+    data = bytearray(fixture.image.data)
+    root_offset = fixture.image.va_to_offset(fixture.private_page_helper)
+    root_end = fixture.image.va_to_offset(fixture.private_page_helper + 0x40)
+    assert root_offset is not None and root_end is not None
+    root = bytes(data[root_offset:root_end])
+    original = bytes.fromhex(
+        "83 c4 0c 8b 43 0c 83 e0 f8 8d 44 03 fc c7 00 00 00 00 00 5b c3"
+    )
+    with_overwrite = bytes.fromhex("83 c4 0c 89 43 0c 5b c3")
+    rewritten = root.replace(original, with_overwrite, 1)
+    assert rewritten != root
+    data[root_offset:root_end] = rewritten.ljust(len(root), b"\x90")
+    image = replace(
+        fixture.image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract, fixture.private_page_helper
+    )
+    assert witness is not None
+
+    effects = recovery._publication_private_heap_effect_closure(witness)
+
+    assert effects is not None
+    extent_writes = tuple(
+        row
+        for row in effects.symbolic_writes
+        if row.address == ("affine", 1, 0, 0xC)
+    )
+    assert len(extent_writes) == 2
+    assert extent_writes[1].operation == "mov"
+    assert extent_writes[1].value_before == (
+        "tagged",
+        ("affine", 0, 1, 0),
+        3,
+    )
+    assert extent_writes[1].value_after is None
+
+
+def test_private_heap_effect_closure_current_validator_rejects_hostile_rows():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-effect"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract, fixture.private_page_helper
+    )
+    assert witness is not None
+    effects = recovery._publication_private_heap_effect_closure(witness)
+    assert effects is not None
+    assert recovery._publication_private_heap_effect_closure_is_current(effects)
+    first = effects.symbolic_writes[0]
+
+    hostiles = (
+        replace(effects, symbolic_writes=(("malformed-row",),)),
+        replace(
+            effects,
+            function_fingerprints=(
+                (
+                    effects.function_fingerprints[0][0],
+                    "0" * 64,
+                ),
+                *effects.function_fingerprints[1:],
+            ),
+        ),
+        replace(
+            effects,
+            allocator_dependency_fingerprints=(
+                (
+                    effects.allocator_dependency_fingerprints[0][0],
+                    "0" * 64,
+                ),
+                *effects.allocator_dependency_fingerprints[1:],
+            ),
+        ),
+        replace(
+            effects,
+            symbolic_writes=(*effects.symbolic_writes, first),
+        ),
+        replace(
+            effects,
+            symbolic_writes=(
+                *effects.symbolic_writes,
+                replace(first, value_after=("affine", 0, 0, 7)),
+            ),
+        ),
+        replace(
+            effects,
+            symbolic_writes=(
+                replace(first, instruction_address=first.instruction_address + 1),
+                *effects.symbolic_writes[1:],
+            ),
+        ),
+        replace(
+            effects,
+            symbolic_writes=(
+                replace(first, function_entry=first.function_entry + 1),
+                *effects.symbolic_writes[1:],
+            ),
+        ),
+        replace(
+            effects,
+            symbolic_writes=(
+                replace(first, address=("affine", 1, 0)),
+                *effects.symbolic_writes[1:],
+            ),
+        ),
+        replace(
+            effects,
+            symbolic_writes=(
+                replace(first, value_after=("tagged", ("bad",), 3)),
+                *effects.symbolic_writes[1:],
+            ),
+        ),
+        replace(
+            effects,
+            symbolic_writes=(
+                replace(first, access="read"),
+                *effects.symbolic_writes[1:],
+            ),
+        ),
+        replace(
+            effects,
+            symbolic_writes=(
+                replace(first, width=0),
+                *effects.symbolic_writes[1:],
+            ),
+        ),
+        replace(
+            effects,
+            symbolic_writes=(
+                replace(first, immediate=3),
+                *effects.symbolic_writes[1:],
+            ),
+        ),
+    )
+    assert all(
+        not recovery._publication_private_heap_effect_closure_is_current(
+            hostile
+        )
+        for hostile in hostiles
+    )
+
+
 def test_private_heap_bounded_witness_rejects_stale_function_fingerprint():
     fixture = finalized_handle_arena_image(
         mutation="private-heap-bounded-helper-normalized"
@@ -11916,6 +12210,9 @@ def test_private_heap_bounded_witness_rejects_stale_function_fingerprint():
         contract, fixture.private_page_helper
     )
     assert witness is not None
+    effects = recovery._publication_private_heap_effect_closure(witness)
+    assert effects is not None
+    assert effects.symbolic_writes
 
     stale = replace(witness, helper_function_sha256="0" * 64)
 
@@ -11942,6 +12239,9 @@ def test_private_heap_effect_closure_replays_allocator_dependencies():
     )
     assert witness is not None
     assert witness.allocator_dependency_fingerprints
+    effects = recovery._publication_private_heap_effect_closure(witness)
+    assert effects is not None
+    assert effects.symbolic_writes
 
     entry, _sha256 = witness.allocator_dependency_fingerprints[-1]
     stale = replace(

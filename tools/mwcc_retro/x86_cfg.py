@@ -1720,6 +1720,22 @@ class _PublicationPrivateHeapPrunedBranch:
 
 
 @dataclass(frozen=True, slots=True)
+class _PublicationPrivateHeapSymbolicWrite:
+    """One exact private-heap write executed by the certified closure."""
+
+    function_entry: int
+    instruction_address: int
+    operand_index: int
+    access: Literal["write"]
+    width: int
+    address: tuple[str, int, int, int]
+    operation: Literal["mov", "and", "or"]
+    value_before: tuple[Any, ...] | None
+    value_after: tuple[Any, ...] | None
+    immediate: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class _PublicationPrivateHeapEffectClosure:
     root_helper: int
     function_entries: tuple[int, ...]
@@ -1728,6 +1744,7 @@ class _PublicationPrivateHeapEffectClosure:
     pruned_call_sites: tuple[int, ...]
     pruned_branches: tuple[_PublicationPrivateHeapPrunedBranch, ...]
     bounded_spans: tuple[_PublicationPrivateHeapBoundedSpan, ...]
+    symbolic_writes: tuple[_PublicationPrivateHeapSymbolicWrite, ...]
     preserved_metadata_calls: tuple[int, ...]
     function_fingerprints: tuple[tuple[int, str], ...]
     allocator_dependency_fingerprints: tuple[tuple[int, str], ...]
@@ -19367,6 +19384,216 @@ class _DirectCfgRecovery:
                 ))
         return tuple(spans) if spans else None
 
+    def _publication_private_heap_effect_closure_is_current(
+        self,
+        effects: _PublicationPrivateHeapEffectClosure,
+    ) -> bool:
+        """Replay immutable dependencies and validate exact write evidence."""
+
+        function_entries = effects.function_entries
+        if (
+            not function_entries
+            or not all(type(entry) is int for entry in function_entries)
+            or function_entries != tuple(sorted(set(function_entries)))
+            or any(entry not in self.function_addresses for entry in function_entries)
+        ):
+            return False
+        fingerprints = effects.function_fingerprints
+        if not all(
+            isinstance(row, tuple)
+            and len(row) == 2
+            and type(row[0]) is int
+            and isinstance(row[1], str)
+            for row in fingerprints
+        ):
+            return False
+        if (
+            tuple(entry for entry, _sha256 in fingerprints)
+            != function_entries
+            or any(
+                type(entry) is not int
+                or not isinstance(sha256, str)
+                or sha256 != self._producer_function_fingerprint(entry)
+                for entry, sha256 in fingerprints
+            )
+        ):
+            return False
+        dependencies = effects.allocator_dependency_fingerprints
+        if not all(
+            isinstance(row, tuple)
+            and len(row) == 2
+            and type(row[0]) is int
+            and isinstance(row[1], str)
+            for row in dependencies
+        ):
+            return False
+        dependency_entries = tuple(entry for entry, _sha256 in dependencies)
+        if (
+            not all(type(entry) is int for entry in dependency_entries)
+            or dependency_entries != tuple(sorted(set(dependency_entries)))
+            or any(
+                entry not in self.function_addresses
+                or not isinstance(sha256, str)
+                or sha256 != self._producer_function_fingerprint(entry)
+                for entry, sha256 in dependencies
+            )
+        ):
+            return False
+        executed = effects.executed_instruction_addresses
+        if (
+            not executed
+            or not all(type(address) is int for address in executed)
+            or executed != tuple(sorted(set(executed)))
+            or any(address not in self.instructions for address in executed)
+        ):
+            return False
+
+        def is_affine(value: object) -> bool:
+            return bool(
+                isinstance(value, tuple)
+                and len(value) == 4
+                and value[0] == "affine"
+                and all(type(component) is int for component in value[1:])
+            )
+
+        def is_value(value: object) -> bool:
+            return bool(
+                value is None
+                or is_affine(value)
+                or (
+                    isinstance(value, tuple)
+                    and len(value) == 3
+                    and value[0] == "tagged"
+                    and is_affine(value[1])
+                    and type(value[2]) is int
+                    and 0 <= value[2] <= 0xFFFF_FFFF
+                )
+            )
+
+        def low_bits_are_zero(value: tuple[Any, ...], mask: int) -> bool:
+            return bool(
+                is_affine(value)
+                and value[1] == 0
+                and value[2] in {0, 1}
+                and value[3] & mask == 0
+            )
+
+        def replay_bit_operation(
+            operation: str,
+            value: tuple[Any, ...] | None,
+            immediate: int,
+        ) -> tuple[Any, ...] | None:
+            if value is None:
+                return None
+            if operation == "or":
+                if is_affine(value) and value[1:3] == (0, 0):
+                    return (
+                        "affine",
+                        0,
+                        0,
+                        (value[3] | immediate) & 0xFFFF_FFFF,
+                    )
+                if is_affine(value) and low_bits_are_zero(value, immediate):
+                    return ("tagged", value, immediate)
+                if value[0] == "tagged":
+                    return ("tagged", value[1], value[2] | immediate)
+                return None
+            if is_affine(value) and value[1:3] == (0, 0):
+                return ("affine", 0, 0, value[3] & immediate)
+            cleared = (~immediate) & 0xFFFF_FFFF
+            if is_affine(value) and low_bits_are_zero(value, cleared):
+                return value
+            if value[0] == "tagged":
+                base = value[1]
+                bits = value[2] & immediate
+                if low_bits_are_zero(base, cleared):
+                    return base if bits == 0 else ("tagged", base, bits)
+            return None
+
+        rows = effects.symbolic_writes
+        if not rows or not all(
+            isinstance(row, _PublicationPrivateHeapSymbolicWrite)
+            for row in rows
+        ):
+            return False
+        row_keys = tuple(
+            (row.function_entry, row.instruction_address, row.operand_index)
+            for row in rows
+        )
+        if (
+            row_keys != tuple(sorted(row_keys))
+            or len(row_keys) != len(set(row_keys))
+        ):
+            return False
+        function_set = set(function_entries)
+        executed_set = set(executed)
+        for row in rows:
+            if (
+                row.function_entry not in function_set
+                or row.instruction_address not in executed_set
+                or self._registrar_function_entry(row.instruction_address)
+                != row.function_entry
+                or type(row.operand_index) is not int
+                or row.operand_index < 0
+                or row.access != "write"
+                or type(row.width) is not int
+                or row.width <= 0
+                or not is_affine(row.address)
+                or not is_value(row.value_before)
+                or not is_value(row.value_after)
+            ):
+                return False
+            decoded = self._owned_decoded(row.instruction_address)
+            operands = decoded.operands
+            if row.operand_index >= len(operands):
+                return False
+            destination = operands[row.operand_index]
+            if not (
+                destination.type == X86_OP_MEM
+                and destination.access & CS_AC_WRITE
+                and destination.size == row.width
+                and decoded.mnemonic == row.operation
+            ):
+                return False
+            matching_spans = tuple(
+                span
+                for span in effects.bounded_spans
+                if span.instruction_address == row.instruction_address
+                and span.operand_index == row.operand_index
+            )
+            if len(matching_spans) != 1:
+                return False
+            span = matching_spans[0]
+            if span.position not in {"base-relative", "end-relative"}:
+                return False
+            expected_address = (
+                "affine",
+                1,
+                0 if span.position == "base-relative" else 1,
+                span.displacement,
+            )
+            if span.width != row.width or row.address != expected_address:
+                return False
+            if row.operation == "mov":
+                if row.immediate is not None:
+                    return False
+                continue
+            if not (
+                row.operation in {"and", "or"}
+                and len(operands) == 2
+                and operands[1].type == X86_OP_IMM
+                and type(row.immediate) is int
+                and row.immediate == operands[1].imm & 0xFFFF_FFFF
+                and row.value_after
+                == replay_bit_operation(
+                    row.operation,
+                    row.value_before,
+                    row.immediate,
+                )
+            ):
+                return False
+        return True
+
     def _publication_private_heap_effect_closure(
         self,
         witness: _PublicationPrivateHeapExtentWitness,
@@ -19562,6 +19789,7 @@ class _DirectCfgRecovery:
             return_memories = []
             spans = set()
             writes = set()
+            symbolic_writes = []
             functions = {function_entry}
             executed_instructions = set()
             call_edges = set()
@@ -19779,6 +20007,7 @@ class _DirectCfgRecovery:
                     (
                         next_memory,
                         nested_writes,
+                        nested_symbolic_writes,
                         nested_spans,
                         nested_functions,
                         nested_instructions,
@@ -19792,6 +20021,7 @@ class _DirectCfgRecovery:
                     preserved_calls.add(address)
                     preserved_calls.update(nested_preserved)
                     writes.update(nested_writes)
+                    symbolic_writes.extend(nested_symbolic_writes)
                     spans.update(nested_spans)
                     functions.update(nested_functions)
                     executed_instructions.update(nested_instructions)
@@ -19872,7 +20102,22 @@ class _DirectCfgRecovery:
                             return None
                         spans.add(span)
                         writes.add(key)
+                        value_before = next_memory.get(key)
                         next_memory[key] = value
+                        symbolic_writes.append(
+                            _PublicationPrivateHeapSymbolicWrite(
+                                function_entry=function_entry,
+                                instruction_address=address,
+                                operand_index=0,
+                                access="write",
+                                width=destination.size,
+                                address=key,
+                                operation="mov",
+                                value_before=value_before,
+                                value_after=value,
+                                immediate=None,
+                            )
+                        )
                     else:
                         return None
                     successors = (address + decoded.size,)
@@ -19944,9 +20189,25 @@ class _DirectCfgRecovery:
                             return None
                         spans.add(span)
                         writes.add(key)
-                        next_memory[key] = operation(
-                            next_memory.get(key),
+                        value_before = next_memory.get(key)
+                        value_after = operation(
+                            value_before,
                             source.imm,
+                        )
+                        next_memory[key] = value_after
+                        symbolic_writes.append(
+                            _PublicationPrivateHeapSymbolicWrite(
+                                function_entry=function_entry,
+                                instruction_address=address,
+                                operand_index=0,
+                                access="write",
+                                width=destination.size,
+                                address=key,
+                                operation=decoded.mnemonic,
+                                value_before=value_before,
+                                value_after=value_after,
+                                immediate=source.imm & 0xFFFF_FFFF,
+                            )
                         )
                     else:
                         return None
@@ -20038,6 +20299,7 @@ class _DirectCfgRecovery:
             return (
                 dict(next(iter(memory_keys))),
                 frozenset(writes),
+                tuple(symbolic_writes),
                 frozenset(spans),
                 frozenset(functions),
                 frozenset(executed_instructions),
@@ -20058,6 +20320,7 @@ class _DirectCfgRecovery:
         (
             _memory,
             _writes,
+            symbolic_writes,
             spans,
             functions,
             executed_instructions,
@@ -20083,7 +20346,23 @@ class _DirectCfgRecovery:
             for entry, current in fingerprints
         ):
             return None
-        return _PublicationPrivateHeapEffectClosure(
+        symbolic_write_keys = tuple(
+            (row.function_entry, row.instruction_address, row.operand_index)
+            for row in symbolic_writes
+        )
+        if len(symbolic_write_keys) != len(set(symbolic_write_keys)):
+            return None
+        canonical_symbolic_writes = tuple(
+            sorted(
+                symbolic_writes,
+                key=lambda row: (
+                    row.function_entry,
+                    row.instruction_address,
+                    row.operand_index,
+                ),
+            )
+        )
+        effects = _PublicationPrivateHeapEffectClosure(
             root_helper=witness.helper_entry,
             function_entries=tuple(sorted(functions)),
             executed_instruction_addresses=tuple(
@@ -20111,9 +20390,17 @@ class _DirectCfgRecovery:
                     ),
                 )
             ),
+            symbolic_writes=canonical_symbolic_writes,
             preserved_metadata_calls=tuple(sorted(preserved_calls)),
             function_fingerprints=fingerprints,
             allocator_dependency_fingerprints=dependency_fingerprints,
+        )
+        return (
+            effects
+            if self._publication_private_heap_effect_closure_is_current(
+                effects
+            )
+            else None
         )
 
     def _function_returns_call_result_or_zero(
