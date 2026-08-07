@@ -169,7 +169,7 @@ git commit -m "test(mwcc-retro): model private page arena"
 - Produces: `_PublicationPrivateHeapSymbolicWrite` and the canonical
   `_PublicationPrivateHeapEffectClosure.symbolic_writes` tuple.
 
-- [ ] **Step 1: Write RED symbolic-write evidence tests**
+- [x] **Step 1: Write RED symbolic-write evidence tests**
 
 Use the existing positive effect fixtures to require deterministic rows for
 `mov`, `or`, and `and`, including nested function identity, exact
@@ -179,7 +179,7 @@ fingerprint, a row outside `executed_instruction_addresses`, duplicate location
 keys, malformed affine/value shapes, and an unknown value. Unknown rows remain
 serialized but cannot establish a later layout fact.
 
-- [ ] **Step 2: Thread rows through the existing interpreter**
+- [x] **Step 2: Thread rows through the existing interpreter**
 
 Collect rows at the point where `execute_function` already computes the memory
 key and write value; merge nested rows exactly like bounded spans, sort by
@@ -187,7 +187,7 @@ key and write value; merge nested rows exactly like bounded spans, sort by
 location keys. Do not create a second interpreter and do not change generic
 bounded-span authorization.
 
-- [ ] **Step 3: Run the effect suite and commit**
+- [x] **Step 3: Run the effect suite and commit**
 
 ```bash
 python -m pytest tools/melee-agent/tests/test_retro_x86_cfg.py -q \
@@ -200,6 +200,13 @@ git diff --check
 git add tools/mwcc_retro/x86_cfg.py tools/melee-agent/tests/test_retro_x86_cfg.py
 git commit -m "feat(mwcc-retro): retain initializer write evidence"
 ```
+
+Observed at `d0fe94dc6`: the 11-test private-heap effect-closure selection
+passed, the complete x86-CFG suite passed independently with 1,563 tests, and
+Ruff, `py_compile`, and diff checks were clean. Independent review found no
+remaining Critical or Important findings. Task 2 must re-run
+`_publication_private_heap_effect_closure_is_current(effects)` at its evidence
+consumption boundary before deriving layout facts.
 
 ---
 
