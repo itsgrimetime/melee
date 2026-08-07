@@ -5431,6 +5431,36 @@ def private_page_ring_register_head_image(
     return replace(fixture, arena=replace(fixture.arena, image=image))
 
 
+def private_page_ring_stack_transfer_image(
+    prefix: str,
+) -> PrivatePageArenaFixture:
+    """Prepend one fixed-width stack-transfer probe to the publisher."""
+    fixture = private_page_arena_image()
+    prefix_bytes = bytes.fromhex(prefix)
+    assert len(prefix_bytes) == 3
+    raw = bytearray(fixture.arena.image.data)
+    section = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.va
+        <= fixture.page_inserter
+        < section.va + section.raw_size
+    )
+    offset = section.raw_offset + fixture.page_inserter - section.va
+    body = bytes(raw[offset : offset + 0x33])
+    assert body[-1] == 0xC3
+    assert raw[offset + 0x33 : offset + 0x40] == b"\x90" * 0x0D
+    code = prefix_bytes + body
+    assert len(code) <= 0x40
+    raw[offset : offset + 0x40] = code + b"\x90" * (0x40 - len(code))
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
 _PRIVATE_PAGE_RING_HOSTILES = (
     "extra-selector-caller",
     "arbitrary-existing-page",
@@ -5712,6 +5742,37 @@ def private_page_arena_contract(fixture):
     effects = recovery._publication_private_heap_effect_closure(extent)
     assert effects is not None
     return recovery, contract, extent, effects
+
+
+def private_page_ring_task3_evidence(fixture):
+    """Reach Task 3 with current Task 1/2 evidence for a fixture."""
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    assert recovery._publication_private_heap_effect_closure_is_current(
+        effects
+    )
+    layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert layout is not None
+    assert layout.page_link_offsets is None
+    return recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    )
+
+
+def private_page_image_changed_addresses(baseline, hostile):
+    """Return complete image byte differences for paired arena fixtures."""
+    return {
+        address
+        for section in baseline.arena.image.sections
+        for address in range(section.va, section.va + section.raw_size)
+        if baseline.arena.image.read(address, 1)
+        != hostile.arena.image.read(address, 1)
+    }
 
 
 _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
@@ -14075,6 +14136,77 @@ def test_private_page_layout_does_not_consume_page_ring_links():
 
     assert layout is not None
     assert layout.page_link_offsets is None
+
+
+@pytest.mark.parametrize("prefix", ("50 90 5b", "50 5b 90"))
+def test_private_page_ring_publisher_accepts_balanced_full_width_stack(
+    prefix,
+):
+    """Balanced dword PUSH/POP preserves exact argument provenance."""
+    fixture = private_page_ring_stack_transfer_image(prefix)
+
+    ring_evidence = private_page_ring_task3_evidence(fixture)
+
+    assert ring_evidence is not None
+    assert ring_evidence.layout.page_link_offsets == (0, 4)
+
+
+def test_private_page_ring_publisher_stack_partial_pop():
+    """A word POP cannot counterfeit a restored entry stack pointer."""
+    baseline = private_page_ring_stack_transfer_image("50 90 5b")
+    hostile = private_page_ring_stack_transfer_image("50 66 5b")
+    assert private_page_image_changed_addresses(baseline, hostile) == {
+        baseline.page_inserter + 0x01
+    }
+    assert private_page_ring_task3_evidence(baseline) is not None
+
+    assert private_page_ring_task3_evidence(hostile) is None
+
+
+def test_private_page_ring_publisher_stack_pop_esp():
+    """POP into the stack-pointer family cannot preserve stack proof."""
+    baseline = private_page_ring_stack_transfer_image("50 5b 90")
+    hostile = private_page_ring_stack_transfer_image("50 5c 90")
+    assert private_page_image_changed_addresses(baseline, hostile) == {
+        baseline.page_inserter + 0x01
+    }
+    assert private_page_ring_task3_evidence(baseline) is not None
+
+    assert private_page_ring_task3_evidence(hostile) is None
+
+
+@pytest.mark.parametrize(
+    ("baseline_prefix", "hostile_prefix", "changed_offset"),
+    (
+        pytest.param("90 50 5b", "66 50 5b", 0x00, id="partial-push"),
+        pytest.param(
+            "90 50 5b",
+            "67 50 5b",
+            0x00,
+            id="address-size-push",
+        ),
+        pytest.param(
+            "50 90 5b",
+            "50 67 5b",
+            0x01,
+            id="address-size-pop",
+        ),
+    ),
+)
+def test_private_page_ring_publisher_stack_transfer_boundary(
+    baseline_prefix,
+    hostile_prefix,
+    changed_offset,
+):
+    """Reject stack forms outside the shared dword ESP model."""
+    baseline = private_page_ring_stack_transfer_image(baseline_prefix)
+    hostile = private_page_ring_stack_transfer_image(hostile_prefix)
+    assert private_page_image_changed_addresses(baseline, hostile) == {
+        baseline.page_inserter + changed_offset
+    }
+    assert private_page_ring_task3_evidence(baseline) is not None
+
+    assert private_page_ring_task3_evidence(hostile) is None
 
 
 def test_private_page_ring_accepts_full_width_register_head_guard():
