@@ -4580,9 +4580,13 @@ def _normalize_private_page_symbolic_writes(
 def private_page_arena_image(
     *,
     mutation: str | None = None,
+    minimum_extent: int = 0x10000,
     post_initializer_unknown_clobber: str | None = None,
 ) -> PrivatePageArenaFixture:
     """Extend the proved private heap with one coherent page/block arena."""
+    assert type(minimum_extent) is int
+    assert 0 < minimum_extent <= 0xFFFF_FFFF - 8
+    encoded_minimum_extent = minimum_extent.to_bytes(4, "little").hex(" ")
     assert mutation in {
         None,
         "extent-mask",
@@ -4713,9 +4717,9 @@ def private_page_arena_image(
     # return path; no obsolete page-init role remains between helper/publisher.
     cursor = emit(page_provider, "53 57 8b 5c 24 0c")
     cursor = emit(cursor, "8d 9b 17 10 00 00 81 e3 00 f0 ff ff")
-    cursor = emit(cursor, "81 fb 00 00 01 00")
+    cursor = emit(cursor, "81 fb " + encoded_minimum_extent)
     extent_ready = cursor
-    cursor = emit(cursor, "73 00 bb 00 00 01 00")
+    cursor = emit(cursor, "73 00 bb " + encoded_minimum_extent)
     extent_ready_target = cursor
     cursor = emit(cursor, "53")
     cursor = emit_call(cursor, base.private_factory)
@@ -13294,6 +13298,133 @@ def test_private_page_arena_preserves_private_heap_prerequisites():
     assert ring_write_displacements >= {0, 4}
 
 
+@pytest.mark.parametrize("minimum_extent", (33, 36, 40, 63))
+def test_private_heap_extent_alignment_rejects_decoded_unaligned_minimum(
+    minimum_extent,
+):
+    fixture = private_page_arena_image(minimum_extent=minimum_extent)
+    image = fixture.arena.image
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        replace(
+            generous_limits(image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.arena.private_allocator,
+        frozenset({fixture.arena.callback_slot}),
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract,
+        fixture.arena.private_page_helper,
+    )
+    assert witness is not None
+    assert witness.minimum_extent == minimum_extent
+
+    compared = recovery._owned_decoded(
+        witness.extent_witness_addresses[3]
+    )
+    fallback = recovery._owned_decoded(
+        witness.extent_witness_addresses[5]
+    )
+    assert compared.id == capstone.x86.X86_INS_CMP
+    assert compared.operands[1].type == capstone.x86.X86_OP_IMM
+    assert compared.operands[1].imm & 0xFFFF_FFFF == minimum_extent
+    assert fallback.id == capstone.x86.X86_INS_MOV
+    assert fallback.operands[1].type == capstone.x86.X86_OP_IMM
+    assert fallback.operands[1].imm & 0xFFFF_FFFF == minimum_extent
+    encoded = minimum_extent.to_bytes(4, "little")
+    assert image.read(compared.address + 2, 4) == encoded
+    assert image.read(fallback.address + 1, 4) == encoded
+
+    low_zero_mask = (
+        recovery._publication_private_heap_extent_low_zero_mask(witness)
+    )
+    effects = recovery._publication_private_heap_effect_closure(witness)
+    layout = (
+        None
+        if effects is None
+        else recovery._publication_private_page_layout(
+            contract,
+            witness,
+            effects,
+        )
+    )
+
+    assert (low_zero_mask, effects is None, layout is None) == (
+        None,
+        True,
+        True,
+    )
+
+
+@pytest.mark.parametrize("minimum_extent", (0x1000, 0x2000, 0x10000))
+def test_private_heap_extent_alignment_accepts_decoded_aligned_minimum(
+    minimum_extent,
+):
+    fixture = private_page_arena_image(minimum_extent=minimum_extent)
+    image = fixture.arena.image
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        replace(
+            generous_limits(image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.arena.private_allocator,
+        frozenset({fixture.arena.callback_slot}),
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract,
+        fixture.arena.private_page_helper,
+    )
+    assert witness is not None
+    assert witness.minimum_extent == minimum_extent
+
+    compared = recovery._owned_decoded(
+        witness.extent_witness_addresses[3]
+    )
+    fallback = recovery._owned_decoded(
+        witness.extent_witness_addresses[5]
+    )
+    assert compared.id == capstone.x86.X86_INS_CMP
+    assert compared.operands[1].type == capstone.x86.X86_OP_IMM
+    assert compared.operands[1].imm & 0xFFFF_FFFF == minimum_extent
+    assert fallback.id == capstone.x86.X86_INS_MOV
+    assert fallback.operands[1].type == capstone.x86.X86_OP_IMM
+    assert fallback.operands[1].imm & 0xFFFF_FFFF == minimum_extent
+    encoded = minimum_extent.to_bytes(4, "little")
+    assert image.read(compared.address + 2, 4) == encoded
+    assert image.read(fallback.address + 1, 4) == encoded
+
+    assert (
+        recovery._publication_private_heap_extent_low_zero_mask(witness)
+        == 0xFFF
+    )
+    effects = recovery._publication_private_heap_effect_closure(witness)
+    assert effects is not None
+    assert recovery._publication_private_heap_effect_closure_is_current(
+        effects
+    )
+    layout = recovery._publication_private_page_layout(
+        contract,
+        witness,
+        effects,
+    )
+    assert layout is not None
+    assert layout.extent_alignment == 0x1000
+
+
 def test_private_page_layout_is_derived_from_untagged_initializer_header():
     fixture = private_page_arena_image()
     recovery, contract, extent, effects = private_page_arena_contract(fixture)
@@ -18101,11 +18232,15 @@ def test_private_heap_effect_currentness_rejects_forged_minimum_extent():
     effects = recovery._publication_private_heap_effect_closure(witness)
     assert effects is not None
 
-    forged = replace(witness, minimum_extent=0x20000)
-
-    assert not recovery._publication_private_heap_effect_closure_is_current(
-        replace(effects, extent_witness=forged)
-    )
+    for minimum_extent in (33, 36, 40, 63, 0x20000):
+        forged = replace(witness, minimum_extent=minimum_extent)
+        assert (
+            recovery._publication_private_heap_extent_low_zero_mask(forged)
+            is None
+        )
+        assert not recovery._publication_private_heap_effect_closure_is_current(
+            replace(effects, extent_witness=forged)
+        )
 
 
 def test_private_heap_effect_rejects_forged_minimum_at_exact_boundary():

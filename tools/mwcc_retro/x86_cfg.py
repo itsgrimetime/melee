@@ -21597,15 +21597,15 @@ class _DirectCfgRecovery:
             return None
         low_zero_mask = (~masks[0]) & 0xFFFF_FFFF
         alignment = low_zero_mask + 1
-        return (
-            low_zero_mask
-            if (
-                low_zero_mask > 0
-                and alignment <= 0x1_0000_0000
-                and alignment & (alignment - 1) == 0
-            )
-            else None
-        )
+        if not (
+            low_zero_mask > 0
+            and alignment <= 0x1_0000_0000
+            and alignment & (alignment - 1) == 0
+        ):
+            return None
+        if witness.minimum_extent & low_zero_mask:
+            return None
+        return low_zero_mask
 
     def _publication_private_heap_effect_closure_is_current(
         self,
