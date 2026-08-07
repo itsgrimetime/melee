@@ -456,7 +456,8 @@ Expected: all selected tests pass before the commit.
 - Produces: an updated `_PublicationPrivatePageLayout` with the publisher's
   link offsets, `_PublicationPrivatePageRingRole`, triple-keyed ring spans,
   contextual selector page/request invocations, and durable insert/remove/
-  rotate transfers from
+  rotate transfers retained together as immutable
+  `_PublicationPrivatePageRingEvidence` from
   `_publication_private_page_ring_role(contract, extent, layout)`.
 
 - [ ] **Step 1: Write the RED role-discovery test**
@@ -472,7 +473,11 @@ def test_private_page_ring_proves_both_selector_page_arguments():
         contract, extent, layout
     )
     assert ring_result is not None
-    layout, ring, ring_transfers, ring_spans = ring_result
+    ring_evidence = ring_result
+    layout = ring_evidence.layout
+    ring = ring_evidence.role
+    ring_transfers = ring_evidence.transfers
+    ring_spans = ring_evidence.spans
     assert layout.page_link_offsets == (0, 4)
     assert ring.head_slot == fixture.page_head_slot
     assert ring.provider_entry == fixture.page_provider
@@ -537,12 +542,7 @@ def _publication_private_page_ring_role(
     contract: _PrivateHeapAllocatorContract,
     extent: _PublicationPrivateHeapExtentWitness,
     layout: _PublicationPrivatePageLayout,
-) -> tuple[
-    _PublicationPrivatePageLayout,
-    _PublicationPrivatePageRingRole,
-    tuple[_PublicationPrivateArenaTransfer, ...],
-    tuple[_PublicationPrivateArenaSpan, ...],
-] | None:
+) -> _PublicationPrivatePageRingEvidence | None:
     """Prove a closed circular ring containing only provider pages."""
 ```
 
@@ -569,7 +569,9 @@ Serialize insertion/removal/rotation as contextual
 call must dominate one rotation that writes the selected page to the head.
 Instruction inventories are not authorization. Task 4, not Task 3, emits the
 single durable `select` transfer; Task 3 retains the invocations that Task 4
-must consume.
+must consume. Return layout, role, transfers, and spans only as one immutable
+ring-evidence object so later mutation/replay phases cannot silently drop the
+certified `ring-remove` transfer or its operand spans.
 
 - [ ] **Step 4: Run ring/allocator tests and commit**
 
@@ -591,8 +593,8 @@ Expected: all selected tests pass before the commit.
 - Modify: `tools/melee-agent/tests/test_retro_x86_cfg.py:11300-12000`
 
 **Interfaces:**
-- Consumes: page layout, ring role, and every contextual selector invocation
-  retained by Task 3.
+- Consumes: Task 3 `_PublicationPrivatePageRingEvidence`; it retains the ring
+  transfers/spans unchanged while Task 4 adds selector evidence.
 - Produces: an updated layout, a selector-seeded
   `_PublicationPrivateBlockArenaRole`, exactly one contextual `select`
   transfer, exact triple-keyed arena spans, and the process-local relational
@@ -603,12 +605,14 @@ Expected: all selected tests pass before the commit.
 ```python
 def test_private_block_selector_walks_only_same_page_blocks():
     fixture = private_page_arena_image()
-    recovery, contract, extent, effects, layout, ring = (
+    recovery, contract, extent, effects, ring_evidence = (
         private_page_arena_ring(fixture)
     )
+    layout = ring_evidence.layout
+    ring = ring_evidence.role
 
     result = recovery._publication_private_block_selector_role(
-        contract, extent, effects, layout, ring
+        contract, extent, effects, ring_evidence
     )
     assert result is not None
     layout, role, select_transfer, spans = result
@@ -618,6 +622,11 @@ def test_private_block_selector_walks_only_same_page_blocks():
     assert set(role.selector_calls) == set(fixture.selector_calls)
     assert select_transfer.role == "select"
     assert select_transfer.invocations == ring.selector_invocations
+    assert all(
+        invocation.block_state.allocation == "none"
+        and invocation.block_state.membership == "none"
+        for invocation in select_transfer.invocations
+    )
     assert any(
         transition.before.allocation == "free"
         and transition.before.membership == "listed"
@@ -635,7 +644,9 @@ def test_private_block_selector_walks_only_same_page_blocks():
 Run the positive once for a provider-only invocation, once for an existing-ring
 invocation, and once with both origins joined at one call site. Require every
 site to use the same normalized request lineage and require the selector to
-emit one transfer shared by all contexts, not one transfer per call site.
+emit one transfer shared by all contexts, not one transfer per call site. Add a
+positive unknown two-successor branch whose successors both retain identical
+recurrence and guard relations, proving that a benign join remains admissible.
 
 Add one-fact hostiles for an extent clobber, changed size mask, foreign block
 link, header sourced from mapped global memory, removed unsigned fit guard,
@@ -648,7 +659,8 @@ input to split away from `free/listed`, make either ordered initializer call
 conditional, alter either call's copied bit-2 argument, omit `B2` relinking,
 make split return `allocated/listed`, omit unlink, omit unlink's bit-2 set or
 exact `D`/singleton/reciprocal/`P+8` updates, or demand restoration before the
-compound select return.
+compound select return. Reject a selector invocation with a non-`none/none`
+block state, or a state transition lacking its matching invocation context.
 
 - [ ] **Step 2: Verify RED**
 
@@ -692,8 +704,7 @@ def _publication_private_block_selector_role(
     contract: _PrivateHeapAllocatorContract,
     extent: _PublicationPrivateHeapExtentWitness,
     effects: _PublicationPrivateHeapEffectClosure,
-    layout: _PublicationPrivatePageLayout,
-    ring: _PublicationPrivatePageRingRole,
+    ring_evidence: _PublicationPrivatePageRingEvidence,
 ) -> tuple[
     _PublicationPrivatePageLayout,
     _PublicationPrivateBlockArenaRole,
@@ -706,9 +717,12 @@ def _publication_private_block_selector_role(
 Use a bounded CFG worklist and intern bounded expression tokens. Values and
 predicates are distinct domains. Joins retain only identical relational facts;
 `zero` joins only explicitly nullable fields. Explore both successors of an
-unknown branch. The only widening is the proved same-page block recurrence at
-the certified circular-list backedge, so the proof never enumerates block or
-page members.
+unknown branch only when both successors type-check under the same retained
+relations. An unknown loop/backedge, or either branch that loses the required
+recurrence or guard relation, rejects. The only widening is the proved
+same-page block recurrence at the certified circular-list backedge, so the
+proof never enumerates block or page members; worklist states and interned
+tokens have explicit finite caps and exhaustion rejects.
 
 Track allocation and free-list membership as independent components. Stable
 compound boundaries admit `free/listed` and `allocated/unlisted`. A nested
@@ -729,11 +743,14 @@ as `region="successor", field="successor-header"` only after both alternatives
 are proved; it must never include the `P+E-4` sentinel. Derive the unique
 unsigned minimum split remainder and return an updated immutable layout.
 
-Consume `ring.selector_invocations` exactly and emit one `select` transfer
-whose invocation tuple contains all sites/contexts and whose span keys are
-exact `(function_entry, instruction_address, operand_index)` triples. No
+Derive the input layout only from `ring_evidence.layout`; there is no separate
+caller-supplied layout that could disagree with the retained ring proof.
+Consume `ring_evidence.role.selector_invocations` exactly and emit one `select`
+transfer whose invocation tuple contains all sites/contexts and whose span keys
+are exact `(function_entry, instruction_address, operand_index)` triples. No
 abstract state, worklist result, or inferred capability survives construction;
-only the immutable layout, role seed, transfer, and spans are durable. The
+only the immutable layout, role seed, transfer, selector spans, and retained
+ring evidence are durable. The
 transfer records `free/listed` input and output around split, both sequential
 block-initializer calls with copied input bit `2`, then unlink's
 `free/listed -> allocated/unlisted` compound transition. Task 5 must bind exact
@@ -760,7 +777,9 @@ Expected: the positive selector and all hostiles pass before the commit.
 - Modify: `tools/melee-agent/tests/test_retro_x86_cfg.py:11300-12200`
 
 **Interfaces:**
-- Consumes: Task 4 abstract domain and selector role.
+- Consumes: Task 4 abstract domain and selector role plus the unchanged Task 3
+  `_PublicationPrivatePageRingEvidence`, including its insert/remove/rotate
+  transfers and exact spans.
 - Produces: contextual `_PublicationPrivateArenaInvocation`,
   `_PublicationPrivateArenaStateTransition`, and
   `_PublicationPrivateArenaTransfer` rows; typed call edges; a complete
@@ -903,14 +922,18 @@ the narrowest transfer or role-assembly entry point.
 Add insert-specific hostiles for a missing/retargeted initializer-base or later
 invocation, missing later body span/dependency/transition/fingerprint, and an
 effect authority installed simultaneously with arena authority at one exact
-insert key. Add arena-free hostiles for a missing/duplicate role or compound
-transfer, foreign payload, changed payload offset/tag mask, missing
+insert key. Reject a fabricated initializer-base call path that is absent from
+the exact embedded effect closure. Add arena-free hostiles for a
+missing/duplicate role or compound transfer, foreign payload, changed payload
+offset/tag mask, a deallocator-context invocation with populated page origins
+or a partial `none` block-state pair, missing
 insert-local `allocated/unlisted -> free/unlisted -> free/listed` ordering,
 private-free taking both or neither direct small/arena branch, a small payload
 fed directly to arena-free, collapsed direct-arena and backing-page-retirement
 invocations, reordered insert/coalescing, escaped transient, false whole-page
-predicate, reordered page removal/release, and every missing
-body/call/span/fingerprint/dependency fact.
+predicate, reordered page removal/release, a remover-shaped body detached from
+the retained `ring-remove` transfer or carrying nonmatching ring span keys, and
+every missing body/call/span/fingerprint/dependency fact.
 
 - [ ] **Step 3: Verify RED**
 
@@ -938,7 +961,7 @@ def _publication_private_arena_transfer(
     extent: _PublicationPrivateHeapExtentWitness,
     effects: _PublicationPrivateHeapEffectClosure,
     layout: _PublicationPrivatePageLayout,
-    ring: _PublicationPrivatePageRingRole,
+    ring_evidence: _PublicationPrivatePageRingEvidence,
 ) -> tuple[
     _PublicationPrivateArenaTransfer,
     tuple[_PublicationPrivateArenaSpan, ...],
@@ -952,7 +975,7 @@ def _publication_private_block_arena_role(
     extent: _PublicationPrivateHeapExtentWitness,
     effects: _PublicationPrivateHeapEffectClosure,
     layout: _PublicationPrivatePageLayout,
-    ring: _PublicationPrivatePageRingRole,
+    ring_evidence: _PublicationPrivatePageRingEvidence,
     selector_role: _PublicationPrivateBlockArenaRole,
     select_transfer: _PublicationPrivateArenaTransfer,
     selector_spans: tuple[_PublicationPrivateArenaSpan, ...],
@@ -964,8 +987,9 @@ def _publication_private_block_arena_role(
     """Discover and close every live metadata transfer role."""
 ```
 
-Seed formals separately for every durable invocation, including
-initializer-base block-initialize/insert, both ordered block-initialize sites
+Seed the already certified exact effect-closure initializer-base
+block-initialize/insert calls separately, then seed formals for both ordered
+block-initialize sites
 in selector split, both ordered sites in resize split,
 arena-free/deallocator, grow, and shrink contexts. Use
 `_PublicationPrivateArenaBlockState` with independent `allocation` and
@@ -975,7 +999,12 @@ states. Any transition to a transient must carry its non-null
 invocation reconciles an incoming role call and shares the durable
 `block-initialize` helper transfer, while its enclosing effects remain the
 induction base; it does not create an `initialize` transfer. Start
-free/coalesce discovery only at `contract.deallocator_root`.
+all *new later* free/coalesce/arena-free discovery only at
+`contract.deallocator_root`; the seeded initializer-base effects are not a
+general alternate discovery root.
+Require the Task 4 layout to equal `ring_evidence.layout` except for the exact
+selector-derived fields Task 4 is authorized to populate; any disagreement in
+the inherited page/header/link fields rejects.
 Require its least reachable complete function/call closure, reconcile raw,
 decoded, and provisional-residue edges with
 `_least_reachable_incoming_call_domain_is_closed`, and store typed edges in the
@@ -1026,7 +1055,9 @@ tagged page word, invoke certified insert, bind its bit-2 clear to
 single-usable-block page predicate before certified ring removal and release to
 `none/none`. Every branch and nested edge must restore at the exact
 deallocator root; deallocator closure entries and an insert transfer alone are
-not equivalent evidence.
+not equivalent evidence. The release branch must consume the exact retained
+`ring-remove` transfer and its triple-keyed spans from `ring_evidence`, not
+merely rediscover a remover-shaped function.
 
 Within private-free, prove the classifying predicate partitions the direct
 small-free and arena-free edges: exactly one is taken for the original payload.
@@ -1068,8 +1099,8 @@ Expected: all selected tests pass before the commit.
 - Modify: `tools/melee-agent/tests/test_retro_x86_cfg.py:11500-12350`
 
 **Interfaces:**
-- Consumes: layout, ring, block role, all ring/block transfers, and all spans
-  from Tasks 2-5.
+- Consumes: layout, immutable Task 3 ring evidence, block role, all ring/block
+  transfers, and all spans from Tasks 2-5.
 - Produces: `_PublicationPrivatePageArenaInvariant`, its builder, and its
   dependency replay validator. The invariant embeds the exact initializer
   effect closure as its induction base; `induction_substituted_entries` records
@@ -1096,6 +1127,9 @@ def test_private_page_arena_invariant_serializes_complete_evidence():
     assert invariant.initializer_effects == effects
     assert sum(row.role == "select" for row in invariant.transfers) == 1
     assert sum(row.role == "arena-free" for row in invariant.transfers) == 1
+    assert {row.role for row in invariant.transfers} >= {
+        "ring-insert", "ring-remove", "ring-rotate"
+    }
     assert invariant.block_arena.arena_free_entries == (fixture.arena_free,)
     assert set(invariant.induction_substituted_entries) >= {
         fixture.block_initializer,
@@ -1164,7 +1198,8 @@ invocations collapsed,
 intersection, a missing/duplicated/changed arena-free entry/transfer/invocation/
 transition/restoration, changed role, an added ordinary `initialize` transfer,
 zero/two select or arena-free transfers, changed layout/flag semantics, stale
-extent token, and a fresh recomputation that differs in any field. Each altered
+extent token, a removed/reordered/duplicated ring transfer or ring span key,
+and a fresh recomputation that differs in any field. Each altered
 certificate must fail
 `_publication_private_page_arena_invariant_is_current` without noting partial
 dependencies.
@@ -1219,6 +1254,14 @@ Require the arena-free transfer's exact owner entry, deallocator invocation,
 payload recovery, ordered state transitions, nested insert/coalescer and
 optional ring-removal/release edges, full span inventory, fingerprint, and
 dependencies.
+
+Carry immutable ring evidence from Task 3 through selector and mutation
+assembly. Require every retained ring transfer and span to appear unchanged in
+the final aggregate, every transfer span key to resolve to exactly one aggregate
+span, and every aggregate span to be referenced by its certified transfer. A
+shared key is allowed only when its access, region, and field interpretation is
+identical. The whole-page arena-free branch must reference the retained
+`ring-remove` transfer rather than a fresh remover lookalike.
 
 Replay in fail-closed order: validate immutable shape/order/literals first;
 replay allocator fingerprints and embedded initializer effects; replay

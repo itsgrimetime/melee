@@ -285,6 +285,16 @@ class _PublicationPrivateArenaTransfer:
 
 
 @dataclass(frozen=True, slots=True)
+class _PublicationPrivatePageRingEvidence:
+    """Immutable Task 3 ring proof retained by all later arena phases."""
+
+    layout: _PublicationPrivatePageLayout
+    role: _PublicationPrivatePageRingRole
+    transfers: tuple[_PublicationPrivateArenaTransfer, ...]
+    spans: tuple[_PublicationPrivateArenaSpan, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _PublicationPrivateArenaDependency:
     kind: Literal["function", "global-slot", "absolute-reference"]
     identifier: int
@@ -689,7 +699,7 @@ canonicalizes and rejects duplicates before publication:
 - snapshot every function, concrete global slot, and exact absolute reference
   as canonical `_PublicationPrivateArenaDependency` rows;
 - copy the allocator dependency fingerprint tuple exactly from the extent
-  witness; and
+  witness into the invariant; and
 - fingerprint every ring, block-initializer, insert, arena-free, transfer,
   deallocator, incoming-context, and resize owner.
 
