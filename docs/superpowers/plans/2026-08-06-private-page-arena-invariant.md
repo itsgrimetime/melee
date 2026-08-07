@@ -496,6 +496,12 @@ def test_private_page_ring_proves_both_selector_page_arguments():
         for invocation in selector_invocations
         for origin in invocation.page_origins
     } == {"provider", "ring"}
+    assert ring.remover_call_obligations
+    ring_remove = next(
+        transfer for transfer in ring_transfers
+        if transfer.role == "ring-remove"
+    )
+    assert ring_remove.invocations == ()
     assert ring_spans
 ```
 
@@ -503,7 +509,12 @@ Exercise durable removal from a nonempty ring as well as the singleton-to-null
 case, and require the recovered transfer inventory to distinguish removal from
 head rotation and insertion. The remover must update the exact recovered head
 slot and reciprocal link fields; a null head is the only accepted empty-ring
-result.
+result. Reconcile the remover's complete raw/decoded incoming call domain and
+retain every resolved deallocator-owned site as an immutable
+`_PublicationPrivateRemovalCallObligation`. These rows are deliberately not
+semantic invocations: Task 3 has not proved the payload overlay, page-pointer
+flag, or complete typed-writer invariant. Therefore the Task 3 `ring-remove`
+transfer has `invocations == ()` and no call fact carries a `ring` page origin.
 
 The ring dataclass keeps `selector_page_calls` distinct from `provider_calls`;
 the implementation must populate and replay both inventories. A selector call
@@ -522,8 +533,12 @@ mutation, raw/decoded call disagreement, empty per-site origins, collective
 origins missing provider or ring, different request normalization at one site,
 missing or partial removal, removal through the wrong head/link field,
 singleton removal that leaves a nonnull head, nonempty removal that breaks a
-reciprocal link, missing head rotation, rotation before success, and rotation
-of a different page.
+reciprocal link, an unresolved remover owner, a remover caller outside the
+closed deallocator graph, a missing/duplicate call obligation, a semantic
+remover invocation fabricated from an address inventory, missing head rotation,
+rotation before success, and rotation of a different page. Retain wrong,
+missing, partial, adjusted, and foreign remover arguments as Task 5 discharge
+hostiles; Task 3 must never label them as `P` or `ring`.
 
 - [ ] **Step 2: Verify RED**
 
@@ -564,10 +579,12 @@ discovery. Type every `P`-relative page-link operand and emit spans keyed by
 
 Keep concrete head-slot accesses on the exact finite/global path, but retain
 their reads, writes, global-slot dependency, and absolute-reference dependency.
-Serialize insertion/removal/rotation as contextual
-`_PublicationPrivateArenaTransfer` rows. A successful existing-ring selector
-call must dominate one rotation that writes the selected page to the head.
-Instruction inventories are not authorization. Task 4, not Task 3, emits the
+Serialize insertion and rotation with their proved contextual invocations.
+Serialize `ring-remove` as a conditional remover-body transfer with no
+invocations, plus the separate closed call-obligation inventory. A successful
+existing-ring selector call must dominate one rotation that writes the selected
+page to the head. Instruction and call-address inventories are not semantic
+authorization. Task 4, not Task 3, emits the
 single durable `select` transfer; Task 3 retains the invocations that Task 4
 must consume. Return layout, role, transfers, and spans only as one immutable
 ring-evidence object so later mutation/replay phases cannot silently drop the
@@ -779,7 +796,7 @@ Expected: the positive selector and all hostiles pass before the commit.
 **Interfaces:**
 - Consumes: Task 4 abstract domain and selector role plus the unchanged Task 3
   `_PublicationPrivatePageRingEvidence`, including its insert/remove/rotate
-  transfers and exact spans.
+  transfers, exact spans, and unresolved remover-call obligations.
 - Produces: contextual `_PublicationPrivateArenaInvocation`,
   `_PublicationPrivateArenaStateTransition`, and
   `_PublicationPrivateArenaTransfer` rows; typed call edges; a complete
@@ -932,8 +949,10 @@ private-free taking both or neither direct small/arena branch, a small payload
 fed directly to arena-free, collapsed direct-arena and backing-page-retirement
 invocations, reordered insert/coalescing, escaped transient, false whole-page
 predicate, reordered page removal/release, a remover-shaped body detached from
-the retained `ring-remove` transfer or carrying nonmatching ring span keys, and
-every missing body/call/span/fingerprint/dependency fact.
+the retained `ring-remove` transfer or carrying nonmatching ring span keys, a
+missing/duplicate/foreign removal-call obligation, a retained obligation not
+discharged as exact untagged `P`, a nested remover call absent from the retained
+obligations, and every missing body/call/span/fingerprint/dependency fact.
 
 - [ ] **Step 3: Verify RED**
 
@@ -1057,7 +1076,12 @@ single-usable-block page predicate before certified ring removal and release to
 deallocator root; deallocator closure entries and an insert transfer alone are
 not equivalent evidence. The release branch must consume the exact retained
 `ring-remove` transfer and its triple-keyed spans from `ring_evidence`, not
-merely rediscover a remover-shaped function.
+merely rediscover a remover-shaped function. It must also prove exact untagged
+ring page `P` at argument zero for every retained
+`remover_call_obligations` key and discharge those keys one-for-one. Task 5 may
+use its now-complete payload overlay, page-pointer flag, typed-field writer
+closure, and compound restoration proof; it may not trust a familiar
+displacement or any opaque Task 3 caller expression.
 
 Within private-free, prove the classifying predicate partitions the direct
 small-free and arena-free edges: exactly one is taken for the original payload.
@@ -1199,6 +1223,8 @@ intersection, a missing/duplicated/changed arena-free entry/transfer/invocation/
 transition/restoration, changed role, an added ordinary `initialize` transfer,
 zero/two select or arena-free transfers, changed layout/flag semantics, stale
 extent token, a removed/reordered/duplicated ring transfer or ring span key,
+removed/duplicated/changed remover-call obligations, a semantic invocation
+fabricated at Task 3, a Task 5 discharge missing or not exact `P`,
 and a fresh recomputation that differs in any field. Each altered
 certificate must fail
 `_publication_private_page_arena_invariant_is_current` without noting partial
@@ -1262,11 +1288,15 @@ span, and every aggregate span to be referenced by its certified transfer. A
 shared key is allowed only when its access, region, and field interpretation is
 identical. The whole-page arena-free branch must reference the retained
 `ring-remove` transfer rather than a fresh remover lookalike.
+Retain the canonical Task 3 remover-call obligations unchanged, require the
+arena-free compound transfer to discharge every obligation key exactly once as
+exact `P`, and reject any extra nested remover call or surviving obligation.
 
 Replay in fail-closed order: validate immutable shape/order/literals first;
 replay allocator fingerprints and embedded initializer effects; replay
 canonical dependencies plus raw/decoded/provisional-residue and contextual
-incoming call closure; freshly recompute layout, ring, selector,
+incoming call closure; freshly recompute layout, ring, its removal-call
+obligations, selector,
 every induction-substituted helper, block-initializer/insert invocations and
 local postconditions, both split calls and their bit-2/list effects, unlink's
 selector correction, resize insert's clear-before-list correction,

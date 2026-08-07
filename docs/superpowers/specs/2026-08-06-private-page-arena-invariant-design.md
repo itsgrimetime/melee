@@ -202,6 +202,17 @@ class _PublicationPrivateArenaStateTransition:
 
 
 @dataclass(frozen=True, slots=True)
+class _PublicationPrivateRemovalCallObligation:
+    """Task 3 call-domain fact awaiting Task 5 page proof."""
+
+    caller_entry: int
+    call_address: int
+    remover_entry: int
+    caller_function_sha256: str
+    proof_instruction_addresses: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _PublicationPrivatePageRingRole:
     head_slot: int
     provider_entry: int
@@ -211,6 +222,9 @@ class _PublicationPrivatePageRingRole:
     selector_page_calls: tuple[int, ...]
     selector_request_calls: tuple[int, ...]
     selector_invocations: tuple[_PublicationPrivateArenaInvocation, ...]
+    remover_call_obligations: tuple[
+        _PublicationPrivateRemovalCallObligation, ...
+    ]
     head_reads: tuple[int, ...]
     head_writes: tuple[int, ...]
     ring_link_reads: tuple[int, ...]
@@ -430,7 +444,12 @@ extent witness, and its current initializer effects.
    source and provider publication destination. Reconcile every overlapping
    writer and exact absolute reference.
 3. Recover publisher/remover shapes from provider and deallocator closures.
-   Prove null/singleton/nonempty ring behavior and both reciprocal links.
+   Prove null/singleton/nonempty ring behavior and both reciprocal links. For
+   removal, also reconcile the complete raw/decoded incoming domain and retain
+   every resolved deallocator-owned call as an immutable, non-semantic
+   `_PublicationPrivateRemovalCallObligation`. Task 3 does not yet know the
+   payload overlay, page-pointer flag, or complete typed-writer invariant, so
+   the `ring-remove` transfer has no invocation rows and no page origin.
 4. For each selector call site, derive a nonempty subset of `provider` and
    `ring` page origins. Require their collective union to contain both. Prove
    that every selector call receives the identical normalized request lineage.
@@ -448,9 +467,13 @@ extent witness, and its current initializer effects.
    inventory must retain the initializer-base call plus both sequential split
    calls under both selector and resize contexts, with input bit-2 lineage,
    `B`/`B2` subjects, and distinct allocation/list-membership postconditions.
-   Arena free's
-   compound transfer must be rooted in that closed deallocator context and bind
-   every nested mutation/release edge before the boundary returns.
+   Arena free's compound transfer must be rooted in that closed deallocator
+   context and bind every nested mutation/release edge before the boundary
+   returns. Its page-release arm must discharge the retained Task 3 removal-call
+   obligations one-for-one by proving exact untagged ring page `P` at argument
+   zero. A wrong, missing, partial, adjusted, foreign, duplicate, or undisclosed
+   call rejects final evidence; an address inventory alone never becomes a
+   semantic invocation.
 7. Close the complete incoming domain of every discovered mutation role. An
    otherwise external owner may enter the mutation fixed point only if its
    complete relevant paths type-check as one bounded `resize` context. Add it
@@ -691,6 +714,8 @@ The invariant is durable evidence, not a process-local inference. Construction
 canonicalizes and rejects duplicates before publication:
 
 - embed the exact current initializer effect closure;
+- retain the exact canonical Task 3 removal-call obligations and require the
+  Task 5 arena-free compound proof to discharge their keys one-for-one;
 - require exactly one `select`, one coherent `arena-free` compound transfer,
   and no ordinary `initialize` transfer;
 - sort contextual invocations, state transitions, typed edges, triple span
@@ -712,12 +737,14 @@ Replay has one fail-closed ordering:
 3. Replay canonical function/global-slot/absolute-reference dependency rows,
    raw/decoded/provisional-residue call closure, contextual incoming calls, and
    exact function fingerprints.
-4. Freshly recompute layout, ring, selector, every induction-substituted helper,
+4. Freshly recompute layout, ring, its unresolved removal-call obligations,
+   selector, every induction-substituted helper,
    both ordered block-initializer calls in every split context, input bit-2
    lineage, insert clear-before-list postconditions, the private-free
    small/arena branch partition, arena-free and resize compound restoration
    obligations, mutation contexts, typed edges, transfers, and spans with no
-   arena memo lookup.
+   arena memo lookup; require the arena-free release proof to discharge every
+   freshly recomputed removal-call obligation exactly once as exact `P`.
 5. Require exact dataclass equality between the freshly assembled invariant
    and the supplied invariant.
 6. Only after equality succeeds, propagate/note its dependencies and permit an
@@ -738,7 +765,9 @@ certificate rejects:
   extra selector caller, missing rotation, or rotation of a different page;
 - a foreign/partial/indexed page-head writer, broken singleton, missing
   reciprocal page link, stale absolute-reference dependency, or unresolved
-  ring edge;
+  ring edge; a missing, duplicate, foreign, or prematurely semantic Task 3
+  remover-call obligation; or a Task 5 arena-free proof that does not discharge
+  every obligation exactly once as exact untagged `P`;
 - changed extent/size mask, sentinel or page-end off-by-one, missing
   largest-free initialization/update, or a post-initializer extent clobber;
 - selector recurrence through a foreign page, successor/page-end type
@@ -787,6 +816,9 @@ certificate rejects:
 - stale/missing/duplicate invocation or state transition, typed edge, triple
   span key, function, global-slot, absolute-reference, allocator,
   initializer-effect, layout, or extent-token evidence;
+- a missing, duplicate, foreign, stale, or prematurely semantic Task 3
+  removal-call obligation, or any obligation not discharged exactly once by
+  the Task 5 arena-free page-release proof;
 - an ordinary initialize transfer, missing/duplicate `block-initialize`
   transfer, missing/duplicate `arena-free` compound transfer, zero or multiple
   select transfers, a nested transient falsely classified as already stable,
