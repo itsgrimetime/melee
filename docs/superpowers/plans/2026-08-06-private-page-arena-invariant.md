@@ -201,9 +201,14 @@ git add tools/mwcc_retro/x86_cfg.py tools/melee-agent/tests/test_retro_x86_cfg.p
 git commit -m "feat(mwcc-retro): retain initializer write evidence"
 ```
 
-Observed at `d0fe94dc6`: the 11-test private-heap effect-closure selection
-passed, the complete x86-CFG suite passed independently with 1,563 tests, and
-Ruff, `py_compile`, and diff checks were clean. Independent review found no
+Observed through `d0fe94dc6` and `6f8d7f619`: the exact-write evidence gained
+operand-bound bit-operation provenance and a structurally rebound allocator
+contract token after adversarial review. The final 16-test provenance review
+selection and complete 1,568-test x86-CFG suite passed independently; the
+canonical 13-test effect selection, Ruff, `py_compile`, and diff checks were
+clean. The exact retail mini-query hydrated in 13.81 seconds, retained
+`P | 1`, the `E | 3` then `E & ~7` address chain, and `E - 0x18`, and returned
+non-null effects with 30 body domains. Independent final review found no
 remaining Critical or Important findings. Task 2 must re-run
 `_publication_private_heap_effect_closure_is_current(effects)` at its evidence
 consumption boundary before deriving layout facts.
