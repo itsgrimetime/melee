@@ -22938,12 +22938,9 @@ class _DirectCfgRecovery:
             unknown_value = "unknown"
             scalar_value = "scalar"
             zero_value = "zero"
-            provider_page = "provider-page"
-            ring_head = "ring-head"
-            ring_scan = "ring-scan"
-            page_values = frozenset(
-                {provider_page, ring_head, ring_scan}
-            )
+            provider_class = "provider"
+            ring_head_class = "ring-head"
+            ring_scan_class = "ring-scan"
             expected_mask = (~layout.size_flag_mask) & 0xFFFF_FFFF
             empty_registers = tuple(
                 unknown_value for _ in _REGISTER_FAMILIES
@@ -22951,6 +22948,154 @@ class _DirectCfgRecovery:
             state_cap = 512
             event_cap = 64
             iterations = 0
+
+            def page_value(page_class: str, nominal_id: int):
+                return ("page", page_class, nominal_id)
+
+            def is_page(value) -> bool:
+                return bool(
+                    isinstance(value, tuple)
+                    and len(value) == 3
+                    and value[0] == "page"
+                    and value[1]
+                    in {provider_class, ring_head_class, ring_scan_class}
+                    and isinstance(value[2], int)
+                )
+
+            def page_origin(value) -> str | None:
+                if not is_page(value):
+                    return None
+                return "provider" if value[1] == provider_class else "ring"
+
+            def iter_page_ids(value):
+                if is_page(value):
+                    yield value[2]
+                    return
+                if isinstance(value, (tuple, list, frozenset, set)):
+                    for item in value:
+                        yield from iter_page_ids(item)
+
+            def replace_page_ids(value, replacements):
+                if is_page(value):
+                    return page_value(
+                        value[1], replacements.get(value[2], value[2])
+                    )
+                if isinstance(value, tuple):
+                    return tuple(
+                        replace_page_ids(item, replacements) for item in value
+                    )
+                if isinstance(value, frozenset):
+                    return frozenset(
+                        replace_page_ids(item, replacements) for item in value
+                    )
+                return value
+
+            def canonicalize_state(state):
+                (
+                    registers,
+                    stack,
+                    current_head,
+                    predicate,
+                    last_selector,
+                    pending_rotation,
+                    relations,
+                    events,
+                    instruction_addresses,
+                ) = state
+                live_values = (
+                    registers,
+                    stack,
+                    current_head,
+                    predicate,
+                    last_selector,
+                    pending_rotation,
+                )
+                live_ids = set(iter_page_ids(live_values))
+                ordered_ids = []
+                for nominal_id in iter_page_ids(live_values):
+                    if nominal_id not in ordered_ids:
+                        ordered_ids.append(nominal_id)
+                live_relations = tuple(
+                    sorted(
+                        relation
+                        for relation in relations
+                        if relation[0] in live_ids and relation[1] in live_ids
+                    )
+                )
+                for nominal_id in iter_page_ids(live_relations):
+                    if nominal_id not in ordered_ids:
+                        ordered_ids.append(nominal_id)
+                replacements = {
+                    nominal_id: canonical
+                    for canonical, nominal_id in enumerate(ordered_ids)
+                }
+                canonical_relations = tuple(
+                    sorted(
+                        {
+                            tuple(
+                                sorted(
+                                    (
+                                        replacements[left],
+                                        replacements[right],
+                                    )
+                                )
+                            )
+                            for left, right in live_relations
+                            if replacements[left] != replacements[right]
+                        }
+                    )
+                )
+                return (
+                    replace_page_ids(registers, replacements),
+                    replace_page_ids(stack, replacements),
+                    replace_page_ids(current_head, replacements),
+                    replace_page_ids(predicate, replacements),
+                    replace_page_ids(last_selector, replacements),
+                    replace_page_ids(pending_rotation, replacements),
+                    canonical_relations,
+                    events,
+                    instruction_addresses,
+                )
+
+            def fresh_page_id(*values) -> int:
+                live_ids = set(iter_page_ids(values))
+                return max(live_ids, default=-1) + 1
+
+            def refine_page_relation(state, left, right, equal: bool):
+                if not (is_page(left) and is_page(right)):
+                    return state
+                left_id = left[2]
+                right_id = right[2]
+                if equal:
+                    if left_id == right_id:
+                        return state
+                    replacements = {right_id: left_id}
+                    refined = tuple(
+                        replace_page_ids(item, replacements)
+                        for item in state[:6]
+                    )
+                    relations = tuple(
+                        sorted(
+                            {
+                                tuple(
+                                    sorted(
+                                        (
+                                            replacements.get(a, a),
+                                            replacements.get(b, b),
+                                        )
+                                    )
+                                )
+                                for a, b in state[6]
+                                if replacements.get(a, a)
+                                != replacements.get(b, b)
+                            }
+                        )
+                    )
+                    return (*refined, relations, *state[7:])
+                if left_id == right_id:
+                    return state
+                relation = tuple(sorted((left_id, right_id)))
+                return (*state[:6], tuple(sorted({*state[6], relation})), *state[7:])
 
             def family_value(registers, register: int):
                 family = self._register_family(register)
@@ -22986,7 +23131,7 @@ class _DirectCfgRecovery:
 
             def known_nonzero(value) -> bool:
                 return bool(
-                    value in page_values
+                    is_page(value)
                     or (
                         isinstance(value, str)
                         and value.startswith(
@@ -23022,7 +23167,13 @@ class _DirectCfgRecovery:
                 address: int,
                 operand,
                 registers,
+                stack,
                 current_head,
+                predicate,
+                last_selector,
+                pending_rotation,
+                relations,
+                reserved_pages=(),
             ):
                 if operand.type == X86_OP_REG:
                     return (
@@ -23069,7 +23220,7 @@ class _DirectCfgRecovery:
                 if memory.base == X86_REG_INVALID:
                     return scalar_value
                 base = family_value(registers, memory.base)
-                if base not in page_values:
+                if not is_page(base):
                     return scalar_value
                 if (
                     memory.segment != X86_REG_INVALID
@@ -23079,7 +23230,19 @@ class _DirectCfgRecovery:
                     return None
                 if memory.disp in link_offsets:
                     return (
-                        ring_scan
+                        page_value(
+                            ring_scan_class,
+                            fresh_page_id(
+                                registers,
+                                stack,
+                                current_head,
+                                predicate,
+                                last_selector,
+                                pending_rotation,
+                                relations,
+                                reserved_pages,
+                            ),
+                        )
                         if memory.disp == link_offsets[1]
                         else None
                     )
@@ -23089,7 +23252,12 @@ class _DirectCfgRecovery:
                 decoded,
                 address: int,
                 registers,
+                stack,
                 current_head,
+                predicate,
+                last_selector,
+                pending_rotation,
+                relations,
             ):
                 if len(decoded.operands) != 2:
                     return None
@@ -23103,13 +23271,24 @@ class _DirectCfgRecovery:
                     address,
                     left_operand,
                     registers,
+                    stack,
                     current_head,
+                    predicate,
+                    last_selector,
+                    pending_rotation,
+                    relations,
                 )
                 right = read_operand(
                     address,
                     right_operand,
                     registers,
+                    stack,
                     current_head,
+                    predicate,
+                    last_selector,
+                    pending_rotation,
+                    relations,
+                    (left,),
                 )
                 if left is None or right is None:
                     return None
@@ -23134,11 +23313,24 @@ class _DirectCfgRecovery:
                     )
                 if decoded.mnemonic != "cmp":
                     return None
-                if (
-                    {left, right} == {ring_scan, current_head}
-                    and current_head in {ring_head, provider_page}
-                ):
-                    return ("ring-anchor", None, None, None)
+                if is_page(left) and is_page(right):
+                    relation = tuple(sorted((left[2], right[2])))
+                    known = (
+                        True
+                        if left[2] == right[2]
+                        else False if relation in relations else None
+                    )
+                    is_anchor = bool(
+                        is_page(current_head)
+                        and current_head[2] in {left[2], right[2]}
+                        and ring_scan_class in {left[1], right[1]}
+                    )
+                    return (
+                        "ring-anchor" if is_anchor else "equal",
+                        None,
+                        (left, right),
+                        known,
+                    )
                 if left == right and left not in {
                     unknown_value,
                     scalar_value,
@@ -23180,7 +23372,7 @@ class _DirectCfgRecovery:
             scenario_returns = []
             for scenario, initial_head in (
                 ("zero", zero_value),
-                ("ring", ring_head),
+                ("ring", page_value(ring_head_class, 0)),
             ):
                 initial_state = (
                     empty_registers,
@@ -23191,12 +23383,14 @@ class _DirectCfgRecovery:
                     None,
                     (),
                     (),
+                    (),
                 )
                 pending = [(function_entry, initial_state)]
                 seen = set()
                 returns = []
                 while pending:
                     address, state = pending.pop()
+                    state = canonicalize_state(state)
                     state_key = (address, state)
                     if state_key in seen:
                         continue
@@ -23212,6 +23406,7 @@ class _DirectCfgRecovery:
                         predicate,
                         last_selector,
                         pending_rotation,
+                        relations,
                         events,
                         instruction_addresses,
                     ) = state
@@ -23227,6 +23422,7 @@ class _DirectCfgRecovery:
                     next_predicate = predicate
                     next_last_selector = last_selector
                     next_pending_rotation = pending_rotation
+                    next_relations = relations
                     next_events = events
                     outputs = []
 
@@ -23236,7 +23432,12 @@ class _DirectCfgRecovery:
                             address,
                             source,
                             registers,
+                            stack,
                             current_head,
+                            predicate,
+                            last_selector,
+                            pending_rotation,
+                            relations,
                         )
                         if source_value is None:
                             return None
@@ -23269,8 +23470,9 @@ class _DirectCfgRecovery:
                                 or destination.size != 4
                             ):
                                 return None
-                            if source_value not in page_values:
+                            if not is_page(source_value):
                                 return None
+                            write_origin = None
                             if next_pending_rotation is not None:
                                 call_address, selected_page = (
                                     next_pending_rotation
@@ -23283,7 +23485,7 @@ class _DirectCfgRecovery:
                                         "success",
                                         True,
                                     )
-                                    and source_value == selected_page
+                                    and source_value[2] == selected_page[2]
                                 ):
                                     return None
                                 event = (
@@ -23291,27 +23493,34 @@ class _DirectCfgRecovery:
                                     call_address,
                                     address,
                                     0,
-                                    source_value,
+                                    page_origin(selected_page),
                                 )
                                 next_events = append_event(next_events, event)
                                 if next_events is None:
                                     return None
                                 next_pending_rotation = None
+                                write_origin = page_origin(selected_page)
                             elif not (
                                 next_last_selector is not None
                                 and next_last_selector[2:] == (
                                     "success",
                                     True,
                                 )
-                                and next_last_selector[1] == provider_page
-                                and source_value == provider_page
+                                and page_origin(next_last_selector[1])
+                                == "provider"
+                                and source_value[2]
+                                == next_last_selector[1][2]
                             ):
                                 return None
+                            else:
+                                write_origin = page_origin(
+                                    next_last_selector[1]
+                                )
                             event = (
                                 "head-write",
                                 address,
                                 0,
-                                source_value,
+                                write_origin,
                             )
                             next_events = append_event(next_events, event)
                             if next_events is None:
@@ -23335,7 +23544,7 @@ class _DirectCfgRecovery:
                             ("request-input:", "request-adjusted:")
                         ):
                             value = f"request-adjusted:{source.mem.disp}"
-                        elif base in page_values:
+                        elif is_page(base):
                             if source.mem.disp != 0:
                                 return None
                             value = base
@@ -23357,7 +23566,7 @@ class _DirectCfgRecovery:
                         destination = decoded.operands[0]
                         prior = family_value(registers, destination.reg)
                         mask = decoded.operands[1].imm & 0xFFFF_FFFF
-                        if prior in page_values:
+                        if is_page(prior):
                             return None
                         value = (
                             f"request-normalized:{mask}"
@@ -23385,7 +23594,7 @@ class _DirectCfgRecovery:
                     ):
                         destination = decoded.operands[0]
                         prior = family_value(registers, destination.reg)
-                        if prior in page_values:
+                        if is_page(prior):
                             return None
                         value = (
                             f"request-adjusted:{decoded.operands[1].imm}"
@@ -23430,7 +23639,12 @@ class _DirectCfgRecovery:
                             decoded,
                             address,
                             registers,
+                            stack,
                             current_head,
+                            predicate,
+                            last_selector,
+                            pending_rotation,
+                            relations,
                         )
                     elif decoded.id == X86_INS_PUSH:
                         if (
@@ -23443,7 +23657,12 @@ class _DirectCfgRecovery:
                             address,
                             decoded.operands[0],
                             registers,
+                            stack,
                             current_head,
+                            predicate,
+                            last_selector,
+                            pending_rotation,
+                            relations,
                         )
                         if value is None:
                             return None
@@ -23489,6 +23708,18 @@ class _DirectCfgRecovery:
                             )
                             if next_events is None:
                                 return None
+                            provider_page = page_value(
+                                provider_class,
+                                fresh_page_id(
+                                    registers,
+                                    stack,
+                                    current_head,
+                                    predicate,
+                                    last_selector,
+                                    pending_rotation,
+                                    relations,
+                                ),
+                            )
                             for result in (zero_value, provider_page):
                                 result_registers = list(clobbered)
                                 result_registers[
@@ -23506,6 +23737,7 @@ class _DirectCfgRecovery:
                                         None,
                                         None,
                                         None,
+                                        relations,
                                         next_events,
                                         instruction_addresses,
                                     )
@@ -23515,15 +23747,9 @@ class _DirectCfgRecovery:
                                 return None
                             page = stack[-1]
                             request = stack[-2]
-                            if page not in page_values or not request_value(
-                                request
-                            ):
+                            if not is_page(page) or not request_value(request):
                                 return None
-                            origin = (
-                                "provider"
-                                if page == provider_page
-                                else "ring"
-                            )
+                            origin = page_origin(page)
                             next_events = append_event(
                                 events,
                                 (
@@ -23531,7 +23757,6 @@ class _DirectCfgRecovery:
                                     address,
                                     origin,
                                     request,
-                                    page,
                                 ),
                             )
                             if next_events is None:
@@ -23557,6 +23782,7 @@ class _DirectCfgRecovery:
                                             and origin == "ring"
                                             else None
                                         ),
+                                        relations,
                                         next_events,
                                         instruction_addresses,
                                     )
@@ -23593,6 +23819,7 @@ class _DirectCfgRecovery:
                                 next_predicate,
                                 next_last_selector,
                                 next_pending_rotation,
+                                next_relations,
                                 next_events,
                                 instruction_addresses,
                             )
@@ -23631,6 +23858,7 @@ class _DirectCfgRecovery:
                             output_predicate,
                             output_last_selector,
                             output_pending_rotation,
+                            output_relations,
                             output_events,
                             output_instructions,
                         ) = output
@@ -23639,7 +23867,8 @@ class _DirectCfgRecovery:
                             known = (
                                 output_predicate[3]
                                 if output_predicate is not None
-                                and output_predicate[0] in {"zero", "equal"}
+                                and output_predicate[0]
+                                in {"zero", "equal", "ring-anchor"}
                                 else None
                             )
                             if known is not None:
@@ -23651,6 +23880,41 @@ class _DirectCfgRecovery:
                                 ]
                         for successor in feasible_successors:
                             relation = branch_relation(decoded, successor)
+                            successor_state = (
+                                output_registers,
+                                output_stack,
+                                output_head,
+                                output_predicate,
+                                output_last_selector,
+                                output_pending_rotation,
+                                output_relations,
+                                output_events,
+                                output_instructions,
+                            )
+                            if (
+                                relation is not None
+                                and output_predicate is not None
+                                and output_predicate[0]
+                                in {"equal", "ring-anchor"}
+                                and isinstance(output_predicate[2], tuple)
+                                and len(output_predicate[2]) == 2
+                            ):
+                                successor_state = refine_page_relation(
+                                    successor_state,
+                                    *output_predicate[2],
+                                    relation,
+                                )
+                            (
+                                successor_registers,
+                                successor_stack,
+                                successor_head,
+                                successor_predicate,
+                                successor_last_selector,
+                                successor_pending_rotation,
+                                successor_relations,
+                                successor_events,
+                                successor_instructions,
+                            ) = successor_state
                             cyclic_backedge = bool(
                                 successor <= address
                                 and self._reachable_within_function(
@@ -23666,11 +23930,10 @@ class _DirectCfgRecovery:
                                 and relation is False
                             ):
                                 return None
-                            successor_last_selector = output_last_selector
                             if (
-                                output_predicate is not None
-                                and output_predicate[0] == "zero"
-                                and output_predicate[1] == "eax"
+                                successor_predicate is not None
+                                and successor_predicate[0] == "zero"
+                                and successor_predicate[1] == "eax"
                                 and successor_last_selector is not None
                                 and not successor_last_selector[3]
                             ):
@@ -23683,8 +23946,8 @@ class _DirectCfgRecovery:
                                     else selector_success(call_address)
                                 )
                                 if (
-                                    output_predicate[2] == expected_result
-                                    and output_predicate[3] is not None
+                                    successor_predicate[2] == expected_result
+                                    and successor_predicate[3] is not None
                                 ):
                                     successor_last_selector = (
                                         call_address,
@@ -23696,16 +23959,17 @@ class _DirectCfgRecovery:
                                 (
                                     successor,
                                     (
-                                        output_registers,
-                                        output_stack,
-                                        output_head,
+                                        successor_registers,
+                                        successor_stack,
+                                        successor_head,
                                         None
                                         if decoded.group(CS_GRP_JUMP)
-                                        else output_predicate,
+                                        else successor_predicate,
                                         successor_last_selector,
-                                        output_pending_rotation,
-                                        output_events,
-                                        output_instructions,
+                                        successor_pending_rotation,
+                                        successor_relations,
+                                        successor_events,
+                                        successor_instructions,
                                     ),
                                 )
                             )
@@ -23790,8 +24054,7 @@ class _DirectCfgRecovery:
                 iter({event[1:3] for event in head_write_events})
             )
             head_write_origins = frozenset(
-                "provider" if event[3] == provider_page else "ring"
-                for event in head_write_events
+                event[3] for event in head_write_events
             )
             rotation_write = (
                 head_write_address,

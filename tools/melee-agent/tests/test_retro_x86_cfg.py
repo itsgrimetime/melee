@@ -5554,6 +5554,233 @@ def private_page_ring_selector_origin_rotation_image(
     return replace(fixture, arena=replace(fixture.arena, image=image))
 
 
+_PRIVATE_PAGE_SELECTED_IDENTITY_VARIANTS = frozenset(
+    {
+        "direct",
+        "same-page-lea",
+        "copy-once",
+        "copy-twice",
+        "retain-original",
+        "advance-once",
+        "advance-twice",
+        "launder-once",
+        "launder-twice",
+        "different-live-page",
+    }
+)
+
+
+def private_page_ring_selected_identity_image(
+    variant: str,
+) -> PrivatePageArenaFixture:
+    """Build one compact selected-page identity proof fixture."""
+    assert variant in _PRIVATE_PAGE_SELECTED_IDENTITY_VARIANTS
+    fixture = private_page_arena_image()
+    code = bytearray()
+    labels = {}
+    fixups = []
+    selector_calls = []
+    provider_calls = []
+    head = fixture.page_head_slot.to_bytes(4, "little")
+
+    def emit(value: str | bytes) -> int:
+        start = len(code)
+        code.extend(bytes.fromhex(value) if isinstance(value, str) else value)
+        return start
+
+    def mark(label: str) -> None:
+        assert label not in labels
+        labels[label] = len(code)
+
+    def branch(opcode: int, label: str) -> None:
+        start = emit(bytes((opcode, 0)))
+        fixups.append((start, label))
+
+    def call(target: int, calls: list[int]) -> None:
+        address = fixture.large_allocator + len(code)
+        displacement = target - address - 5
+        emit(b"\xe8" + displacement.to_bytes(4, "little", signed=True))
+        calls.append(address)
+
+    paired_seam = variant in {"same-page-lea", "advance-once"}
+    retain_distinct = variant in {
+        "retain-original",
+        "different-live-page",
+    }
+
+    if retain_distinct:
+        emit("53 56 57 55 8b 5c 24 14")
+    else:
+        emit("53 56 57 8b 5c 24 10")
+    emit("8d 5b 0f 83 e3 f8 83 fb 50")
+    branch(0x73, "request-ready")
+    emit("bb 50 00 00 00")
+    mark("request-ready")
+    emit("8b 35")
+    emit(head)
+    emit("85 f6")
+    branch(0x75, "initial-page")
+    emit("53")
+    call(fixture.page_provider, provider_calls)
+    emit("59 85 c0")
+    branch(0x74, "failure")
+    emit("89 c6")
+    mark("initial-page")
+    if paired_seam:
+        emit("31 ff 89 f7 89 ff")
+    else:
+        emit("89 f7")
+
+    mark("selector-loop")
+    if retain_distinct:
+        emit("8b 6e 04")
+    emit("53 56")
+    call(fixture.selector, selector_calls)
+    emit("59 59 85 c0")
+    branch(0x75, "later-success")
+    emit("8b 76 04 39 fe")
+    branch(0x75, "selector-loop")
+
+    emit("53")
+    call(fixture.page_provider, provider_calls)
+    emit("59 85 c0")
+    branch(0x74, "failure")
+    emit("89 c6 53 56")
+    call(fixture.selector, selector_calls)
+    emit("59 59 85 c0")
+    branch(0x74, "failure")
+    mark("success-return")
+    emit(
+        "83 c0 08 5d 5f 5e 5b c3"
+        if retain_distinct
+        else "83 c0 08 5f 5e 5b c3"
+    )
+
+    assert len(code) <= (0x69 if paired_seam else 0x6B)
+    if paired_seam:
+        emit(b"\x90" * (0x69 - len(code)))
+    mark("later-success")
+
+    head_source = "esi"
+    if variant in {"copy-once", "launder-once"}:
+        emit("89 f1")
+        head_source = "ecx"
+    elif variant in {"copy-twice", "launder-twice"}:
+        emit("89 f1 89 ca")
+        head_source = "edx"
+    emit("39 fe")
+    branch(0x74, "selected-write")
+    if paired_seam:
+        assert len(code) == 0x6D
+
+    if variant == "same-page-lea":
+        emit("8d 76 00")
+    elif variant == "advance-once":
+        emit("8b 76 04")
+    elif variant == "advance-twice":
+        emit("8b 76 04 8b 76 04")
+    elif variant == "launder-once":
+        emit("8b 4e 04")
+    elif variant == "launder-twice":
+        emit("8b 4e 04 89 ca")
+    elif variant == "different-live-page":
+        emit("89 ee")
+    else:
+        branch(0xEB, "selected-write")
+
+    mark("selected-write")
+    if head_source == "ecx":
+        emit("89 0d")
+    elif head_source == "edx":
+        emit("89 15")
+    else:
+        emit("89 35")
+    emit(head)
+    branch(0xEB, "success-return")
+    mark("failure")
+    emit(
+        "31 c0 5d 5f 5e 5b c3"
+        if retain_distinct
+        else "31 c0 5f 5e 5b c3"
+    )
+    assert len(code) <= 0x80
+
+    for start, label in fixups:
+        displacement = labels[label] - start - 2
+        assert -0x80 <= displacement <= 0x7F
+        code[start + 1] = displacement & 0xFF
+
+    raw = bytearray(fixture.arena.image.data)
+    section = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.va
+        <= fixture.large_allocator
+        < section.va + section.raw_size
+    )
+    raw_offset = (
+        section.raw_offset + fixture.large_allocator - section.va
+    )
+    replacement = bytes(code) + b"\x90" * (0x80 - len(code))
+    raw[raw_offset : raw_offset + 0x80] = replacement
+    changed_addresses = {
+        address
+        for address in range(section.va, section.va + section.raw_size)
+        if fixture.arena.image.read(address, 1)
+        != bytes(
+            raw[
+                section.raw_offset
+                + address
+                - section.va : section.raw_offset
+                + address
+                - section.va
+                + 1
+            ]
+        )
+    }
+    assert changed_addresses
+    assert changed_addresses < set(
+        range(fixture.large_allocator, fixture.page_provider)
+    )
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    updated = replace(
+        fixture,
+        arena=replace(fixture.arena, image=image),
+        selector_calls=tuple(selector_calls),
+    )
+
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        replace(
+            generous_limits(image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+    calls = recovery._function_direct_calls(fixture.large_allocator)
+    assert tuple(
+        (row.address, row.target)
+        for row in calls
+        if row.target == fixture.selector
+    ) == tuple((address, fixture.selector) for address in selector_calls)
+    assert tuple(
+        (row.address, row.target)
+        for row in calls
+        if row.target == fixture.page_provider
+    ) == tuple((address, fixture.page_provider) for address in provider_calls)
+    assert recovery._raw_direct_call_sites(fixture.selector) == set(
+        selector_calls
+    )
+    assert recovery._incoming_call_domain_is_closed(fixture.selector)
+    return updated
+
+
 _PRIVATE_PAGE_RING_HOSTILES = (
     "extra-selector-caller",
     "arbitrary-existing-page",
@@ -6073,6 +6300,52 @@ def private_page_ring_task3_evidence(fixture):
         extent,
         layout,
     )
+
+
+def private_page_ring_selected_identity_prerequisites(fixture):
+    """Require intact Task 1/2 and selector/head-write structure."""
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    assert recovery._publication_private_heap_effect_closure_is_current(
+        effects
+    )
+    layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert layout is not None
+    assert layout.page_link_offsets is None
+    selector_calls = tuple(
+        call.address
+        for call in recovery._function_direct_calls(fixture.large_allocator)
+        if call.target == fixture.selector
+    )
+    assert selector_calls == fixture.selector_calls
+    assert recovery._raw_direct_call_sites(fixture.selector) == set(
+        fixture.selector_calls
+    )
+    assert recovery._incoming_call_domain_is_closed(fixture.selector)
+    head_writes = tuple(
+        (address, operand_index)
+        for address in recovery._function_instruction_addresses(
+            fixture.large_allocator
+        )
+        for operand_index, operand in enumerate(
+            recovery._owned_decoded(address).operands
+        )
+        if operand.type == capstone.x86.X86_OP_MEM
+        and operand.size == 4
+        and operand.access & capstone.CS_AC_WRITE
+        and recovery._absolute_memory_operand(operand)
+        == fixture.page_head_slot
+    )
+    assert len(head_writes) == 1
+    return recovery, contract, extent, effects, layout
+
+
+def private_page_ring_selected_identity_seam(fixture):
+    """Return the exact three-byte selected-page mutation seam."""
+    return fixture.arena.image.read(fixture.large_allocator + 0x6D, 3)
 
 
 def private_page_ring_remover_path_evidence(fixture):
@@ -14778,6 +15051,96 @@ def test_private_page_ring_rejects_unproved_ring_selection_rotation(
     assert private_page_ring_task3_evidence(baseline) is not None
 
     assert private_page_ring_task3_evidence(hostile) is None
+
+
+def test_private_page_ring_rejects_successor_as_selected_rotation_page():
+    """A selected scan page and its successor are not interchangeable."""
+    control = private_page_ring_selected_identity_image("same-page-lea")
+    hostile = private_page_ring_selected_identity_image("advance-once")
+    control_prerequisites = (
+        private_page_ring_selected_identity_prerequisites(control)
+    )
+    hostile_prerequisites = (
+        private_page_ring_selected_identity_prerequisites(hostile)
+    )
+    control_recovery = control_prerequisites[0]
+    hostile_recovery = hostile_prerequisites[0]
+    seam_address = control.large_allocator + 0x6D
+
+    assert private_page_ring_selected_identity_seam(control) == bytes.fromhex(
+        "8d 76 00"
+    )
+    assert private_page_ring_selected_identity_seam(hostile) == bytes.fromhex(
+        "8b 76 04"
+    )
+    assert private_page_image_changed_addresses(control, hostile) == {
+        seam_address,
+        seam_address + 2,
+    }
+    control_decoded = control_recovery._owned_decoded(seam_address)
+    hostile_decoded = hostile_recovery._owned_decoded(seam_address)
+    assert control_decoded.id == capstone.x86.X86_INS_LEA
+    assert hostile_decoded.id == capstone.x86.X86_INS_MOV
+    assert control_decoded.operands[1].mem.disp == 0
+    assert hostile_decoded.operands[1].mem.disp == 4
+    assert private_page_ring_task3_evidence(control) is not None
+
+    assert private_page_ring_task3_evidence(hostile) is None
+
+
+@pytest.mark.parametrize(
+    "variant",
+    (
+        "advance-twice",
+        "launder-once",
+        "launder-twice",
+        "different-live-page",
+    ),
+)
+def test_private_page_ring_selector_selected_page_identity_rejects_other_node(
+    variant,
+):
+    """Traversal results and their copies cannot counterfeit selection."""
+    hostile = private_page_ring_selected_identity_image(variant)
+    private_page_ring_selected_identity_prerequisites(hostile)
+
+    assert private_page_ring_task3_evidence(hostile) is None
+
+
+@pytest.mark.parametrize(
+    "variant",
+    (
+        "direct",
+        "copy-once",
+        "copy-twice",
+        "retain-original",
+    ),
+)
+def test_private_page_ring_selector_selected_page_identity_accepts_same_node(
+    variant,
+):
+    """Exact full-width aliases of the selected page remain valid."""
+    fixture = private_page_ring_selected_identity_image(variant)
+    private_page_ring_selected_identity_prerequisites(fixture)
+
+    evidence = private_page_ring_task3_evidence(fixture)
+
+    assert evidence is not None
+    assert tuple(
+        (row.call_address, row.page_origins)
+        for row in evidence.role.selector_invocations
+    ) == (
+        (fixture.selector_calls[0], ("provider", "ring")),
+        (fixture.selector_calls[1], ("provider",)),
+    )
+    rotation = next(
+        transfer
+        for transfer in evidence.transfers
+        if transfer.role == "ring-rotate"
+    )
+    assert tuple(row.call_address for row in rotation.invocations) == (
+        fixture.selector_calls[0],
+    )
 
 
 def test_private_page_ring_remover_path_default_builder_is_exact():
