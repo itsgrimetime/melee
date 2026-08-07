@@ -1107,7 +1107,7 @@ class _OwnedBumpAllocatorFact:
 
 
 @dataclass(frozen=True, slots=True)
-class _AllocatorTransactionFunctionSlice:
+class _IntraproceduralGoalSlice:
     """Exact owned instructions that can execute before one goal call."""
 
     function_entry: int
@@ -1115,25 +1115,6 @@ class _AllocatorTransactionFunctionSlice:
     retained_addresses: frozenset[int]
     retained_call_sites: frozenset[int]
     retained_transfer_sites: frozenset[int]
-
-
-@dataclass(frozen=True, slots=True)
-class _AllocatorTransactionSlice:
-    """Dependency-bound interprocedural path to every allocator goal."""
-
-    root: int
-    allocator: int
-    allocation_caller: int
-    goal_call_sites: frozenset[int]
-    function_slices: tuple[_AllocatorTransactionFunctionSlice, ...]
-    side_scope_functions: frozenset[int]
-
-    @property
-    def function_entries(self) -> frozenset[int]:
-        return frozenset(
-            row.function_entry for row in self.function_slices
-        ) | self.side_scope_functions
-
 
 @dataclass(frozen=True, slots=True)
 class _AllocatorSessionCertificate:
@@ -1239,7 +1220,6 @@ class _SessionStateCapabilitySeal:
 class _AllocatorTotalityCertificate(_AllocatorSessionCertificate):
     """Session evidence plus a closed allocator-state noninterference proof."""
 
-    transaction_slices: tuple[_AllocatorTransactionSlice, ...] = ()
     returning_body_functions: frozenset[int] = field(default_factory=frozenset)
     capability_seal: _SessionStateCapabilitySeal | None = None
 
@@ -22140,7 +22120,7 @@ class _DirectCfgRecovery:
         self,
         function_entry: int,
         goal_call_sites: frozenset[int],
-    ) -> _AllocatorTransactionFunctionSlice | None:
+    ) -> _IntraproceduralGoalSlice | None:
         """Retain every exact entry-to-goal instruction in one function."""
         if function_entry not in self.function_addresses or not goal_call_sites:
             return None
@@ -22231,7 +22211,7 @@ class _DirectCfgRecovery:
         if function_entry not in retained:
             return None
         retained_addresses = frozenset(retained)
-        return _AllocatorTransactionFunctionSlice(
+        return _IntraproceduralGoalSlice(
             function_entry=function_entry,
             goal_call_sites=goal_call_sites,
             retained_addresses=retained_addresses,
@@ -22257,313 +22237,6 @@ class _DirectCfgRecovery:
             ),
         )
 
-    def _allocator_transaction_slice(
-        self,
-        root: int,
-        allocator: int,
-        allocation_caller: int,
-        protected_slots: frozenset[int],
-        deferred_call_sites: frozenset[int],
-        call_return_domains: dict[
-            int,
-            tuple[
-                Literal["finite", "private-stack", "fresh-allocation", "private-heap"],
-                frozenset[int],
-            ],
-        ],
-        *,
-        terminal_functions: frozenset[int] = frozenset(),
-    ) -> _AllocatorTransactionSlice | None:
-        """Audit exact root-to-allocator paths without unrelated call arms."""
-        if not {
-            root,
-            allocator,
-            allocation_caller,
-            *terminal_functions,
-        } <= self.function_addresses:
-            return None
-        allocator_fact = self._owned_fixed_bump_allocator_fact(allocator)
-        if allocator_fact is None:
-            return None
-
-        reachable_functions = {root}
-        pending = [root]
-        targets_by_transfer: dict[int, frozenset[int]] = {}
-        transfers_by_function: dict[int, tuple[int, ...]] = {}
-        reverse_function_edges: dict[int, set[int]] = {}
-        while pending:
-            function_entry = heapq.heappop(pending)
-            if function_entry in terminal_functions:
-                # A terminal is the transaction goal itself.  Expanding its
-                # callees would import post-goal cycles into the pre-goal
-                # proof surface and can make unrelated functions appear to
-                # lead back to the terminal.
-                transfers_by_function[function_entry] = ()
-                continue
-            function_addresses = frozenset(
-                self._function_instruction_addresses(function_entry)
-            )
-            following_entry = self._following_function_entry(
-                function_entry
-            )
-            reachable_addresses = set()
-            pending_addresses = [function_entry]
-            while pending_addresses:
-                address = heapq.heappop(pending_addresses)
-                if address in reachable_addresses:
-                    continue
-                if address not in function_addresses:
-                    continue
-                reachable_addresses.add(address)
-                self.limits.check(
-                    "max_summary_iterations", len(reachable_addresses)
-                )
-                for successor in self._summary_successors(
-                    address,
-                    function_entry,
-                    following_entry,
-                ):
-                    if successor not in reachable_addresses:
-                        heapq.heappush(pending_addresses, successor)
-            transfers = []
-            for transfer_address in sorted(reachable_addresses):
-                decoded = self._owned_decoded(transfer_address)
-                if decoded.group(CS_GRP_CALL):
-                    targets = set(
-                        self.call_targets_by_source.get(
-                            transfer_address, ()
-                        )
-                    )
-                    direct = self._direct_target(decoded)
-                    if direct is not None:
-                        targets.add(direct)
-                elif decoded.group(CS_GRP_JUMP):
-                    targets = {
-                        target
-                        for target in self.non_call_successors.get(
-                            transfer_address, ()
-                        )
-                        if target not in function_addresses
-                    }
-                    if not targets:
-                        continue
-                else:
-                    continue
-                transfers.append(transfer_address)
-                frozen_targets = frozenset(targets)
-                targets_by_transfer[transfer_address] = frozen_targets
-                for target in frozen_targets & self.function_addresses:
-                    reverse_function_edges.setdefault(target, set()).add(
-                        function_entry
-                    )
-                    if target in reachable_functions:
-                        continue
-                    reachable_functions.add(target)
-                    self.limits.check(
-                        "max_summary_iterations", len(reachable_functions)
-                    )
-                    heapq.heappush(pending, target)
-            transfers_by_function[function_entry] = tuple(transfers)
-
-        distance_targets = (
-            terminal_functions
-            if terminal_functions
-            else frozenset({allocation_caller})
-        )
-        if not distance_targets <= reachable_functions:
-            return None
-        distances = {target: 0 for target in distance_targets}
-        pending_distances = [
-            (0, target) for target in sorted(distance_targets)
-        ]
-        while pending_distances:
-            distance, target = heapq.heappop(pending_distances)
-            if distance != distances[target]:
-                continue
-            for caller in sorted(reverse_function_edges.get(target, ())):
-                if caller not in reachable_functions:
-                    continue
-                candidate = distance + 1
-                if candidate >= distances.get(caller, 0x1_0000_0000):
-                    continue
-                distances[caller] = candidate
-                self.limits.check(
-                    "max_summary_iterations", len(distances)
-                )
-                heapq.heappush(pending_distances, (candidate, caller))
-        if root not in distances:
-            return None
-        spine_entries = frozenset(distances) - terminal_functions
-
-        allocator_goal_calls = (
-            frozenset(
-                call_address
-                for call_address in transfers_by_function.get(
-                    allocation_caller, ()
-                )
-                if self._owned_decoded(call_address).group(CS_GRP_CALL)
-                and allocator
-                in targets_by_transfer.get(call_address, ())
-            )
-            if not terminal_functions
-            else frozenset()
-        )
-        if not terminal_functions and not allocator_goal_calls:
-            return None
-        function_slices = []
-        for function_entry in sorted(spine_entries):
-            if not terminal_functions and function_entry == allocation_caller:
-                goal_calls = allocator_goal_calls
-            else:
-                current_distance = distances[function_entry]
-                goal_calls = frozenset(
-                    call_address
-                    for call_address in transfers_by_function.get(
-                        function_entry, ()
-                    )
-                    if any(
-                        distances.get(target, 0x1_0000_0000)
-                        < current_distance
-                        for target in targets_by_transfer.get(
-                            call_address, ()
-                        )
-                    )
-                )
-            function_slice = self._intraprocedural_goal_slice(
-                function_entry,
-                goal_calls,
-            )
-            if function_slice is None:
-                return None
-            function_slices.append(function_slice)
-        transaction_goal_sites = (
-            allocator_goal_calls
-            if not terminal_functions
-            else frozenset(
-                transfer_address
-                for function_slice in function_slices
-                for transfer_address in (
-                    function_slice.retained_transfer_sites
-                )
-                if targets_by_transfer.get(
-                    transfer_address, frozenset()
-                )
-                & terminal_functions
-            )
-        )
-        if not transaction_goal_sites:
-            return None
-
-        side_scope_functions = set()
-        for function_slice in function_slices:
-            for transfer_address in function_slice.retained_transfer_sites:
-                if transfer_address in deferred_call_sites:
-                    continue
-                targets = targets_by_transfer.get(
-                    transfer_address, frozenset()
-                )
-                if not targets:
-                    if not (
-                        self._owned_decoded(transfer_address).group(
-                            CS_GRP_CALL
-                        )
-                        and self._exact_semantic_import_preserves_direction_flag(
-                            transfer_address
-                        )
-                    ):
-                        return None
-                    continue
-                if any(
-                    target not in self.function_addresses
-                    for target in targets
-                ):
-                    return None
-                for target in sorted(
-                    targets
-                    - spine_entries
-                    - terminal_functions
-                    - {allocator}
-                ):
-                    side_scope = self._finite_owned_function_call_scope(
-                        target,
-                        protected_slots,
-                        deferred_call_sites,
-                    )
-                    if side_scope is None:
-                        return None
-                    side_scope_functions.update(side_scope)
-                    self.limits.check(
-                        "max_summary_iterations",
-                        len(side_scope_functions),
-                    )
-
-        function_slice_entries = frozenset(
-            row.function_entry for row in function_slices
-        )
-        transaction_functions = (
-            function_slice_entries | frozenset(side_scope_functions)
-        )
-        allowed_call_sites = frozenset(
-            {
-                *(
-                    address
-                    for row in function_slices
-                    for address in row.retained_call_sites
-                ),
-                *(
-                    address
-                    for function_entry in side_scope_functions
-                    for address in self._function_instruction_addresses(
-                        function_entry
-                    )
-                    if self._owned_decoded(address).group(CS_GRP_CALL)
-                ),
-            }
-        )
-        argument_domains = self._semantic_closed_argument_domains_from_roots(
-            frozenset({root}),
-            transaction_functions,
-            call_return_domains=call_return_domains,
-            allowed_call_sites=allowed_call_sites,
-        )
-        for function_slice in function_slices:
-            if function_slice.function_entry in {
-                allocator,
-                allocator_fact.grow_target,
-            }:
-                continue
-            if self._semantic_writes_forbidden_spans(
-                function_slice.function_entry,
-                protected_slots,
-                call_return_domains=call_return_domains,
-                addresses=function_slice.retained_addresses,
-                argument_domains=argument_domains.get(
-                    function_slice.function_entry, {}
-                ),
-                deferred_call_sites=deferred_call_sites,
-            ):
-                return None
-        grow_target = allocator_fact.grow_target
-        if any(
-            function_entry not in {allocator, grow_target}
-            and self._semantic_writes_forbidden_spans(
-                function_entry,
-                protected_slots,
-                call_return_domains=call_return_domains,
-                argument_domains=argument_domains.get(function_entry, {}),
-                deferred_call_sites=deferred_call_sites,
-            )
-            for function_entry in side_scope_functions
-        ):
-            return None
-        return _AllocatorTransactionSlice(
-            root=root,
-            allocator=allocator,
-            allocation_caller=allocation_caller,
-            goal_call_sites=transaction_goal_sites,
-            function_slices=tuple(function_slices),
-            side_scope_functions=frozenset(side_scope_functions),
-        )
 
     def _is_deferred_lifecycle_transfer_call(
         self,
@@ -23440,19 +23113,6 @@ class _DirectCfgRecovery:
                         lifecycle_deferred_calls
                         | {grow_shape.callback_call}
                     )
-                    backend_transaction = None
-                    if not structural_only and not lifetime_roots:
-                        backend_transaction = self._allocator_transaction_slice(
-                            backend_call.target,
-                            allocator,
-                            allocation_caller,
-                            semantic_protected_slots,
-                            deferred_lifecycle_calls,
-                            call_return_domains,
-                            terminal_functions=lifetime_roots,
-                        )
-                        if backend_transaction is None:
-                            continue
                     deferred_target_scope = frozenset()
                     if not structural_only:
                         deferred_target_scope = (
@@ -23627,11 +23287,6 @@ class _DirectCfgRecovery:
                             break
                     if not session_scope_is_stable:
                         continue
-                    transaction_slices = (
-                        []
-                        if backend_transaction is None
-                        else [backend_transaction]
-                    )
                     lifetime_semantic_scopes = []
                     if lifetime_roots:
                         if not lifetime_roots <= closure:
@@ -23690,10 +23345,6 @@ class _DirectCfgRecovery:
                             continue
                     stability_scope_functions = frozenset().union(
                         deferred_target_scope,
-                        *(
-                            transaction.function_entries
-                            for transaction in transaction_slices
-                        ),
                         *lifetime_semantic_scopes,
                     )
                     reset_targets = frozenset(
@@ -23784,16 +23435,6 @@ class _DirectCfgRecovery:
                         session_candidates.append(
                             _AllocatorTotalityCertificate(
                                 **common_certificate_fields,
-                                transaction_slices=tuple(
-                                    sorted(
-                                        set(transaction_slices),
-                                        key=lambda row: (
-                                            row.root,
-                                            row.allocator,
-                                            row.allocation_caller,
-                                        ),
-                                    )
-                                ),
                             )
                         )
         compatible_candidates: dict[
@@ -23805,7 +23446,6 @@ class _DirectCfgRecovery:
                 set[int],
                 set[int],
                 set[int],
-                set[_AllocatorTransactionSlice],
             ],
         ] = {}
         for candidate in session_candidates:
@@ -23827,27 +23467,18 @@ class _DirectCfgRecovery:
                 candidate.finalizer_targets,
                 candidate.call_return_domains,
                 candidate.return_storage_slots,
-                (
-                    candidate.transaction_slices
-                    if isinstance(
-                        candidate, _AllocatorTotalityCertificate
-                    )
-                    else ()
-                ),
                 candidate.lifetime_roots,
                 candidate.descriptor_slots,
             )
             grouped = compatible_candidates.setdefault(
                 compatibility_key,
-                (candidate, set(), set(), set(), set(), set(), set()),
+                (candidate, set(), set(), set(), set(), set()),
             )
             grouped[1].update(candidate.backend_roots)
             grouped[2].update(candidate.backend_call_sites)
             grouped[3].update(candidate.session_slice_addresses)
             grouped[4].update(candidate.session_scope_functions)
             grouped[5].update(candidate.stability_scope_functions)
-            if isinstance(candidate, _AllocatorTotalityCertificate):
-                grouped[6].update(candidate.transaction_slices)
         if len(compatible_candidates) != 1:
             return None
         (
@@ -23857,7 +23488,6 @@ class _DirectCfgRecovery:
             session_slice_addresses,
             session_scope_functions,
             stability_scope_functions,
-            transaction_slices,
         ) = next(iter(compatible_candidates.values()))
         common_merged_fields = dict(
             session_root=template.session_root,
@@ -23906,16 +23536,6 @@ class _DirectCfgRecovery:
         else:
             certificate = _AllocatorTotalityCertificate(
                 **common_merged_fields,
-                transaction_slices=tuple(
-                    sorted(
-                        transaction_slices,
-                        key=lambda row: (
-                            row.root,
-                            row.allocator,
-                            row.allocation_caller,
-                        ),
-                    )
-                ),
             )
             dependencies = self._allocator_totality_dependencies(
                 allocator,
@@ -23998,18 +23618,6 @@ class _DirectCfgRecovery:
             function_dependencies.update(
                 self._direct_function_call_closure(root)
             )
-        for transaction in certificate.transaction_slices:
-            function_dependencies.update(transaction.function_entries)
-            for function_slice in transaction.function_slices:
-                if any(
-                    self._registrar_function_entry(address)
-                    != function_slice.function_entry
-                    for address in function_slice.retained_addresses
-                ):
-                    raise CfgRecoveryError(
-                        "allocator transaction retained an address outside "
-                        "its function dependency"
-                    )
         deferred_calls = (
             self._deferred_lifecycle_transfer_call_sites(
                 certificate.lifetime_roots,
@@ -49534,7 +49142,6 @@ class _DirectCfgRecovery:
 
         certificate = _AllocatorTotalityCertificate(
             **asdict(session),
-            transaction_slices=(),
             returning_body_functions=body_entries,
             capability_seal=seal,
         )

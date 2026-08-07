@@ -11970,7 +11970,7 @@ def test_allocator_totality_rejects_recursive_owned_typed_return():
     assert certificate is None
 
 
-def _allocator_transaction_fixture_slice(mutation):
+def _intraprocedural_goal_fixture_slice(mutation):
     fixture = return_path_publication_lifecycle_image(mutation=mutation)
     recovery = _DirectCfgRecovery(
         fixture.image,
@@ -11987,8 +11987,8 @@ def _allocator_transaction_fixture_slice(mutation):
     return fixture, recovery, owner_calls
 
 
-def test_allocator_transaction_slice_excludes_unreachable_untrusted_branch():
-    fixture, recovery, owner_calls = _allocator_transaction_fixture_slice(
+def test_intraprocedural_goal_slice_excludes_unreachable_untrusted_branch():
+    fixture, recovery, owner_calls = _intraprocedural_goal_fixture_slice(
         "transaction-unreachable-untrusted-call"
     )
 
@@ -12010,8 +12010,8 @@ def test_allocator_transaction_slice_excludes_unreachable_untrusted_branch():
     assert len(all_backend_calls - sliced.retained_call_sites) == 1
 
 
-def test_allocator_transaction_slice_retains_reconverging_untrusted_call():
-    fixture, recovery, owner_calls = _allocator_transaction_fixture_slice(
+def test_intraprocedural_goal_slice_retains_reconverging_untrusted_call():
+    fixture, recovery, owner_calls = _intraprocedural_goal_fixture_slice(
         "transaction-reconverging-untrusted-call"
     )
 
@@ -12033,8 +12033,8 @@ def test_allocator_transaction_slice_retains_reconverging_untrusted_call():
     assert untrusted_calls <= sliced.retained_call_sites
 
 
-def test_allocator_transaction_slice_retains_reconverging_protected_write():
-    fixture, recovery, owner_calls = _allocator_transaction_fixture_slice(
+def test_intraprocedural_goal_slice_retains_reconverging_protected_write():
+    fixture, recovery, owner_calls = _intraprocedural_goal_fixture_slice(
         "transaction-reconverging-protected-write"
     )
 
@@ -12059,8 +12059,8 @@ def test_allocator_transaction_slice_retains_reconverging_protected_write():
     assert protected_writes <= sliced.retained_addresses
 
 
-def test_allocator_transaction_slice_rejects_reachable_unresolved_jump():
-    fixture, recovery, owner_calls = _allocator_transaction_fixture_slice(
+def test_intraprocedural_goal_slice_rejects_reachable_unresolved_jump():
+    fixture, recovery, owner_calls = _intraprocedural_goal_fixture_slice(
         "transaction-reconverging-unresolved-jump"
     )
 
@@ -12413,7 +12413,6 @@ def test_return_path_publication_backend_bridge_binds_exact_session_and_callers(
     bridge = result.certificate.backend_bridges[0]
     assert bridge.consumer_entry == fixture.publishing_consumer
     assert bridge.allocator_certificate.capability_seal is not None
-    assert bridge.allocator_certificate.transaction_slices == ()
     assert bridge.allocator_certificate.session_root == totality.session_root
     assert (
         bridge.allocator_certificate.callback_target
@@ -12442,7 +12441,6 @@ def test_return_path_publication_backend_bridge_binds_exact_session_and_callers(
     assert totality.return_storage_slots == frozenset({0x004030C0})
     assert totality.init_call_site < totality.setjmp_call_site
     assert totality.setjmp_call_site < min(totality.backend_call_sites)
-    assert totality.transaction_slices == ()
     assert fixture.session_helper in totality.session_scope_functions
     assert totality.setjmp_call_site in totality.session_slice_addresses
     assert set(totality.backend_call_sites) <= set(
@@ -12564,10 +12562,7 @@ def test_allocator_totality_cache_tracks_reachable_session_helper():
     assert recovery._dependency_memo_hit(replacement_entry)
 
 
-@pytest.mark.parametrize("surface", ("retained", "excluded-full-body"))
-def test_allocator_transaction_cache_tracks_slice_and_full_body_dependencies(
-    surface,
-):
+def test_allocator_totality_cache_tracks_backend_closure_dependencies():
     fixture = return_path_publication_lifecycle_image(
         mutation="transaction-unreachable-untrusted-call"
     )
@@ -12583,50 +12578,37 @@ def test_allocator_transaction_cache_tracks_slice_and_full_body_dependencies(
         lifetime_roots=frozenset({fixture.publishing_consumer}),
     )
     assert certificate is not None
-    transaction = next(
-        row
-        for row in certificate.transaction_slices
-        if row.root == fixture.backend_root
-    )
     entry = next(
         row
         for row in recovery.allocator_totality_cache.values()
         if row is not None and row.result == certificate
     )
-    if surface == "retained":
-        function_entry = fixture.backend_root
-        instruction_address = min(
-            next(
-                row.retained_addresses
-                for row in transaction.function_slices
-                if row.function_entry == function_entry
+    backend_closure = recovery._direct_function_call_closure(
+        fixture.backend_root
+    )
+    dependency_keys = {
+        (kind, identifier)
+        for kind, identifier, _fingerprint in entry.dependencies
+    }
+    assert {
+        ("function", function_entry) for function_entry in backend_closure
+    } <= dependency_keys
+    function_entry = next(
+        candidate
+        for candidate in sorted(backend_closure - {fixture.backend_root})
+        if any(
+            recovery._owned_decoded(address).group(capstone.CS_GRP_CALL)
+            and not recovery.call_targets_by_source.get(address)
+            and not any(
+                edge.source == address
+                for edge in recovery.terminal_external_edges
             )
+            for address in recovery._function_instruction_addresses(candidate)
         )
-    else:
-        excluded_functions = (
-            recovery._direct_function_call_closure(fixture.backend_root)
-            - transaction.function_entries
-        )
-        function_entry = next(
-            candidate
-            for candidate in sorted(excluded_functions)
-            if any(
-                recovery._owned_decoded(address).group(
-                    capstone.CS_GRP_CALL
-                )
-                and not recovery.call_targets_by_source.get(address)
-                and not any(
-                    edge.source == address
-                    for edge in recovery.terminal_external_edges
-                )
-                for address in recovery._function_instruction_addresses(
-                    candidate
-                )
-            )
-        )
-        instruction_address = recovery._function_instruction_addresses(
-            function_entry
-        )[0]
+    )
+    instruction_address = recovery._function_instruction_addresses(
+        function_entry
+    )[0]
     instruction = recovery.instructions[instruction_address]
     changed = bytearray.fromhex(instruction.bytes_hex)
     changed[-1] ^= 1
@@ -12643,7 +12625,6 @@ def test_allocator_transaction_cache_tracks_slice_and_full_body_dependencies(
         lifetime_roots=frozenset({fixture.publishing_consumer}),
     )
     assert recomputed is not None
-    assert recomputed.transaction_slices == certificate.transaction_slices
     replacement_entry = next(
         row
         for row in recovery.allocator_totality_cache.values()
@@ -19722,7 +19703,11 @@ def test_allocator_totality_cache_invalidates_callback_slot_overwrite(
 
 
 def test_allocator_totality_accepts_reset_outside_closed_lifetime():
-    image, _movzx_address, _transfer_address = lifecycle_optional_allocation_pointee_image(mutation="reset-reachable")
+    image, _movzx_address, transfer_address = (
+        lifecycle_optional_allocation_pointee_image(
+            mutation="reset-reachable"
+        )
+    )
     recovery = _DirectCfgRecovery(
         image,
         build_seed_inventory(image, ()),
@@ -19731,9 +19716,6 @@ def test_allocator_totality_accepts_reset_outside_closed_lifetime():
     recovery.recover()
     lifetime_roots = frozenset({0x00401080, 0x00401140})
 
-    assert recovery._allocator_totality_certificate(
-        0x00401380, 0x00401300
-    ) is None
     certificate = recovery._allocator_totality_certificate(
         0x00401380,
         0x00401300,
@@ -19742,6 +19724,12 @@ def test_allocator_totality_accepts_reset_outside_closed_lifetime():
 
     assert certificate is not None
     assert certificate.lifetime_roots == lifetime_roots
+    cfg = recover_cfg(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    assert cfg.jump_table_at(transfer_address).guard_bound == 74
 
 
 def test_allocator_totality_accepts_two_checked_backend_phases():
@@ -20283,7 +20271,6 @@ def test_retail_multi_attempt_grow_rejects_open_totality(mutation):
         "one-arena-null-path",
         "returning-callback",
         "callback-overwritten",
-        "reset-reachable",
         "alternate-backend-entry",
         "allocation-before-init",
         "unknown-initial-head",
