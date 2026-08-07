@@ -4235,6 +4235,7 @@ _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
         "seal-external-owned-xor-mask-disjoint-destination",
         "seal-grow-forbidden-callback-write",
         "seal-allocator-sibling-descriptor-write",
+        "seal-session-reset",
         "seal-session-reset-writer",
         "seal-initializer-unrolled-zero",
         "seal-initializer-unrolled-zero-df-set",
@@ -5403,6 +5404,12 @@ def return_path_publication_lifecycle_image(
         "session-finite-helper-cmpxchg-callback-slot",
     }:
         cursor = emit_abs(cursor, "0f b1 05", callback_slot)
+        emit(cursor, "c3")
+    elif mutation == "seal-session-reset":
+        cursor = emit_abs(cursor, "c7 05", heap_cursor, "00 00 00 00")
+        cursor = emit_abs(
+            cursor, "c7 05", heap_remaining, "00 00 00 00"
+        )
         emit(cursor, "c3")
     elif mutation == "seal-session-reset-writer":
         cursor = emit_abs(cursor, "c7 05", heap_remaining, "00 00 00 00")
@@ -12420,6 +12427,33 @@ def test_session_capability_seal_rejects_prebackend_reset_writer():
     result = _direct_return_path_publication_certificate(fixture)
 
     assert result.certificate is None
+
+
+def test_final_publication_seal_accepts_reset_outside_returning_interval():
+    """A complete reset before backend entry is outside the checked return."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-session-reset"
+    )
+
+    cfg = recover_cfg(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+
+    assert len(cfg.publication_noninterference_certificates) == 1
+    certificate = cfg.publication_noninterference_certificates[0]
+    assert len(certificate.backend_bridges) == 1
+    totality = certificate.backend_bridges[0].allocator_certificate
+    seal = totality.capability_seal
+    assert seal is not None
+    assert totality.reset_targets == frozenset({fixture.session_helper})
+    assert fixture.session_helper not in seal.returning_body_functions
+    assert totality.reset_targets.isdisjoint(
+        seal.returning_body_functions
+    )
+    assert fixture.session_helper in seal.allowed_reference_owners
+    assert fixture.session_helper in seal.session_relevant_functions
 
 
 def test_session_capability_seal_accepts_bounded_initializer_zero_stores():
