@@ -482,7 +482,7 @@ def test_private_page_ring_proves_both_selector_page_arguments():
     assert ring.head_writes
     assert ring.ring_link_writes
     assert {row.role for row in ring_transfers} >= {
-        "ring-insert", "ring-rotate"
+        "ring-insert", "ring-remove", "ring-rotate"
     }
     selector_invocations = ring.selector_invocations
     assert all(invocation.page_origins for invocation in selector_invocations)
@@ -493,6 +493,12 @@ def test_private_page_ring_proves_both_selector_page_arguments():
     } == {"provider", "ring"}
     assert ring_spans
 ```
+
+Exercise durable removal from a nonempty ring as well as the singleton-to-null
+case, and require the recovered transfer inventory to distinguish removal from
+head rotation and insertion. The remover must update the exact recovered head
+slot and reciprocal link fields; a null head is the only accepted empty-ring
+result.
 
 The ring dataclass keeps `selector_page_calls` distinct from `provider_calls`;
 the implementation must populate and replay both inventories. A selector call
@@ -509,8 +515,10 @@ argument, adjusted provider result, foreign/partial/indexed head writer,
 missing reciprocal page link, broken singleton self-link, unresolved indirect
 mutation, raw/decoded call disagreement, empty per-site origins, collective
 origins missing provider or ring, different request normalization at one site,
-missing head rotation, rotation before success, and rotation of a different
-page.
+missing or partial removal, removal through the wrong head/link field,
+singleton removal that leaves a nonnull head, nonempty removal that breaks a
+reciprocal link, missing head rotation, rotation before success, and rotation
+of a different page.
 
 - [ ] **Step 2: Verify RED**
 
