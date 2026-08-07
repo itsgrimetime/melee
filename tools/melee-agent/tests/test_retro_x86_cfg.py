@@ -5461,6 +5461,37 @@ def private_page_ring_stack_transfer_image(
     return replace(fixture, arena=replace(fixture.arena, image=image))
 
 
+def private_page_ring_publisher_return_image(
+    tail: str,
+) -> PrivatePageArenaFixture:
+    """Replace only the fixed publisher return tail."""
+    fixture = private_page_arena_image()
+    tail_bytes = bytes.fromhex(tail)
+    assert len(tail_bytes) == 3
+    raw = bytearray(fixture.arena.image.data)
+    section = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.va
+        <= fixture.page_inserter + 0x32
+        < section.va + section.raw_size
+    )
+    offset = (
+        section.raw_offset
+        + fixture.page_inserter
+        + 0x32
+        - section.va
+    )
+    assert raw[offset : offset + 3] == bytes.fromhex("c3 90 90")
+    raw[offset : offset + 3] = tail_bytes
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
 _PRIVATE_PAGE_RING_HOSTILES = (
     "extra-selector-caller",
     "arbitrary-existing-page",
@@ -14454,6 +14485,61 @@ def test_private_page_ring_publisher_stack_transfer_boundary(
     assert private_page_image_changed_addresses(baseline, hostile) == {
         baseline.page_inserter + changed_offset
     }
+    assert private_page_ring_task3_evidence(baseline) is not None
+
+    assert private_page_ring_task3_evidence(hostile) is None
+
+
+def test_private_page_ring_publisher_rejects_entry_return_slot_pop():
+    """A later push cannot repair a consumed publisher return slot."""
+    control = private_page_ring_stack_transfer_image("53 58 90")
+    hostile = private_page_ring_stack_transfer_image("58 53 90")
+
+    assert private_page_image_changed_addresses(control, hostile) == {
+        control.page_inserter,
+        control.page_inserter + 1,
+    }
+    assert private_page_ring_task3_evidence(control) is not None
+
+    assert private_page_ring_task3_evidence(hostile) is None
+
+
+@pytest.mark.parametrize(
+    ("control_tail", "hostile_tail", "changed_offset"),
+    (
+        pytest.param("50 58 c3", "90 58 c3", 0, id="unmatched-pop"),
+        pytest.param("50 58 c3", "50 90 c3", 1, id="unmatched-push"),
+    ),
+)
+def test_private_page_ring_publisher_rejects_unbalanced_return_tail(
+    control_tail,
+    hostile_tail,
+    changed_offset,
+):
+    """Every publisher return retains the untouched entry return slot."""
+    control = private_page_ring_publisher_return_image(control_tail)
+    hostile = private_page_ring_publisher_return_image(hostile_tail)
+    assert private_page_image_changed_addresses(control, hostile) == {
+        control.page_inserter + 0x32 + changed_offset
+    }
+    assert private_page_ring_task3_evidence(control) is not None
+
+    assert private_page_ring_task3_evidence(hostile) is None
+
+
+@pytest.mark.parametrize(
+    "tail",
+    (
+        pytest.param("c2 04 00", id="near-ret-immediate"),
+        pytest.param("cb 90 90", id="far-ret"),
+        pytest.param("ca 04 00", id="far-ret-immediate"),
+    ),
+)
+def test_private_page_ring_publisher_rejects_unsupported_return_form(tail):
+    """Only an operand-free ordinary near RET closes the proof."""
+    baseline = private_page_ring_publisher_return_image("c3 90 90")
+    hostile = private_page_ring_publisher_return_image(tail)
+    assert private_page_image_changed_addresses(baseline, hostile)
     assert private_page_ring_task3_evidence(baseline) is not None
 
     assert private_page_ring_task3_evidence(hostile) is None
