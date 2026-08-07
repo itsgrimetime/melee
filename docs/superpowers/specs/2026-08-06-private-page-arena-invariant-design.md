@@ -70,11 +70,13 @@ class _PublicationPrivatePageLayout:
     page_largest_free_offset: int
     page_extent_offset: int
     first_block_offset: int
+    page_end_tag_displacement: int
     end_sentinel_displacement: int
     block_header_offset: int
     block_page_flags_offset: int
     block_prev_offset: int
     block_next_offset: int
+    block_boundary_tag_displacement: int
     flag_mask: int
     minimum_split_remainder: int | None
 
@@ -115,8 +117,10 @@ class _PublicationPrivateArenaSpan:
         "page-link",
         "largest-free",
         "extent",
+        "page-end-tag",
         "sentinel",
         "block-header",
+        "block-page-flags",
         "block-prev",
         "block-next",
         "boundary-tag",
@@ -167,10 +171,11 @@ class _PublicationPrivatePageArenaInvariant:
 The layout is recovered from the exact initializer and mutation shapes. Values
 such as extent alignment, block alignment, field offsets, end displacement,
 and split threshold are stored in the witness because the decoded program
-proves them; they are not constants used to select a retail function. The
-retail initializer establishes an extent alignment of `0x1000` and a block
-alignment of `8`. This constrains `E` and block arithmetic, respectively; it
-is explicitly **not** a claim that the provider return `P` is `0x1000`-aligned.
+proves them; production discovery does not require familiar values in order to
+select a function. The exact retail integration establishes an extent
+alignment of `0x1000` and a block alignment of `8`. This constrains `E` and
+block arithmetic, respectively; it is explicitly **not** a claim that the
+provider return `P` is `0x1000`-aligned.
 Initial layout recovery leaves `page_link_offsets` and
 `minimum_split_remainder` null. Ring-role recovery must bind the unique
 `P+0`/`P+4` link pair, and selector-role recovery must derive the unique
@@ -179,10 +184,11 @@ unsigned guard, before the final arena invariant is available.
 The induction-base layout has the following exact field facts, recovered from
 the certified initializer rather than used as selectors: `P+8` is the
 largest-free size, `P+0xc` is `E | 3`, `P+0x10` is the first block,
-`P+E-8` is its end boundary tag, and `P+E-4` is the end sentinel. A block
-uses size at `+0`, page/flags at `+4`, and predecessor/successor links at
-`+8`/`+0xc`. The page publisher, not the initializer effect closure, writes
-the page-ring links at `P+0` and `P+4`.
+`P+E-8` is the page-end tag, and `P+E-4` is the end sentinel. A block uses
+size at `+0`, page/flags at `+4`, and predecessor/successor links at
+`+8`/`+0xc`; its boundary tag is at `B+S-4` (which is `P+E-0xc` for the
+initial `B=P+0x10`, `S=E-0x18` block). The page publisher, not the initializer
+effect closure, writes the page-ring links at `P+0` and `P+4`.
 
 ## Structural Role Discovery
 
@@ -224,8 +230,9 @@ until an explicit no-wrap check proves a concrete x86 address interval.
 
 The page invariant is:
 
-- `E` satisfies the provider's minimum, `0x1000` extent-alignment, and
-  no-wrap proof. The invariant makes no alignment claim about `P` itself.
+- `E` satisfies the provider's minimum, recovered extent-alignment, and
+  no-wrap proof. The exact retail integration asserts that the recovered
+  value is `0x1000`; the invariant makes no alignment claim about `P` itself.
 - The page header, first block, and end sentinel are contained in `[P, P+E)`.
 - Both page links are null only while unpublished; once published they name
   pages carrying the same allocator-root capability. A singleton names itself
@@ -235,9 +242,9 @@ The page invariant is:
 
 The block invariant for `Block(P, E, B, S)` is:
 
-- Block arithmetic uses the recovered `8`-byte block alignment; this remains
-  distinct from extent alignment and does not imply an alignment property of
-  `P`.
+- Block arithmetic uses the recovered block alignment; the exact retail
+  integration asserts that it is `8`. It remains distinct from extent
+  alignment and does not imply an alignment property of `P`.
 - The complete block metadata span lies inside the page arena.
 - Masking the block header by the recovered flag mask yields `S`.
 - `B + S` does not wrap and does not pass the recovered end boundary.

@@ -26,9 +26,10 @@ hydrated raw-CFG diagnostic.
   extent/effect witness; do not create a parallel allocator recognizer.
 - Recover layout values and transfer roles from decoded evidence rather than
   symbol names, byte-string identity, or familiar constants used as selectors.
-- Keep `extent_alignment == 0x1000` distinct from `block_alignment == 8`.
-  These constrain `E` and block arithmetic; do not infer or assert that `P`
-  is page-aligned.
+- Keep extent alignment distinct from block alignment. Exact retail integration
+  expects `0x1000` and `8`, respectively, but production discovery derives both
+  values structurally. They constrain `E` and block arithmetic; do not infer or
+  assert that `P` is page-aligned.
 - Every unresolved edge, extra caller/writer, unknown abstract value, conflicting
   role, unclassified memory operand, or stale dependency fails closed.
 - Extend the existing ignored `--private-heap-extent` diagnostic; do not add a
@@ -97,9 +98,10 @@ producer; do not place a disconnected page-arena image beside it. Both
 selector paths must enter the same selector: one receives a member loaded from
 a circular page ring, and one receives the exact page-provider result. Its
 certified initializer must write `P+8` largest-free size, `P+0xc` as `E | 3`,
-the first block at `P+0x10`, the end boundary tag at `P+E-8`, and the sentinel
-at `P+E-4`; the first block must expose size `+0`, page/flags `+4`, and links
-`+8`/`+0xc`. The page publisher must write the ring links at `P+0`/`P+4`.
+the first block at `P+0x10`, the page-end tag at `P+E-8`, the first block's
+boundary tag at `B+S-4`, and the sentinel at `P+E-4`; the first block must
+expose size `+0`, page/flags `+4`, and links `+8`/`+0xc`. The page publisher
+must write the ring links at `P+0`/`P+4`.
 The selector iterates a circular free list, optionally splits and unlinks a
 block, and returns it. The companion free path exercises insertion and both
 coalescing directions.
@@ -119,7 +121,7 @@ def test_private_page_arena_still_requires_an_inductive_witness():
     assert fixture.selector in {
         body.function_entry for body in closure.bodies
     }
-    assert effects.spans  # The induction base is real, not a fake bridge.
+    assert effects.bounded_spans  # The induction base is real, not a fake bridge.
 
     assert recovery._publication_body_address_domains(
         fixture.arena.callback_slot, closure, (bridge,)
@@ -183,11 +185,15 @@ def test_private_page_layout_is_derived_from_initializer_effects():
     assert layout.page_largest_free_offset == 8
     assert layout.page_extent_offset == 12
     assert layout.first_block_offset == 0x10
+    assert layout.page_end_tag_displacement == -8
     assert layout.end_sentinel_displacement == -4
     assert layout.block_header_offset == 0
     assert layout.block_page_flags_offset == 4
     assert layout.block_prev_offset == 8
     assert layout.block_next_offset == 12
+    assert layout.block_boundary_tag_displacement == -4
+    assert layout.flag_mask == 7
+    assert layout.minimum_split_remainder is None
 ```
 
 Add parametrized mutations for a changed extent mask, changed sentinel
@@ -226,10 +232,11 @@ def _publication_private_page_layout(
 
 Replay contract, extent, and effect fingerprints. Decode the exact certified
 provider/initializer body together with its effect spans to derive `P+8`
-largest-free, `P+0xc` extent/flag word (`E | 3`), first block `P+0x10`, end
-tag `P+E-8`, sentinel `P+E-4`, and block size/page-flags/prev/next fields
-`+0/+4/+8/+0xc`. Derive `extent_alignment == 0x1000` and
-`block_alignment == 8` separately; neither establishes alignment of `P`.
+largest-free, `P+0xc` extent/flag word (`E | 3`), first block `P+0x10`, page
+end tag `P+E-8`, block boundary tag `B+S-4`, sentinel `P+E-4`, and block
+size/page-flags/prev/next fields `+0/+4/+8/+0xc`. Derive extent and block
+alignment separately (the exact retail assertions are `0x1000` and `8`);
+neither establishes alignment of `P`.
 Reject duplicate layouts, wrap, or any initializer span outside `[P, P+E)`.
 Set `page_link_offsets=None`: exact `P+0`/`P+4` links are not part of the
 initializer effect evidence and Task 3 alone may bind them. The split threshold
@@ -323,9 +330,10 @@ to the head or page links is null, the exact provider return, or an existing
 same-ring page. Use the finite lattice `null/provider-page/ring-page/bottom`;
 never enumerate members. Discover the selector as the unique large-allocator
 callee whose complete incoming inventory receives a page from the provider arm
-or ring arm. Require publisher writes of exactly `P+0` and `P+4`, then return
-an immutable copy of `layout` with `page_link_offsets == (0, 4)`; no earlier
-task may populate those offsets.
+or ring arm. Require one structurally coherent pair of distinct publisher link
+writes, then return an immutable copy of `layout` with those derived offsets;
+no earlier task may populate them. The synthetic and exact retail integration
+tests assert that the derived pair is `(0, 4)`.
 
 - [ ] **Step 4: Run ring/allocator tests and commit**
 
@@ -625,9 +633,9 @@ classifications; copy the complete allocator dependency fingerprint tuple;
 fingerprint every additional transfer function; and note producer dependencies
 for every function and concrete state slot. Replay raw/decoded direct edges,
 complete incoming calls, state dependencies, layout, transfers, and exact span
-keys. Reject final assembly unless `layout.page_link_offsets == (0, 4)` and
-`layout.minimum_split_remainder` is positive. Do not add a standalone arena
-cache.
+keys. Reject final assembly unless `layout.page_link_offsets` contains two
+distinct derived offsets and `layout.minimum_split_remainder` is positive. Do
+not add a standalone arena cache.
 
 - [ ] **Step 4: Run replay tests and commit**
 
