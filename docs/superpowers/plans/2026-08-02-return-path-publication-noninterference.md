@@ -115,7 +115,29 @@ pytest synthetic PE fixtures, canonical producer checkpoints, branch-local
   it must exactly match the stored aggregate result and dependency tuple before
   validation.
 - Treat `0x4b1f95` as an independent ESP-slot binding blocker. Do not make the
-  publication certificate accept it.
+  publication certificate accept it. Retain the intermediate 29/30 diagnostic,
+  then complete the parent plan's generic ESP-slot subtask; the final accepted
+  bundle must contain zero unresolved targets and no publication-certificate
+  provenance for `0x4b1f95`.
+- Keep producer checkpoint schema v1 aggregate-only. The private-page arena
+  adds no durable schema or semantic-version bump by itself, so existing
+  producer-v27/lifecycle-v6 files may be reused only after their current
+  fingerprints and dependencies revalidate. New arena dependencies may make a
+  lifecycle variant stale and force a new exact variant; that is expected and
+  is not permission to delete or copy a checkpoint root.
+- The retained v6 root is a focused witness, never an independent promotion
+  candidate. It intentionally has no accepted `CURRENT` until every blocker is
+  closed. Resume it in place only across nonzero checkpoint refusals whose
+  parsed counters prove positive completed work, valid discovered/validated/
+  pending relationships, and the expected checkpoint directory. A zero-progress
+  or malformed refusal fails immediately. The first status-zero invocation is
+  the silent zero-new pass and must publish a resolver-valid bundle; success
+  does not print `completed_this_run=0`.
+- Thirty rejection-ledger hits are expected only while producer v27, lifecycle
+  v6, and the accepted object/copy baseline remain byte-identical. Record the
+  observed hit count; any semantic bump, changed accepted baseline, or current
+  fingerprint/dependency mismatch invalidates the affected entries and must be
+  explained and recomputed rather than forced to hit.
 - Use `apply_patch` for source and test edits. Preserve unrelated `.agents/`
   and `.pi/` worktree files.
 - Follow red-green-refactor order for every task and commit only coherent green
@@ -2016,8 +2038,10 @@ git commit -m "feat(mwcc-retro): persist lifecycle publication proofs"
 **Interfaces:**
 
 - Consumes: complete v6 implementation and branch-local static retail command.
-- Produces: a canonical ignored static bundle and a tracked result note proving
-  29 publication-blocked calls are admitted while `0x4b1f95` remains separate.
+- Produces: a retained intermediate diagnostic proving 29 publication-blocked
+  calls are admitted while `0x4b1f95` remains separate, followed—only after the
+  parent plan's generic ESP-slot subtask—by a canonical ignored static bundle
+  with zero unresolved targets and a tracked result note preserving both facts.
 
 - [ ] **Step 1: Prepare the exact compiler/Ghidra environment**
 
@@ -2042,24 +2066,145 @@ generations, rejection ledgers, and producer checkpoints from prior refused
 invocations. Never remove it. Bundle publication replaces `CURRENT` atomically
 only after a complete resolver-valid generation is durable.
 
-- [ ] **Step 2: Run the focused branch-local static retail command**
+The private-page arena's first exact root `0x435620` must already pass its local
+and focused acceptance. Independently run the second exact root before the full
+static command:
+
+```bash
+cd "$ROOT"
+ROOT_LOG=$(mktemp \
+  "$ROOT/build/diagnostics/task4-repair-exact/task4-publication-root-435a8c.log.XXXXXX")
+set -o pipefail
+if ! /usr/bin/time -l env PYTHONPATH=. python \
+    build/diagnostics/task4-repair-exact/hydrate-cfg-query.py \
+    --scan-owned-blocks \
+    --task4-publication-certificate \
+    --task4-publication-root 0x435a8c \
+    --no-semantic-trace 2>&1 | tee "$ROOT_LOG"; then
+  exit 1
+fi
+python - "$ROOT_LOG" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+rows = [
+    line
+    for line in Path(sys.argv[1]).read_text().splitlines()
+    if line.startswith("task4-publication-certificate;")
+]
+assert len(rows) == 1, rows
+assert re.fullmatch(
+    r"task4-publication-certificate;root=0x435a8c;.+;result=True;stages=.*",
+    rows[0],
+), rows[0]
+print(rows[0])
+PY
+```
+
+Expected: the wrapper retains the full timed log and accepts exactly one
+`task4-publication-certificate` row whose root is `0x435a8c` and whose result is
+`True`. A missing, false, duplicated, or differently rooted row fails. The
+single accepted row proves a definitive post-install lifecycle-v6 certificate
+under the current arena without importing the `0x435620` result as proof. A
+stale pre-install witness, changed dependency fingerprint, open arena path, or
+new blocker also fails this gate.
+
+- [ ] **Step 2: Advance the focused root to a zero-new accepted publication**
 
 ```bash
 cd "$ROOT/tools/melee-agent"
-DECOMP_AGENT_ID=codex-issue-1240-retail-pcode-proof \
-  python -m src.cli debug retro probe-backend-map \
-  "$ROOT/src/melee/mn/mndiagram.c" \
-  -f mnDiagram_DrawFighterHeaders \
-  --static-only \
-  --melee-root "$ROOT" \
-  -O "$OUT"
+LOG_ROOT="$ROOT/build/diagnostics/task4-repair-exact/final-v6-resume"
+mkdir -p "$LOG_ROOT"
+ATTEMPT=0
+TOTAL_COMPLETED=0
+MAX_TOTAL_COMPLETED=$(PYTHONPATH="$ROOT/tools" python - <<'PY'
+from mwcc_retro.x86_cfg import AnalysisLimits
+
+print(AnalysisLimits.__dataclass_fields__["max_producer_domain_queries"].default)
+PY
+)
+MAX_INVOCATIONS=$((MAX_TOTAL_COMPLETED + 1))
+while :; do
+  ATTEMPT=$((ATTEMPT + 1))
+  test "$ATTEMPT" -le "$MAX_INVOCATIONS" || exit 1
+  LOG="$LOG_ROOT/invocation-$ATTEMPT.log"
+  set +e
+  DECOMP_AGENT_ID=codex-issue-1240-retail-pcode-proof \
+    python -m src.cli debug retro probe-backend-map \
+    "$ROOT/src/melee/mn/mndiagram.c" \
+    -f mnDiagram_DrawFighterHeaders \
+    --static-only \
+    --melee-root "$ROOT" \
+    -O "$OUT" >"$LOG" 2>&1
+  STATUS=$?
+  set -e
+  cat "$LOG"
+  if test "$STATUS" -eq 0; then
+    PYTHONPATH="$ROOT/tools" python - "$OUT" <<'PY'
+import sys
+from pathlib import Path
+
+from mwcc_retro.backend_lifetime_proof import resolve_lifetime_bundle
+
+resolve_lifetime_bundle(Path(sys.argv[1]))
+PY
+    break
+  fi
+  CHECKPOINT_COMPLETED=$(
+    python - "$LOG" "$OUT" "$MAX_TOTAL_COMPLETED" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+pattern = re.compile(
+    r"producer checkpoint incomplete: completed_this_run=(\d+);"
+    r"discovered=(\d+);validated=(\d+);pending=(\d+);checkpoint_dir=(.+)$"
+)
+matches = []
+for line in Path(sys.argv[1]).read_text().splitlines():
+    match = pattern.search(line)
+    if match is not None:
+        matches.append(match.groups())
+assert len(matches) == 1, matches
+completed, discovered, validated, pending = map(int, matches[0][:4])
+checkpoint_dir = Path(matches[0][4])
+max_queries = int(sys.argv[3])
+assert 0 < completed <= 2048, completed
+assert 0 < discovered < max_queries, (discovered, max_queries)
+assert 0 <= validated <= discovered, (validated, discovered)
+assert 0 <= pending <= discovered, (pending, discovered)
+assert validated + pending <= discovered, (validated, pending, discovered)
+expected = Path(sys.argv[2]) / ".producer-domain-checkpoints.v1"
+assert checkpoint_dir.resolve() == expected.resolve(), (checkpoint_dir, expected)
+print(completed)
+PY
+  ) || exit "$STATUS"
+  TOTAL_COMPLETED=$((TOTAL_COMPLETED + CHECKPOINT_COMPLETED))
+  test "$TOTAL_COMPLETED" -le "$MAX_TOTAL_COMPLETED" || exit 1
+done
 ```
 
-Expected: command succeeds, exact raw/Ghidra reconciliation accepts every
-provisional publication-reference obligation, and the canonical static bundle
-is published under `OUT`. A fixed-point-valid lifecycle certificate alone is
-not sufficient to publish the bundle; it must be the current definitive
-post-install certificate and still pass external reconciliation.
+Before entering this loop, retain the diagnostic 29/30 result and sole
+`0x4b1f95` blocker without claiming a published bundle, then complete the
+parent ESP-slot subtask. The loop invokes the exact command repeatedly against
+the same `OUT`. On a nonzero exit it parses exactly one checkpoint exception
+row and resumes only when `0 < completed_this_run <= 2048`, the other counters
+have a valid shape, and the checkpoint directory is exactly
+`OUT/.producer-domain-checkpoints.v1`. Zero progress, malformed counters, a
+wrong directory, or any other nonzero exit fails immediately. Do not select a
+new output suffix for a valid positive-progress refusal. Status zero is already
+the silent zero-new pass; the loop resolves and validates its published
+generation rather than waiting for an output marker that success does not
+emit. The cumulative completed-query and invocation guards are derived from
+the 2,000,000-query analysis limit, so the loop is explicitly finite.
+
+Expected final result: exact raw/Ghidra reconciliation accepts every provisional
+publication-reference obligation, the unresolved-control inventory is empty,
+and the canonical static bundle is published under `OUT`. A fixed-point-valid
+lifecycle certificate alone is not sufficient to publish the bundle; it must
+be the current definitive post-install certificate, still pass external
+reconciliation, and coexist with the independently proved `0x4b1f95` table.
 
 - [ ] **Step 3: Assert the 29 lifecycle calls from the canonical JSONL**
 
@@ -2178,7 +2323,7 @@ assert len(expected_returning) == 39
 assert witness["default_callback_closure_count"] == 56
 assert {
     (row["dll"], row["name"], row["iat_va"])
-    for row in witness["imports"]
+    for row in witness["import_identities"]
 } == expected_imports
 inventory = witness["reference_inventory"]
 assert len(inventory) == 19
@@ -2194,10 +2339,8 @@ assert inventory == sorted(
 base_keys = {
     "reference_start", "reference_end", "bytes_hex", "relocation_type",
     "reference_class", "target_slot", "source_kind", "source_evidence",
-    "residue_reconciliation_sha256",
 }
 for row in inventory:
-    assert set(row) == base_keys, row
     start = row["reference_start"]
     expected_owner = expected_reference_owners[start]
     assert row["reference_end"] == start + 4
@@ -2208,6 +2351,7 @@ for row in inventory:
     source = row["source_evidence"]
     assert source["kind"] == row["source_kind"]
     if expected_owner is not None:
+        assert set(row) == base_keys, row
         assert row["source_kind"] == "owned-instruction"
         assert set(source) == {
             "kind", "owner_instruction_address", "owner_function_entry",
@@ -2221,8 +2365,8 @@ for row in inventory:
             <= expected_owner
             < source["owned_interval"]["end"]
         )
-        assert row["residue_reconciliation_sha256"] is None
     else:
+        assert set(row) == base_keys | {"residue_reconciliation_sha256"}, row
         assert row["source_kind"] == "provisional-unowned-executable"
         assert set(source) == {
             "kind", "interval_start", "interval_end", "bytes_sha256",
@@ -2236,7 +2380,7 @@ for row in inventory:
         ) == (interval_start, interval_end, interval_sha256)
         assert len(source["current_ownership_sha256"]) == 64
         assert row["residue_reconciliation_sha256"] == witness[
-            "residue_reconciliation_sha256"
+            "external_reconciliation_sha256"
         ]
 
 raw_inventory_projection = [
@@ -2256,7 +2400,7 @@ canonical_inventory = json.dumps(
 assert witness["reference_inventory_sha256"] == hashlib.sha256(
     canonical_inventory
 ).hexdigest()
-assert witness["residue_reconciliation_sha256"]
+assert witness["external_reconciliation_sha256"]
 print("returning", len(expected_returning))
 print("default-closure", witness["default_callback_closure_count"])
 print("imports", len(expected_imports))
@@ -2296,15 +2440,24 @@ def contains_address(value, needle):
         return f"0x{needle:x}" in lowered or f"0x{needle:08x}" in lowered
     return False
 
-blockers = [
+unresolved = [
     row
     for row in rows
     if row.get("record_kind") == "unresolved-control-target"
-    and row.get("address") == 0x004B1F95
-    and row.get("kind") == "computed-flow-blocker"
 ]
-assert len(blockers) == 1, blockers
-assert "index=75" in blockers[0]["detail"]
+assert not unresolved, unresolved
+esp_tables = [
+    row
+    for row in rows
+    if row.get("record_kind") == "jump-table"
+    and row.get("address") == 0x004B1F95
+    and row.get("flow_kind") == "call"
+    and row.get("base") == 0x00560648
+    and row.get("index_min") == 0
+    and row.get("index_max") == 74
+    and row.get("guard_operator") == "esp-slot-binding-domain"
+]
+assert len(esp_tables) == 1, esp_tables
 assert not any(
     row.get("record_kind") == "jump-table"
     and row.get("address") == 0x004B1F95
@@ -2316,12 +2469,15 @@ assert not any(
     and contains_address(row, 0x004B1F95)
     for row in rows
 ), "0x4b1f95 must have no publication-certificate/provenance row"
-print(blockers[0]["detail"])
+print("esp-slot-table", hex(esp_tables[0]["address"]), "domain=0..74")
 PY
 ```
 
-Expected: one independent computed-flow blocker at `0x4b1f95`; it has no
-publication certificate provenance.
+Expected: the final bundle has no unresolved control target. `0x4b1f95` is
+accepted exactly once by the generic ESP-slot binding proof with domain
+`0..74`; it has no lifecycle jump-table admission and no publication
+certificate provenance. Preserve the earlier `index=75` blocker as the
+intermediate 29/30 diagnostic, not as a final bundle member.
 
 - [ ] **Step 6: Record the exact retail witness**
 
@@ -2344,17 +2500,19 @@ Create the result note with:
   executable sites accepted only by the final external reconciliation;
 - explicit wording that the first actual is loaded from `[EDI+0x16]` and its
   value is copied to `0x587ffc` as an opaque-copy escape; and
-- the separate `0x4b1f95` blocker detail.
+- the intermediate `0x4b1f95` blocker detail and the later independent generic
+  ESP-slot `0..74` closure that removed it without publication provenance.
 
 Do not mention local agent process state or describe retail addresses as
 acceptance rules.
 
 - [ ] **Step 7: Review checkpoint 4**
 
-Review the result note and canonical verifier output. Require the 29/30 split,
-zero new unresolved control other than the already separated blocker set,
-exact raw/Ghidra reconciliation, and no publication provenance on `0x4b1f95`.
-Pause for review before the full suite.
+Review the result note and canonical verifier output. Require the retained
+intermediate 29/30 diagnostic, followed by a final bundle with zero unresolved
+control targets, exact raw/Ghidra reconciliation, the independent ESP-slot
+closure at `0x4b1f95`, and no publication provenance at that address. Pause for
+review before the full suite.
 
 - [ ] **Step 8: Commit the retail result and any generic repair**
 
@@ -2372,9 +2530,11 @@ If no production/test repair was needed, only the result note is staged.
 focused Task 7 proof witness, not the runtime-promotion candidate. Before Task
 10, run the parent plan's two independent fresh-root generation invocations in
 `run1` and `run2`, resolve both bundles, and require byte-identical canonical
-members. Only resolver-validated `run1/gc_125n.candidate.json` is live-tested
-and later promoted; copying the v6 generation into either root does not satisfy
-the independent determinism gate.
+members. Only
+`resolve_lifetime_bundle(Path(run1)).path("gc_125n.candidate.json")` is
+live-tested and later promoted; no top-level `run1/<member>` path is canonical.
+Copying the v6 generation into either root does not satisfy the independent
+determinism gate.
 
 ---
 
@@ -2515,8 +2675,9 @@ Review these questions explicitly:
     bodies, the 56-body default closure, five exact imports/IATs, exactly 19
     unique full `0x587130` rows, a recomputed inventory digest, and six exact
     interval/hash/reconciliation bindings?
-16. Does the verifier detect both integer fields and hex-string provenance when
-    asserting `0x4b1f95` has no publication certificate?
+16. Does the verifier require zero unresolved targets, exactly one generic
+    ESP-slot `0..74` table at `0x4b1f95`, and both integer-field and hex-string
+    scans proving that address has no publication certificate?
 
 Any "no" blocks completion.
 

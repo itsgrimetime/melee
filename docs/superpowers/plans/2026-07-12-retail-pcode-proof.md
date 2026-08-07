@@ -14,7 +14,7 @@
 - The proof schema remains the unmerged `mwcc-retro-lifetime-proof.v1`, amended in place; mode is exactly `allocation-generation`; basis is exactly `exhaustive-static-callgraph-and-disassembly`.
 - The proof ID is exactly `gc-1.2.5n-backend-entity-allocation-trace.v1`.
 - Do not weaken a validator, invent an address/site/opcode/register range/constructor semantic, or substitute bounded dynamic survival for exhaustive static proof.
-- Every relevant unresolved control-flow, value-flow, constructor, site, capture-semantic, or emission path fails closed.
+- Every relevant unresolved control-flow, value-flow, constructor, site, capture-semantic, or emission path fails closed. A diagnostic 29/30 publication split may be retained as evidence, but no accepted lifetime bundle may contain an `unresolved-control-target`; final publication requires an empty unresolved inventory.
 - Analysis is deterministic and explicitly bounded. Hitting a cap is an error, never truncation or widening to a trusted result.
 - Ghidra is a cross-check, not authoritative function ownership.
 - Extend `debug retro probe-backend-map` and `probe-backend-pcode`; add no new top-level CLI command.
@@ -25,12 +25,41 @@
 - The proof digest binds the RFC 8785 digest of `mwcc-retro-runtime-hooks.v1`; the unchanged promotion registry tuple therefore binds every runtime breakpoint/capture semantic.
 - Every hook-plan site is installed exactly. `per-run` sites hit in every live probe and every `probe-union` site hits in at least one of the four-run union; no optional/install-only policy exists.
 - Fix and re-review every Critical or Important task or broad-review finding before proceeding.
+- A `ProducerCheckpointIncomplete` refusal is resumable progress only when its parsed counters prove `0 < completed_this_run <= 2048`, valid discovered/validated/pending relationships, and the expected checkpoint directory. Reinvoke that same output root so its producer checkpoints and rejection ledgers advance; never restart merely because one positive-progress invocation exhausted the query budget. A zero-progress or malformed refusal fails immediately. The exception text reports `completed_this_run` only on a nonzero checkpoint refusal. A status-zero invocation is silent about that counter and already proves no new or pending checkpoint work remained; accept it only after `resolve_lifetime_bundle` validates the published generation.
+- Resolve every candidate, proof, hook-manifest, and report path through `resolve_lifetime_bundle(...).path(...)` or `canonical_files()`. The canonical files live only in the immutable generation selected by `CURRENT`; a top-level `runN/<member>` path is never authoritative.
 
 ## Completed reviewed foundation
 
 Commits `1b057f747..3d3c3fbbc` already provide the proof/registry trust substrate, object/frame capture, same-run PCode lineage, fail-closed PCode diagnostics, and independent registry binding. The clean handoff baseline is freshly verified at 439 focused tests. Do not re-dispatch or rewrite this foundation; migrate it through the tasks below.
 
 The approved design is `docs/superpowers/specs/2026-07-12-mwcc-retro-whole-pe-proof-design.md` at commit `44137746c`.
+
+## Disposable merge-rehearsal baseline
+
+The read-only rehearsal
+`git merge-tree --write-tree --messages master 7abd5f7a2` was run before the
+completion-path amendment. Its merge base is `25aec205a`, and it reports 20
+conflicts that must be resolved rather than discovered during the real merge:
+
+- ten add/add conflicts: the `pcode_lineage` fixtures
+  `duplicate_output.json`, `fresh_clone_id.json`, `missing_emission.json`,
+  `self_parent.json`, and `wrong_machine_register.json`,
+  `test_retro_backend_instrumentation_proof.py`,
+  `test_retro_backend_object_snapshot.py`,
+  `test_retro_backend_pcode_lineage.py`,
+  `backend_instrumentation_proof.py`, and `backend_pcode_lineage.py`;
+- ten content conflicts: `src/cli/debug/retro.py`,
+  `test_retro_backend_map_evidence.py`,
+  `test_retro_backend_pcode_snapshot.py`,
+  `test_retro_backend_runtime.py`,
+  `test_retro_backend_trace_assembler.py`, `test_retro_struct_map.py`,
+  `backend_map_probe_hook.py`, `backend_onepass_trace_hook.py`,
+  `backend_trace_assembler.py`, and `struct_map.py`.
+
+Repeat the read-only merge-tree rehearsal after code/review freeze, then perform
+the resolved merge and its tests in a disposable worktree before touching
+`/Users/mike/code/melee`. Rehearsal work must never mutate the main checkout or
+the canonical issue worktree.
 
 ## File structure
 
@@ -516,6 +545,90 @@ Commit: `feat: close computed retail compiler control flow`
 
 ---
 
+### Task 4A: Close the independent `0x4b1f95` ESP-slot binding
+
+**Execution order:** This is a late Task 4 completion addendum, not permission
+to replay already developed Tasks 5/6 as accepted proof. Run it after the
+companion publication plan has retained its intermediate 29/30 diagnostic, as
+specified by the controller gates at the end of this plan.
+
+**Files:**
+- Modify: `tools/mwcc_retro/x86_cfg.py`
+- Modify: `tools/melee-agent/tests/retro_pe_fixture.py`
+- Modify: `tools/melee-agent/tests/test_retro_x86_cfg.py`
+- Modify if the accepted audit projection changes:
+  `tools/melee-agent/tests/test_retro_backend_lifetime_audit.py`
+- Update: `docs/superpowers/results/2026-08-02-return-path-publication-noninterference.md`
+
+**Interfaces:**
+- Extends the generic finite-control analysis with an exact ESP-relative slot
+  binding proof. It must bind a value stored or pushed through a stack slot to
+  the same receiver/argument identity at the indirect transfer across every
+  reachable predecessor, stack adjustment, spill/reload, and call effect.
+- Produces the stable `esp-slot-binding-domain` jump-table provenance only when
+  the complete predecessor domain proves the exact finite index set. It is not
+  an object-tag lifecycle-v6 or publication-noninterference exception.
+- Consumes the companion return-path plan's retained 29/30 diagnostic, then
+  returns control to that plan for the final zero-unresolved publication run.
+
+- [ ] **Step 1: Preserve the intermediate 29/30 diagnostic and add RED tests**
+
+First retain the companion plan's diagnostic proving that the 29 lifecycle
+calls are independently admitted and that `0x4b1f95` remains the sole
+`index=75` computed-flow blocker with no publication-certificate provenance.
+This is diagnostic evidence only: `backend_lifetime_proof._collect_unresolved`
+must continue rejecting it, and no `CURRENT` publication may be claimed from
+that invocation.
+
+Add generic fixtures covering an indirect table index that is stored through
+an ESP-relative local, reloaded after balanced stack adjustments, and passed
+through a receiver/argument binding. Add hostile variants for one predecessor
+with a different value, an aliased/partially overwritten slot, an unbalanced
+stack delta, an intervening unknown call effect, a mismatched receiver, an
+open predecessor, and an out-of-domain value. Assert that each hostile variant
+remains unresolved and that no fixture uses a retail address allowlist or a
+publication certificate.
+
+- [ ] **Step 2: Implement the generic ESP-slot binding proof**
+
+Reuse the existing stack-state, exact-definition, argument-binding, and finite
+domain machinery. Normalize each slot by the proven ESP state at the write and
+read, require one unchanged four-byte identity across the complete reachable
+predecessor set, and reject partial writes, aliasing, unknown call mutation,
+or any unknown stack state. Feed the resulting exact finite domain through the
+normal indexed-table relocation/executable-target checks. Do not special-case
+`0x4b1f95`, `0x560648`, index 75, the compiler hash, or the publication
+certificate in the generic resolver.
+
+- [ ] **Step 3: Run the exact compiler acceptance**
+
+Rerun the companion plan's exact root checks and focused static command in the
+same retained `return-path-publication-v6` root. The command may resume existing
+v27/v6 producer checkpoints and ledgers. Repeat only across expected nonzero
+`ProducerCheckpointIncomplete` refusals whose parsed `completed_this_run` is
+positive. A zero-progress refusal is a hard failure. The first status-zero
+invocation is the zero-new completion pass; resolve its resulting bundle
+through `resolve_lifetime_bundle` and require:
+
+- zero `unresolved-control-target` rows globally;
+- exactly one `jump-table` row at `0x004b1f95`, with flow kind `call`, base
+  `0x00560648`, domain `0..74`, and guard operator
+  `esp-slot-binding-domain`;
+- no nested integer or hexadecimal-string occurrence tying `0x004b1f95` to a
+  `return-path-publication-noninterference` row; and
+- all table entries still pass the ordinary relocation and executable-target
+  checks, with no acceptance-rule weakening.
+
+- [ ] **Step 4: Run focused checks, review, and commit**
+
+Run the Task 4 focused CFG/audit/CLI suites, scoped Ruff, py_compile, and
+`git diff --check`. Review the genericity and the exact accepted JSONL before
+committing.
+
+Commit: `feat(mwcc-retro): prove esp-slot control bindings`
+
+---
+
 ### Task 5: Add bounded interprocedural values, types, and call summaries
 
 **Files:**
@@ -745,19 +858,91 @@ Run the exact Task 4 `ghidra-setup` command, then invoke the branch-local static
 ROOT=/Users/mike/code/melee/.claude/worktrees/codex-issue-1240-retail-pcode-proof
 RUN1="$ROOT/build/mwcc_retro/gc125n-proof/run1"
 RUN2="$ROOT/build/mwcc_retro/gc125n-proof/run2"
-cd "$ROOT/tools/melee-agent"
+LOG_ROOT="$ROOT/build/diagnostics/task4-repair-exact/final-independent-runs"
+mkdir -p "$LOG_ROOT"
 for OUT in "$RUN1" "$RUN2"; do
   test ! -e "$OUT" || {
-    echo "refusing to overwrite retained proof root: $OUT" >&2
+    echo "refusing nonempty initial proof root: $OUT" >&2
     exit 1
   }
   mkdir -p "$OUT"
-  DECOMP_AGENT_ID=codex-issue-1240-retail-pcode-proof \
-    python -m src.cli debug retro probe-backend-map \
-    "$ROOT/src/melee/mn/mndiagram.c" \
-    -f mnDiagram_DrawFighterHeaders \
-    --static-only --melee-root "$ROOT" -O "$OUT"
 done
+cd "$ROOT/tools/melee-agent"
+advance_independent_root() {
+  OUT="$1"
+  ATTEMPT=0
+  TOTAL_COMPLETED=0
+  MAX_TOTAL_COMPLETED=$(PYTHONPATH="$ROOT/tools" python - <<'PY'
+from mwcc_retro.x86_cfg import AnalysisLimits
+
+print(AnalysisLimits.__dataclass_fields__["max_producer_domain_queries"].default)
+PY
+)
+  MAX_INVOCATIONS=$((MAX_TOTAL_COMPLETED + 1))
+  while :; do
+    ATTEMPT=$((ATTEMPT + 1))
+    test "$ATTEMPT" -le "$MAX_INVOCATIONS" || return 1
+    LOG="$LOG_ROOT/$(basename "$OUT")-$ATTEMPT.log"
+    set +e
+    DECOMP_AGENT_ID=codex-issue-1240-retail-pcode-proof \
+      python -m src.cli debug retro probe-backend-map \
+      "$ROOT/src/melee/mn/mndiagram.c" \
+      -f mnDiagram_DrawFighterHeaders \
+      --static-only --melee-root "$ROOT" -O "$OUT" >"$LOG" 2>&1
+    STATUS=$?
+    set -e
+    cat "$LOG"
+    if test "$STATUS" -eq 0; then
+      PYTHONPATH="$ROOT/tools" python - "$OUT" <<'PY'
+import sys
+from pathlib import Path
+
+from mwcc_retro.backend_lifetime_proof import resolve_lifetime_bundle
+
+resolve_lifetime_bundle(Path(sys.argv[1]))
+PY
+      return 0
+    fi
+    CHECKPOINT_COMPLETED=$(
+      python - "$LOG" "$OUT" "$MAX_TOTAL_COMPLETED" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+pattern = re.compile(
+    r"producer checkpoint incomplete: completed_this_run=(\d+);"
+    r"discovered=(\d+);validated=(\d+);pending=(\d+);checkpoint_dir=(.+)$"
+)
+matches = []
+for line in Path(sys.argv[1]).read_text().splitlines():
+    match = pattern.search(line)
+    if match is not None:
+        matches.append(match.groups())
+assert len(matches) == 1, matches
+completed, discovered, validated, pending = map(int, matches[0][:4])
+checkpoint_dir = Path(matches[0][4])
+max_queries = int(sys.argv[3])
+assert 0 < completed <= 2048, completed
+assert 0 < discovered < max_queries, (discovered, max_queries)
+assert 0 <= validated <= discovered, (validated, discovered)
+assert 0 <= pending <= discovered, (pending, discovered)
+assert validated + pending <= discovered, (validated, pending, discovered)
+expected = Path(sys.argv[2]) / ".producer-domain-checkpoints.v1"
+assert checkpoint_dir.resolve() == expected.resolve(), (checkpoint_dir, expected)
+print(completed)
+PY
+    ) || return "$STATUS"
+    TOTAL_COMPLETED=$((TOTAL_COMPLETED + CHECKPOINT_COMPLETED))
+    test "$TOTAL_COMPLETED" -le "$MAX_TOTAL_COMPLETED" || return 1
+  done
+}
+set -e
+advance_independent_root "$RUN1" & PID1=$!
+advance_independent_root "$RUN2" & PID2=$!
+STATUS=0
+wait "$PID1" || STATUS=1
+wait "$PID2" || STATUS=1
+test "$STATUS" -eq 0
 PYTHONPATH="$ROOT/tools" python - "$RUN1" "$RUN2" <<'PY'
 import hashlib
 import sys
@@ -786,12 +971,28 @@ for name, payload in first.items():
 PY
 ```
 
-Any delta or unresolved diagnostic blocks the task. If either invocation
-refuses or fails after creating evidence, retain that root and choose a fresh,
-paired suffix such as `run1-rerun01` / `run2-rerun01`; update every later
-candidate path to the accepted clean pair. Do not copy the focused
-`return-path-publication-v6` bundle or one run into the other, because that does
-not prove independent regeneration.
+Each root starts independently empty, but every expected 2,048-query
+`ProducerCheckpointIncomplete` refusal resumes that same root in place only
+after the wrapper validates its exact counter/directory shape and proves
+positive completed work. A zero-progress, malformed, or unexpected nonzero
+exit fails immediately. An
+invocation that writes exact producer/lifecycle variants exits nonzero through
+that exception and must be followed by another invocation on the same root.
+Status zero is the silent zero-new pass; the loop immediately validates its
+published generation with `resolve_lifetime_bundle` and returns. The cumulative
+completed-query and invocation guards are derived from
+`AnalysisLimits.max_producer_domain_queries == 2_000_000`, so even a sequence
+of one-query progress refusals is finite.
+Running the two independent roots concurrently is allowed after code/review
+freeze; copying v6 or either run's checkpoints, ledgers, generations, or
+`CURRENT` into the other is forbidden.
+
+Any delta or unresolved diagnostic blocks the task. Retain a refused root and
+choose a fresh paired suffix only after corruption, a non-checkpoint failure,
+or an explicitly abandoned run—not after an expected checkpoint-budget
+refusal. Update every later resolver root to the accepted clean pair. Do not
+copy the focused `return-path-publication-v6` bundle or one run into the other,
+because that does not prove independent regeneration.
 
 - [ ] **Step 7: Track reviewed proof, manifest, and evidence**
 
@@ -980,7 +1181,13 @@ Run the audited Task 9 library directly; this extends the existing probes and ad
 ```bash
 ROOT=/Users/mike/code/melee/.claude/worktrees/codex-issue-1240-retail-pcode-proof
 PROOF_ROOT="$ROOT/build/mwcc_retro/gc125n-proof"
-CANDIDATE="$PROOF_ROOT/run1/gc_125n.candidate.json"
+CANDIDATE=$(PYTHONPATH="$ROOT/tools" python - "$PROOF_ROOT/run1" <<'PY'
+import sys
+from pathlib import Path
+from mwcc_retro.backend_lifetime_proof import resolve_lifetime_bundle
+print(resolve_lifetime_bundle(Path(sys.argv[1])).path("gc_125n.candidate.json"))
+PY
+)
 SEEDS="$PROOF_ROOT/live-probe-preflight-seeds.json"
 SELECTION="$PROOF_ROOT/live-probe-selection.json"
 LIMITS="$PROOF_ROOT/live-probe-preflight-limits.json"
@@ -1081,7 +1288,13 @@ Validate the selection file and run both existing probes with the exact ignored 
 ```bash
 ROOT=/Users/mike/code/melee/.claude/worktrees/codex-issue-1240-retail-pcode-proof
 PROOF_ROOT="$ROOT/build/mwcc_retro/gc125n-proof"
-CANDIDATE="$PROOF_ROOT/run1/gc_125n.candidate.json"
+CANDIDATE=$(PYTHONPATH="$ROOT/tools" python - "$PROOF_ROOT/run1" <<'PY'
+import sys
+from pathlib import Path
+from mwcc_retro.backend_lifetime_proof import resolve_lifetime_bundle
+print(resolve_lifetime_bundle(Path(sys.argv[1])).path("gc_125n.candidate.json"))
+PY
+)
 SELECTION="$PROOF_ROOT/live-probe-selection.json"
 cd "$ROOT/tools/melee-agent"
 PYTHONPATH="$ROOT" python - "$SELECTION" "$PROOF_ROOT/preflight" "$CANDIDATE" <<'PY'
@@ -1127,11 +1340,24 @@ Run the closed validator and retain its ignored canonical result:
 ```bash
 ROOT=/Users/mike/code/melee/.claude/worktrees/codex-issue-1240-retail-pcode-proof
 PROOF_ROOT="$ROOT/build/mwcc_retro/gc125n-proof"
-CANDIDATE="$PROOF_ROOT/run1/gc_125n.candidate.json"
+CANDIDATE=$(PYTHONPATH="$ROOT/tools" python - "$PROOF_ROOT/run1" <<'PY'
+import sys
+from pathlib import Path
+from mwcc_retro.backend_lifetime_proof import resolve_lifetime_bundle
+print(resolve_lifetime_bundle(Path(sys.argv[1])).path("gc_125n.candidate.json"))
+PY
+)
+HOOKS=$(PYTHONPATH="$ROOT/tools" python - "$PROOF_ROOT/run1" <<'PY'
+import sys
+from pathlib import Path
+from mwcc_retro.backend_lifetime_proof import resolve_lifetime_bundle
+print(resolve_lifetime_bundle(Path(sys.argv[1])).path("gc_125n_lifetime_hooks.candidate.json"))
+PY
+)
 SELECTION="$PROOF_ROOT/live-probe-selection.json"
 cd "$ROOT"
 PYTHONPATH="$ROOT" python - "$SELECTION" "$PROOF_ROOT/live" \
-  "$PROOF_ROOT/run1/gc_125n_lifetime_hooks.candidate.json" "$CANDIDATE" \
+  "$HOOKS" "$CANDIDATE" \
   "$PROOF_ROOT/live-probe-union.json" <<'PY'
 import json, pathlib, sys
 from tools.mwcc_retro.backend_live_probe_selection import validate_live_probe_union
@@ -1160,10 +1386,24 @@ Before editing, require byte equality between the candidate proof/manifest used 
 ```bash
 ROOT=/Users/mike/code/melee/.claude/worktrees/codex-issue-1240-retail-pcode-proof
 PROOF_ROOT="$ROOT/build/mwcc_retro/gc125n-proof"
+PROOF=$(PYTHONPATH="$ROOT/tools" python - "$PROOF_ROOT/run1" <<'PY'
+import sys
+from pathlib import Path
+from mwcc_retro.backend_lifetime_proof import resolve_lifetime_bundle
+print(resolve_lifetime_bundle(Path(sys.argv[1])).path("gc_125n_lifetime_proof.candidate.json"))
+PY
+)
+HOOKS=$(PYTHONPATH="$ROOT/tools" python - "$PROOF_ROOT/run1" <<'PY'
+import sys
+from pathlib import Path
+from mwcc_retro.backend_lifetime_proof import resolve_lifetime_bundle
+print(resolve_lifetime_bundle(Path(sys.argv[1])).path("gc_125n_lifetime_hooks.candidate.json"))
+PY
+)
 cd "$ROOT"
-cmp "$PROOF_ROOT/run1/gc_125n_lifetime_proof.candidate.json" \
+cmp "$PROOF" \
   "$ROOT/tools/mwcc_retro/tables/gc_125n_lifetime_proof.json"
-cmp "$PROOF_ROOT/run1/gc_125n_lifetime_hooks.candidate.json" \
+cmp "$HOOKS" \
   "$ROOT/tools/mwcc_retro/tables/gc_125n_lifetime_hooks.json"
 ```
 
@@ -1198,11 +1438,52 @@ Commit: `feat: promote exact retail pcode lifetime proof`
 
 The root controller, not a task implementer, performs these ordered gates:
 
-1. Generate a whole-branch review package from merge-base to HEAD and dispatch the most capable independent reviewer.
-2. Send the complete Critical/Important finding set to one fix subagent, re-run covering tests, and re-review until clean.
-3. Re-run the full Task 10 verification commands fresh.
-4. Use `superpowers:finishing-a-development-branch`; the user's handoff already selects local merge into `master`, so do not pause for an option prompt.
-5. In `/Users/mike/code/melee`, preserve `.coverage` and `docs/superpowers/order-targets/`, merge `codex/issue-1240-retail-pcode-proof` into `master`, and verify the merged result again.
-6. Replay `/opt/homebrew/bin/melee-agent` from main/master, confirming the editable install now sees merged tooling.
-7. Resolve issue #1240 with final commit, proof and manifest digests, static coverage/high-water summary, and all four live probe results.
-8. Run `DECOMP_AGENT_ID=codex-issue-1240-retail-pcode-proof melee-agent issues list` and continue any newly opened actionable issue.
+1. Finish the private-page arena gates in order: local synthetic tests, focused
+   exact-root checks for `0x435620` and `0x435a8c`, then its full suite. Do not
+   begin a final accepted bundle from a partially reviewed arena change.
+2. Retain the companion plan's diagnostic 29/30 split, finish Task 4A's
+   independent generic `0x4b1f95` ESP-slot proof, and require zero final
+   unresolved control targets with no publication provenance at that address.
+3. Run the full parent Task 4 and companion Task 8 verification. Then resume
+   `return-path-publication-v6` in place across parsed positive-progress
+   checkpoint refusals until the first status-zero pass; fail on zero progress,
+   then resolve and verify its accepted bundle.
+4. Freeze proof-affecting code and independently advance the initially empty
+   `run1` and `run2` roots across every parsed positive-progress checkpoint
+   refusal until each returns status zero. Bounded cumulative progress prevents
+   an infinite resume loop. That successful invocation is the silent zero-new
+   pass. Require byte-equal resolver-validated canonical files.
+5. Complete Tasks 8 and 9, run the four exact live probes and union gate from
+   resolver-selected `run1`, and only then promote the exercised tuple in Task
+   10. Re-run the full Task 10 verification commands fresh.
+6. Generate a whole-branch review package from merge-base to HEAD and dispatch
+   the most capable independent reviewer. Send the complete Critical/Important
+   finding set to one fix subagent, re-run covering tests, and re-review until
+   clean. Any proof-affecting fix invalidates the freeze and repeats Gates 3-5.
+7. Before any post-freeze merge rehearsal, preserve and fingerprint the main
+   checkout's untracked `.coverage` and `docs/superpowers/order-targets/`
+   outside the repository. Record
+   `git status --short -- .coverage docs/superpowers/order-targets/`, a SHA-256
+   of `.coverage` when present, and
+   a sorted path/size/SHA-256 manifest of every regular file under
+   `order-targets/` as the immutable pre-rehearsal baseline.
+8. Repeat `git merge-tree --write-tree --messages master codex/issue-1240-retail-pcode-proof`
+   after the final freeze and compare its conflict inventory with the recorded
+   20-conflict baseline. Rehearse the resolutions and merged verification in a
+   disposable worktree; never merge experimentally in `/Users/mike/code/melee`
+   or the issue worktree. Immediately after removing the disposable rehearsal,
+   require the main checkout's status and both fingerprints to equal the Gate
+   7 baseline; restore from the preservation copy and stop if either differs.
+9. Use `superpowers:finishing-a-development-branch`; the user's handoff already
+   selects local merge into `master`, so do not pause for an option prompt. In
+   `/Users/mike/code/melee`, apply the rehearsed resolutions, merge
+   `codex/issue-1240-retail-pcode-proof` into `master`, and verify the merged
+   result again. Immediately compare `.coverage` and `order-targets/` status
+   and fingerprints with the same pre-rehearsal Gate 7 baseline; restore from
+   the preservation copy and stop before issue resolution if either differs.
+10. Replay `/opt/homebrew/bin/melee-agent` from main/master, confirming the
+    editable install now sees merged tooling.
+11. Resolve issue #1240 with final commit, proof and manifest digests, static
+    coverage/high-water summary, and all four live probe results.
+12. Run `DECOMP_AGENT_ID=codex-issue-1240-retail-pcode-proof melee-agent issue list`
+    and continue any newly opened actionable issue.
