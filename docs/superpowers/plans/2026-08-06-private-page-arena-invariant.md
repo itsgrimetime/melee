@@ -156,6 +156,53 @@ git commit -m "test(mwcc-retro): model private page arena"
 
 ---
 
+### Task 1A: Retain Exact Initializer Symbolic Writes
+
+**Files:**
+- Modify: `tools/mwcc_retro/x86_cfg.py:1690-1745`
+- Modify: `tools/mwcc_retro/x86_cfg.py:19370-20120`
+- Modify: `tools/melee-agent/tests/test_retro_x86_cfg.py:11850-12050`
+
+**Interfaces:**
+- Consumes: the existing bounded interpreter's per-instruction affine memory
+  key, value-before/value-after, operation, and immediate mask.
+- Produces: `_PublicationPrivateHeapSymbolicWrite` and the canonical
+  `_PublicationPrivateHeapEffectClosure.symbolic_writes` tuple.
+
+- [ ] **Step 1: Write RED symbolic-write evidence tests**
+
+Use the existing positive effect fixtures to require deterministic rows for
+`mov`, `or`, and `and`, including nested function identity, exact
+`(instruction_address, operand_index)`, affine destination, width,
+value-before/value-after, and immediate. Add hostiles for a stale function
+fingerprint, a row outside `executed_instruction_addresses`, duplicate location
+keys, malformed affine/value shapes, and an unknown value. Unknown rows remain
+serialized but cannot establish a later layout fact.
+
+- [ ] **Step 2: Thread rows through the existing interpreter**
+
+Collect rows at the point where `execute_function` already computes the memory
+key and write value; merge nested rows exactly like bounded spans, sort by
+`(function_entry, instruction_address, operand_index)`, and reject duplicate
+location keys. Do not create a second interpreter and do not change generic
+bounded-span authorization.
+
+- [ ] **Step 3: Run the effect suite and commit**
+
+```bash
+python -m pytest tools/melee-agent/tests/test_retro_x86_cfg.py -q \
+  -k 'private_heap_effect or private_heap_symbolic_write'
+python -m py_compile tools/mwcc_retro/x86_cfg.py \
+  tools/melee-agent/tests/test_retro_x86_cfg.py
+ruff check tools/mwcc_retro/x86_cfg.py \
+  tools/melee-agent/tests/test_retro_x86_cfg.py
+git diff --check
+git add tools/mwcc_retro/x86_cfg.py tools/melee-agent/tests/test_retro_x86_cfg.py
+git commit -m "feat(mwcc-retro): retain initializer write evidence"
+```
+
+---
+
 ### Task 2: Recover the Layout and Bind the Initial Invariant
 
 **Files:**
@@ -342,10 +389,12 @@ callee whose complete incoming inventory receives a page from the provider arm
 or ring arm. Require one structurally coherent pair of distinct publisher link
 writes, then return an immutable copy of `layout` with those derived offsets;
 no earlier task may populate them. The synthetic and exact retail integration
-tests assert that the derived pair is `(0, 4)`. Type every head/link operand,
-emit exact spans for it, and serialize the successful insertion/removal/rotation
-checks as `_PublicationPrivateArenaTransfer` rows. Instruction addresses in the
-ring role are an inventory, not authorization.
+tests assert that the derived pair is `(0, 4)`. Type every `P`-relative page-
+link operand and emit exact spans for it. Keep the concrete head-slot accesses
+on the existing finite/global address path, while replaying their instruction
+and global-slot inventories through the ring role. Serialize the successful
+insertion/removal/rotation checks as `_PublicationPrivateArenaTransfer` rows.
+Instruction addresses in the ring role are an inventory, not authorization.
 
 - [ ] **Step 4: Run ring/allocator tests and commit**
 

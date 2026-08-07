@@ -67,6 +67,19 @@ are structural classifications, not free-form claims.
 
 ```python
 @dataclass(frozen=True, slots=True)
+class _PublicationPrivateHeapSymbolicWrite:
+    function_entry: int
+    instruction_address: int
+    operand_index: int
+    width: int
+    address: tuple[Literal["affine"], int, int, int]
+    operation: Literal["mov", "and", "or"]
+    value_before: tuple[Any, ...] | None
+    value_after: tuple[Any, ...] | None
+    immediate: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class _PublicationPrivatePageLayout:
     extent_alignment: int
     block_alignment: int
@@ -203,6 +216,9 @@ affine destination, operation, value before/after, and exact immediate when a
 mask/tag operation uses one. Rows must belong to the closure's executed and
 fingerprinted function inventory. Unknown values are retained and make any
 layout fact that depends on them fail closed; they are never silently omitted.
+`_PublicationPrivateHeapEffectClosure.symbolic_writes` stores the sorted tuple;
+construction rejects duplicate location keys, and replay checks each row
+against the closure's executed-address and function-fingerprint inventories.
 
 ## Structural Role Discovery
 
@@ -292,9 +308,13 @@ invariant:
   checked size sum, and cannot extend past the original page boundary.
 
 Ring discovery emits the same operand-keyed arena spans and durable transfer
-rows as block discovery. Publisher/remover/rotation link operands therefore
-enter the final span inventory and are replayed before publication-body use;
-instruction-address inventories alone are never dereference authority.
+rows as block discovery for `P`-relative page-link operands. Concrete
+page-head-slot reads/writes remain ordinary exact finite/global operands and are
+replayed separately through `PageRingRole.head_reads/head_writes` plus the
+invariant's global-slot dependency. Publisher/remover/rotation link operands
+therefore enter the final span inventory and are replayed before
+publication-body use; instruction-address inventories alone are never
+dereference authority.
 
 The certificate covers allocator metadata accesses only. It does not prove
 client payload correctness, admit external mutation of allocator metadata, or
