@@ -5380,6 +5380,57 @@ def private_page_arena_image(
     )
 
 
+def private_page_ring_register_head_image(
+    *,
+    partial_head_test: bool = False,
+    harmless_partial_scalar: bool = False,
+) -> PrivatePageArenaFixture:
+    """Use an equivalent publisher with a register-held head predicate."""
+    fixture = private_page_arena_image()
+    code = bytearray()
+    head = fixture.page_head_slot.to_bytes(4, "little")
+
+    if harmless_partial_scalar:
+        code.extend(bytes.fromhex("b3 01"))
+    code.extend(bytes.fromhex("8b 0d"))
+    code.extend(head)
+    code.extend(bytes.fromhex("84 c9" if partial_head_test else "85 c9"))
+    code.extend(bytes.fromhex("8b 54 24 04"))
+    singleton_branch = len(code)
+    code.extend(bytes.fromhex("74 00"))
+    code.extend(bytes.fromhex("8b 01 89 02 89 50 04 89 4a 04 89 11"))
+    code.extend(bytes.fromhex("89 15"))
+    code.extend(head)
+    done_branch = len(code)
+    code.extend(bytes.fromhex("eb 00"))
+    singleton = len(code)
+    code.extend(bytes.fromhex("89 15"))
+    code.extend(head)
+    code.extend(bytes.fromhex("89 12 89 52 04"))
+    done = len(code)
+    code.extend(bytes.fromhex("c3"))
+    code[singleton_branch + 1] = singleton - singleton_branch - 2
+    code[done_branch + 1] = done - done_branch - 2
+    assert len(code) <= 0x40
+
+    raw = bytearray(fixture.arena.image.data)
+    section = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.va
+        <= fixture.page_inserter
+        < section.va + section.raw_size
+    )
+    offset = section.raw_offset + fixture.page_inserter - section.va
+    raw[offset : offset + 0x40] = code + b"\x90" * (0x40 - len(code))
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
 _PRIVATE_PAGE_RING_HOSTILES = (
     "extra-selector-caller",
     "arbitrary-existing-page",
@@ -5388,6 +5439,8 @@ _PRIVATE_PAGE_RING_HOSTILES = (
     "partial-head-writer",
     "indexed-head-writer",
     "publisher-inverted-empty-branch",
+    "publisher-partial-page-argument-load",
+    "publisher-partial-head-test",
     "publisher-missing-new-link-a",
     "publisher-missing-new-link-b",
     "missing-publisher-reciprocal-link",
@@ -5414,6 +5467,8 @@ _PRIVATE_PAGE_RING_HOSTILES = (
 
 _PRIVATE_PAGE_PUBLISHER_HOSTILE_CHANGED_OFFSETS = {
     "publisher-inverted-empty-branch": frozenset({0x0B}),
+    "publisher-partial-page-argument-load": frozenset({0x07}),
+    "publisher-partial-head-test": frozenset({0x06}),
     "publisher-missing-new-link-a": frozenset({0x15, 0x16}),
     "publisher-missing-new-link-b": frozenset({0x1A, 0x1B, 0x1C}),
     "missing-publisher-reciprocal-link": frozenset({0x17, 0x18, 0x19}),
@@ -5452,6 +5507,8 @@ def private_page_ring_hostile(mutation: str) -> PrivatePageArenaFixture:
         return private_page_arena_image(mutation="selector-foreign-page")
     if mutation == "broken-singleton-self-link":
         return private_page_arena_image(mutation="ring-broken-singleton")
+    if mutation == "publisher-partial-head-test":
+        return private_page_ring_register_head_image(partial_head_test=True)
 
     fixture = private_page_arena_image()
     raw = bytearray(fixture.arena.image.data)
@@ -5504,6 +5561,8 @@ def private_page_ring_hostile(mutation: str) -> PrivatePageArenaFixture:
         )
     elif mutation == "publisher-inverted-empty-branch":
         patch(publisher + 0x0B, "74 1a", "75 1a")
+    elif mutation == "publisher-partial-page-argument-load":
+        patch(publisher + 0x07, "8b 54 24 04", "8a 54 24 04")
     elif mutation == "publisher-missing-new-link-a":
         patch(publisher + 0x15, "89 02", "90 90")
     elif mutation == "publisher-missing-new-link-b":
@@ -14018,6 +14077,50 @@ def test_private_page_layout_does_not_consume_page_ring_links():
     assert layout.page_link_offsets is None
 
 
+def test_private_page_ring_accepts_full_width_register_head_guard():
+    """A 32-bit register test retains the exact head null predicate."""
+    fixture = private_page_ring_register_head_image()
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert layout is not None
+
+    ring_evidence = recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    )
+
+    assert ring_evidence is not None
+    assert ring_evidence.layout.page_link_offsets == (0, 4)
+
+
+def test_private_page_ring_accepts_harmless_partial_scalar():
+    """An unused byte scalar cannot counterfeit or destroy pointer proof."""
+    fixture = private_page_ring_register_head_image(
+        harmless_partial_scalar=True
+    )
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert layout is not None
+
+    ring_evidence = recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    )
+
+    assert ring_evidence is not None
+    assert ring_evidence.layout.page_link_offsets == (0, 4)
+
+
 def test_private_page_ring_proves_both_selector_page_arguments():
     """Reject losing page/request provenance at either selector call."""
     fixture = private_page_arena_image()
@@ -14173,7 +14276,11 @@ def test_private_page_ring_rejects_one_fact_hostiles(mutation):
         _PRIVATE_PAGE_PUBLISHER_HOSTILE_CHANGED_OFFSETS.get(mutation)
     )
     if publisher_offsets is not None:
-        default = private_page_arena_image()
+        default = (
+            private_page_ring_register_head_image()
+            if mutation == "publisher-partial-head-test"
+            else private_page_arena_image()
+        )
         changed_addresses = {
             address
             for section in default.arena.image.sections

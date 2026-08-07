@@ -22948,12 +22948,21 @@ class _DirectCfgRecovery:
                     return unknown
                 return registers[_REGISTER_FAMILIES.index(family)]
 
-            def set_family(registers, register: int, value: Value):
-                family = self._register_family(register)
+            def register_operand_value(registers, operand) -> Value:
+                if operand.type != X86_OP_REG or operand.size != 4:
+                    return scalar
+                return family_value(registers, operand.reg)
+
+            def set_register_operand(registers, operand, value: Value):
+                if operand.type != X86_OP_REG:
+                    return None
+                family = self._register_family(operand.reg)
                 if family not in _REGISTER_FAMILIES or len(value) > 2:
                     return None
                 output = list(registers)
-                output[_REGISTER_FAMILIES.index(family)] = value
+                output[_REGISTER_FAMILIES.index(family)] = (
+                    value if operand.size == 4 else unknown
+                )
                 return tuple(output)
 
             def memory_value(memory, base: str, displacement: int):
@@ -23011,7 +23020,7 @@ class _DirectCfgRecovery:
                 events,
             ):
                 if operand.type == X86_OP_REG:
-                    return family_value(registers, operand.reg), events
+                    return register_operand_value(registers, operand), events
                 if operand.type == X86_OP_IMM:
                     value = operand.imm & 0xFFFF_FFFF
                     return (zero if value == 0 else scalar), events
@@ -23023,7 +23032,11 @@ class _DirectCfgRecovery:
                     function_entry,
                 )
                 if argument is not None:
-                    return (page if argument == 0 else scalar), events
+                    return (
+                        page
+                        if argument == 0 and operand.size == 4
+                        else scalar
+                    ), events
                 absolute = self._absolute_memory_operand(operand)
                 if head_overlap(operand):
                     if absolute != head_slot or operand.size != 4:
@@ -23152,9 +23165,9 @@ class _DirectCfgRecovery:
                         return None
                     source_value, next_events = read
                     if destination.type == X86_OP_REG:
-                        next_registers = set_family(
+                        next_registers = set_register_operand(
                             registers,
-                            destination.reg,
+                            destination,
                             source_value,
                         )
                         if next_registers is None:
@@ -23232,14 +23245,32 @@ class _DirectCfgRecovery:
                         value, next_events = read
                         reads.append(value)
                     if decoded.mnemonic == "cmp":
+                        exact_width = all(
+                            operand.type == X86_OP_IMM or operand.size == 4
+                            for operand in decoded.operands
+                        ) and any(
+                            operand.type != X86_OP_IMM
+                            for operand in decoded.operands
+                        )
                         exact_head_guard = (
-                            (reads[0] == head_domain and reads[1] == zero)
-                            or (reads[1] == head_domain and reads[0] == zero)
+                            exact_width
+                            and (
+                                (
+                                    reads[0] == head_domain
+                                    and reads[1] == zero
+                                )
+                                or (
+                                    reads[1] == head_domain
+                                    and reads[0] == zero
+                                )
+                            )
                         )
                     else:
                         exact_head_guard = bool(
                             decoded.operands[0].type == X86_OP_REG
                             and decoded.operands[1].type == X86_OP_REG
+                            and decoded.operands[0].size == 4
+                            and decoded.operands[1].size == 4
                             and self._register_family(decoded.operands[0].reg)
                             == self._register_family(decoded.operands[1].reg)
                             and reads[0] == head_domain
@@ -23258,10 +23289,15 @@ class _DirectCfgRecovery:
                     and self._register_family(decoded.operands[0].reg)
                     == self._register_family(decoded.operands[1].reg)
                 ):
-                    next_registers = set_family(
+                    exact_zero = (
+                        zero
+                        if all(operand.size == 4 for operand in decoded.operands)
+                        else unknown
+                    )
+                    next_registers = set_register_operand(
                         registers,
-                        decoded.operands[0].reg,
-                        zero,
+                        decoded.operands[0],
+                        exact_zero,
                     )
                     if next_registers is None:
                         return None
@@ -23287,9 +23323,9 @@ class _DirectCfgRecovery:
                         or decoded.operands[0].type != X86_OP_REG
                     ):
                         return None
-                    next_registers = set_family(
+                    next_registers = set_register_operand(
                         registers,
-                        decoded.operands[0].reg,
+                        decoded.operands[0],
                         unknown,
                     )
                     if next_registers is None:
