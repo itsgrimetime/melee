@@ -5492,6 +5492,68 @@ def private_page_ring_publisher_return_image(
     return replace(fixture, arena=replace(fixture.arena, image=image))
 
 
+_SELECTOR_ORIGIN_ROTATION_MUTATIONS = {
+    "head-branch-inverted": (0x1F, "75", "74"),
+    "head-compare-self": (0x1D, "85 f6", "39 f6"),
+    "first-provider-forward-missing": (0x2C, "89 c6", "90 90"),
+    "rotation-success-branch-inverted": (0x3F, "75", "74"),
+    "rotation-success-compare-self": (0x3D, "85 c0", "39 c0"),
+    "rotation-success-partial-test": (0x3D, "85 c0", "84 c0"),
+    "second-provider-forward-missing": (0x57, "89 c6", "90 90"),
+}
+
+
+def private_page_ring_selector_origin_rotation_image(
+    mutation: str,
+) -> PrivatePageArenaFixture:
+    """Apply one exact selector-origin or rotation mutation."""
+    fixture = private_page_arena_image()
+    offset, expected, replacement = _SELECTOR_ORIGIN_ROTATION_MUTATIONS[
+        mutation
+    ]
+    expected_bytes = bytes.fromhex(expected)
+    replacement_bytes = bytes.fromhex(replacement)
+    assert len(expected_bytes) == len(replacement_bytes)
+    address = fixture.large_allocator + offset
+    raw = bytearray(fixture.arena.image.data)
+    section = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.va <= address < section.va + section.raw_size
+    )
+    raw_offset = section.raw_offset + address - section.va
+    assert raw[raw_offset : raw_offset + len(expected_bytes)] == expected_bytes
+    raw[raw_offset : raw_offset + len(replacement_bytes)] = replacement_bytes
+    changed_addresses = {
+        candidate
+        for candidate in range(
+            section.va,
+            section.va + section.raw_size,
+        )
+        if fixture.arena.image.read(candidate, 1)
+        != bytes(
+            raw[
+                section.raw_offset
+                + candidate
+                - section.va : section.raw_offset
+                + candidate
+                - section.va
+                + 1
+            ]
+        )
+    }
+    assert changed_addresses
+    assert changed_addresses < set(
+        range(fixture.large_allocator, fixture.page_provider)
+    )
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
 _PRIVATE_PAGE_RING_HOSTILES = (
     "extra-selector-caller",
     "arbitrary-existing-page",
@@ -14655,9 +14717,67 @@ def test_private_page_ring_proves_both_selector_page_arguments():
         "provider",
         "ring",
     }
+    invocations = {
+        row.call_address: row
+        for row in ring.selector_invocations
+    }
+    assert invocations[fixture.selector_calls[0]].page_origins == (
+        "provider",
+        "ring",
+    )
+    assert invocations[fixture.selector_calls[1]].page_origins == (
+        "provider",
+    )
+    rotation = next(
+        transfer
+        for transfer in ring_evidence.transfers
+        if transfer.role == "ring-rotate"
+    )
+    assert tuple(row.call_address for row in rotation.invocations) == (
+        fixture.selector_calls[0],
+    )
     assert ring_evidence.spans
     span_keys = {(span.function_entry, span.instruction_address, span.operand_index) for span in ring_evidence.spans}
     assert all(key in span_keys for transfer in ring_evidence.transfers for key in transfer.span_keys)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "head-branch-inverted",
+        "head-compare-self",
+        "first-provider-forward-missing",
+    ),
+)
+def test_private_page_ring_rejects_unbound_selector_page_origin(mutation):
+    """Origin labels must come from feasible exact head/provider paths."""
+    baseline = private_page_arena_image()
+    hostile = private_page_ring_selector_origin_rotation_image(mutation)
+    assert private_page_image_changed_addresses(baseline, hostile)
+    assert private_page_ring_task3_evidence(baseline) is not None
+
+    assert private_page_ring_task3_evidence(hostile) is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "rotation-success-branch-inverted",
+        "rotation-success-compare-self",
+        "rotation-success-partial-test",
+        "second-provider-forward-missing",
+    ),
+)
+def test_private_page_ring_rejects_unproved_ring_selection_rotation(
+    mutation,
+):
+    """Every exact successful ring selection rotates its selected page."""
+    baseline = private_page_arena_image()
+    hostile = private_page_ring_selector_origin_rotation_image(mutation)
+    assert private_page_image_changed_addresses(baseline, hostile)
+    assert private_page_ring_task3_evidence(baseline) is not None
+
+    assert private_page_ring_task3_evidence(hostile) is None
 
 
 def test_private_page_ring_remover_path_default_builder_is_exact():
