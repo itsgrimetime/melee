@@ -5330,6 +5330,32 @@ def private_page_arena_image(
     )
 
 
+def private_page_arena_contract(fixture):
+    """Recover the certified heap prerequisites for the arena fixture."""
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.arena.private_allocator,
+        frozenset({fixture.arena.callback_slot}),
+    )
+    assert contract is not None
+    extent = recovery._publication_private_heap_extent_witness(
+        contract, fixture.arena.private_page_helper
+    )
+    assert extent is not None
+    effects = recovery._publication_private_heap_effect_closure(extent)
+    assert effects is not None
+    return recovery, contract, extent, effects
+
+
 _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
     {
         "alternate-slice-entry",
@@ -13220,6 +13246,107 @@ def test_private_page_arena_preserves_private_heap_prerequisites():
         and operand.mem.base != capstone.x86.X86_REG_INVALID
     }
     assert ring_write_displacements >= {0, 4}
+
+
+def test_private_page_layout_is_derived_from_untagged_initializer_header():
+    fixture = private_page_arena_image()
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    header_rows = tuple(
+        row
+        for row in effects.symbolic_writes
+        if row.address == ("affine", 1, 0, 0x10)
+        and row.operation == "mov"
+        and row.immediate is None
+        and row.address_bit_operations == ()
+        and row.value_bit_operations == ()
+    )
+    assert len(header_rows) == 1
+    assert header_rows[0].value_after == ("affine", 0, 1, -0x18)
+
+    layout = recovery._publication_private_page_layout(
+        contract, extent, effects
+    )
+
+    assert layout is not None
+    assert layout.extent_alignment == 0x1000
+    assert layout.block_alignment == 8
+    assert layout.page_link_offsets is None
+    assert layout.page_largest_free_offset == 8
+    assert layout.page_extent_offset == 12
+    assert layout.first_block_offset == 0x10
+    assert layout.page_end_tag_displacement == -8
+    assert layout.end_sentinel_displacement == -4
+    assert layout.block_header_offset == 0
+    assert layout.block_page_flags_offset == 4
+    assert layout.block_prev_offset == 8
+    assert layout.block_next_offset == 12
+    assert layout.block_boundary_tag_displacement == -4
+    assert layout.size_flag_mask == 7
+    assert layout.minimum_split_remainder is None
+
+
+def test_private_page_layout_rejects_incomplete_or_stale_effects():
+    fixture = private_page_arena_image()
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    layout_rows = tuple(
+        row
+        for row in effects.symbolic_writes
+        if row.address
+        in {
+            ("affine", 1, 0, 8),
+            ("affine", 1, 0, 12),
+            ("affine", 1, 0, 16),
+            ("affine", 1, 0, 20),
+            ("affine", 1, 0, 24),
+            ("affine", 1, 0, 28),
+            ("affine", 1, 1, -8),
+            ("affine", 1, 1, -4),
+        }
+    )
+    assert layout_rows
+
+    for omitted in layout_rows:
+        incomplete = replace(
+            effects,
+            symbolic_writes=tuple(
+                row for row in effects.symbolic_writes if row != omitted
+            ),
+        )
+        assert (
+            recovery._publication_private_page_layout(
+                contract, extent, incomplete
+            )
+            is None
+        )
+
+    stale_extent = replace(extent, extent_token_sha256="0" * 64)
+    assert (
+        recovery._publication_private_page_layout(
+            contract,
+            stale_extent,
+            replace(effects, extent_witness=stale_extent),
+        )
+        is None
+    )
+    assert (
+        recovery._publication_private_page_layout(
+            replace(contract, large_allocator=contract.large_allocator + 1),
+            extent,
+            effects,
+        )
+        is None
+    )
+    assert (
+        recovery._publication_private_page_layout(
+            replace(
+                contract,
+                dependency_functions=frozenset({0xDEAD_BEEF}),
+            ),
+            extent,
+            effects,
+        )
+        is None
+    )
 
 
 def test_private_page_arena_fixed_slots_have_no_stale_executable_tail():

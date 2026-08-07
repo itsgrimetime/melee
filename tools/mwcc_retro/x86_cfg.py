@@ -1833,6 +1833,25 @@ class _PublicationPrivateHeapEffectClosure:
 
 
 @dataclass(frozen=True, slots=True)
+class _PublicationPrivatePageLayout:
+    extent_alignment: int
+    block_alignment: int
+    page_link_offsets: tuple[int, int] | None
+    page_largest_free_offset: int
+    page_extent_offset: int
+    first_block_offset: int
+    page_end_tag_displacement: int
+    end_sentinel_displacement: int
+    block_header_offset: int
+    block_page_flags_offset: int
+    block_prev_offset: int
+    block_next_offset: int
+    block_boundary_tag_displacement: int
+    size_flag_mask: int
+    minimum_split_remainder: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class _PublicationPrivateStackAddressDomain:
     kind: Literal["private-stack"]
     function_entry: int
@@ -21912,6 +21931,283 @@ class _DirectCfgRecovery:
             witness
         )
         return replayed == effects
+
+    def _publication_private_page_layout(
+        self,
+        contract: _PrivateHeapAllocatorContract,
+        extent: _PublicationPrivateHeapExtentWitness,
+        effects: _PublicationPrivateHeapEffectClosure,
+    ) -> _PublicationPrivatePageLayout | None:
+        """Recover private page/block offsets from current initializer writes."""
+        if not all(
+            (
+                isinstance(contract, _PrivateHeapAllocatorContract),
+                isinstance(extent, _PublicationPrivateHeapExtentWitness),
+                isinstance(effects, _PublicationPrivateHeapEffectClosure),
+            )
+        ):
+            return None
+        if (
+            type(contract.root) is not int
+            or not isinstance(contract.protected_slots, frozenset)
+            or not all(type(slot) is int for slot in contract.protected_slots)
+        ):
+            return None
+        current_contract = self._private_heap_allocator_contract(
+            contract.root, contract.protected_slots
+        )
+        if (
+            current_contract is None
+            or current_contract != contract
+            or current_contract.protected_slots != contract.protected_slots
+            or effects.extent_witness != extent
+            or contract.root != extent.allocator_root
+            or contract.protected_slots != extent.allocator_protected_slots
+            or contract.page_provider != extent.provider_entry
+            or contract.factory.function_entry != extent.factory_entry
+            or self._private_heap_allocator_contract_sha256(contract)
+            != extent.allocator_contract_sha256
+            or not self._publication_private_heap_effect_closure_is_current(
+                effects
+            )
+        ):
+            return None
+
+        extent_low_zero_mask = (
+            self._publication_private_heap_extent_low_zero_mask(extent)
+        )
+        if extent_low_zero_mask is None:
+            return None
+        extent_alignment = extent_low_zero_mask + 1
+
+        def is_affine(
+            value: object,
+            *,
+            payload: int | None = None,
+            extent_coefficient: int | None = None,
+        ) -> bool:
+            return bool(
+                isinstance(value, tuple)
+                and len(value) == 4
+                and value[0] == "affine"
+                and all(type(component) is int for component in value[1:])
+                and (payload is None or value[1] == payload)
+                and (
+                    extent_coefficient is None
+                    or value[2] == extent_coefficient
+                )
+            )
+
+        def tagged_base(
+            value: object,
+        ) -> tuple[tuple[Any, ...], int] | None:
+            if not (
+                isinstance(value, tuple)
+                and len(value) == 3
+                and value[0] in {"tagged", "bit-or"}
+                and is_affine(value[1])
+                and type(value[2]) is int
+                and 0 < value[2] <= 0xFFFF_FFFF
+            ):
+                return None
+            return value[1], value[2]
+
+        def unique(values: set[int]) -> int | None:
+            return next(iter(values)) if len(values) == 1 else None
+
+        rows = effects.symbolic_writes
+        if not rows or any(row.width != 4 for row in rows):
+            return None
+
+        address_clear_masks = {
+            (~operation.immediate) & 0xFFFF_FFFF
+            for row in rows
+            for operation in row.address_bit_operations
+            if operation.operation == "and"
+        }
+        value_clear_masks = {
+            (~operation.immediate) & 0xFFFF_FFFF
+            for row in rows
+            for operation in row.value_bit_operations
+            if operation.operation == "and"
+        }
+        alignment_masks = {
+            mask
+            for mask in address_clear_masks & value_clear_masks
+            if mask > 0
+            and mask <= extent_low_zero_mask
+            and (mask + 1) & mask == 0
+        }
+        size_flag_mask = unique(alignment_masks)
+        if size_flag_mask is None:
+            return None
+        block_alignment = size_flag_mask + 1
+
+        extent_tags = {
+            tagged[1]
+            for row in rows
+            if (tagged := tagged_base(row.value_after)) is not None
+            and tagged[0] == ("affine", 0, 1, 0)
+        }
+        extent_tag_mask = unique(extent_tags)
+        if (
+            extent_tag_mask is None
+            or extent_tag_mask & ~size_flag_mask
+            or extent_tag_mask == size_flag_mask
+        ):
+            return None
+
+        page_extent_offsets = {
+            row.address[3]
+            for row in rows
+            if is_affine(row.address, payload=1, extent_coefficient=0)
+            and tagged_base(row.value_after)
+            == (("affine", 0, 1, 0), extent_tag_mask)
+        }
+        page_end_tag_displacements = {
+            row.address[3]
+            for row in rows
+            if is_affine(row.address, payload=1, extent_coefficient=1)
+            and tagged_base(row.value_after)
+            == (("affine", 0, 1, 0), extent_tag_mask)
+        }
+        page_extent_offset = unique(page_extent_offsets)
+        page_end_tag_displacement = unique(page_end_tag_displacements)
+        if page_extent_offset is None or page_end_tag_displacement is None:
+            return None
+
+        largest_free_rows = tuple(
+            row
+            for row in rows
+            if is_affine(row.address, payload=1, extent_coefficient=0)
+            and is_affine(
+                row.value_after, payload=0, extent_coefficient=1
+            )
+            and row.value_after[3] < 0
+        )
+        largest_free_offsets = {row.address[3] for row in largest_free_rows}
+        initial_sizes = {row.value_after for row in largest_free_rows}
+        page_largest_free_offset = unique(largest_free_offsets)
+        if page_largest_free_offset is None or len(initial_sizes) != 1:
+            return None
+        initial_size = next(iter(initial_sizes))
+        if initial_size[3] % block_alignment:
+            return None
+
+        first_block_offsets = {
+            row.address[3]
+            for row in rows
+            if is_affine(row.address, payload=1, extent_coefficient=0)
+            and (tagged := tagged_base(row.value_after)) is not None
+            and tagged[0] == initial_size
+            and tagged[1] & ~size_flag_mask == 0
+        }
+        first_block_offset = unique(first_block_offsets)
+        if first_block_offset is None:
+            return None
+
+        page_flag_offsets = {
+            row.address[3] - first_block_offset
+            for row in rows
+            if is_affine(row.address, payload=1, extent_coefficient=0)
+            and (tagged := tagged_base(row.value_after)) is not None
+            and tagged[0] == ("affine", 1, 0, 0)
+            # Task 1 retains this exact P|1 operation without claiming P
+            # alignment.  Task 5 assigns the bit its page-pointer meaning.
+            and tagged[1] == 1
+        }
+        block_page_flags_offset = unique(page_flag_offsets)
+        if block_page_flags_offset is None:
+            return None
+
+        link_offsets = sorted(
+            {
+                row.address[3] - first_block_offset
+                for row in rows
+                if is_affine(
+                    row.address, payload=1, extent_coefficient=0
+                )
+                and row.value_after
+                == ("affine", 1, 0, first_block_offset)
+            }
+        )
+        if len(link_offsets) != 2:
+            return None
+        block_prev_offset, block_next_offset = link_offsets
+
+        sentinel_displacements = {
+            row.address[3]
+            for row in rows
+            if is_affine(row.address, payload=1, extent_coefficient=1)
+            and row.value_after == ("affine", 0, 0, 0)
+        }
+        end_sentinel_displacement = unique(sentinel_displacements)
+        if end_sentinel_displacement is None:
+            return None
+
+        boundary_rows = tuple(
+            row
+            for row in rows
+            if is_affine(row.address, payload=1, extent_coefficient=1)
+            and row.value_after == initial_size
+        )
+        boundary_end_displacements = {row.address[3] for row in boundary_rows}
+        boundary_end_displacement = unique(boundary_end_displacements)
+        if boundary_end_displacement is None:
+            return None
+        block_boundary_tag_displacement = (
+            boundary_end_displacement
+            - first_block_offset
+            - initial_size[3]
+        )
+
+        block_header_offset = 0
+        ordered_fields = (
+            block_header_offset,
+            block_page_flags_offset,
+            block_prev_offset,
+            block_next_offset,
+        )
+        if not (
+            extent_alignment >= block_alignment
+            and extent_alignment % block_alignment == 0
+            and page_largest_free_offset >= 0
+            and page_extent_offset
+            >= page_largest_free_offset + 4
+            and first_block_offset >= page_extent_offset + 4
+            and first_block_offset % block_alignment == 0
+            and ordered_fields
+            == tuple(range(0, 4 * len(ordered_fields), 4))
+            and block_boundary_tag_displacement == -4
+            and page_end_tag_displacement
+            == first_block_offset + initial_size[3]
+            and boundary_end_displacement
+            == page_end_tag_displacement + block_boundary_tag_displacement
+            and end_sentinel_displacement
+            == page_end_tag_displacement + 4
+            and end_sentinel_displacement <= -4
+        ):
+            return None
+
+        return _PublicationPrivatePageLayout(
+            extent_alignment=extent_alignment,
+            block_alignment=block_alignment,
+            page_link_offsets=None,
+            page_largest_free_offset=page_largest_free_offset,
+            page_extent_offset=page_extent_offset,
+            first_block_offset=first_block_offset,
+            page_end_tag_displacement=page_end_tag_displacement,
+            end_sentinel_displacement=end_sentinel_displacement,
+            block_header_offset=block_header_offset,
+            block_page_flags_offset=block_page_flags_offset,
+            block_prev_offset=block_prev_offset,
+            block_next_offset=block_next_offset,
+            block_boundary_tag_displacement=(
+                block_boundary_tag_displacement
+            ),
+            size_flag_mask=size_flag_mask,
+            minimum_split_remainder=None,
+        )
 
     def _publication_private_heap_effect_closure_replay(
         self,
