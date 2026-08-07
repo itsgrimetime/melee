@@ -22965,6 +22965,21 @@ class _DirectCfgRecovery:
                 )
                 return tuple(output)
 
+            def supported_stack_transfer(decoded, *, pop: bool) -> bool:
+                if (
+                    len(decoded.operands) != 1
+                    or decoded.operands[0].size != 4
+                    or decoded.addr_size != 4
+                ):
+                    return False
+                if not pop:
+                    return True
+                operand = decoded.operands[0]
+                return bool(
+                    operand.type == X86_OP_REG
+                    and self._register_family(operand.reg) != "esp"
+                )
+
             def memory_value(memory, base: str, displacement: int):
                 return next(
                     (
@@ -23303,7 +23318,7 @@ class _DirectCfgRecovery:
                         return None
                     next_predicate = None
                 elif decoded.id == X86_INS_PUSH:
-                    if len(decoded.operands) != 1:
+                    if not supported_stack_transfer(decoded, pop=False):
                         return None
                     read = read_operand(
                         address,
@@ -23318,10 +23333,7 @@ class _DirectCfgRecovery:
                         return None
                     _value, next_events = read
                 elif decoded.mnemonic == "pop":
-                    if (
-                        len(decoded.operands) != 1
-                        or decoded.operands[0].type != X86_OP_REG
-                    ):
+                    if not supported_stack_transfer(decoded, pop=True):
                         return None
                     next_registers = set_register_operand(
                         registers,
