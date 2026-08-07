@@ -5380,6 +5380,197 @@ def private_page_arena_image(
     )
 
 
+_PRIVATE_PAGE_RING_HOSTILES = (
+    "extra-selector-caller",
+    "arbitrary-existing-page",
+    "adjusted-provider-result",
+    "foreign-head-writer",
+    "partial-head-writer",
+    "indexed-head-writer",
+    "missing-publisher-reciprocal-link",
+    "broken-singleton-self-link",
+    "unresolved-indirect-mutation",
+    "raw-decoded-call-disagreement",
+    "empty-site-origin",
+    "collective-origin-missing-provider",
+    "collective-origin-missing-ring",
+    "different-request-normalization",
+    "missing-removal",
+    "partial-removal",
+    "removal-wrong-head",
+    "removal-wrong-link",
+    "singleton-removal-nonnull-head",
+    "nonempty-removal-broken-reciprocal",
+    "missing-head-rotation",
+    "rotation-before-success",
+    "rotation-different-page",
+)
+
+
+def private_page_ring_hostile(mutation: str) -> PrivatePageArenaFixture:
+    """Apply exactly one Task 3 page-ring hostile to the arena fixture."""
+    assert mutation in _PRIVATE_PAGE_RING_HOSTILES
+    if mutation == "arbitrary-existing-page":
+        return private_page_arena_image(mutation="selector-foreign-page")
+    if mutation == "broken-singleton-self-link":
+        return private_page_arena_image(mutation="ring-broken-singleton")
+
+    fixture = private_page_arena_image()
+    raw = bytearray(fixture.arena.image.data)
+
+    def patch(address: int, expected: str, replacement: str) -> None:
+        expected_bytes = bytes.fromhex(expected)
+        replacement_bytes = bytes.fromhex(replacement)
+        assert len(expected_bytes) == len(replacement_bytes)
+        section = next(
+            section for section in fixture.arena.image.sections if section.va <= address < section.va + section.raw_size
+        )
+        offset = section.raw_offset + address - section.va
+        assert raw[offset : offset + len(expected_bytes)] == expected_bytes
+        raw[offset : offset + len(replacement_bytes)] = replacement_bytes
+
+    def call_encoding(address: int, target: int) -> str:
+        displacement = target - address - 5
+        return "e8" + displacement.to_bytes(4, "little", signed=True).hex()
+
+    def retarget_call(address: int, target: int) -> None:
+        section = next(
+            section for section in fixture.arena.image.sections if section.va <= address < section.va + section.raw_size
+        )
+        offset = section.raw_offset + address - section.va
+        assert raw[offset] == 0xE8
+        patch(
+            address,
+            bytes(raw[offset : offset + 5]).hex(),
+            call_encoding(address, target),
+        )
+
+    head = fixture.page_head_slot.to_bytes(4, "little").hex()
+    large = fixture.large_allocator
+    publisher = fixture.page_inserter
+    selector = fixture.selector
+    remover = fixture.page_remover
+    if mutation == "extra-selector-caller":
+        retarget_call(fixture.reallocator + 0x39, selector)
+    elif mutation == "adjusted-provider-result":
+        patch(large + 0x57, "89 c6", "40 96")
+    elif mutation == "foreign-head-writer":
+        patch(selector + 0x39, "31 c0 5d 5f 5e 5b", "89 35 " + head)
+    elif mutation == "partial-head-writer":
+        patch(selector + 0x39, "31 c0 5d 5f 5e 5b", "88 35 " + head)
+    elif mutation == "indexed-head-writer":
+        patch(
+            remover + 0x0B,
+            "c7 05 " + head + " 00 00 00 00",
+            "89 34 35 " + head + " 90 90 90",
+        )
+    elif mutation == "missing-publisher-reciprocal-link":
+        patch(publisher + 0x17, "89 50 04", "90 90 90")
+    elif mutation == "unresolved-indirect-mutation":
+        patch(publisher + 0x32, "c3 90 90", "ff d0 c3")
+    elif mutation == "raw-decoded-call-disagreement":
+        patch(
+            publisher + 0x33,
+            "90 90 90 90 90",
+            call_encoding(publisher + 0x33, selector),
+        )
+    elif mutation == "empty-site-origin":
+        patch(fixture.selector_calls[1] - 1, "56", "51")
+    elif mutation == "collective-origin-missing-provider":
+        patch(large + 0x2C, "89 c6", "90 90")
+        patch(large + 0x57, "89 c6", "90 90")
+    elif mutation == "collective-origin-missing-ring":
+        patch(large + 0x1D, "85 f6", "31 f6")
+        patch(large + 0x1F, "75 11", "90 90")
+        patch(large + 0x4A, "75 e8", "75 29")
+    elif mutation == "different-request-normalization":
+        patch(large + 0x45, "8b 76 04", "8b 5e 04")
+    elif mutation == "missing-removal":
+        patch(fixture.arena_free + 0x45, call_encoding(fixture.arena_free + 0x45, remover), "90 90 90 90 90")
+    elif mutation == "partial-removal":
+        patch(remover + 0x2C, "c7 03 00 00 00 00", "c6 03 00 90 90 90")
+    elif mutation == "removal-wrong-head":
+        patch(
+            remover + 0x0B,
+            "c7 05 " + head + " 00 00 00 00",
+            "c7 05 " + (fixture.page_head_slot + 4).to_bytes(4, "little").hex() + " 00 00 00 00",
+        )
+    elif mutation == "removal-wrong-link":
+        patch(remover + 0x1C, "89 50 04", "89 50 08")
+    elif mutation == "singleton-removal-nonnull-head":
+        patch(
+            remover + 0x0B,
+            "c7 05 " + head + " 00 00 00 00",
+            "a3 " + head + " 90 90 90 90 90",
+        )
+    elif mutation == "nonempty-removal-broken-reciprocal":
+        patch(remover + 0x1A, "89 02", "90 90")
+    elif mutation == "missing-head-rotation":
+        patch(large + 0x6D, "89 35 " + head, "90 90 90 90 90 90")
+    elif mutation == "rotation-before-success":
+        patch(large + 0x3D, "85 c0 75 2c 85 ff", "89 35 " + head)
+        patch(large + 0x6D, "89 35 " + head, "90 90 90 90 90 90")
+    elif mutation == "rotation-different-page":
+        patch(large + 0x6D, "89 35 " + head, "89 3d " + head)
+    else:
+        raise AssertionError(mutation)
+
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
+def private_page_ring_joined_removal_image() -> PrivatePageArenaFixture:
+    """Use retail's guarded nullable successor in the page remover."""
+    fixture = private_page_arena_image()
+    raw = bytearray(fixture.arena.image.data)
+    section = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.va <= fixture.page_remover < section.va + section.raw_size
+    )
+    offset = section.raw_offset + fixture.page_remover - section.va
+    head = fixture.page_head_slot.to_bytes(4, "little").hex()
+    code = bytes.fromhex(
+        "53 8b 5c 24 08 8b 4b 04 39 d9 89 c8 75 02 31 c0 "
+        "39 1d " + head + " 75 05 a3 " + head + " 85 c0 74 09 8b 13 89 10 8b 08 89 41 04 "
+        "c7 43 04 00 00 00 00 c7 03 00 00 00 00 5b c3"
+    )
+    assert len(code) <= 0x80
+    raw[offset : offset + 0x80] = code + b"\x90" * (0x80 - len(code))
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
+def private_page_ring_flag_preserving_rotation_image() -> PrivatePageArenaFixture:
+    """Place stack cleanup between the selector-result test and branch."""
+    fixture = private_page_arena_image()
+    raw = bytearray(fixture.arena.image.data)
+    section = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.va <= fixture.large_allocator + 0x3B < section.va + section.raw_size
+    )
+    offset = section.raw_offset + fixture.large_allocator + 0x3B - section.va
+    expected = bytes.fromhex("59 59 85 c0 75 2c")
+    replacement = bytes.fromhex("85 c0 59 59 75 2c")
+    assert raw[offset : offset + len(expected)] == expected
+    raw[offset : offset + len(replacement)] = replacement
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
 def private_page_arena_contract(fixture):
     """Recover the certified heap prerequisites for the arena fixture."""
     recovery = _DirectCfgRecovery(
@@ -13767,6 +13958,173 @@ def test_private_page_layout_does_not_consume_page_ring_links():
 
     assert layout is not None
     assert layout.page_link_offsets is None
+
+
+def test_private_page_ring_proves_both_selector_page_arguments():
+    """Reject losing page/request provenance at either selector call."""
+    fixture = private_page_arena_image()
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert layout is not None
+
+    ring_evidence = recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    )
+
+    assert ring_evidence is not None
+    assert ring_evidence.layout.page_link_offsets == (0, 4)
+    ring = ring_evidence.role
+    assert ring.head_slot == fixture.page_head_slot
+    assert ring.provider_entry == fixture.page_provider
+    assert ring.inserter_entry == fixture.page_inserter
+    assert ring.remover_entry == fixture.page_remover
+    assert set(ring.selector_page_calls) == set(fixture.selector_calls)
+    assert ring.selector_request_calls == ring.selector_page_calls
+    assert ring.head_reads
+    assert ring.head_writes
+    assert ring.ring_link_reads
+    assert ring.ring_link_writes
+    assert {row.role for row in ring_evidence.transfers} == {
+        "ring-insert",
+        "ring-remove",
+        "ring-rotate",
+    }
+    assert all(
+        invocation.page_origins
+        and invocation.block_state.allocation == "none"
+        and invocation.block_state.membership == "none"
+        for invocation in ring.selector_invocations
+    )
+    assert {origin for invocation in ring.selector_invocations for origin in invocation.page_origins} == {
+        "provider",
+        "ring",
+    }
+    assert ring_evidence.spans
+    span_keys = {(span.function_entry, span.instruction_address, span.operand_index) for span in ring_evidence.spans}
+    assert all(key in span_keys for transfer in ring_evidence.transfers for key in transfer.span_keys)
+
+
+def test_private_page_ring_retains_singleton_and_nonempty_removal_evidence():
+    """Retain null-head and reciprocal-link removal in one durable transfer."""
+    fixture = private_page_arena_image()
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert layout is not None
+
+    ring_evidence = recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    )
+
+    assert ring_evidence is not None
+    remover = next(transfer for transfer in ring_evidence.transfers if transfer.role == "ring-remove")
+    assert remover.function_entry == fixture.page_remover
+    assert remover.invocations
+    remover_spans = tuple(span for span in ring_evidence.spans if span.function_entry == fixture.page_remover)
+    assert {span.displacement for span in remover_spans} == {0, 4}
+    assert {span.access for span in remover_spans} >= {"read", "write"}
+    assert remover.span_keys == tuple(
+        (span.function_entry, span.instruction_address, span.operand_index) for span in remover_spans
+    )
+    assert len(set(ring_evidence.role.head_writes) & set(remover.instruction_addresses)) >= 2
+
+
+def test_private_page_ring_accepts_guarded_nullable_removal_successor():
+    """Retail refines its joined null/ring successor after ``test``/``je``."""
+    fixture = private_page_ring_joined_removal_image()
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert layout is not None
+
+    ring_evidence = recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    )
+
+    assert ring_evidence is not None
+    assert ring_evidence.role.remover_entry == fixture.page_remover
+    remover_spans = {
+        (span.displacement, span.access) for span in ring_evidence.spans if span.function_entry == fixture.page_remover
+    }
+    assert {(0, "write"), (4, "write")} <= remover_spans
+
+
+def test_private_page_ring_accepts_flag_preserving_rotation_cleanup():
+    """Recognize a selector guard across bounded flag-preserving cleanup."""
+    fixture = private_page_ring_flag_preserving_rotation_image()
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert layout is not None
+
+    ring_evidence = recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    )
+
+    assert ring_evidence is not None
+    rotation = next(transfer for transfer in ring_evidence.transfers if transfer.role == "ring-rotate")
+    assert rotation.invocations
+
+
+@pytest.mark.parametrize("mutation", _PRIVATE_PAGE_RING_HOSTILES)
+def test_private_page_ring_rejects_one_fact_hostiles(mutation):
+    fixture = private_page_ring_hostile(mutation)
+    if mutation == "unresolved-indirect-mutation":
+        recovery = _DirectCfgRecovery(
+            fixture.arena.image,
+            build_seed_inventory(fixture.arena.image, ()),
+            replace(
+                generous_limits(fixture.arena.image),
+                max_instructions=1024,
+                max_blocks=1024,
+            ),
+        )
+        recovery.recover()
+        assert (
+            recovery._private_heap_allocator_contract(
+                fixture.arena.private_allocator,
+                frozenset({fixture.arena.callback_slot}),
+            )
+            is None
+        )
+        return
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert layout is not None
+
+    assert (
+        recovery._publication_private_page_ring_role(
+            contract,
+            extent,
+            layout,
+        )
+        is None
+    )
 
 
 def test_private_page_arena_fixed_slots_have_no_stale_executable_tail():
