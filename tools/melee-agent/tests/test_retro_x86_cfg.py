@@ -3926,11 +3926,17 @@ def finalized_handle_arena_image(
             cursor = emit_call(cursor, private_selector)
             emit(cursor, "c3")
             patch_short(pruned_branch, pruned_target)
+        elif mutation == "private-heap-bounded-helper-effect-clobber":
+            emit(
+                private_effect_helper,
+                "8b 44 24 04 8b 4c 24 08 89 c2 83 ca 01 89 50 04 "
+                "89 48 10 83 7c 24 0c 00 75 01 c3 89 48 0c c3",
+            )
         else:
             emit(
                 private_effect_helper,
-                "8b 44 24 04 8b 4c 24 08 89 48 10 83 7c 24 0c 00 "
-                "75 01 c3 89 48 0c c3",
+                "8b 44 24 04 8b 4c 24 08 89 c2 83 ca 01 89 50 04 "
+                "89 48 10 83 c9 03 83 e1 f8 83 e9 18 89 48 08 c3",
             )
     elif mutation in {"private-heap-bounded-helper-spans", "private-heap-bounded-helper-normalized"}:
         emit(private_page_helper, "8b 44 24 04 8b 4c 24 08 89 48 0c 8d 54 08 f8 89 0a c3")
@@ -11940,6 +11946,11 @@ def test_private_heap_effect_closure_retains_canonical_symbolic_writes():
     effects = recovery._publication_private_heap_effect_closure(witness)
 
     assert effects is not None
+    assert effects.extent_witness == witness
+    assert (
+        recovery._publication_private_heap_extent_low_zero_mask(witness)
+        == 0xFFF
+    )
     writes = effects.symbolic_writes
     assert writes == tuple(
         sorted(
@@ -11980,6 +11991,394 @@ def test_private_heap_effect_closure_retains_canonical_symbolic_writes():
     assert normalization.value_before == ("tagged", ("affine", 0, 1, 0), 3)
     assert normalization.value_after == ("affine", 0, 1, 0)
     assert normalization.immediate == 0xFFFF_FFF8
+
+
+def test_private_heap_effect_closure_retains_register_bit_provenance():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-effect"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract, fixture.private_page_helper
+    )
+    assert witness is not None
+
+    effects = recovery._publication_private_heap_effect_closure(witness)
+
+    assert effects is not None
+    page_flags = next(
+        row
+        for row in effects.symbolic_writes
+        if row.address == ("affine", 1, 0, 4)
+    )
+    payload = ("affine", 1, 0, 0)
+    assert page_flags.value_after == ("bit-or", payload, 1)
+    assert page_flags.address_bit_operations == ()
+    assert len(page_flags.value_bit_operations) == 1
+    payload_or = page_flags.value_bit_operations[0]
+    assert payload_or.function_entry == page_flags.function_entry
+    assert payload_or.operation == "or"
+    assert payload_or.immediate == 1
+    assert payload_or.value_before == payload
+    assert payload_or.value_after == ("bit-or", payload, 1)
+
+    sentinel = next(
+        row
+        for row in effects.symbolic_writes
+        if row.address == ("affine", 1, 1, -4)
+    )
+    assert sentinel.value_bit_operations == ()
+    assert tuple(
+        (operation.operation, operation.immediate)
+        for operation in sentinel.address_bit_operations
+    ) == (("or", 3), ("and", 0xFFFF_FFF8))
+    extent = ("affine", 0, 1, 0)
+    tagged_extent = ("tagged", extent, 3)
+    assert sentinel.address_bit_operations[0].value_before == extent
+    assert sentinel.address_bit_operations[0].value_after == tagged_extent
+    assert sentinel.address_bit_operations[1].value_before == tagged_extent
+    assert sentinel.address_bit_operations[1].value_after == extent
+
+    largest_free = next(
+        row
+        for row in effects.symbolic_writes
+        if row.address == ("affine", 1, 0, 8)
+    )
+    assert largest_free.value_after == ("affine", 0, 1, -0x18)
+    assert tuple(
+        (operation.operation, operation.immediate)
+        for operation in largest_free.value_bit_operations
+    ) == (("or", 3), ("and", 0xFFFF_FFF8))
+    assert largest_free.value_bit_operations[-1].value_after == extent
+    assert recovery._publication_private_heap_effect_closure_is_current(
+        effects
+    )
+
+
+def test_private_heap_effect_currentness_rejects_hostile_bit_provenance():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-effect"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract, fixture.private_page_helper
+    )
+    assert witness is not None
+    effects = recovery._publication_private_heap_effect_closure(witness)
+    assert effects is not None
+    assert recovery._publication_private_heap_effect_closure_is_current(
+        effects
+    )
+    page_flags = next(
+        row
+        for row in effects.symbolic_writes
+        if row.address == ("affine", 1, 0, 4)
+    )
+    sentinel = next(
+        row
+        for row in effects.symbolic_writes
+        if row.address == ("affine", 1, 1, -4)
+    )
+
+    def replace_row(original, replacement):
+        return replace(
+            effects,
+            symbolic_writes=tuple(
+                replacement if row == original else row
+                for row in effects.symbolic_writes
+            ),
+        )
+
+    payload_or = page_flags.value_bit_operations[0]
+    extent_or, extent_and = sentinel.address_bit_operations
+    constant = ("affine", 0, 0, 0)
+    constant_or = replace(
+        payload_or,
+        value_before=constant,
+        value_after=("affine", 0, 0, 1),
+    )
+    hostiles = (
+        replace(
+            effects,
+            extent_witness=replace(
+                witness,
+                extent_definition_addresses=(
+                    extent_and.instruction_address,
+                    witness.extent_definition_addresses[1],
+                ),
+            ),
+        ),
+        replace_row(
+            page_flags,
+            replace(page_flags, value_bit_operations=()),
+        ),
+        replace_row(
+            sentinel,
+            replace(
+                sentinel,
+                address_bit_operations=(extent_and, extent_or),
+            ),
+        ),
+        replace_row(
+            sentinel,
+            replace(sentinel, address_bit_operations=()),
+        ),
+        replace_row(
+            sentinel,
+            replace(
+                sentinel,
+                address_bit_operations=(extent_or,),
+            ),
+        ),
+        replace_row(
+            sentinel,
+            replace(
+                sentinel,
+                address_bit_operations=(extent_and,),
+            ),
+        ),
+        replace_row(
+            sentinel,
+            replace(
+                sentinel,
+                address_bit_operations=(payload_or,),
+            ),
+        ),
+        replace_row(
+            sentinel,
+            replace(
+                sentinel,
+                address_bit_operations=(
+                    extent_or,
+                    extent_and,
+                    extent_and,
+                ),
+            ),
+        ),
+        replace_row(
+            page_flags,
+            replace(
+                page_flags,
+                value_bit_operations=(
+                    replace(
+                        payload_or,
+                        instruction_address=(
+                            payload_or.instruction_address + 1
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        replace_row(
+            page_flags,
+            replace(
+                page_flags,
+                value_bit_operations=(
+                    replace(payload_or, immediate=3),
+                ),
+            ),
+        ),
+        replace_row(
+            page_flags,
+            replace(
+                page_flags,
+                value_bit_operations=(
+                    replace(
+                        payload_or,
+                        value_after=(
+                            "bit-or",
+                            ("affine", 1, 0, 0),
+                            3,
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        replace_row(
+            page_flags,
+            replace(
+                page_flags,
+                value_after=constant_or.value_after,
+                value_bit_operations=(constant_or,),
+            ),
+        ),
+    )
+
+    assert [
+        recovery._publication_private_heap_effect_closure_is_current(
+            hostile
+        )
+        for hostile in hostiles
+    ] == [False] * len(hostiles)
+
+
+def test_private_heap_effect_currentness_rejects_forged_minimum_extent():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-effect"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract, fixture.private_page_helper
+    )
+    assert witness is not None
+    assert witness.minimum_extent == 0x10000
+    effects = recovery._publication_private_heap_effect_closure(witness)
+    assert effects is not None
+
+    forged = replace(witness, minimum_extent=0x20000)
+
+    assert not recovery._publication_private_heap_effect_closure_is_current(
+        replace(effects, extent_witness=forged)
+    )
+
+
+def test_private_heap_effect_rejects_forged_minimum_at_exact_boundary():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-effect"
+    )
+    data = bytearray(fixture.image.data)
+    nested_helper = fixture.private_page_helper + 0x100
+    nested_offset = fixture.image.va_to_offset(nested_helper)
+    assert nested_offset is not None
+    boundary_write = bytes.fromhex(
+        "8b 44 24 04 8b 4c 24 08 89 c2 83 ca 01 89 50 04 "
+        "89 88 00 00 01 00 c3"
+    )
+    data[nested_offset : nested_offset + 0x20] = boundary_write.ljust(
+        0x20, b"\x90"
+    )
+    image = replace(
+        fixture.image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+    boundary_recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    boundary_recovery.recover()
+    boundary_contract = boundary_recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert boundary_contract is not None
+    boundary_witness = (
+        boundary_recovery._publication_private_heap_extent_witness(
+            boundary_contract, fixture.private_page_helper
+        )
+    )
+    assert boundary_witness is not None
+    assert (
+        boundary_recovery._publication_private_heap_effect_closure_replay(
+            boundary_witness
+        )
+        is None
+    )
+
+    boundary_forged = replace(
+        boundary_witness, minimum_extent=0x20000
+    )
+
+    assert (
+        boundary_recovery._publication_private_heap_effect_closure_replay(
+            boundary_forged
+        )
+        is None
+    )
+
+
+def test_private_heap_effect_rejects_forged_allocator_identity_and_closure():
+    fixture = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-effect"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.private_allocator, frozenset({fixture.callback_slot})
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract, fixture.private_page_helper
+    )
+    assert witness is not None
+    effects = recovery._publication_private_heap_effect_closure(witness)
+    assert effects is not None
+
+    unrelated = next(
+        entry
+        for entry in sorted(recovery.function_addresses)
+        if entry not in witness.allocator_dependency_functions
+    )
+    added_dependencies = tuple(
+        sorted((*witness.allocator_dependency_functions, unrelated))
+    )
+    removable = next(
+        entry
+        for entry in witness.allocator_dependency_functions
+        if entry not in effects.function_entries
+    )
+    removed_dependencies = tuple(
+        entry
+        for entry in witness.allocator_dependency_functions
+        if entry != removable
+    )
+
+    def with_dependencies(dependencies):
+        return replace(
+            witness,
+            allocator_dependency_functions=dependencies,
+            allocator_dependency_fingerprints=tuple(
+                (
+                    entry,
+                    recovery._producer_function_fingerprint(entry),
+                )
+                for entry in dependencies
+            ),
+        )
+
+    hostiles = (
+        replace(witness, allocator_root=witness.allocator_root + 1),
+        with_dependencies(added_dependencies),
+        with_dependencies(removed_dependencies),
+    )
+
+    assert all(
+        not recovery._publication_private_heap_effect_closure_is_current(
+            replace(effects, extent_witness=hostile)
+        )
+        for hostile in hostiles
+    )
 
 
 def test_private_heap_effect_closure_retains_unknown_symbolic_write():

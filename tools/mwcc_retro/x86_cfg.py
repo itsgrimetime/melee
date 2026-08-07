@@ -1304,6 +1304,7 @@ class _PrivateHeapAllocatorContract:
     """A closed allocator rooted in one private-region factory."""
 
     root: int
+    protected_slots: frozenset[int] = field(compare=False)
     factory: _PrivateRegionFactoryShape
     page_provider: int
     large_allocator: int
@@ -1676,6 +1677,8 @@ class _PublicationPrivateHeapExtentWitness:
     """Exact provider-to-helper forwarding for one factory allocation."""
 
     allocator_root: int
+    allocator_protected_slots: frozenset[int]
+    allocator_contract_sha256: str
     provider_entry: int
     factory_call: int
     factory_entry: int
@@ -1720,6 +1723,19 @@ class _PublicationPrivateHeapPrunedBranch:
 
 
 @dataclass(frozen=True, slots=True)
+class _PublicationPrivateHeapSymbolicBitOperation:
+    """One exact register or memory bit operation in a write derivation."""
+
+    function_entry: int
+    instruction_address: int
+    operand_index: int
+    operation: Literal["and", "or"]
+    immediate: int
+    value_before: tuple[Any, ...] | None
+    value_after: tuple[Any, ...] | None
+
+
+@dataclass(frozen=True, slots=True)
 class _PublicationPrivateHeapSymbolicWrite:
     """One exact private-heap write executed by the certified closure."""
 
@@ -1733,10 +1749,17 @@ class _PublicationPrivateHeapSymbolicWrite:
     value_before: tuple[Any, ...] | None
     value_after: tuple[Any, ...] | None
     immediate: int | None
+    address_bit_operations: tuple[
+        _PublicationPrivateHeapSymbolicBitOperation, ...
+    ]
+    value_bit_operations: tuple[
+        _PublicationPrivateHeapSymbolicBitOperation, ...
+    ]
 
 
 @dataclass(frozen=True, slots=True)
 class _PublicationPrivateHeapEffectClosure:
+    extent_witness: _PublicationPrivateHeapExtentWitness
     root_helper: int
     function_entries: tuple[int, ...]
     executed_instruction_addresses: tuple[int, ...]
@@ -18581,6 +18604,7 @@ class _DirectCfgRecovery:
             self._note_producer_dependency(dependency)
         result = _PrivateHeapAllocatorContract(
             root=function_entry,
+            protected_slots=protected_slots,
             factory=factory,
             page_provider=page_provider,
             large_allocator=large_allocator,
@@ -18605,6 +18629,22 @@ class _DirectCfgRecovery:
         self._propagate_producer_dependencies(dependency_rows)
         self.private_heap_allocator_contract_cache[cache_key] = entry
         return result
+
+    def _private_heap_allocator_contract_sha256(
+        self, contract: _PrivateHeapAllocatorContract
+    ) -> str:
+        """Bind one structural allocator contract to its current closure."""
+        payload = {
+            "contract": contract,
+            "function_fingerprints": tuple(
+                (
+                    entry,
+                    self._producer_function_fingerprint(entry),
+                )
+                for entry in sorted(contract.dependency_functions)
+            ),
+        }
+        return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
 
     def _publication_private_heap_extent_witness(
         self,
@@ -18975,6 +19015,10 @@ class _DirectCfgRecovery:
             self._note_producer_dependency(dependency)
         return _PublicationPrivateHeapExtentWitness(
             allocator_root=contract.root,
+            allocator_protected_slots=contract.protected_slots,
+            allocator_contract_sha256=(
+                self._private_heap_allocator_contract_sha256(contract)
+            ),
             provider_entry=provider_entry,
             factory_call=factory_call.address,
             factory_entry=factory.function_entry,
@@ -19384,12 +19428,163 @@ class _DirectCfgRecovery:
                 ))
         return tuple(spans) if spans else None
 
+    def _publication_private_heap_extent_low_zero_mask(
+        self,
+        witness: _PublicationPrivateHeapExtentWitness,
+    ) -> int | None:
+        """Return only the low-zero bits proved by the extent definition."""
+        if (
+            type(witness.allocator_root) is not int
+            or witness.allocator_root not in self.function_addresses
+            or not isinstance(witness.allocator_protected_slots, frozenset)
+            or not all(
+                type(slot) is int
+                for slot in witness.allocator_protected_slots
+            )
+        ):
+            return None
+        allocator_contract = self._private_heap_allocator_contract(
+            witness.allocator_root,
+            witness.allocator_protected_slots,
+        )
+        if allocator_contract is None:
+            return None
+        dependency_functions = tuple(
+            sorted(allocator_contract.dependency_functions)
+        )
+        dependency_fingerprints = tuple(
+            (
+                entry,
+                self._producer_function_fingerprint(entry),
+            )
+            for entry in dependency_functions
+        )
+        if (
+            allocator_contract.root != witness.allocator_root
+            or allocator_contract.protected_slots
+            != witness.allocator_protected_slots
+            or allocator_contract.page_provider != witness.provider_entry
+            or allocator_contract.factory.function_entry
+            != witness.factory_entry
+            or allocator_contract.factory.header_size
+            != witness.factory_header_size
+            or allocator_contract.factory.return_offsets
+            != witness.factory_return_offsets
+            or dependency_functions
+            != witness.allocator_dependency_functions
+            or dependency_fingerprints
+            != witness.allocator_dependency_fingerprints
+            or self._private_heap_allocator_contract_sha256(
+                allocator_contract
+            )
+            != witness.allocator_contract_sha256
+        ):
+            return None
+        addresses = witness.extent_witness_addresses
+        provider_addresses = frozenset(
+            self._function_instruction_addresses(witness.provider_entry)
+        )
+        if (
+            witness.provider_entry not in self.function_addresses
+            or witness.helper_entry not in self.function_addresses
+            or witness.payload_argument_index != 0
+            or witness.extent_argument_index != 1
+            or type(witness.minimum_extent) is not int
+            or witness.minimum_extent <= 0
+            or len(addresses) != 8
+            or len(addresses) != len(set(addresses))
+            or addresses != tuple(sorted(addresses))
+            or witness.extent_definition_addresses
+            != (addresses[2], addresses[5])
+            or any(address not in provider_addresses for address in addresses)
+            or witness.factory_call not in provider_addresses
+            or witness.helper_call not in provider_addresses
+            or self._producer_function_fingerprint(witness.provider_entry)
+            != witness.provider_function_sha256
+            or self._producer_function_fingerprint(witness.helper_entry)
+            != witness.helper_function_sha256
+            or hashlib.sha256(
+                _canonical_json_bytes(
+                    tuple(
+                        (address, self.instructions[address].bytes_hex)
+                        for address in addresses
+                    )
+                )
+            ).hexdigest()
+            != witness.extent_token_sha256
+        ):
+            return None
+        compared = self._owned_decoded(addresses[3])
+        fallback = self._owned_decoded(addresses[5])
+        factory_call = self._owned_decoded(witness.factory_call)
+        helper_call = self._owned_decoded(witness.helper_call)
+        extent_argument = self._pushed_call_argument(
+            witness.helper_call, witness.extent_argument_index
+        )
+        if not (
+            compared.mnemonic == "cmp"
+            and len(compared.operands) == 2
+            and compared.operands[1].type == X86_OP_IMM
+            and compared.operands[1].imm & 0xFFFF_FFFF
+            == witness.minimum_extent
+            and fallback.mnemonic == "mov"
+            and len(fallback.operands) == 2
+            and fallback.operands[1].type == X86_OP_IMM
+            and fallback.operands[1].imm & 0xFFFF_FFFF
+            == witness.minimum_extent
+            and factory_call.group(CS_GRP_CALL)
+            and self._direct_target(factory_call) == witness.factory_entry
+            and helper_call.group(CS_GRP_CALL)
+            and self._direct_target(helper_call) == witness.helper_entry
+            and extent_argument is not None
+            and extent_argument[0].address == addresses[7]
+            and extent_argument[2] == witness.provider_entry
+        ):
+            return None
+        masks = []
+        for address in witness.extent_definition_addresses:
+            if address not in self.instructions:
+                return None
+            decoded = self._owned_decoded(address)
+            if not (
+                decoded.mnemonic == "and"
+                and len(decoded.operands) == 2
+                and decoded.operands[0].type == X86_OP_REG
+                and decoded.operands[1].type == X86_OP_IMM
+            ):
+                continue
+            masks.append(decoded.operands[1].imm & 0xFFFF_FFFF)
+        if len(masks) != 1:
+            return None
+        low_zero_mask = (~masks[0]) & 0xFFFF_FFFF
+        alignment = low_zero_mask + 1
+        return (
+            low_zero_mask
+            if (
+                low_zero_mask > 0
+                and alignment <= 0x1_0000_0000
+                and alignment & (alignment - 1) == 0
+            )
+            else None
+        )
+
     def _publication_private_heap_effect_closure_is_current(
         self,
         effects: _PublicationPrivateHeapEffectClosure,
     ) -> bool:
         """Replay immutable dependencies and validate exact write evidence."""
 
+        witness = effects.extent_witness
+        if not isinstance(witness, _PublicationPrivateHeapExtentWitness):
+            return False
+        extent_low_zero_mask = (
+            self._publication_private_heap_extent_low_zero_mask(witness)
+        )
+        if (
+            extent_low_zero_mask is None
+            or effects.root_helper != witness.helper_entry
+        ):
+            return False
         function_entries = effects.function_entries
         if (
             not function_entries
@@ -19456,10 +19651,21 @@ class _DirectCfgRecovery:
                 and all(type(component) is int for component in value[1:])
             )
 
+        def is_bit_or(value: object) -> bool:
+            return bool(
+                isinstance(value, tuple)
+                and len(value) == 3
+                and value[0] == "bit-or"
+                and is_affine(value[1])
+                and type(value[2]) is int
+                and 0 <= value[2] <= 0xFFFF_FFFF
+            )
+
         def is_value(value: object) -> bool:
             return bool(
                 value is None
                 or is_affine(value)
+                or is_bit_or(value)
                 or (
                     isinstance(value, tuple)
                     and len(value) == 3
@@ -19476,6 +19682,10 @@ class _DirectCfgRecovery:
                 and value[1] == 0
                 and value[2] in {0, 1}
                 and value[3] & mask == 0
+                and (
+                    value[2] == 0
+                    or mask & ~extent_low_zero_mask == 0
+                )
             )
 
         def replay_bit_operation(
@@ -19495,8 +19705,12 @@ class _DirectCfgRecovery:
                     )
                 if is_affine(value) and low_bits_are_zero(value, immediate):
                     return ("tagged", value, immediate)
+                if is_affine(value):
+                    return ("bit-or", value, immediate)
                 if value[0] == "tagged":
                     return ("tagged", value[1], value[2] | immediate)
+                if value[0] == "bit-or":
+                    return ("bit-or", value[1], value[2] | immediate)
                 return None
             if is_affine(value) and value[1:3] == (0, 0):
                 return ("affine", 0, 0, value[3] & immediate)
@@ -19509,6 +19723,83 @@ class _DirectCfgRecovery:
                 if low_bits_are_zero(base, cleared):
                     return base if bits == 0 else ("tagged", base, bits)
             return None
+
+        def bit_operations_are_current(
+            operations: object,
+        ) -> bool:
+            if not isinstance(operations, tuple) or not all(
+                isinstance(
+                    operation,
+                    _PublicationPrivateHeapSymbolicBitOperation,
+                )
+                for operation in operations
+            ):
+                return False
+            keys = tuple(
+                (
+                    operation.function_entry,
+                    operation.instruction_address,
+                    operation.operand_index,
+                )
+                for operation in operations
+            )
+            if len(keys) != len(set(keys)):
+                return False
+            previous = None
+            previous_operation = None
+            for index, operation in enumerate(operations):
+                if (
+                    operation.function_entry not in function_set
+                    or operation.instruction_address not in executed_set
+                    or self._registrar_function_entry(
+                        operation.instruction_address
+                    )
+                    != operation.function_entry
+                    or type(operation.operand_index) is not int
+                    or operation.operand_index < 0
+                    or operation.operation not in {"and", "or"}
+                    or type(operation.immediate) is not int
+                    or not 0 <= operation.immediate <= 0xFFFF_FFFF
+                    or not is_value(operation.value_before)
+                    or not is_value(operation.value_after)
+                    or (
+                        index > 0
+                        and operation.value_before != previous
+                    )
+                    or (
+                        previous_operation is not None
+                        and previous_operation.function_entry
+                        == operation.function_entry
+                        and previous_operation.instruction_address
+                        >= operation.instruction_address
+                    )
+                ):
+                    return False
+                decoded = self._owned_decoded(
+                    operation.instruction_address
+                )
+                operands = decoded.operands
+                if not (
+                    decoded.mnemonic == operation.operation
+                    and len(operands) == 2
+                    and operation.operand_index < len(operands)
+                    and operands[operation.operand_index].type
+                    in {X86_OP_REG, X86_OP_MEM}
+                    and operands[operation.operand_index].access & CS_AC_WRITE
+                    and operands[1].type == X86_OP_IMM
+                    and operation.immediate
+                    == operands[1].imm & 0xFFFF_FFFF
+                    and operation.value_after
+                    == replay_bit_operation(
+                        operation.operation,
+                        operation.value_before,
+                        operation.immediate,
+                    )
+                ):
+                    return False
+                previous = operation.value_after
+                previous_operation = operation
+            return True
 
         rows = effects.symbolic_writes
         if not rows or not all(
@@ -19541,6 +19832,18 @@ class _DirectCfgRecovery:
                 or not is_affine(row.address)
                 or not is_value(row.value_before)
                 or not is_value(row.value_after)
+                or not bit_operations_are_current(
+                    row.address_bit_operations
+                )
+                or not bit_operations_are_current(
+                    row.value_bit_operations
+                )
+                or (
+                    isinstance(row.value_after, tuple)
+                    and row.value_after
+                    and row.value_after[0] in {"bit-or", "tagged"}
+                    and not row.value_bit_operations
+                )
             ):
                 return False
             decoded = self._owned_decoded(row.instruction_address)
@@ -19592,9 +19895,12 @@ class _DirectCfgRecovery:
                 )
             ):
                 return False
-        return True
+        replayed = self._publication_private_heap_effect_closure_replay(
+            witness
+        )
+        return replayed == effects
 
-    def _publication_private_heap_effect_closure(
+    def _publication_private_heap_effect_closure_replay(
         self,
         witness: _PublicationPrivateHeapExtentWitness,
     ) -> _PublicationPrivateHeapEffectClosure | None:
@@ -19620,8 +19926,20 @@ class _DirectCfgRecovery:
         # Values are exact affine P/E expressions or one low-bit tag over one.
         # ("affine", payload coefficient, extent coefficient, displacement)
         # ("tagged", affine-value, low-bit mask)
+        # ("bit-or", affine-value, bit mask) retains an exact OR when the
+        # affine base has no proven low-bit alignment (notably P).
         Value = tuple[Any, ...]
         Affine = tuple[str, int, int, int]
+        BitOperations = tuple[
+            _PublicationPrivateHeapSymbolicBitOperation, ...
+        ]
+        TrackedValue = tuple[Value | None, BitOperations]
+
+        extent_low_zero_mask = (
+            self._publication_private_heap_extent_low_zero_mask(witness)
+        )
+        if extent_low_zero_mask is None:
+            return None
 
         def affine(
             payload: int = 0,
@@ -19636,6 +19954,30 @@ class _DirectCfgRecovery:
                 and len(value) == 4
                 and value[0] == "affine"
             )
+
+        def tracked(
+            value: Value | None,
+            operations: BitOperations = (),
+        ) -> TrackedValue:
+            return value, operations
+
+        def merge_operations(
+            *operation_groups: BitOperations,
+        ) -> BitOperations | None:
+            merged = tuple(
+                operation
+                for operations in operation_groups
+                for operation in operations
+            )
+            keys = tuple(
+                (
+                    operation.function_entry,
+                    operation.instruction_address,
+                    operation.operand_index,
+                )
+                for operation in merged
+            )
+            return merged if len(keys) == len(set(keys)) else None
 
         def add_values(
             left: Value | None,
@@ -19658,6 +20000,10 @@ class _DirectCfgRecovery:
                 and value[1] == 0
                 and value[2] in {0, 1}
                 and value[3] & mask == 0
+                and (
+                    value[2] == 0
+                    or mask & ~extent_low_zero_mask == 0
+                )
             )
 
         def or_value(value: Value | None, immediate: int) -> Value | None:
@@ -19668,12 +20014,20 @@ class _DirectCfgRecovery:
                 return affine(displacement=(value[3] | immediate) & 0xFFFF_FFFF)
             if is_affine(value) and low_bits_are_zero(value, immediate):
                 return ("tagged", value, immediate)
+            if is_affine(value):
+                return ("bit-or", value, immediate)
             if (
                 isinstance(value, tuple)
                 and len(value) == 3
                 and value[0] == "tagged"
             ):
                 return ("tagged", value[1], value[2] | immediate)
+            if (
+                isinstance(value, tuple)
+                and len(value) == 3
+                and value[0] == "bit-or"
+            ):
+                return ("bit-or", value[1], value[2] | immediate)
             return None
 
         def and_value(value: Value | None, immediate: int) -> Value | None:
@@ -19695,6 +20049,32 @@ class _DirectCfgRecovery:
                 if low_bits_are_zero(base, cleared):
                     return base if bits == 0 else ("tagged", base, bits)
             return None
+
+        def apply_bit_operation(
+            function_entry: int,
+            instruction_address: int,
+            operand_index: int,
+            operation: Literal["and", "or"],
+            immediate: int,
+            value: TrackedValue,
+        ) -> TrackedValue:
+            semantic, operations = value
+            immediate &= 0xFFFF_FFFF
+            after = (
+                or_value(semantic, immediate)
+                if operation == "or"
+                else and_value(semantic, immediate)
+            )
+            evidence = _PublicationPrivateHeapSymbolicBitOperation(
+                function_entry=function_entry,
+                instruction_address=instruction_address,
+                operand_index=operand_index,
+                operation=operation,
+                immediate=immediate,
+                value_before=semantic,
+                value_after=after,
+            )
+            return tracked(after, (*operations, evidence))
 
         def bounded_span(
             function_entry: int,
@@ -19772,8 +20152,8 @@ class _DirectCfgRecovery:
 
         def execute_function(
             function_entry: int,
-            arguments: tuple[Value | None, ...],
-            incoming_memory: dict[Affine, Value | None],
+            arguments: tuple[TrackedValue, ...],
+            incoming_memory: dict[Affine, TrackedValue],
             active: frozenset[int],
         ):
             if (
@@ -19801,7 +20181,7 @@ class _DirectCfgRecovery:
             def memory_key(
                 address: int,
                 operand,
-                registers: dict[str, Value | None],
+                registers: dict[str, TrackedValue],
             ):
                 memory = operand.mem
                 if (
@@ -19809,42 +20189,55 @@ class _DirectCfgRecovery:
                     or memory.base == X86_REG_INVALID
                 ):
                     return invalid
-                base = registers.get(self._register_family(memory.base))
-                if not is_affine(base):
+                base = registers.get(
+                    self._register_family(memory.base), tracked(None)
+                )
+                if not is_affine(base[0]):
                     return invalid
-                result = base
+                result = base[0]
+                operations = base[1]
                 if memory.index != X86_REG_INVALID:
                     if memory.scale != 1:
                         return invalid
                     index = registers.get(
-                        self._register_family(memory.index)
+                        self._register_family(memory.index), tracked(None)
                     )
-                    if not is_affine(index):
+                    if not is_affine(index[0]):
                         return invalid
-                    result = add_values(result, index)
+                    result = add_values(result, index[0])
+                    operations = merge_operations(
+                        operations, index[1]
+                    )
+                    if operations is None:
+                        return invalid
                 if not is_affine(result):
                     return invalid
-                return affine(
-                    result[1],
-                    result[2],
-                    result[3] + memory.disp,
+                return tracked(
+                    affine(
+                        result[1],
+                        result[2],
+                        result[3] + memory.disp,
+                    ),
+                    operations,
                 )
 
             def value_from_operand(
                 address: int,
                 operand_index: int,
                 operand,
-                registers: dict[str, Value | None],
-                memory: dict[Affine, Value | None],
+                registers: dict[str, TrackedValue],
+                memory: dict[Affine, TrackedValue],
                 *,
                 record_memory: bool = True,
             ):
                 if operand.type == X86_OP_IMM:
-                    return affine(
-                        displacement=operand.imm & 0xFFFF_FFFF
+                    return tracked(
+                        affine(displacement=operand.imm & 0xFFFF_FFFF)
                     )
                 if operand.type == X86_OP_REG:
-                    return registers.get(self._register_family(operand.reg))
+                    return registers.get(
+                        self._register_family(operand.reg), tracked(None)
+                    )
                 if operand.type != X86_OP_MEM:
                     return invalid
                 argument_index = self._stack_argument_index_at(
@@ -19876,10 +20269,12 @@ class _DirectCfgRecovery:
                         function_entry,
                     )
                 ):
-                    return None
-                key = memory_key(address, operand, registers)
-                if key is invalid:
+                    return tracked(None)
+                tracked_key = memory_key(address, operand, registers)
+                if tracked_key is invalid:
                     return invalid
+                key = tracked_key[0]
+                assert is_affine(key)
                 if record_memory:
                     span = bounded_span(
                         function_entry,
@@ -19891,7 +20286,7 @@ class _DirectCfgRecovery:
                     if span is None:
                         return invalid
                     spans.add(span)
-                return memory.get(key)
+                return memory.get(key, tracked(None))
 
             def address_from_lea(address: int, operand, registers):
                 if operand.type != X86_OP_MEM:
@@ -20078,16 +20473,18 @@ class _DirectCfgRecovery:
                             self._register_family(destination.reg)
                         ] = value
                     elif destination.type == X86_OP_MEM:
-                        key = memory_key(address, destination, next_registers)
+                        tracked_key = memory_key(
+                            address, destination, next_registers
+                        )
                         span = (
                             None
-                            if key is invalid
+                            if tracked_key is invalid
                             else bounded_span(
                                 function_entry,
                                 address,
                                 0,
                                 destination.size,
-                                key,
+                                tracked_key[0],
                             )
                         )
                         value = value_from_operand(
@@ -20098,11 +20495,17 @@ class _DirectCfgRecovery:
                             next_memory,
                             record_memory=False,
                         )
-                        if key is invalid or span is None or value is invalid:
+                        if (
+                            tracked_key is invalid
+                            or span is None
+                            or value is invalid
+                        ):
                             return None
+                        key = tracked_key[0]
+                        assert is_affine(key)
                         spans.add(span)
                         writes.add(key)
-                        value_before = next_memory.get(key)
+                        value_before = next_memory.get(key, tracked(None))
                         next_memory[key] = value
                         symbolic_writes.append(
                             _PublicationPrivateHeapSymbolicWrite(
@@ -20113,9 +20516,11 @@ class _DirectCfgRecovery:
                                 width=destination.size,
                                 address=key,
                                 operation="mov",
-                                value_before=value_before,
-                                value_after=value,
+                                value_before=value_before[0],
+                                value_after=value[0],
                                 immediate=None,
+                                address_bit_operations=tracked_key[1],
+                                value_bit_operations=value[1],
                             )
                         )
                     else:
@@ -20140,8 +20545,10 @@ class _DirectCfgRecovery:
                         return None
                     family = self._register_family(operands[0].reg)
                     right = (
-                        affine(
-                            displacement=_signed_u32(operands[1].imm)
+                        tracked(
+                            affine(
+                                displacement=_signed_u32(operands[1].imm)
+                            )
                         )
                         if operands[1].type == X86_OP_IMM
                         else value_from_operand(
@@ -20155,44 +20562,62 @@ class _DirectCfgRecovery:
                     )
                     if right is invalid:
                         return None
-                    next_registers[family] = add_values(
-                        next_registers.get(family),
-                        right,
-                        subtract=decoded.mnemonic == "sub",
+                    left = next_registers.get(family, tracked(None))
+                    operations = merge_operations(left[1], right[1])
+                    if operations is None:
+                        return None
+                    next_registers[family] = tracked(
+                        add_values(
+                            left[0],
+                            right[0],
+                            subtract=decoded.mnemonic == "sub",
+                        ),
+                        operations,
                     )
                     successors = (address + decoded.size,)
                 elif decoded.mnemonic in {"or", "and"} and len(operands) == 2:
                     destination, source = operands
                     if source.type != X86_OP_IMM:
                         return None
-                    operation = or_value if decoded.mnemonic == "or" else and_value
                     if destination.type == X86_OP_REG:
                         family = self._register_family(destination.reg)
-                        next_registers[family] = operation(
-                            next_registers.get(family),
+                        next_registers[family] = apply_bit_operation(
+                            function_entry,
+                            address,
+                            0,
+                            decoded.mnemonic,
                             source.imm,
+                            next_registers.get(family, tracked(None)),
                         )
                     elif destination.type == X86_OP_MEM:
-                        key = memory_key(address, destination, next_registers)
+                        tracked_key = memory_key(
+                            address, destination, next_registers
+                        )
                         span = (
                             None
-                            if key is invalid
+                            if tracked_key is invalid
                             else bounded_span(
                                 function_entry,
                                 address,
                                 0,
                                 destination.size,
-                                key,
+                                tracked_key[0],
                             )
                         )
-                        if key is invalid or span is None:
+                        if tracked_key is invalid or span is None:
                             return None
+                        key = tracked_key[0]
+                        assert is_affine(key)
                         spans.add(span)
                         writes.add(key)
-                        value_before = next_memory.get(key)
-                        value_after = operation(
-                            value_before,
+                        value_before = next_memory.get(key, tracked(None))
+                        value_after = apply_bit_operation(
+                            function_entry,
+                            address,
+                            0,
+                            decoded.mnemonic,
                             source.imm,
+                            value_before,
                         )
                         next_memory[key] = value_after
                         symbolic_writes.append(
@@ -20204,9 +20629,11 @@ class _DirectCfgRecovery:
                                 width=destination.size,
                                 address=key,
                                 operation=decoded.mnemonic,
-                                value_before=value_before,
-                                value_after=value_after,
+                                value_before=value_before[0],
+                                value_after=value_after[0],
                                 immediate=source.imm & 0xFFFF_FFFF,
+                                address_bit_operations=tracked_key[1],
+                                value_bit_operations=value_after[1],
                             )
                         )
                     else:
@@ -20229,7 +20656,7 @@ class _DirectCfgRecovery:
                     )
                     if left is invalid or right is invalid:
                         return None
-                    next_comparison = (left, right)
+                    next_comparison = (left[0], right[0])
                     successors = (address + decoded.size,)
                 elif decoded.mnemonic == "push":
                     successors = (address + decoded.size,)
@@ -20311,7 +20738,10 @@ class _DirectCfgRecovery:
 
         result = execute_function(
             witness.helper_entry,
-            (affine(1, 0, 0), affine(0, 1, 0)),
+            (
+                tracked(affine(1, 0, 0)),
+                tracked(affine(0, 1, 0)),
+            ),
             {},
             frozenset(),
         )
@@ -20363,6 +20793,7 @@ class _DirectCfgRecovery:
             )
         )
         effects = _PublicationPrivateHeapEffectClosure(
+            extent_witness=witness,
             root_helper=witness.helper_entry,
             function_entries=tuple(sorted(functions)),
             executed_instruction_addresses=tuple(
@@ -20395,6 +20826,14 @@ class _DirectCfgRecovery:
             function_fingerprints=fingerprints,
             allocator_dependency_fingerprints=dependency_fingerprints,
         )
+        return effects
+
+    def _publication_private_heap_effect_closure(
+        self, witness: _PublicationPrivateHeapExtentWitness
+    ) -> _PublicationPrivateHeapEffectClosure | None:
+        effects = self._publication_private_heap_effect_closure_replay(witness)
+        if effects is None:
+            return None
         return (
             effects
             if self._publication_private_heap_effect_closure_is_current(
