@@ -2024,7 +2024,11 @@ git commit -m "feat(mwcc-retro): persist lifecycle publication proofs"
 ```bash
 ROOT=/Users/mike/code/melee/.claude/worktrees/codex-issue-1240-retail-pcode-proof
 OUT="$ROOT/build/mwcc_retro/gc125n-proof/return-path-publication-v6"
-test ! -e "$OUT" || { echo "refusing to overwrite $OUT" >&2; exit 1; }
+test ! -e "$OUT" || { test -d "$OUT" && ! test -L "$OUT"; } || {
+  echo "refusing non-directory/symlink proof root: $OUT" >&2
+  exit 1
+}
+mkdir -p "$OUT"
 cd "$ROOT"
 DECOMP_AGENT_ID=codex-issue-1240-retail-pcode-proof \
   melee-agent debug retro ghidra-setup \
@@ -2033,6 +2037,10 @@ DECOMP_AGENT_ID=codex-issue-1240-retail-pcode-proof \
 ```
 
 Expected: exact compiler hash and validated Ghidra project are ready.
+The existing regular `OUT` is intentionally reused: it contains immutable
+generations, rejection ledgers, and producer checkpoints from prior refused
+invocations. Never remove it. Bundle publication replaces `CURRENT` atomically
+only after a complete resolver-valid generation is durable.
 
 - [ ] **Step 2: Run the focused branch-local static retail command**
 
@@ -2359,6 +2367,14 @@ git commit -m "test(mwcc-retro): verify retail publication proof"
 ```
 
 If no production/test repair was needed, only the result note is staged.
+
+**Promotion handoff:** The accepted `return-path-publication-v6` bundle is the
+focused Task 7 proof witness, not the runtime-promotion candidate. Before Task
+10, run the parent plan's two independent fresh-root generation invocations in
+`run1` and `run2`, resolve both bundles, and require byte-identical canonical
+members. Only resolver-validated `run1/gc_125n.candidate.json` is live-tested
+and later promoted; copying the v6 generation into either root does not satisfy
+the independent determinism gate.
 
 ---
 

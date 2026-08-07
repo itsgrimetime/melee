@@ -747,7 +747,10 @@ RUN1="$ROOT/build/mwcc_retro/gc125n-proof/run1"
 RUN2="$ROOT/build/mwcc_retro/gc125n-proof/run2"
 cd "$ROOT/tools/melee-agent"
 for OUT in "$RUN1" "$RUN2"; do
-  rm -rf "$OUT"
+  test ! -e "$OUT" || {
+    echo "refusing to overwrite retained proof root: $OUT" >&2
+    exit 1
+  }
   mkdir -p "$OUT"
   DECOMP_AGENT_ID=codex-issue-1240-retail-pcode-proof \
     python -m src.cli debug retro probe-backend-map \
@@ -783,7 +786,12 @@ for name, payload in first.items():
 PY
 ```
 
-Any delta or unresolved diagnostic blocks the task.
+Any delta or unresolved diagnostic blocks the task. If either invocation
+refuses or fails after creating evidence, retain that root and choose a fresh,
+paired suffix such as `run1-rerun01` / `run2-rerun01`; update every later
+candidate path to the accepted clean pair. Do not copy the focused
+`return-path-publication-v6` bundle or one run into the other, because that does
+not prove independent regeneration.
 
 - [ ] **Step 7: Track reviewed proof, manifest, and evidence**
 
