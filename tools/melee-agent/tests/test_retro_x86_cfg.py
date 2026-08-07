@@ -4097,48 +4097,584 @@ class PrivatePageArenaFixture:
     large_allocator: int
     page_inserter: int
     page_remover: int
+    page_initializer: int
+    block_initializer: int
+    block_initializer_calls: tuple[int, int, int]
     selector: int
     selector_calls: tuple[int, int]
     splitter: int
     unlinker: int
     block_inserter: int
     coalescers: tuple[int, int]
+    arena_free: int
+    reallocator: int
+    realloc_driver: int
+
+
+_RETAIL_PRIVATE_PAGE_INITIALIZER_NORMALIZED_WRITES = (
+    (
+        ("initializer", 0),
+        0,
+        "write",
+        4,
+        ("affine", 1, 0, 12),
+        "mov",
+        None,
+        ("tagged", ("affine", 0, 1, 0), 3),
+        None,
+        (),
+        (
+            (
+                ("initializer", 0),
+                0,
+                "or",
+                3,
+                ("affine", 0, 1, 0),
+                ("tagged", ("affine", 0, 1, 0), 3),
+            ),
+        ),
+    ),
+    (
+        ("initializer", 1),
+        0,
+        "write",
+        4,
+        ("affine", 1, 1, -8),
+        "mov",
+        None,
+        ("tagged", ("affine", 0, 1, 0), 3),
+        None,
+        (),
+        (
+            (
+                ("initializer", 0),
+                0,
+                "or",
+                3,
+                ("affine", 0, 1, 0),
+                ("tagged", ("affine", 0, 1, 0), 3),
+            ),
+        ),
+    ),
+    (
+        ("initializer", 2),
+        0,
+        "write",
+        4,
+        ("affine", 1, 0, 8),
+        "mov",
+        None,
+        ("affine", 0, 1, -24),
+        None,
+        (),
+        (),
+    ),
+    (
+        ("initializer", 3),
+        0,
+        "write",
+        4,
+        ("affine", 1, 1, -4),
+        "mov",
+        None,
+        ("affine", 0, 0, 0),
+        None,
+        (
+            (
+                ("initializer", 0),
+                0,
+                "or",
+                3,
+                ("affine", 0, 1, 0),
+                ("tagged", ("affine", 0, 1, 0), 3),
+            ),
+            (
+                ("initializer", 1),
+                0,
+                "and",
+                0xFFFF_FFF8,
+                ("tagged", ("affine", 0, 1, 0), 3),
+                ("affine", 0, 1, 0),
+            ),
+        ),
+        (),
+    ),
+    (
+        ("insert", 0),
+        0,
+        "write",
+        4,
+        ("affine", 1, 0, 16),
+        "and",
+        ("affine", 0, 1, -24),
+        ("affine", 0, 1, -24),
+        0xFFFF_FFFD,
+        (),
+        (
+            (
+                ("insert", 0),
+                0,
+                "and",
+                0xFFFF_FFFD,
+                ("affine", 0, 1, -24),
+                ("affine", 0, 1, -24),
+            ),
+        ),
+    ),
+    (
+        ("insert", 1),
+        0,
+        "write",
+        4,
+        ("affine", 1, 1, -8),
+        "and",
+        ("tagged", ("affine", 0, 1, 0), 3),
+        ("tagged", ("affine", 0, 1, 0), 3),
+        0xFFFF_FFFB,
+        (
+            (
+                ("insert", 1),
+                0,
+                "and",
+                0xFFFF_FFF8,
+                ("affine", 0, 1, -24),
+                ("affine", 0, 1, -24),
+            ),
+        ),
+        (
+            (
+                ("initializer", 0),
+                0,
+                "or",
+                3,
+                ("affine", 0, 1, 0),
+                ("tagged", ("affine", 0, 1, 0), 3),
+            ),
+            (
+                ("insert", 2),
+                0,
+                "and",
+                0xFFFF_FFFB,
+                ("tagged", ("affine", 0, 1, 0), 3),
+                ("tagged", ("affine", 0, 1, 0), 3),
+            ),
+        ),
+    ),
+    (
+        ("insert", 2),
+        0,
+        "write",
+        4,
+        ("affine", 1, 1, -12),
+        "mov",
+        ("affine", 0, 1, -24),
+        ("affine", 0, 1, -24),
+        None,
+        (
+            (
+                ("insert", 1),
+                0,
+                "and",
+                0xFFFF_FFF8,
+                ("affine", 0, 1, -24),
+                ("affine", 0, 1, -24),
+            ),
+        ),
+        (
+            (
+                ("insert", 1),
+                0,
+                "and",
+                0xFFFF_FFF8,
+                ("affine", 0, 1, -24),
+                ("affine", 0, 1, -24),
+            ),
+        ),
+    ),
+    (
+        ("insert", 3),
+        0,
+        "write",
+        4,
+        ("affine", 1, 1, -4),
+        "mov",
+        ("affine", 0, 0, 0),
+        ("affine", 1, 0, 16),
+        None,
+        (
+            (
+                ("initializer", 0),
+                0,
+                "or",
+                3,
+                ("affine", 0, 1, 0),
+                ("tagged", ("affine", 0, 1, 0), 3),
+            ),
+            (
+                ("insert", 3),
+                0,
+                "and",
+                0xFFFF_FFF8,
+                ("tagged", ("affine", 0, 1, 0), 3),
+                ("affine", 0, 1, 0),
+            ),
+        ),
+        (),
+    ),
+    (
+        ("insert", 4),
+        0,
+        "write",
+        4,
+        ("affine", 1, 0, 24),
+        "mov",
+        None,
+        ("affine", 1, 0, 16),
+        None,
+        (),
+        (),
+    ),
+    (
+        ("insert", 5),
+        0,
+        "write",
+        4,
+        ("affine", 1, 0, 28),
+        "mov",
+        None,
+        ("affine", 1, 0, 16),
+        None,
+        (),
+        (),
+    ),
+    (
+        ("block-init", 0),
+        0,
+        "write",
+        4,
+        ("affine", 1, 0, 20),
+        "mov",
+        None,
+        ("bit-or", ("affine", 1, 0, 0), 1),
+        None,
+        (),
+        (
+            (
+                ("block-init", 0),
+                0,
+                "or",
+                1,
+                ("affine", 1, 0, 0),
+                ("bit-or", ("affine", 1, 0, 0), 1),
+            ),
+        ),
+    ),
+    (
+        ("block-init", 1),
+        0,
+        "write",
+        4,
+        ("affine", 1, 0, 16),
+        "mov",
+        None,
+        ("affine", 0, 1, -24),
+        None,
+        (),
+        (),
+    ),
+    (
+        ("block-init", 2),
+        0,
+        "write",
+        4,
+        ("affine", 1, 1, -12),
+        "mov",
+        None,
+        ("affine", 0, 1, -24),
+        None,
+        (),
+        (),
+    ),
+)
+
+
+def _validate_private_page_symbolic_value(value):
+    if value is None:
+        return
+    if not isinstance(value, tuple):
+        raise ValueError("symbolic value must be a tuple or None")
+    if (
+        len(value) == 4
+        and value[0] == "affine"
+        and all(type(component) is int for component in value[1:])
+    ):
+        return
+    if (
+        len(value) == 3
+        and value[0] in {"tagged", "bit-or"}
+        and type(value[2]) is int
+    ):
+        _validate_private_page_symbolic_value(value[1])
+        return
+    raise ValueError(f"unknown symbolic value: {value!r}")
+
+
+def _normalize_private_page_symbolic_writes(
+    symbolic_writes,
+    role_by_entry,
+    *,
+    closure_entries=None,
+):
+    role_by_entry = dict(role_by_entry)
+    expected_roles = {"initializer", "insert", "block-init"}
+    if (
+        len(role_by_entry) != len(expected_roles)
+        or set(role_by_entry.values()) != expected_roles
+        or len(set(role_by_entry.values())) != len(role_by_entry)
+    ):
+        raise ValueError("private-page role mapping must be bijective and total")
+    if not isinstance(symbolic_writes, tuple) or len(symbolic_writes) != 13:
+        raise ValueError("private-page retail closure must contain exactly 13 writes")
+    if closure_entries is not None:
+        if (
+            not isinstance(closure_entries, tuple)
+            or len(closure_entries) != len(role_by_entry)
+            or len(set(closure_entries)) != len(closure_entries)
+            or set(closure_entries) != set(role_by_entry)
+        ):
+            raise ValueError("unmapped private-page closure entry")
+
+    bit_events = {}
+    row_locations = set()
+    for row in symbolic_writes:
+        if not isinstance(
+            row,
+            x86_cfg_module._PublicationPrivateHeapSymbolicWrite,
+        ):
+            raise ValueError("malformed symbolic write row")
+        location = (
+            row.function_entry,
+            row.instruction_address,
+            row.operand_index,
+        )
+        if location in row_locations:
+            raise ValueError("duplicate symbolic write location")
+        row_locations.add(location)
+        if row.function_entry not in role_by_entry:
+            raise ValueError("unmapped private-page closure entry")
+        if (
+            type(row.function_entry) is not int
+            or type(row.instruction_address) is not int
+            or type(row.operand_index) is not int
+            or row.operand_index < 0
+            or row.access != "write"
+            or type(row.width) is not int
+            or row.width <= 0
+            or row.operation not in {"mov", "and", "or"}
+            or (
+                row.immediate is not None
+                and type(row.immediate) is not int
+            )
+        ):
+            raise ValueError("malformed symbolic write row")
+        _validate_private_page_symbolic_value(row.address)
+        if row.address is None or row.address[0] != "affine":
+            raise ValueError("symbolic write address must be affine")
+        _validate_private_page_symbolic_value(row.value_before)
+        _validate_private_page_symbolic_value(row.value_after)
+        for operations in (
+            row.address_bit_operations,
+            row.value_bit_operations,
+        ):
+            if not isinstance(operations, tuple):
+                raise ValueError("malformed symbolic bit-operation tuple")
+            for operation in operations:
+                if not isinstance(
+                    operation,
+                    x86_cfg_module._PublicationPrivateHeapSymbolicBitOperation,
+                ):
+                    raise ValueError("malformed symbolic bit-operation row")
+                bit_location = (
+                    operation.function_entry,
+                    operation.instruction_address,
+                    operation.operand_index,
+                )
+                if operation.function_entry not in role_by_entry:
+                    raise ValueError("unmapped symbolic bit-operation entry")
+                if (
+                    type(operation.function_entry) is not int
+                    or type(operation.instruction_address) is not int
+                    or type(operation.operand_index) is not int
+                    or operation.operand_index < 0
+                    or operation.operation not in {"and", "or"}
+                    or type(operation.immediate) is not int
+                ):
+                    raise ValueError("malformed symbolic bit-operation row")
+                _validate_private_page_symbolic_value(operation.value_before)
+                _validate_private_page_symbolic_value(operation.value_after)
+                semantic_event = (
+                    operation.operation,
+                    operation.immediate,
+                    operation.value_before,
+                    operation.value_after,
+                )
+                existing = bit_events.setdefault(bit_location, semantic_event)
+                if existing != semantic_event:
+                    raise ValueError("conflicting symbolic bit-operation identity")
+
+    bit_event_locations = {}
+    next_bit_ordinal = Counter()
+    for function_entry, instruction_address, operand_index in sorted(bit_events):
+        role = role_by_entry[function_entry]
+        bit_event_locations[(
+            function_entry,
+            instruction_address,
+            operand_index,
+        )] = (role, next_bit_ordinal[role])
+        next_bit_ordinal[role] += 1
+
+    def normalize_bit_operation(operation):
+        return (
+            bit_event_locations[(
+                operation.function_entry,
+                operation.instruction_address,
+                operation.operand_index,
+            )],
+            operation.operand_index,
+            operation.operation,
+            operation.immediate,
+            operation.value_before,
+            operation.value_after,
+        )
+
+    next_write_ordinal = Counter()
+    normalized = []
+    for row in symbolic_writes:
+        role = role_by_entry[row.function_entry]
+        write_location = (role, next_write_ordinal[role])
+        next_write_ordinal[role] += 1
+        normalized.append(
+            (
+                write_location,
+                row.operand_index,
+                row.access,
+                row.width,
+                row.address,
+                row.operation,
+                row.value_before,
+                row.value_after,
+                row.immediate,
+                tuple(
+                    normalize_bit_operation(operation)
+                    for operation in row.address_bit_operations
+                ),
+                tuple(
+                    normalize_bit_operation(operation)
+                    for operation in row.value_bit_operations
+                ),
+            )
+        )
+    return tuple(normalized)
 
 
 def private_page_arena_image(
     *, mutation: str | None = None,
 ) -> PrivatePageArenaFixture:
-    """Return a closed synthetic page ring with a split/coalesce block arena.
-
-    This deliberately remains fixture-only evidence.  The graph is reachable
-    from a replacement PE entrypoint and is composed of decoded x86 writes,
-    calls, and loops rather than test metadata or named-role shortcuts.
-    """
-    assert mutation is None
-    base = finalized_handle_arena_image()
+    """Extend the proved private heap with one coherent page/block arena."""
+    assert mutation in {
+        None,
+        "extent-mask",
+        "sentinel-displacement",
+        "missing-first-block",
+        "boundary-out-of-range",
+        "missing-largest-free",
+        "ring-broken-singleton",
+        "selector-foreign-page",
+        "split-missing-guard",
+        "split-missing-second-initializer",
+        "unlink-partial",
+        "unlink-missing-empty-largest",
+        "insert-keeps-allocated",
+        "insert-keeps-successor-prev-allocated",
+        "block-initializer-free-clears-successor",
+        "block-initializer-masks-header",
+        "block-initializer-header-before-page",
+        "insert-missing-footer",
+        "resize-insert-missing-page-untag",
+        "insert-uses-unmasked-size",
+        "initial-block-prev-allocated",
+        "coalesce-prev-missing",
+        "coalesce-next-missing",
+        "block-page-flags",
+    }
+    base = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-effect"
+    )
     text_va = 0x00401000
     data_va = 0x00403000
-    text_size = 0xE00
+    text_size = 0xF00
     data_size = 0x400
     raw = bytearray(text_size + data_size)
     raw[:0x800] = base.image.data[:0x800]
+    raw[0x800:text_size] = b"\x90" * (text_size - 0x800)
     raw[text_size:] = base.image.data[0x800:0xC00]
-    page_head_slot = data_va + 0x180
-    arena_root = text_va + 0x800
-    page_provider = text_va + 0x840
-    large_allocator = text_va + 0x900
-    page_inserter = text_va + 0x940
-    page_remover = text_va + 0x980
-    selector = text_va + 0x9C0
-    splitter = text_va + 0xA40
-    unlinker = text_va + 0xA80
-    block_inserter = text_va + 0xAC0
+    page_head_slot = data_va + 0x30
+    page_provider = text_va + 0x550
+    large_allocator = text_va + 0x4D0
+    page_inserter = text_va + 0x600
+    page_initializer = text_va + 0x880
+    selector = text_va + 0x800
+    splitter = text_va + 0x900
+    unlinker = text_va + 0x980
+    page_remover = text_va + 0xA00
+    block_inserter = text_va + 0xA80
     coalesce_left = text_va + 0xB00
-    coalesce_right = text_va + 0xB40
-    arena_free = text_va + 0xB80
+    coalesce_right = text_va + 0xB70
+    arena_free = text_va + 0xC00
+    block_initializer = text_va + 0xC80
+    reallocator = text_va + 0xD00
+    realloc_driver = text_va + 0xE00
+    private_small_free = text_va + 0x750
+    private_os_free = text_va + 0x7A0
+    enter_critical_section_iat = data_va + 0x108
+    leave_critical_section_iat = data_va + 0x10C
+
+    fixed_slots = (
+        (text_va + 0x4D0, text_va + 0x550),
+        (text_va + 0x550, text_va + 0x5C0),
+        (text_va + 0x5C0, text_va + 0x600),
+        (text_va + 0x600, text_va + 0x640),
+        (text_va + 0x680, text_va + 0x6C0),
+        (text_va + 0x6C0, text_va + 0x700),
+        (text_va + 0x700, text_va + 0x750),
+        (text_va + 0x7C0, text_va + 0x7E0),
+    )
+    emission_slots = fixed_slots + (
+        (text_va + 0x800, text_va + 0x880),
+        (text_va + 0x880, text_va + 0x900),
+        (text_va + 0x900, text_va + 0x980),
+        (text_va + 0x980, text_va + 0xA00),
+        (text_va + 0xA00, text_va + 0xA80),
+        (text_va + 0xA80, text_va + 0xB00),
+        (text_va + 0xB00, text_va + 0xB70),
+        (text_va + 0xB70, text_va + 0xC00),
+        (text_va + 0xC00, text_va + 0xC80),
+        (text_va + 0xC80, text_va + 0xD00),
+        (text_va + 0xD00, text_va + 0xE00),
+        (text_va + 0xE00, text_va + 0xE80),
+    )
+    for start, end in fixed_slots:
+        raw[start - text_va : end - text_va] = b"\x90" * (end - start)
 
     def emit(address: int, encoded: str) -> int:
         code = bytes.fromhex(encoded)
+        containing = tuple(
+            (start, end)
+            for start, end in emission_slots
+            if start <= address < end
+        )
+        assert len(containing) == 1
+        assert address + len(code) <= containing[0][1]
         offset = address - text_va
         raw[offset : offset + len(code)] = code
         return address + len(code)
@@ -4154,105 +4690,620 @@ def private_page_arena_image(
     def emit_abs(address: int, prefix: str, target: int) -> int:
         return emit(address, prefix + target.to_bytes(4, "little").hex())
 
-    # The root gives CFG recovery a finite owner for every arena role.
-    cursor = emit(arena_root, "6a 00")
-    cursor = emit_call(cursor, large_allocator)
-    cursor = emit(cursor, "59 50")
-    cursor = emit_call(cursor, page_remover)
-    cursor = emit(cursor, "59 50")
-    cursor = emit_call(cursor, arena_free)
-    emit(cursor, "59 c3")
+    def patch_short(branch: int, target: int) -> None:
+        raw[branch - text_va + 1] = (target - branch - 2) & 0xFF
 
-    # Provider allocates one page, makes it a singleton circular ring, records
-    # its extent and largest-free pointer, and constructs free-block/sentinel
-    # boundary tags.  P+0x20 is the first free block; P+0xffc is the sentinel.
-    cursor = emit(page_provider, "53 68 00 10 00 00")
-    cursor = emit_call(cursor, base.private_factory)
-    cursor = emit(cursor, "59 85 c0 74 3e 89 c3")
-    cursor = emit(cursor, "89 1b 89 5b 04 8d 43 20 89 43 08")
-    cursor = emit(cursor, "c7 43 0c 00 10 00 00")
-    cursor = emit(cursor, "8d 53 20 89 53 20 89 53 24")
-    cursor = emit(cursor, "c7 43 28 d8 0f 00 00 c7 43 2c 01 00 00 00")
-    cursor = emit(cursor, "c7 83 fc 0f 00 00 00 00 00 00")
+    # Normalize one extent, allocate the page, initialize its bounded
+    # metadata, and publish it.  Both saved registers are restored on every
+    # return path; no obsolete page-init role remains between helper/publisher.
+    cursor = emit(page_provider, "53 57 8b 5c 24 0c")
+    cursor = emit(cursor, "8d 9b 17 10 00 00 81 e3 00 f0 ff ff")
+    cursor = emit(cursor, "81 fb 00 00 01 00")
+    extent_ready = cursor
+    cursor = emit(cursor, "73 00 bb 00 00 01 00")
+    extent_ready_target = cursor
     cursor = emit(cursor, "53")
+    cursor = emit_call(cursor, base.private_factory)
+    cursor = emit(cursor, "89 c7 59 85 ff")
+    provider_success = cursor
+    cursor = emit(cursor, "75 00 5f 5b 31 c0 c3")
+    provider_success_target = cursor
+    cursor = emit(cursor, "53 57")
+    cursor = emit_call(cursor, page_initializer)
+    cursor = emit(cursor, "83 c4 08 57")
     cursor = emit_call(cursor, page_inserter)
-    emit(cursor, "59 89 d8 5b c3")
+    emit(cursor, "59 89 f8 5f 5b c3")
+    patch_short(extent_ready, extent_ready_target)
+    patch_short(provider_success, provider_success_target)
 
-    # Both selector paths are real calls: an existing ring member and the
-    # exact fresh provider result.  This is intentionally the page role the
-    # future inductive recognizer must distinguish.
-    cursor = emit_abs(large_allocator, "a1", page_head_slot)
-    cursor = emit(cursor, "50")
+    # Normalize the request once before either selector call.  A null initial
+    # head obtains a provider page and joins the ordinary ring-page selector;
+    # exhaustion obtains a provider page for the second, provider-only site.
+    # Existing-ring success rotates the proved page into the published head;
+    # provider-only success returns directly because that page is already head.
+    cursor = emit(large_allocator, "53 56 57 8b 5c 24 10")
+    cursor = emit(cursor, "8d 5b 0f 83 e3 f8 83 fb 50")
+    request_ready = cursor
+    cursor = emit(cursor, "73 00 bb 50 00 00 00")
+    request_ready_target = cursor
+    cursor = emit_abs(cursor, "8b 35", page_head_slot)
+    cursor = emit(cursor, "85 f6")
+    have_ring = cursor
+    cursor = emit(cursor, "75 00 53")
+    initial_provider_call = cursor
+    cursor = emit_call(cursor, page_provider)
+    cursor = emit(cursor, "59 85 c0")
+    initial_provider_fail = cursor
+    cursor = emit(cursor, "74 00 89 c6 31 ff")
+    initial_provider_join = cursor
+    cursor = emit(cursor, "eb 00")
+    have_ring_target = cursor
+    cursor = emit(cursor, "89 f7")
+    selector_join = cursor
+    cursor = emit(cursor, "53 56")
     selector_existing = cursor
     cursor = emit_call(cursor, selector)
-    cursor = emit(cursor, "59")
+    cursor = emit(cursor, "59 59 85 c0")
+    existing_success = cursor
+    cursor = emit(cursor, "75 00 85 ff")
+    initial_selected_fail = cursor
+    cursor = emit(cursor, "74 00 8b 76 04 39 fe")
+    ring_more = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit(cursor, "53")
+    exhaustion_provider_call = cursor
     cursor = emit_call(cursor, page_provider)
-    cursor = emit(cursor, "50")
+    cursor = emit(cursor, "59 85 c0")
+    provider_fail = cursor
+    cursor = emit(cursor, "74 00 89 c6 53")
+    cursor = emit(
+        cursor,
+        "53" if mutation == "selector-foreign-page" else "56",
+    )
     selector_provider = cursor
     cursor = emit_call(cursor, selector)
-    emit(cursor, "59 c3")
+    cursor = emit(cursor, "59 59 85 c0")
+    selected_fail = cursor
+    cursor = emit(cursor, "74 00")
+    success = cursor
+    cursor = emit(cursor, "83 c0 08 5f 5e 5b c3")
+    ring_rotate = cursor
+    cursor = emit_abs(cursor, "89 35", page_head_slot)
+    rotate_done = cursor
+    cursor = emit(cursor, "eb 00")
+    failure = cursor
+    emit(cursor, "31 c0 5f 5e 5b c3")
+    patch_short(request_ready, request_ready_target)
+    patch_short(have_ring, have_ring_target)
+    patch_short(initial_provider_fail, failure)
+    patch_short(initial_provider_join, selector_join)
+    patch_short(existing_success, ring_rotate)
+    patch_short(initial_selected_fail, failure)
+    patch_short(ring_more, selector_join)
+    patch_short(provider_fail, failure)
+    patch_short(selected_fail, failure)
+    patch_short(rotate_done, success)
+    assert initial_provider_call < selector_existing
+    assert exhaustion_provider_call > ring_more
 
-    # Ring insertion/removal update head and both reciprocal page links.
-    cursor = emit(page_inserter, "8b 44 24 04")
-    cursor = emit_abs(cursor, "8b 0d", page_head_slot)
-    cursor = emit(cursor, "89 00 89 40 04 8b 51 04")
-    cursor = emit(cursor, "89 50 04 89 42 04 89 01")
-    cursor = emit_abs(cursor, "a3", page_head_slot)
-    emit(cursor, "c3")
-    cursor = emit(page_remover, "8b 44 24 04 8b 08 8b 50 04 89 51 04 89 0a")
-    cursor = emit_abs(cursor, "a3", page_head_slot)
-    emit(cursor, "c3")
-
-    # Selector follows the page's free-list, conditionally splits a usable
-    # block, unlinks the selected node, and returns its payload interior.
-    cursor = emit(selector, "53 56 8b 5c 24 0c 8b 73 08 85 f6 74 1b")
-    loop = cursor
-    cursor = emit(cursor, "8b 46 04 83 f8 20 72 08 56")
-    cursor = emit_call(cursor, splitter)
-    cursor = emit(cursor, "59 56")
-    cursor = emit_call(cursor, unlinker)
-    cursor = emit(cursor, "59 8d 46 08 5e 5b c3")
-    cursor = emit(cursor, "8b 76 00 39 f3 75 e0 31 c0 5e 5b c3")
-    assert loop == selector + 13
-
-    # Split preserves a remainder free block; unlink removes a node from the
-    # circular block list.  Together these are actual transfer operations,
-    # rather than comments standing in for allocator behavior.
-    cursor = emit(splitter, "8b 44 24 04 8b 48 04 8d 50 20 83 e9 20")
-    emit(cursor, "89 4a 04 8b 08 89 0a 89 02 c3")
-    cursor = emit(unlinker, "8b 44 24 04 8b 08 8b 50 04 89 11 89 0a c3")
-    cursor = emit(block_inserter, "8b 44 24 04 8b 4c 24 08 8b 11 89 10 89 50 04 89 02 c3")
-
-    # The companion free path invokes insertion and both directional mergers.
-    cursor = emit(coalesce_left, "8b 44 24 04 8b 48 fc 01 48 04 c3")
-    cursor = emit(coalesce_right, "8b 44 24 04 8b 48 04 8b 11 01 50 04 c3")
-    cursor = emit(arena_free, "8b 44 24 04 50 6a 00")
+    # The single initializer root constructs the exact retail block state.
+    # P+E-8 uses raw E; only the later sentinel derivation normalizes the
+    # tagged extent stored at P+0xc.  Page links remain publisher-owned.
+    cursor = emit(
+        page_initializer,
+        "53 56 57 55 8b 6c 24 14 8b 5c 24 18",
+    )
+    cursor = emit(cursor, "89 d8 83 c8 03 89 45 0c")
+    cursor = emit(cursor, "8d 54 1d f8 89 02")
+    cursor = emit(cursor, "8d 73 e8 8d 7d 10 6a 00")
+    cursor = emit(
+        cursor,
+        "6a 04" if mutation == "initial-block-prev-allocated" else "6a 00",
+    )
+    cursor = emit(cursor, "55 56 57")
+    block_initializer_initial_call = cursor
+    if mutation == "missing-first-block":
+        cursor = emit(cursor, "90 90 90 90 90")
+    else:
+        cursor = emit_call(cursor, block_initializer)
+    cursor = emit(cursor, "83 c4 14")
+    cursor = emit(
+        cursor,
+        "8d 40 00" if mutation == "missing-largest-free" else "89 75 08",
+    )
+    cursor = emit(cursor, "8b 4d 0c")
+    cursor = emit(
+        cursor,
+        "83 e1 f0" if mutation == "extent-mask" else "83 e1 f8",
+    )
+    sentinel_disp = "f8" if mutation == "sentinel-displacement" else "fc"
+    cursor = emit(cursor, "8d 54 0d " + sentinel_disp + " c7 02 00 00 00 00")
+    cursor = emit(cursor, "57 55")
     cursor = emit_call(cursor, block_inserter)
-    cursor = emit(cursor, "83 c4 08 50")
-    cursor = emit_call(cursor, coalesce_left)
-    cursor = emit(cursor, "59 50")
-    cursor = emit_call(cursor, coalesce_right)
-    emit(cursor, "59 c3")
+    cursor = emit(cursor, "83 c4 08 5d 5f 5e 5b c3")
+    assert cursor <= text_va + 0x900
 
-    image = pe_mod.Image(
+    # Page publication is the only constructor of P+0/P+4 links.  The null
+    # arm makes a singleton; the nonempty arm splices before the current head.
+    cursor = emit(page_inserter, "83 3d")
+    cursor = emit(cursor, page_head_slot.to_bytes(4, "little").hex() + "00")
+    cursor = emit(cursor, "8b 54 24 04")
+    singleton = cursor
+    cursor = emit(cursor, "74 00")
+    cursor = emit_abs(cursor, "8b 0d", page_head_slot)
+    cursor = emit(cursor, "8b 01 89 02 89 50 04 89 4a 04 89 11")
+    cursor = emit_abs(cursor, "89 15", page_head_slot)
+    done = cursor
+    cursor = emit(cursor, "eb 00")
+    singleton_target = cursor
+    cursor = emit_abs(cursor, "89 15", page_head_slot)
+    cursor = emit(cursor, "89 12")
+    cursor = emit(
+        cursor,
+        "89 42 04" if mutation == "ring-broken-singleton" else "89 52 04",
+    )
+    finish = cursor
+    emit(cursor, "c3")
+    patch_short(singleton, singleton_target)
+    patch_short(done, finish)
+
+    # Selector walks the circular B+0xc list, tracks the largest free block,
+    # and records that maximum at P+8 on exhaustive failure.  Any S>=R block
+    # is selected while still free/listed; only a remainder of at least 0x50
+    # is split before the common sentinel/unlink path.  Unlink owns the
+    # allocated transition and complete removal repair.
+    cursor = emit(selector, "53 56 57 55 8b 5c 24 14")
+    cursor = emit(cursor, "8b 54 24 18")
+    cursor = emit(cursor, "8b 43 0c 83 e0 f8")
+    cursor = emit(cursor, "8d 7c 03 fc 8b 37 31 c9 85 f6")
+    no_blocks = cursor
+    cursor = emit(cursor, "74 00 89 f5")
+    loop = cursor
+    cursor = emit(cursor, "8b 06 83 e0 f8 39 c8")
+    maximum_ready = cursor
+    cursor = emit(cursor, "76 00 89 c1")
+    maximum_ready_target = cursor
+    cursor = emit(cursor, "39 d0")
+    found = cursor
+    cursor = emit(cursor, "73 00")
+    fit_rejected_target = cursor
+    cursor = emit(cursor, "8b 76 0c 39 ee")
+    again = cursor
+    cursor = emit(cursor, "75 00")
+    scan_exhausted = cursor
+    cursor = emit(cursor, "89 4b 08")
+    failure_target = cursor
+    cursor = emit(cursor, "31 c0 5d 5f 5e 5b c3")
+    found_target = cursor
+    cursor = emit(cursor, "29 d0 89 c7 83 ff 50")
+    no_split = cursor
+    if mutation == "split-missing-guard":
+        cursor = emit(cursor, "90 90")
+    else:
+        cursor = emit(cursor, "72 00")
+    cursor = emit(cursor, "ff 74 24 18 56")
+    cursor = emit_call(cursor, splitter)
+    cursor = emit(cursor, "83 c4 08")
+    common_selection = cursor
+    cursor = emit(cursor, "8b 43 0c 83 e0 f8 8d 44 03 fc")
+    cursor = emit(cursor, "8b 4e 0c 89 08 56 53")
+    cursor = emit_call(cursor, unlinker)
+    cursor = emit(cursor, "59 59")
+    emit(cursor, "89 f0 5d 5f 5e 5b c3")
+    patch_short(no_blocks, scan_exhausted)
+    patch_short(maximum_ready, maximum_ready_target)
+    patch_short(found, found_target)
+    patch_short(again, loop)
+    if mutation != "split-missing-guard":
+        patch_short(no_split, common_selection)
+    assert cursor + 9 <= page_initializer
+
+    # Split preserves the input allocation bit through two unconditional
+    # constructor calls.  A free/listed selector input splices B2 after B;
+    # an allocated/unlisted resize input returns B2 without publishing links.
+    cursor = emit(splitter, "53 56 57 55 8b 5c 24 14 8b 74 24 18")
+    cursor = emit(cursor, "8b 03 89 c1 89 c2 83 e0 f8")
+    cursor = emit(cursor, "83 e1 04 83 e2 02 8d 3c 33 29 f0")
+    cursor = emit(cursor, "8b 6b 04 83 e5 fe")
+    cursor = emit(cursor, "50 52 51 55 56 53 89 d6")
+    block_initializer_split_original_call = cursor
+    cursor = emit_call(cursor, block_initializer)
+    cursor = emit(cursor, "83 c4 14 58 56 56 55 50 57")
+    block_initializer_split_remainder_call = cursor
+    if mutation == "split-missing-second-initializer":
+        cursor = emit(cursor, "90 90 90 90 90")
+    else:
+        cursor = emit_call(cursor, block_initializer)
+    cursor = emit(cursor, "83 c4 14 85 f6")
+    allocated_input = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit(cursor, "8b 53 0c 89 5f 08 89 57 0c")
+    cursor = emit(cursor, "89 7b 0c 89 7a 08")
+    allocated_input_target = cursor
+    emit(cursor, "89 f8 5d 5f 5e 5b c3")
+    patch_short(allocated_input, allocated_input_target)
+
+    # Unlink consumes a free/listed block, marks it allocated, repairs the
+    # physical successor, and handles head, singleton, and reciprocal removal.
+    cursor = emit(unlinker, "53 8b 5c 24 0c 8b 13 8b 4c 24 08")
+    cursor = emit(cursor, "81 0b 02 00 00 00 89 d0 83 e0 f8")
+    cursor = emit(cursor, "01 d8 83 08 04 8b 41 0c 83 e0 f8")
+    cursor = emit(cursor, "8d 44 01 fc 39 18")
+    head_not_block = cursor
+    cursor = emit(cursor, "75 00 8b 53 0c 89 10 39 18")
+    non_singleton = cursor
+    cursor = emit(cursor, "75 00 c7 00 00 00 00 00")
+    empty_largest_seam = cursor
+    if mutation == "unlink-missing-empty-largest":
+        cursor = emit(cursor, "90 90 90 90 90 90 90")
+    else:
+        cursor = emit(cursor, "c7 41 08 00 00 00 00")
+    empty_done = cursor
+    cursor = emit(cursor, "eb 00")
+    reciprocal_target = cursor
+    cursor = emit(cursor, "8b 43 08 8b 53 0c")
+    if mutation == "unlink-partial":
+        cursor = emit(cursor, "90 90 90")
+    else:
+        cursor = emit(cursor, "89 42 08")
+    cursor = emit(cursor, "8b 43 0c 8b 4b 08")
+    cursor = emit(cursor, "89 41 0c")
+    unlink_done = cursor
+    emit(cursor, "5b c3")
+    patch_short(head_not_block, reciprocal_target)
+    patch_short(non_singleton, reciprocal_target)
+    patch_short(empty_done, unlink_done)
+    assert empty_largest_seam + 7 <= reciprocal_target
+
+    # Page removal preserves reciprocal links and distinguishes singleton from
+    # nonempty removal before updating the same page-head slot.
+    cursor = emit(page_remover, "53 8b 5c 24 08 8b 03 39 d8")
+    nonempty = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit_abs(cursor, "c7 05", page_head_slot)
+    cursor = emit(cursor, "00 00 00 00")
+    removed = cursor
+    cursor = emit(cursor, "eb 00")
+    nonempty_target = cursor
+    cursor = emit(cursor, "8b 53 04 89 02 89 50 04")
+    cursor = emit_abs(cursor, "3b 1d", page_head_slot)
+    not_current = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit_abs(cursor, "a3", page_head_slot)
+    removed_target = cursor
+    emit(cursor, "c7 03 00 00 00 00 c7 43 04 00 00 00 00 5b c3")
+    patch_short(nonempty, nonempty_target)
+    patch_short(removed, removed_target)
+    patch_short(not_current, removed_target)
+
+    # Free-list insertion owns the complete allocated-to-free transition before
+    # publishing B in D=P+E-4, then coalesces previous before next.  Each call
+    # occupies a fixed five-byte mutation seam.
+    cursor = emit(block_inserter, "53 56 8b 5c 24 0c 8b 74 24 10")
+    cursor = emit(cursor, "8b 16")
+    if mutation == "insert-keeps-allocated":
+        cursor = emit(cursor, "90 90 90 90 90 90")
+    else:
+        cursor = emit(cursor, "81 26 fd ff ff ff")
+    if mutation == "insert-uses-unmasked-size":
+        cursor = emit(cursor, "90 90 90")
+    else:
+        cursor = emit(cursor, "83 e2 f8")
+    cursor = emit(cursor, "8d 04 32")
+    if mutation == "insert-keeps-successor-prev-allocated":
+        cursor = emit(cursor, "90 90 90")
+    else:
+        cursor = emit(cursor, "83 20 fb")
+    if mutation == "insert-missing-footer":
+        cursor = emit(cursor, "90 90 90")
+    else:
+        cursor = emit(cursor, "89 50 fc")
+    cursor = emit(cursor, "8b 43 0c 83 e0 f8 8d 54 03 fc 8b 0a 83 f9 00")
+    empty = cursor
+    cursor = emit(cursor, "74 00 8b 41 08 89 46 08 89 4e 0c")
+    cursor = emit(cursor, "89 70 0c 89 71 08 89 32")
+    nonempty_to_coalescers = cursor
+    cursor = emit(cursor, "eb 00")
+    empty_target = cursor
+    cursor = emit(cursor, "89 32 89 76 08 89 76 0c")
+    empty_to_largest = cursor
+    cursor = emit(cursor, "eb 00")
+    coalescers_target = cursor
+    cursor = emit(cursor, "56 53")
+    if mutation == "coalesce-prev-missing":
+        cursor = emit(cursor, "90 90 90 90 90")
+    else:
+        cursor = emit_call(cursor, coalesce_left)
+    cursor = emit(cursor, "59 59 89 c6")
+    cursor = emit(cursor, "56 53")
+    if mutation == "coalesce-next-missing":
+        cursor = emit(cursor, "90 90 90 90 90")
+    else:
+        cursor = emit_call(cursor, coalesce_right)
+    cursor = emit(cursor, "59 59 89 c6")
+    largest_compare = cursor
+    cursor = emit(cursor, "89 f0 8b 08 83 e1 f8 39 4b 08")
+    largest_not_grown = cursor
+    cursor = emit(cursor, "73 00 89 4b 08")
+    largest_not_grown_target = cursor
+    cursor = emit(cursor, "89 f0 5e 5b c3")
+    assert cursor <= coalesce_left
+    patch_short(empty, empty_target)
+    patch_short(nonempty_to_coalescers, coalescers_target)
+    patch_short(empty_to_largest, largest_compare)
+    patch_short(largest_not_grown, largest_not_grown_target)
+
+    # Previous coalescing leaves the previous free node listed and detaches the
+    # current node itself.  It returns that previous node as the survivor.
+    cursor = emit(coalesce_left, "53 56 57 8b 5c 24 14 8b 44 24 10")
+    cursor = emit(cursor, "83 c0 10 39 c3")
+    first_has_no_prev = cursor
+    cursor = emit(cursor, "74 00 f6 03 04")
+    no_prev = cursor
+    cursor = emit(cursor, "75 00 8b 73 fc 83 e6 f8 89 df 29 f7")
+    cursor = emit(cursor, "8b 43 08 8b 4b 0c 89 48 0c 89 41 08")
+    cursor = emit(cursor, "8b 54 24 10 8b 42 0c 83 e0 f8")
+    cursor = emit(cursor, "8d 54 02 fc 89 3a")
+    cursor = emit(cursor, "8b 07 83 e0 f8 8b 13 83 e2 f8 01 d0")
+    cursor = emit(cursor, "8b 17 83 e2 07 09 d0 89 07 83 e0 f8")
+    cursor = emit(cursor, "8d 14 07 89 42 fc 83 22 fb 89 fb")
+    no_prev_target = cursor
+    emit(cursor, "89 d8 5f 5e 5b c3")
+    patch_short(first_has_no_prev, no_prev_target)
+    patch_short(no_prev, no_prev_target)
+
+    # Next coalescing leaves B's list state untouched, detaches N, and updates
+    # the following block's prev-free bit from B's actual allocation state.
+    cursor = emit(coalesce_right, "53 56 57 8b 5c 24 14 8b 03 83 e0 f8")
+    cursor = emit(cursor, "8d 3c 03 8b 54 24 10 8b 42 0c 83 e0 f8")
+    cursor = emit(cursor, "8d 54 02 fc 8d 47 04 39 d0")
+    page_end_has_no_next = cursor
+    cursor = emit(cursor, "74 00 f6 07 02")
+    no_next = cursor
+    cursor = emit(cursor, "75 00 8b 77 08 8b 4f 0c 89 4e 0c 89 71 08")
+    cursor = emit(cursor, "8b 54 24 10 8b 42 0c 83 e0 f8 8d 54 02 fc")
+    cursor = emit(cursor, "39 3a")
+    next_not_head = cursor
+    cursor = emit(cursor, "75 00 39 f9")
+    next_head_non_single = cursor
+    cursor = emit(cursor, "75 00 c7 02 00 00 00 00")
+    next_head_done = cursor
+    cursor = emit(cursor, "eb 00")
+    next_head_non_single_target = cursor
+    cursor = emit(cursor, "89 0a")
+    next_head_done_target = cursor
+    cursor = emit(cursor, "8b 03 89 c2 83 e0 07 83 e2 f8 8b 0f")
+    cursor = emit(cursor, "83 e1 f8 01 ca 09 c2 89 13 83 e2 f8")
+    cursor = emit(cursor, "8d 0c 13 89 51 fc f6 03 02")
+    next_allocated = cursor
+    cursor = emit(cursor, "74 00 83 09 04")
+    next_done = cursor
+    cursor = emit(cursor, "eb 00")
+    next_allocated_target = cursor
+    cursor = emit(cursor, "83 21 fb")
+    no_next_target = cursor
+    emit(cursor, "89 d8 5f 5e 5b c3")
+    patch_short(no_next, no_next_target)
+    patch_short(page_end_has_no_next, no_next_target)
+    patch_short(next_not_head, next_head_done_target)
+    patch_short(next_head_non_single, next_head_non_single_target)
+    patch_short(next_head_done, next_head_done_target)
+    patch_short(next_allocated, next_allocated_target)
+    patch_short(next_done, no_next_target)
+
+    # Free converts Q back to B, recovers the tagged page pointer without
+    # modifying it, then delegates the complete free transition and coalescing
+    # to the common inserter before its guarded whole-page release logic.
+    cursor = emit(arena_free, "53 56 57 8b 5c 24 10 83 eb 08")
+    cursor = emit(cursor, "8b 73 04 83 e6 fe")
+    cursor = emit(cursor, "53 56")
+    cursor = emit_call(cursor, block_inserter)
+    cursor = emit(cursor, "83 c4 08 89 c3 8d 46 10 39 c3")
+    first_block_guard = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit(cursor, "f6 03 02")
+    free_block_guard = cursor
+    cursor = emit(cursor, "75 00 8b 03 83 e0 f8 8b 4e 0c")
+    cursor = emit(cursor, "83 e1 f8 83 e9 18 39 c8")
+    whole_size_guard = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit(cursor, "39 5b 08")
+    prev_singleton_guard = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit(cursor, "39 5b 0c")
+    next_singleton_guard = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit(cursor, "56")
+    cursor = emit_call(cursor, page_remover)
+    cursor = emit(cursor, "59 56")
+    cursor = emit_call(cursor, private_os_free)
+    cursor = emit(cursor, "59")
+    keep_page_target = cursor
+    emit(cursor, "5f 5e 5b c3")
+    for branch in (
+        first_block_guard,
+        free_block_guard,
+        whole_size_guard,
+        prev_singleton_guard,
+        next_singleton_guard,
+    ):
+        patch_short(branch, keep_page_target)
+
+    # Common five-argument block construction stores P|1 before the raw formal
+    # size S.  The fixed NOP3 seam makes the non-retail S&~7 hostile exact;
+    # caller contracts, not this constructor, establish size alignment.
+    cursor = emit(
+        block_initializer,
+        "53 56 57 55 8b 5c 24 14 8b 74 24 18 8b 7c 24 1c",
+    )
+    cursor = emit(cursor, "8b 4c 24 20 8b 54 24 24")
+    header_mask_seam = cursor
+    cursor = emit(
+        cursor,
+        (
+            "83 e6 f8"
+            if mutation == "block-initializer-masks-header"
+            else "90 90 90"
+        ),
+    )
+    cursor = emit(cursor, "89 f8")
+    cursor = emit(
+        cursor,
+        "83 c8 02" if mutation == "block-page-flags" else "83 c8 01",
+    )
+    cursor = emit(
+        cursor,
+        (
+            "89 33 89 43 04"
+            if mutation == "block-initializer-header-before-page"
+            else "89 43 04 89 33"
+        ),
+    )
+    cursor = emit(cursor, "83 f9 00")
+    previous_clear = cursor
+    cursor = emit(cursor, "74 00 83 0b 04")
+    previous_clear_target = cursor
+    cursor = emit(cursor, "83 fa 00")
+    allocation_clear = cursor
+    cursor = emit(cursor, "74 00 83 0b 02")
+    allocation_clear_target = cursor
+    cursor = emit(cursor, "89 f5 89 f0")
+    assert cursor == header_mask_seam + 0x21
+    cursor = emit(
+        cursor,
+        "8d 44 03 04"
+        if mutation == "boundary-out-of-range"
+        else "8d 44 03 00",
+    )
+    cursor = emit(cursor, "83 fa 00")
+    free_block = cursor
+    cursor = emit(cursor, "74 00 83 08 04 8b 4b 04 89 48 04")
+    block_initialized = cursor
+    cursor = emit(cursor, "eb 00")
+    free_block_target = cursor
+    free_successor_flag_seam = cursor
+    cursor = emit(
+        cursor,
+        (
+            "83 20 fb"
+            if mutation == "block-initializer-free-clears-successor"
+            else "90 90 90"
+        ),
+    )
+    cursor = emit(cursor, "89 e9 89 48 fc")
+    assert cursor == free_successor_flag_seam + 8
+    block_initialized_target = cursor
+    emit(cursor, "5d 5f 5e 5b c3")
+    patch_short(previous_clear, previous_clear_target)
+    patch_short(allocation_clear, allocation_clear_target)
+    patch_short(free_block, free_block_target)
+    patch_short(block_initialized, block_initialized_target)
+
+    # Realloc normalizes its request exactly once.  Shrink and grow pass only
+    # B and R to split, then insert the returned allocated/unlisted remainder.
+    # Grow absorbs next before testing fit.
+    cursor = emit(reallocator, "53 56 57 55 8b 5c 24 14 83 eb 08")
+    cursor = emit(cursor, "8b 74 24 18 8d 76 0f 83 e6 f8 83 fe 50")
+    realloc_request_ready = cursor
+    cursor = emit(cursor, "73 00 be 50 00 00 00")
+    realloc_request_ready_target = cursor
+    cursor = emit(cursor, "8b 7b 04")
+    if mutation == "resize-insert-missing-page-untag":
+        cursor = emit(cursor, "90 90 90")
+    else:
+        cursor = emit(cursor, "83 e7 fe")
+    cursor = emit(cursor, "8b 03 83 e0 f8 39 f0")
+    realloc_grow = cursor
+    cursor = emit(cursor, "72 00 89 c2 29 f2 83 fa 50")
+    realloc_return = cursor
+    cursor = emit(cursor, "72 00 56 53")
+    cursor = emit_call(cursor, splitter)
+    cursor = emit(cursor, "83 c4 08 89 c5 55 57")
+    cursor = emit_call(cursor, block_inserter)
+    cursor = emit(cursor, "83 c4 08")
+    shrink_done = cursor
+    cursor = emit(cursor, "eb 00")
+    realloc_grow_target = cursor
+    cursor = emit(cursor, "53 57")
+    cursor = emit_call(cursor, coalesce_right)
+    cursor = emit(cursor, "59 59 89 c3 8b 03 83 e0 f8 39 f0")
+    realloc_fail = cursor
+    cursor = emit(cursor, "72 00 29 f0 83 f8 50")
+    realloc_grow_small = cursor
+    cursor = emit(cursor, "72 00 56 53")
+    cursor = emit_call(cursor, splitter)
+    cursor = emit(cursor, "83 c4 08 89 c5 55 57")
+    cursor = emit_call(cursor, block_inserter)
+    cursor = emit(cursor, "83 c4 08")
+    grow_done = cursor
+    cursor = emit(cursor, "eb 00")
+    realloc_fail_target = cursor
+    cursor = emit(cursor, "31 c0 5d 5f 5e 5b c3")
+    realloc_return_target = cursor
+    emit(cursor, "8d 43 08 5d 5f 5e 5b c3")
+    patch_short(realloc_request_ready, realloc_request_ready_target)
+    patch_short(realloc_grow, realloc_grow_target)
+    patch_short(realloc_return, realloc_return_target)
+    patch_short(realloc_fail, realloc_fail_target)
+    patch_short(realloc_grow_small, realloc_return_target)
+    patch_short(shrink_done, realloc_return_target)
+    patch_short(grow_done, realloc_return_target)
+
+    # The audit-anchored driver proves that the exact EAX payload returned by
+    # the large allocator is forwarded as realloc argument zero unchanged.
+    cursor = emit(realloc_driver, "53 68 00 01 00 00")
+    cursor = emit_call(cursor, large_allocator)
+    cursor = emit(cursor, "59 89 c3 ff 74 24 08 53")
+    cursor = emit_call(cursor, reallocator)
+    emit(cursor, "59 59 5b c3")
+
+    # Preserve the null-safe lock/import/free shape while selecting exactly
+    # one backend from the recovered unsigned block-size class.
+    private_free = base.private_free
+    cursor = emit(private_free, "53 8b 5c 24 08 85 db")
+    free_nonnull = cursor
+    cursor = emit(cursor, "75 00 5b c3 6a 01")
+    free_work = cursor
+    cursor = emit_abs(cursor, "ff 15", enter_critical_section_iat)
+    cursor = emit(cursor, "59 8b 43 f8 83 e0 f8 83 f8 44")
+    large_free = cursor
+    cursor = emit(cursor, "77 00 50 53")
+    cursor = emit_call(cursor, private_small_free)
+    cursor = emit(cursor, "59 59")
+    small_free_done = cursor
+    cursor = emit(cursor, "eb 00")
+    large_free_target = cursor
+    cursor = emit(cursor, "53")
+    cursor = emit_call(cursor, arena_free)
+    cursor = emit(cursor, "59")
+    free_done = cursor
+    cursor = emit(cursor, "6a 01")
+    cursor = emit_abs(cursor, "ff 15", leave_critical_section_iat)
+    emit(cursor, "59 5b c3")
+    patch_short(free_nonnull, free_work)
+    patch_short(large_free, large_free_target)
+    patch_short(small_free_done, free_done)
+    assert cursor + 3 <= text_va + 0x750
+
+    image = replace(
+        base.image,
         data=bytes(raw),
         sha256=hashlib.sha256(raw).hexdigest(),
-        machine=0x14C,
-        optional_magic=0x10B,
-        image_base=0x00400000,
-        size_of_headers=0,
-        entrypoint=arena_root,
-        directories=(),
         sections=(
-            pe_mod.Section(".text", text_va, 0, text_size, text_size, 0x60000020),
-            pe_mod.Section(".data", data_va, text_size, data_size, data_size, 0xC0000040),
+            pe_mod.Section(
+                ".text", text_va, 0, text_size, text_size, 0x60000020
+            ),
+            pe_mod.Section(
+                ".data", data_va, text_size, data_size, data_size, 0xC0000040
+            ),
         ),
-        imports=base.image.imports,
-        exports=(),
-        relocations=(),
         executable_ranges=((text_va, text_va + text_size),),
     )
-    arena = replace(base, image=image)
+    arena = replace(
+        base,
+        image=image,
+        private_page_helper=page_initializer,
+    )
     return PrivatePageArenaFixture(
         arena=arena,
         page_head_slot=page_head_slot,
@@ -4260,12 +5311,22 @@ def private_page_arena_image(
         large_allocator=large_allocator,
         page_inserter=page_inserter,
         page_remover=page_remover,
+        page_initializer=page_initializer,
+        block_initializer=block_initializer,
+        block_initializer_calls=(
+            block_initializer_initial_call,
+            block_initializer_split_original_call,
+            block_initializer_split_remainder_call,
+        ),
         selector=selector,
         selector_calls=(selector_existing, selector_provider),
         splitter=splitter,
         unlinker=unlinker,
         block_inserter=block_inserter,
         coalescers=(coalesce_left, coalesce_right),
+        arena_free=arena_free,
+        reallocator=reallocator,
+        realloc_driver=realloc_driver,
     )
 
 
@@ -11673,40 +12734,4206 @@ def test_private_heap_allocator_binds_one_factory_and_zeroed_state():
     assert fixture.callback_slot not in contract.mutable_state
 
 
-def test_private_page_arena_still_requires_an_inductive_witness():
+@pytest.fixture(scope="module")
+def private_page_arena_effect_case():
     fixture = private_page_arena_image()
     recovery = _DirectCfgRecovery(
         fixture.arena.image,
         build_seed_inventory(fixture.arena.image, ()),
-        generous_limits(fixture.arena.image),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
     )
     recovery.recover()
-    body = recovery._publication_function_body(fixture.selector)
-    assert body is not None
-    closure = x86_cfg_module._ReturningPublicationClosure(
-        bodies=(body,),
-        call_edges=(),
-        candidate_targets=frozenset(),
-        imports=(),
+    contract = recovery._private_heap_allocator_contract(
+        fixture.arena.private_allocator,
+        frozenset({fixture.arena.callback_slot}),
     )
-    bridge = SimpleNamespace(
-        allocator_certificate=SimpleNamespace(
-            call_return_domains=(
-                (
-                    fixture.arena.publication_body_private_call,
-                    "private-heap",
-                    frozenset(),
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract,
+        fixture.arena.private_page_helper,
+    )
+    assert witness is not None
+    effects = recovery._publication_private_heap_effect_closure(witness)
+    assert effects is not None
+    return fixture, recovery, effects
+
+
+def _private_page_effect_role_map(fixture):
+    return {
+        fixture.arena.private_page_helper: "initializer",
+        fixture.block_inserter: "insert",
+        fixture.block_initializer: "block-init",
+    }
+
+
+def test_private_page_arena_effects_equal_exact_retail_symbolic_writes(
+    private_page_arena_effect_case,
+):
+    fixture, recovery, effects = private_page_arena_effect_case
+    assert effects is not None
+    assert recovery._publication_private_heap_effect_closure_is_current(
+        effects
+    )
+    assert len(effects.symbolic_writes) == 13
+    assert effects.symbolic_writes == tuple(
+        sorted(
+            effects.symbolic_writes,
+            key=lambda row: (
+                row.function_entry,
+                row.instruction_address,
+                row.operand_index,
+            ),
+        )
+    )
+    assert _normalize_private_page_symbolic_writes(
+        effects.symbolic_writes,
+        _private_page_effect_role_map(fixture),
+    ) == _RETAIL_PRIVATE_PAGE_INITIALIZER_NORMALIZED_WRITES
+
+
+def test_private_page_arena_initializer_effect_closure_has_exact_retail_roles(
+    private_page_arena_effect_case,
+):
+    fixture, recovery, effects = private_page_arena_effect_case
+    role_by_entry = _private_page_effect_role_map(fixture)
+    assert len(effects.function_entries) == 3
+    assert set(effects.function_entries) == set(role_by_entry)
+    assert fixture.arena.private_page_helper == fixture.page_initializer
+    assert not set(fixture.coalescers) & set(effects.function_entries)
+
+    root_calls = recovery._function_direct_calls(
+        fixture.arena.private_page_helper
+    )
+    assert tuple(call.target for call in root_calls) == (
+        fixture.block_initializer,
+        fixture.block_inserter,
+    )
+    assert effects.call_edges == tuple(
+        (call.address, call.target) for call in root_calls
+    )
+    coalescer_calls = recovery._function_direct_calls(fixture.block_inserter)
+    assert tuple(call.target for call in coalescer_calls) == fixture.coalescers
+    assert effects.pruned_call_sites == tuple(
+        call.address for call in coalescer_calls
+    )
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    (
+        "missing-row",
+        "extra-row",
+        "reordered-rows",
+        "reordered-address-provenance",
+        "reordered-value-provenance",
+        "duplicate-role",
+        "unmapped-closure-entry",
+        "unknown-value",
+        "malformed-bit-row",
+    ),
+)
+def test_private_page_retail_symbolic_write_serializer_fails_closed(
+    private_page_arena_effect_case,
+    hostile,
+):
+    fixture, _recovery, effects = private_page_arena_effect_case
+    rows = effects.symbolic_writes
+    roles = _private_page_effect_role_map(fixture)
+    closure_entries = None
+
+    if hostile == "missing-row":
+        rows = rows[:-1]
+    elif hostile == "extra-row":
+        rows = (*rows, rows[-1])
+    elif hostile == "reordered-rows":
+        rows = (rows[1], rows[0], *rows[2:])
+    elif hostile == "reordered-address-provenance":
+        row = rows[3]
+        assert len(row.address_bit_operations) == 2
+        rows = (
+            *rows[:3],
+            replace(
+                row,
+                address_bit_operations=tuple(
+                    reversed(row.address_bit_operations)
                 ),
+            ),
+            *rows[4:],
+        )
+    elif hostile == "reordered-value-provenance":
+        row = rows[5]
+        assert len(row.value_bit_operations) >= 2
+        rows = (
+            *rows[:5],
+            replace(
+                row,
+                value_bit_operations=tuple(
+                    reversed(row.value_bit_operations)
+                ),
+            ),
+            *rows[6:],
+        )
+    elif hostile == "duplicate-role":
+        roles = {
+            **roles,
+            fixture.block_inserter: "initializer",
+        }
+    elif hostile == "unmapped-closure-entry":
+        closure_entries = (
+            *roles,
+            0x00DE_AD00,
+        )
+    elif hostile == "unknown-value":
+        rows = (
+            replace(rows[0], value_after=("unknown-private-value",)),
+            *rows[1:],
+        )
+    else:
+        assert hostile == "malformed-bit-row"
+        rows = (
+            replace(rows[0], value_bit_operations=(("malformed",),)),
+            *rows[1:],
+        )
+
+    if hostile in {
+        "reordered-rows",
+        "reordered-address-provenance",
+        "reordered-value-provenance",
+    }:
+        assert (
+            _normalize_private_page_symbolic_writes(rows, roles)
+            != _RETAIL_PRIVATE_PAGE_INITIALIZER_NORMALIZED_WRITES
+        )
+    else:
+        with pytest.raises(ValueError):
+            _normalize_private_page_symbolic_writes(
+                rows,
+                roles,
+                closure_entries=closure_entries,
+            )
+
+
+def test_private_page_arena_preserves_private_heap_prerequisites():
+    fixture = private_page_arena_image()
+    base = finalized_handle_arena_image(
+        mutation="private-heap-bounded-helper-effect"
+    )
+    assert fixture.arena.image.entrypoint == base.image.entrypoint
+    assert fixture.arena.image.exports == base.image.exports
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.arena.private_allocator,
+        frozenset({fixture.arena.callback_slot}),
+    )
+    assert contract is not None
+    assert contract.page_provider == fixture.page_provider
+    assert contract.large_allocator == fixture.large_allocator
+    extent = recovery._publication_private_heap_extent_witness(
+        contract, fixture.arena.private_page_helper
+    )
+    assert extent is not None
+    effects = recovery._publication_private_heap_effect_closure(extent)
+    assert effects is not None
+    assert effects.root_helper == fixture.arena.private_page_helper
+    assert len(effects.function_entries) == 3
+    assert set(effects.function_entries) == {
+        fixture.arena.private_page_helper,
+        fixture.block_initializer,
+        fixture.block_inserter,
+    }
+    assert effects.pruned_call_sites == tuple(
+        call.address
+        for call in recovery._function_direct_calls(fixture.block_inserter)
+        if call.target in fixture.coalescers
+    )
+    assert {
+        span.displacement
+        for span in effects.bounded_spans
+        if span.position == "base-relative"
+    } == {
+        8,
+        12,
+        16,
+        20,
+        24,
+        28,
+    }
+    assert {
+        span.displacement
+        for span in effects.bounded_spans
+        if span.position == "end-relative"
+    } == {-12, -8, -4}
+    assert not any(
+        span.position == "base-relative" and span.displacement in {0, 4}
+        for span in effects.bounded_spans
+    )
+    assert fixture.selector not in effects.function_entries
+    selector_calls = tuple(
+        call.address
+        for call in recovery._function_direct_calls(fixture.large_allocator)
+        if call.target == fixture.selector
+    )
+    assert selector_calls == fixture.selector_calls
+    provider_targets = {
+        call.target
+        for call in recovery._function_direct_calls(fixture.page_provider)
+    }
+    assert fixture.page_inserter in provider_targets
+    assert {
+        call.target
+        for call in recovery._function_direct_calls(fixture.selector)
+    } == {fixture.splitter, fixture.unlinker}
+    assert {
+        fixture.page_inserter,
+        fixture.page_remover,
+        fixture.selector,
+        fixture.splitter,
+        fixture.unlinker,
+        fixture.block_inserter,
+        *fixture.coalescers,
+    } <= contract.dependency_functions
+    ring_write_displacements = {
+        operand.mem.disp
+        for address in recovery._function_instruction_addresses(
+            fixture.page_inserter
+        )
+        for operand in recovery._owned_decoded(address).operands
+        if operand.type == capstone.x86.X86_OP_MEM
+        and operand.access & capstone.CS_AC_WRITE
+        and operand.mem.base != capstone.x86.X86_REG_INVALID
+    }
+    assert ring_write_displacements >= {0, 4}
+
+
+def test_private_page_arena_fixed_slots_have_no_stale_executable_tail():
+    fixture = private_page_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(
+            fixture.arena.image,
+            (audit_anchor(fixture.arena.image, fixture.realloc_driver),),
+        ),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+    active_slots = {
+        0x004014D0: 0x00401550,
+        0x00401550: 0x004015C0,
+        0x00401600: 0x00401640,
+        0x00401700: 0x00401750,
+        fixture.selector: fixture.page_initializer,
+        fixture.page_initializer: fixture.splitter,
+        fixture.splitter: fixture.unlinker,
+        fixture.unlinker: fixture.page_remover,
+        fixture.page_remover: fixture.block_inserter,
+        fixture.block_inserter: fixture.coalescers[0],
+        fixture.coalescers[0]: fixture.coalescers[1],
+        fixture.coalescers[1]: fixture.arena_free,
+        fixture.arena_free: fixture.block_initializer,
+        fixture.block_initializer: fixture.reallocator,
+        fixture.reallocator: fixture.realloc_driver,
+        fixture.realloc_driver: 0x00401E80,
+    }
+    empty_slots = (
+        (0x004015C0, 0x00401600),
+        (0x00401680, 0x004016C0),
+        (0x004016C0, 0x00401700),
+        (0x004017C0, 0x004017E0),
+        (0x00401E80, 0x00401F00),
+    )
+
+    for start, end in active_slots.items():
+        addresses = recovery._function_instruction_addresses(start)
+        assert addresses
+        assert any(
+            recovery._owned_decoded(address).group(capstone.CS_GRP_RET)
+            for address in addresses
+        )
+        terminal_end = max(
+            address + recovery._owned_decoded(address).size
+            for address in addresses
+        )
+        assert terminal_end <= end
+        assert fixture.arena.image.read(
+            terminal_end, end - terminal_end
+        ) == b"\x90" * (end - terminal_end)
+
+    for start, end in empty_slots:
+        assert fixture.arena.image.read(start, end - start) == b"\x90" * (
+            end - start
+        )
+
+    obsolete_heads = {start for start, _end in empty_slots}
+    assert not any(
+        call.target in obsolete_heads for call in recovery.direct_calls
+    )
+    obsolete_helper = range(0x004016C0, 0x00401700)
+    assert not any(
+        recovery._raw_direct_call_sites(target) for target in obsolete_helper
+    )
+    assert not set(obsolete_helper) & recovery.function_addresses
+    assert not any(
+        (target := recovery._direct_target(recovery._owned_decoded(address)))
+        is not None
+        and target in obsolete_helper
+        for address in recovery.instructions
+    )
+    assert not any(
+        seed.address in obsolete_helper for seed in recovery.seed_records
+    )
+    text = fixture.arena.image.read(0x00401000, 0xF00)
+    assert not any(
+        int.from_bytes(text[offset : offset + 4], "little")
+        in obsolete_helper
+        for offset in range(len(text) - 3)
+    )
+    fixed_slots = tuple(active_slots.items()) + empty_slots
+    assert not any(
+        operand.type == capstone.x86.X86_OP_MEM
+        and operand.mem.base == capstone.x86.X86_REG_INVALID
+        and operand.mem.index == capstone.x86.X86_REG_INVALID
+        and any(
+            start <= operand.mem.disp < end
+            for start, end in fixed_slots
+        )
+        for decoded in (
+            recovery._owned_decoded(address)
+            for address in sorted(recovery.instructions)
+        )
+        for operand in decoded.operands
+    )
+    head_bytes = fixture.page_head_slot.to_bytes(4, "little")
+    text_start = 0x00401000
+    text_size = 0xF00
+    text = fixture.arena.image.read(text_start, text_size)
+    raw_head_references = {
+        text_start + offset
+        for offset in range(text_size - 3)
+        if text[offset : offset + 4] == head_bytes
+    }
+    decoded_head_references = set()
+    head_reader_owners = set()
+    for address in sorted(recovery.instructions):
+        decoded = recovery._owned_decoded(address)
+        if not any(
+            operand.type == capstone.x86.X86_OP_MEM
+            and recovery._absolute_memory_operand(operand)
+            == fixture.page_head_slot
+            for operand in decoded.operands
+        ):
+            continue
+        owner = recovery._registrar_function_entry(address)
+        assert owner is not None
+        if any(
+            operand.type == capstone.x86.X86_OP_MEM
+            and operand.access & capstone.CS_AC_READ
+            and recovery._absolute_memory_operand(operand)
+            == fixture.page_head_slot
+            for operand in decoded.operands
+        ):
+            head_reader_owners.add(owner)
+        decoded_head_references.update(
+            candidate
+            for candidate in range(address, address + decoded.size - 3)
+            if fixture.arena.image.read(candidate, 4) == head_bytes
+        )
+    assert raw_head_references == decoded_head_references
+    assert head_reader_owners == {
+        fixture.large_allocator,
+        fixture.page_inserter,
+        fixture.page_remover,
+    }
+
+
+def test_private_page_arena_walk_splits_before_unlink_and_tracks_remainder():
+    fixture = private_page_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+
+    allocator_addresses = recovery._function_instruction_addresses(
+        fixture.large_allocator
+    )
+    allocator_backedges = tuple(
+        (address, target)
+        for address in allocator_addresses
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_JUMP)
+        and (target := recovery._direct_target(recovery._owned_decoded(address)))
+        is not None
+        and fixture.large_allocator <= target < address
+    )
+    assert allocator_backedges
+    selector_calls = tuple(
+        call
+        for call in recovery._function_direct_calls(fixture.large_allocator)
+        if call.target == fixture.selector
+    )
+    assert tuple(call.address for call in selector_calls) == (
+        fixture.selector_calls
+    )
+    assert len(selector_calls) == 2
+    provider_calls = tuple(
+        call
+        for call in recovery._function_direct_calls(fixture.large_allocator)
+        if call.target == fixture.page_provider
+    )
+    assert len(provider_calls) == 2
+    assert provider_calls[0].address < selector_calls[0].address
+    assert provider_calls[1].address > allocator_backedges[0][0]
+
+    selector_page_arguments = tuple(
+        recovery._pushed_call_argument(call.address, 0)
+        for call in selector_calls
+    )
+    assert all(argument is not None for argument in selector_page_arguments)
+    first_page_push, second_page_push = selector_page_arguments
+    assert first_page_push is not None
+    assert second_page_push is not None
+    assert all(
+        argument[1].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(argument[1].reg) == "esi"
+        for argument in (first_page_push, second_page_push)
+    )
+    first_page_definitions = recovery._register_definitions_across_blocks(
+        first_page_push[0].address,
+        "esi",
+        fixture.large_allocator,
+    )
+    second_page_definitions = recovery._register_definitions_across_blocks(
+        second_page_push[0].address,
+        "esi",
+        fixture.large_allocator,
+    )
+    assert first_page_definitions is not None
+    assert second_page_definitions is not None
+    assert len(first_page_definitions) == 3
+    assert {
+        recovery._owned_decoded(address).id
+        for address in first_page_definitions
+    } == {capstone.x86.X86_INS_MOV}
+    assert {
+        absolute
+        for address in first_page_definitions
+        if recovery._owned_decoded(address).operands[1].type
+        == capstone.x86.X86_OP_MEM
+        and (
+            absolute := recovery._absolute_memory_operand(
+                recovery._owned_decoded(address).operands[1]
+            )
+        )
+        is not None
+    } == {fixture.page_head_slot}
+    assert any(
+        recovery._owned_decoded(address).operands[1].type
+        == capstone.x86.X86_OP_REG
+        and recovery._register_family(
+            recovery._owned_decoded(address).operands[1].reg
+        )
+        == "eax"
+        for address in first_page_definitions
+    )
+    assert any(
+        recovery._owned_decoded(address).operands[1].type
+        == capstone.x86.X86_OP_MEM
+        and recovery._register_family(
+            recovery._owned_decoded(address).operands[1].mem.base
+        )
+        == "esi"
+        and recovery._owned_decoded(address).operands[1].mem.disp == 4
+        for address in first_page_definitions
+    )
+    assert len(second_page_definitions) == 1
+    second_page_definition = recovery._owned_decoded(
+        next(iter(second_page_definitions))
+    )
+    assert second_page_definition.id == capstone.x86.X86_INS_MOV
+    assert second_page_definition.operands[1].type == capstone.x86.X86_OP_REG
+    assert (
+        recovery._register_family(second_page_definition.operands[1].reg)
+        == "eax"
+    )
+
+    ring_rotation = tuple(
+        recovery._owned_decoded(address)
+        for address in allocator_addresses
+        if any(
+            operand.type == capstone.x86.X86_OP_MEM
+            and operand.access & capstone.CS_AC_WRITE
+            and recovery._absolute_memory_operand(operand)
+            == fixture.page_head_slot
+            for operand in recovery._owned_decoded(address).operands
+        )
+    )
+    assert len(ring_rotation) == 1
+    assert ring_rotation[0].id == capstone.x86.X86_INS_MOV
+    assert ring_rotation[0].operands[1].type == capstone.x86.X86_OP_REG
+    assert recovery._register_family(ring_rotation[0].operands[1].reg) == "esi"
+    assert selector_calls[0].address < ring_rotation[0].address
+    payload_adjustments = tuple(
+        recovery._owned_decoded(address)
+        for address in allocator_addresses
+        if (decoded := recovery._owned_decoded(address)).id
+        == capstone.x86.X86_INS_ADD
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == "eax"
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+    )
+    assert len(payload_adjustments) == 1
+    assert payload_adjustments[0].operands[1].imm == 8
+    rotation_address = ring_rotation[0].address
+    payload_address = payload_adjustments[0].address
+    allocator_end = recovery._following_function_entry(fixture.large_allocator)
+
+    def reachable_before_return(start):
+        pending = [start]
+        seen = set()
+        while pending:
+            address = pending.pop()
+            if address in seen:
+                continue
+            seen.add(address)
+            decoded = recovery._owned_decoded(address)
+            if decoded.group(capstone.CS_GRP_RET):
+                continue
+            pending.extend(
+                recovery._summary_successors(
+                    address,
+                    fixture.large_allocator,
+                    allocator_end,
+                )
+            )
+        return seen
+
+    existing_success_branch = next(
+        recovery._owned_decoded(address)
+        for address in allocator_addresses
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_JUMP)
+        and recovery._direct_target(recovery._owned_decoded(address))
+        == rotation_address
+    )
+    assert selector_calls[0].address < existing_success_branch.address
+    existing_success_path = reachable_before_return(rotation_address)
+    assert {rotation_address, payload_address} <= existing_success_path
+
+    provider_failure_branch = next(
+        recovery._owned_decoded(address)
+        for address in allocator_addresses
+        if selector_calls[1].address < address
+        and recovery._owned_decoded(address).mnemonic in {"je", "jz"}
+    )
+    provider_success_path = reachable_before_return(
+        provider_failure_branch.address + provider_failure_branch.size
+    )
+    assert payload_address in provider_success_path
+    assert rotation_address not in provider_success_path
+    failure_path = reachable_before_return(
+        recovery._direct_target(provider_failure_branch)
+    )
+    assert payload_address not in failure_path
+    assert rotation_address not in failure_path
+    free_payload_adjustments = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(0x00401C00)
+        if (decoded := recovery._owned_decoded(address)).id
+        == capstone.x86.X86_INS_SUB
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == "ebx"
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+    )
+    assert len(free_payload_adjustments) == 1
+    assert free_payload_adjustments[0].operands[1].imm == 8
+    assert any(
+        decoded.id == capstone.x86.X86_INS_MOV
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == "esi"
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[1].mem.base) == "esi"
+        and decoded.operands[1].mem.disp == 4
+        and selector_calls[0].address < decoded.address
+        < provider_calls[1].address
+        for decoded in (
+            recovery._owned_decoded(address)
+            for address in allocator_addresses
+        )
+    )
+
+    selector_calls = recovery._function_direct_calls(fixture.selector)
+    assert tuple(call.target for call in selector_calls) == (
+        fixture.splitter,
+        fixture.unlinker,
+    )
+    selector_addresses = recovery._function_instruction_addresses(
+        fixture.selector
+    )
+    split_call = selector_calls[0].address
+    remainder_thresholds = tuple(
+        recovery._owned_decoded(address)
+        for address in selector_addresses
+        if (decoded := recovery._owned_decoded(address)).id
+        == capstone.x86.X86_INS_CMP
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 0x50
+    )
+    assert len(remainder_thresholds) == 1
+    threshold = remainder_thresholds[0]
+    threshold_branch = recovery._owned_decoded(
+        threshold.address + threshold.size
+    )
+    assert threshold_branch.mnemonic in {"jb", "jnae"}
+    assert threshold_branch.address < split_call
+    threshold_target = recovery._direct_target(threshold_branch)
+    assert split_call < threshold_target < selector_calls[1].address
+    remainder_subtractions = tuple(
+        recovery._owned_decoded(address)
+        for address in selector_addresses
+        if (decoded := recovery._owned_decoded(address)).id
+        == capstone.x86.X86_INS_SUB
+        and len(decoded.operands) == 2
+        and all(
+            operand.type == capstone.x86.X86_OP_REG
+            for operand in decoded.operands
+        )
+        and recovery._register_family(decoded.operands[0].reg) == "eax"
+        and recovery._register_family(decoded.operands[1].reg) == "edx"
+    )
+    assert len(remainder_subtractions) == 1
+    remainder_subtraction = remainder_subtractions[0]
+    assert remainder_subtraction.address < threshold.address < split_call
+    request_fit_branches = tuple(
+        recovery._owned_decoded(address)
+        for address in selector_addresses
+        if (decoded := recovery._owned_decoded(address)).mnemonic
+        in {"jae", "jnb"}
+        and (target := recovery._direct_target(decoded)) is not None
+        and target < split_call
+    )
+    assert len(request_fit_branches) == 1
+    assert request_fit_branches[0].address < threshold.address
+    selection_remainder = recovery._owned_decoded(
+        recovery._direct_target(request_fit_branches[0])
+    )
+    assert selection_remainder.address == remainder_subtraction.address
+    assert not any(
+        decoded.id == capstone.x86.X86_INS_OR
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 2
+        for decoded in (
+            recovery._owned_decoded(address) for address in selector_addresses
+        )
+    )
+    assert not any(
+        decoded.id == capstone.x86.X86_INS_CMP
+        and len(decoded.operands) == 2
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm in {0x20, 0x50}
+        for decoded in (
+            recovery._owned_decoded(address)
+            for address in recovery._function_instruction_addresses(
+                fixture.splitter
+            )
+        )
+    )
+    largest_free_writes = tuple(
+        recovery._owned_decoded(address)
+        for address in selector_addresses
+        if (decoded := recovery._owned_decoded(address)).id
+        == capstone.x86.X86_INS_MOV
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[0].mem.base) == "ebx"
+        and decoded.operands[0].mem.disp == 8
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+    )
+    assert len(largest_free_writes) == 1
+    largest_free_write = largest_free_writes[0]
+    assert recovery._register_family(largest_free_write.operands[1].reg) == "ecx"
+    assert any(
+        decoded.id == capstone.x86.X86_INS_MOV
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == "ecx"
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[1].reg) == "eax"
+        and decoded.address < largest_free_write.address
+        for decoded in (
+            recovery._owned_decoded(address) for address in selector_addresses
+        )
+    )
+    assert any(
+        decoded.group(capstone.CS_GRP_JUMP)
+        and decoded.mnemonic != "jmp"
+        and recovery._direct_target(decoded) < decoded.address
+        and decoded.address + decoded.size == largest_free_write.address
+        for decoded in (
+            recovery._owned_decoded(address) for address in selector_addresses
+        )
+    )
+    splitter_calls = recovery._function_direct_calls(fixture.splitter)
+    assert tuple(call.target for call in splitter_calls) == (
+        fixture.block_initializer,
+        fixture.block_initializer,
+    )
+    initialization_call = splitter_calls[0].address
+    reciprocal_writes = {
+        operand.mem.disp
+        for address in recovery._function_instruction_addresses(
+            fixture.splitter
+        )
+        if address > initialization_call
+        for operand in recovery._owned_decoded(address).operands
+        if operand.type == capstone.x86.X86_OP_MEM
+        and operand.access & capstone.CS_AC_WRITE
+        and operand.mem.base != capstone.x86.X86_REG_INVALID
+    }
+    assert reciprocal_writes >= {8, 12}
+    splitter_flag_masks = {
+        operand.imm
+        for address in recovery._function_instruction_addresses(
+            fixture.splitter
+        )
+        if recovery._owned_decoded(address).id
+        == capstone.x86.X86_INS_AND
+        for operand in recovery._owned_decoded(address).operands
+        if operand.type == capstone.x86.X86_OP_IMM
+    }
+    assert splitter_flag_masks >= {2, 4}
+    normalization_sites = tuple(
+        recovery._owned_decoded(address)
+        for function_entry in (
+            fixture.large_allocator,
+            fixture.selector,
+            fixture.splitter,
+        )
+        for address in recovery._function_instruction_addresses(
+            function_entry
+        )
+        if (decoded := recovery._owned_decoded(address)).id
+        == capstone.x86.X86_INS_LEA
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[1].mem.base == decoded.operands[0].reg
+        and decoded.operands[1].mem.index == capstone.x86.X86_REG_INVALID
+        and decoded.operands[1].mem.disp == 0xF
+    )
+    assert len(normalization_sites) == 1
+    normalization = normalization_sites[0]
+    assert recovery._registrar_function_entry(normalization.address) == (
+        fixture.large_allocator
+    )
+    normalized_family = recovery._register_family(
+        normalization.operands[0].reg
+    )
+    assert normalized_family == "ebx"
+    assert any(
+        decoded.id == capstone.x86.X86_INS_AND
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg)
+        == normalized_family
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFF8
+        for decoded in (
+            recovery._owned_decoded(address)
+            for address in allocator_addresses
+        )
+    )
+    assert any(
+        decoded.id == capstone.x86.X86_INS_CMP
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg)
+        == normalized_family
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 0x50
+        for decoded in (
+            recovery._owned_decoded(address)
+            for address in allocator_addresses
+        )
+    )
+    assert any(
+        decoded.id == capstone.x86.X86_INS_MOV
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg)
+        == normalized_family
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 0x50
+        for decoded in (
+            recovery._owned_decoded(address)
+            for address in allocator_addresses
+        )
+    )
+    request_pushes = tuple(
+        recovery._pushed_call_argument(call_address, 1)
+        for call_address in fixture.selector_calls
+    )
+    assert all(argument is not None for argument in request_pushes)
+    assert all(
+        argument[1].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(argument[1].reg) == normalized_family
+        for argument in request_pushes
+    )
+    request_definition_sets = tuple(
+        recovery._register_definitions_across_blocks(
+            argument[0].address,
+            normalized_family,
+            fixture.large_allocator,
+        )
+        for argument in request_pushes
+        if argument is not None
+    )
+    assert len(request_definition_sets) == 2
+    assert request_definition_sets[0] == request_definition_sets[1]
+    assert request_definition_sets[0]
+    assert all(
+        not any(
+            decoded.id in {
+                capstone.x86.X86_INS_ADD,
+                capstone.x86.X86_INS_LEA,
+            }
+            and len(decoded.operands) == 2
+            and decoded.operands[0].type == capstone.x86.X86_OP_REG
+            and decoded.operands[1].type
+            in {capstone.x86.X86_OP_IMM, capstone.x86.X86_OP_MEM}
+            and (
+                (
+                    decoded.operands[1].type == capstone.x86.X86_OP_IMM
+                    and decoded.operands[1].imm in {0xF, 0x1B}
+                )
+                or (
+                    decoded.operands[1].type == capstone.x86.X86_OP_MEM
+                    and decoded.operands[1].mem.disp in {0xF, 0x1B}
+                )
+            )
+            for decoded in (
+                recovery._owned_decoded(address)
+                for address in recovery._function_instruction_addresses(
+                    function_entry
+                )
+            )
+        )
+        for function_entry in (fixture.selector, fixture.splitter)
+    )
+    assert any(
+        decoded.id == capstone.x86.X86_INS_MOV
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[1].mem.base
+        != capstone.x86.X86_REG_ESP
+        and decoded.operands[1].mem.disp == 8
+        for decoded in (
+            recovery._owned_decoded(address)
+            for address in recovery._function_instruction_addresses(
+                fixture.block_inserter
             )
         )
     )
 
+
+def test_private_page_arena_selector_selects_whole_fit_when_remainder_is_too_small():
+    fixture = private_page_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+
+    selector_addresses = recovery._function_instruction_addresses(
+        fixture.selector
+    )
+    selector_calls = recovery._function_direct_calls(fixture.selector)
+    assert tuple(call.target for call in selector_calls) == (
+        fixture.splitter,
+        fixture.unlinker,
+    )
+    split_call, unlink_call = selector_calls
+    subtraction = next(
+        recovery._owned_decoded(address)
+        for address in selector_addresses
+        if (decoded := recovery._owned_decoded(address)).id
+        == capstone.x86.X86_INS_SUB
+        and all(
+            operand.type == capstone.x86.X86_OP_REG
+            for operand in decoded.operands
+        )
+    )
+    fit_branch = next(
+        recovery._owned_decoded(address)
+        for address in selector_addresses
+        if recovery._owned_decoded(address).mnemonic in {"jae", "jnb"}
+        and recovery._direct_target(recovery._owned_decoded(address))
+        == subtraction.address
+    )
+    threshold = recovery._owned_decoded(
+        subtraction.address + subtraction.size + 2
+    )
+    if threshold.id != capstone.x86.X86_INS_CMP:
+        threshold = next(
+            recovery._owned_decoded(address)
+            for address in selector_addresses
+            if subtraction.address < address < split_call.address
+            and recovery._owned_decoded(address).id
+            == capstone.x86.X86_INS_CMP
+            and recovery._owned_decoded(address).operands[1].type
+            == capstone.x86.X86_OP_IMM
+            and recovery._owned_decoded(address).operands[1].imm == 0x50
+        )
+    assert fit_branch.address < subtraction.address < threshold.address
+    assert threshold.operands[1].imm == 0x50
+    no_split_branch = recovery._owned_decoded(
+        threshold.address + threshold.size
+    )
+    assert no_split_branch.mnemonic in {"jb", "jnae"}
+    no_split_target = recovery._direct_target(no_split_branch)
+    assert split_call.address < no_split_target < unlink_call.address
+
+    assert not any(
+        decoded.id == capstone.x86.X86_INS_OR
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 2
+        for decoded in (
+            recovery._owned_decoded(address) for address in selector_addresses
+        )
+    )
+
+    selector_end = recovery._following_function_entry(fixture.selector)
+    pending = [no_split_target]
+    reachable = set()
+    while pending:
+        address = pending.pop()
+        if address in reachable:
+            continue
+        reachable.add(address)
+        decoded = recovery._owned_decoded(address)
+        if decoded.group(capstone.CS_GRP_RET):
+            continue
+        pending.extend(
+            recovery._summary_successors(
+                address,
+                fixture.selector,
+                selector_end,
+            )
+        )
+    assert unlink_call.address in reachable
+    assert split_call.address not in reachable
+    assert any(
+        recovery._owned_decoded(address).id == capstone.x86.X86_INS_MOV
+        and recovery._owned_decoded(address).operands[0].type
+        == capstone.x86.X86_OP_MEM
+        and recovery._owned_decoded(address).operands[0].mem.disp == 0
+        for address in reachable
+        if address < unlink_call.address
+    )
+    exhaustion_store = next(
+        address
+        for address in selector_addresses
+        if (decoded := recovery._owned_decoded(address)).id
+        == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 8
+    )
+    assert exhaustion_store not in reachable
+    split_reachable = set()
+    pending = [no_split_branch.address + no_split_branch.size]
+    while pending:
+        address = pending.pop()
+        if address in split_reachable:
+            continue
+        split_reachable.add(address)
+        decoded = recovery._owned_decoded(address)
+        if decoded.group(capstone.CS_GRP_RET):
+            continue
+        pending.extend(
+            recovery._summary_successors(
+                address,
+                fixture.selector,
+                selector_end,
+            )
+        )
+    assert split_call.address in split_reachable
+    assert unlink_call.address in split_reachable
+
+    splitter_calls = recovery._function_direct_calls(fixture.splitter)
+    assert tuple(call.target for call in splitter_calls) == (
+        fixture.block_initializer,
+        fixture.block_initializer,
+    )
+    assert splitter_calls[0].address < splitter_calls[1].address
+
+    unlink_page_argument = recovery._pushed_call_argument(
+        unlink_call.address,
+        0,
+    )
+    unlink_block_argument = recovery._pushed_call_argument(
+        unlink_call.address,
+        1,
+    )
+    assert unlink_page_argument is not None
+    assert unlink_block_argument is not None
+    assert recovery._register_family(unlink_page_argument[1].reg) == "ebx"
+    assert recovery._register_family(unlink_block_argument[1].reg) == "esi"
+    sentinel_head_store = next(
+        recovery._owned_decoded(address)
+        for address in selector_addresses
+        if address < unlink_call.address
+        and (decoded := recovery._owned_decoded(address)).id
+        == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[1].reg) == "ecx"
+    )
+    block_next_load = recovery._owned_decoded(
+        sentinel_head_store.address - 3
+    )
+    assert block_next_load.id == capstone.x86.X86_INS_MOV
+    assert block_next_load.operands[1].type == capstone.x86.X86_OP_MEM
+    assert recovery._register_family(block_next_load.operands[1].mem.base) == "esi"
+    assert block_next_load.operands[1].mem.disp == 12
+    assert sentinel_head_store.address < unlink_call.address
+    assert any(
+        recovery._owned_decoded(address).id == capstone.x86.X86_INS_MOV
+        and recovery._owned_decoded(address).operands[0].type
+        == capstone.x86.X86_OP_REG
+        and recovery._register_family(
+            recovery._owned_decoded(address).operands[0].reg
+        )
+        == "eax"
+        and recovery._owned_decoded(address).operands[1].type
+        == capstone.x86.X86_OP_REG
+        and recovery._register_family(
+            recovery._owned_decoded(address).operands[1].reg
+        )
+        == "esi"
+        for address in reachable
+    )
+
+
+def test_private_page_arena_unlink_repairs_empty_and_nonempty_lists():
+    fixture = private_page_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+
+    instructions = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(
+            fixture.unlinker
+        )
+    )
+    header_or_2 = next(
+        decoded
+        for decoded in instructions
+        if decoded.id == capstone.x86.X86_INS_OR
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 2
+    )
+    successor_or_4 = next(
+        decoded
+        for decoded in instructions
+        if decoded.id == capstone.x86.X86_INS_OR
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 4
+    )
+    page_extent_load = next(
+        decoded
+        for decoded in instructions
+        if decoded.address > successor_or_4.address
+        and decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[1].mem.base) == "ecx"
+        and decoded.operands[1].mem.disp == 12
+    )
+    extent_family = recovery._register_family(page_extent_load.operands[0].reg)
+    extent_mask = next(
+        decoded
+        for decoded in instructions
+        if decoded.address > page_extent_load.address
+        and decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == extent_family
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFF8
+    )
+    sentinel_definition = next(
+        decoded
+        for decoded in instructions
+        if decoded.address > extent_mask.address
+        and decoded.id == capstone.x86.X86_INS_LEA
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == extent_family
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[1].mem.base) == "ecx"
+        and recovery._register_family(decoded.operands[1].mem.index)
+        == extent_family
+        and decoded.operands[1].mem.disp == -4
+    )
+    head_comparisons = tuple(
+        decoded
+        for decoded in instructions
+        if decoded.address > sentinel_definition.address
+        and decoded.id == capstone.x86.X86_INS_CMP
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[0].mem.base)
+        == extent_family
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[1].reg) == "ebx"
+    )
+    assert len(head_comparisons) == 2
+    first_head_comparison, second_head_comparison = head_comparisons
+    head_repair = next(
+        decoded
+        for decoded in instructions
+        if first_head_comparison.address
+        < decoded.address
+        < second_head_comparison.address
+        and decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[0].mem.base)
+        == extent_family
+        and decoded.operands[0].mem.disp == 0
+    )
+    empty_stores = tuple(
+        decoded
+        for decoded in instructions
+        if decoded.address > second_head_comparison.address
+        and decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 0
+    )
+    assert {decoded.operands[0].mem.disp for decoded in empty_stores} == {
+        0,
+        8,
+    }
+    reciprocal_stores = tuple(
+        decoded
+        for decoded in instructions
+        if decoded.address > second_head_comparison.address
+        and decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp in {8, 12}
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+    )
+    assert {decoded.operands[0].mem.disp for decoded in reciprocal_stores} == {
+        8,
+        12,
+    }
+    assert (
+        header_or_2.address
+        < successor_or_4.address
+        < page_extent_load.address
+        < sentinel_definition.address
+        < first_head_comparison.address
+        < head_repair.address
+        < second_head_comparison.address
+    )
+
+    second_branch = recovery._owned_decoded(
+        second_head_comparison.address + second_head_comparison.size
+    )
+    assert second_branch.mnemonic in {"jne", "jnz"}
+    detach_start = recovery._direct_target(second_branch)
+    empty_start = second_branch.address + second_branch.size
+    assert detach_start is not None
+    unlink_end = recovery._following_function_entry(fixture.unlinker)
+
+    def reachable_from(start):
+        pending = [start]
+        reachable = set()
+        while pending:
+            address = pending.pop()
+            if address in reachable:
+                continue
+            reachable.add(address)
+            decoded = recovery._owned_decoded(address)
+            if decoded.group(capstone.CS_GRP_RET):
+                continue
+            pending.extend(
+                recovery._summary_successors(
+                    address,
+                    fixture.unlinker,
+                    unlink_end,
+                )
+            )
+        return reachable
+
+    empty_reachable = reachable_from(empty_start)
+    detach_reachable = reachable_from(detach_start)
+    empty_store_addresses = {decoded.address for decoded in empty_stores}
+    reciprocal_store_addresses = {
+        decoded.address for decoded in reciprocal_stores
+    }
+    assert empty_store_addresses <= empty_reachable
+    assert not (reciprocal_store_addresses & empty_reachable)
+    assert reciprocal_store_addresses <= detach_reachable
+    assert not (empty_store_addresses & detach_reachable)
+    assert empty_reachable & detach_reachable
+
+
+def test_private_free_selects_exactly_one_free_backend():
+    fixture = private_page_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+
+    private_free = fixture.arena.private_free
+    private_small_free = private_free + 0x50
+    instructions = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(private_free)
+    )
+    size_comparisons = tuple(
+        decoded
+        for decoded in instructions
+        if decoded.id == capstone.x86.X86_INS_CMP
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 0x44
+    )
+    assert len(size_comparisons) == 1
+    size_comparison = size_comparisons[0]
+    size_branch = recovery._owned_decoded(
+        size_comparison.address + size_comparison.size
+    )
+    assert size_branch.mnemonic in {"ja", "jnbe"}
+    small_start = size_branch.address + size_branch.size
+    large_start = recovery._direct_target(size_branch)
+    assert large_start is not None
+    private_free_end = recovery._following_function_entry(private_free)
+
+    def reachable_from(start):
+        pending = [start]
+        reachable = set()
+        while pending:
+            address = pending.pop()
+            if address in reachable:
+                continue
+            reachable.add(address)
+            decoded = recovery._owned_decoded(address)
+            if decoded.group(capstone.CS_GRP_RET):
+                continue
+            pending.extend(
+                recovery._summary_successors(
+                    address,
+                    private_free,
+                    private_free_end,
+                )
+            )
+        return reachable
+
+    small_reachable = reachable_from(small_start)
+    large_reachable = reachable_from(large_start)
+    backend_calls = tuple(
+        call
+        for call in recovery._function_direct_calls(private_free)
+        if call.target in {private_small_free, fixture.arena_free}
+    )
+    assert tuple(call.target for call in backend_calls) == (
+        private_small_free,
+        fixture.arena_free,
+    )
+    small_call, large_call = backend_calls
+    assert small_call.address in small_reachable
+    assert large_call.address not in small_reachable
+    assert large_call.address in large_reachable
+    assert small_call.address not in large_reachable
+    convergence = small_reachable & large_reachable
+    assert convergence
+    assert min(convergence) > max(small_call.address, large_call.address)
+
+
+def test_private_page_arena_raw_and_decoded_role_topology_is_exact():
+    fixture = private_page_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(
+            fixture.arena.image,
+            (audit_anchor(fixture.arena.image, fixture.realloc_driver),),
+        ),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+
+    expected_incoming = {
+        fixture.block_initializer: Counter(
+            {
+                fixture.page_initializer: 1,
+                fixture.splitter: 2,
+            }
+        ),
+        fixture.block_inserter: Counter(
+            {
+                fixture.page_initializer: 1,
+                fixture.arena_free: 1,
+                fixture.reallocator: 2,
+            }
+        ),
+        fixture.splitter: Counter(
+            {
+                fixture.selector: 1,
+                fixture.reallocator: 2,
+            }
+        ),
+        fixture.unlinker: Counter({fixture.selector: 1}),
+        fixture.coalescers[0]: Counter({fixture.block_inserter: 1}),
+        fixture.coalescers[1]: Counter(
+            {
+                fixture.block_inserter: 1,
+                fixture.reallocator: 1,
+            }
+        ),
+        fixture.reallocator: Counter({fixture.realloc_driver: 1}),
+    }
+    for target, expected_owners in expected_incoming.items():
+        decoded_sites = frozenset(
+            recovery.direct_call_sources_by_target.get(target, ())
+        )
+        assert recovery._raw_direct_call_sites(target) == decoded_sites
+        assert Counter(
+            recovery._registrar_function_entry(address)
+            for address in decoded_sites
+        ) == expected_owners
+
+    initializer_sites = frozenset(fixture.block_initializer_calls)
+    assert len(fixture.block_initializer_calls) == 3
+    assert len(initializer_sites) == 3
+    assert recovery._raw_direct_call_sites(
+        fixture.block_initializer
+    ) == initializer_sites
+    assert frozenset(
+        call.address
+        for call in recovery.direct_calls
+        if call.target == fixture.block_initializer
+    ) == initializer_sites
+
+    initializer_arguments = tuple(
+        tuple(
+            recovery._pushed_call_argument(call_address, index)
+            for index in range(5)
+        )
+        for call_address in fixture.block_initializer_calls
+    )
+    assert all(
+        all(argument is not None for argument in arguments)
+        for arguments in initializer_arguments
+    )
+    base_arguments, original_arguments, remainder_arguments = (
+        initializer_arguments
+    )
+    assert tuple(
+        recovery._register_family(argument[1].reg)
+        for argument in base_arguments[:3]
+    ) == ("edi", "esi", "ebp")
+    assert tuple(
+        argument[1].imm for argument in base_arguments[3:]
+    ) == (0, 0)
+    base_b_definitions = recovery._register_definitions_across_blocks(
+        base_arguments[0][0].address,
+        "edi",
+        fixture.page_initializer,
+    )
+    base_s_definitions = recovery._register_definitions_across_blocks(
+        base_arguments[1][0].address,
+        "esi",
+        fixture.page_initializer,
+    )
+    assert base_b_definitions is not None and len(base_b_definitions) == 1
+    assert base_s_definitions is not None and len(base_s_definitions) == 1
+    base_b_definition = recovery._owned_decoded(next(iter(base_b_definitions)))
+    base_s_definition = recovery._owned_decoded(next(iter(base_s_definitions)))
+    assert base_b_definition.id == capstone.x86.X86_INS_LEA
+    assert base_b_definition.operands[1].mem.disp == 0x10
+    assert base_s_definition.id == capstone.x86.X86_INS_LEA
+    assert base_s_definition.operands[1].mem.disp == -0x18
+    initializer_instructions = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(
+            fixture.block_initializer
+        )
+    )
+    base_header_store = next(
+        decoded
+        for decoded in initializer_instructions
+        if decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[0].mem.base) == "ebx"
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[1].reg) == "esi"
+    )
+    page_store = next(
+        decoded.address
+        for decoded in initializer_instructions
+        if decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 4
+    )
+    assert page_store < base_header_store.address
+
+    assert tuple(
+        recovery._register_family(argument[1].reg)
+        for argument in original_arguments
+    ) == ("ebx", "esi", "ebp", "ecx", "edx")
+    assert tuple(
+        recovery._register_family(argument[1].reg)
+        for argument in remainder_arguments
+    ) == ("edi", "eax", "ebp", "esi", "esi")
+    splitter_instructions = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(
+            fixture.splitter
+        )
+    )
+    header_loads = tuple(
+        decoded
+        for decoded in splitter_instructions
+        if decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[1].mem.base) == "ebx"
+        and decoded.operands[1].mem.disp == 0
+    )
+    assert len(header_loads) == 1
+    header_family = recovery._register_family(header_loads[0].operands[0].reg)
+    previous_definition = next(
+        decoded
+        for decoded in splitter_instructions
+        if decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == "ecx"
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 4
+    )
+    allocation_definition = next(
+        decoded
+        for decoded in splitter_instructions
+        if decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == "edx"
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 2
+    )
+    allocation_retention = next(
+        decoded
+        for decoded in splitter_instructions
+        if decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == "esi"
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[1].reg) == "edx"
+    )
+    assert header_family == "eax"
+    assert header_loads[0].address < previous_definition.address
+    assert header_loads[0].address < allocation_definition.address
+    assert allocation_definition.address < allocation_retention.address
+
+    driver_calls = recovery._function_direct_calls(fixture.realloc_driver)
+    assert tuple(call.target for call in driver_calls) == (
+        fixture.large_allocator,
+        fixture.reallocator,
+    )
+    realloc_payload = recovery._pushed_call_argument(
+        driver_calls[1].address,
+        0,
+    )
+    assert realloc_payload is not None
+    assert realloc_payload[1].type == capstone.x86.X86_OP_REG
+    payload_family = recovery._register_family(realloc_payload[1].reg)
+    payload_definitions = recovery._register_definitions_across_blocks(
+        realloc_payload[0].address,
+        payload_family,
+        fixture.realloc_driver,
+    )
+    assert payload_definitions is not None
+    assert len(payload_definitions) == 1
+    payload_definition = recovery._owned_decoded(
+        next(iter(payload_definitions))
+    )
+    assert payload_definition.id == capstone.x86.X86_INS_MOV
+    assert payload_definition.operands[1].type == capstone.x86.X86_OP_REG
+    assert recovery._register_family(payload_definition.operands[1].reg) == "eax"
+    assert driver_calls[0].address < payload_definition.address
+    assert payload_definition.address < driver_calls[1].address
+
+    root_calls = recovery._function_direct_calls(fixture.page_initializer)
+    assert tuple(call.target for call in root_calls) == (
+        fixture.block_initializer,
+        fixture.block_inserter,
+    )
+    root_insert_call = root_calls[1]
+    root_insert_arguments = tuple(
+        recovery._pushed_call_argument(root_insert_call.address, index)
+        for index in range(2)
+    )
+    assert all(argument is not None for argument in root_insert_arguments)
+    assert tuple(
+        recovery._register_family(argument[1].reg)
+        for argument in root_insert_arguments
+    ) == ("ebp", "edi")
+    assert recovery._pushed_call_argument(root_insert_call.address, 2) is None
+    assert tuple(
+        call.target
+        for call in recovery._function_direct_calls(fixture.splitter)
+    ) == (
+        fixture.block_initializer,
+        fixture.block_initializer,
+    )
+    first_initializer_call, second_initializer_call = (
+        recovery._function_direct_calls(fixture.splitter)
+    )
+    splitter_end = recovery._following_function_entry(fixture.splitter)
+    pending_paths = [(fixture.splitter, ())]
+    splitter_entry_to_return_paths = []
+    while pending_paths:
+        address, path = pending_paths.pop()
+        assert address not in path
+        decoded = recovery._owned_decoded(address)
+        next_path = (*path, address)
+        if decoded.group(capstone.CS_GRP_RET):
+            splitter_entry_to_return_paths.append(frozenset(next_path))
+            continue
+        pending_paths.extend(
+            (successor, next_path)
+            for successor in recovery._summary_successors(
+                address,
+                fixture.splitter,
+                splitter_end,
+            )
+        )
+    assert splitter_entry_to_return_paths
+    assert first_initializer_call.address < second_initializer_call.address
+    assert all(
+        {
+            first_initializer_call.address,
+            second_initializer_call.address,
+        }
+        <= path
+        for path in splitter_entry_to_return_paths
+    )
+    allocation_test = next(
+        decoded
+        for decoded in splitter_instructions
+        if decoded.address > second_initializer_call.address
+        and decoded.id == capstone.x86.X86_INS_TEST
+        and all(
+            operand.type == capstone.x86.X86_OP_REG
+            and recovery._register_family(operand.reg) == "esi"
+            for operand in decoded.operands
+        )
+    )
+    allocated_unlisted_branch = recovery._owned_decoded(
+        allocation_test.address + allocation_test.size
+    )
+    assert allocated_unlisted_branch.mnemonic in {"jne", "jnz"}
+    unlisted_target = recovery._direct_target(allocated_unlisted_branch)
+    assert unlisted_target is not None
+    split_link_writes = tuple(
+        decoded
+        for decoded in splitter_instructions
+        if allocated_unlisted_branch.address
+        < decoded.address
+        < unlisted_target
+        and decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp in {8, 12}
+    )
+    assert {decoded.operands[0].mem.disp for decoded in split_link_writes} == {
+        8,
+        12,
+    }
+    reallocator_calls = recovery._function_direct_calls(fixture.reallocator)
+    assert tuple(call.target for call in reallocator_calls) == (
+        fixture.splitter,
+        fixture.block_inserter,
+        fixture.coalescers[1],
+        fixture.splitter,
+        fixture.block_inserter,
+    )
+    split_invocations = (
+        recovery._function_direct_calls(fixture.selector)[0],
+        *(call for call in reallocator_calls if call.target == fixture.splitter),
+    )
+    assert len(split_invocations) == 3
+    assert all(
+        recovery._pushed_call_argument(call.address, 0) is not None
+        and recovery._pushed_call_argument(call.address, 1) is not None
+        and recovery._pushed_call_argument(call.address, 2) is None
+        for call in split_invocations
+    )
+
+
+@pytest.mark.parametrize(
+    "proof_fact",
+    (
+        "base-block",
+        "base-size",
+        "base-page",
+        "base-previous",
+        "base-allocated",
+        pytest.param("base-header-effect", id="base_header_effect"),
+        "resize-shrink-page",
+        "resize-grow-page",
+        "inserter-destination",
+    ),
+)
+def test_private_page_arena_raw_and_decoded_role_topology_is_exact_proof_fact(
+    proof_fact,
+):
+    fixture = private_page_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(
+            fixture.arena.image,
+            (audit_anchor(fixture.arena.image, fixture.realloc_driver),),
+        ),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+
+    base_arguments = tuple(
+        recovery._pushed_call_argument(
+            fixture.block_initializer_calls[0],
+            index,
+        )
+        for index in range(5)
+    )
+    assert all(argument is not None for argument in base_arguments)
+    if proof_fact.startswith("base-"):
+        if proof_fact == "base-block":
+            argument = base_arguments[0]
+            family = "edi"
+            displacement = 0x10
+        elif proof_fact == "base-size":
+            argument = base_arguments[1]
+            family = "esi"
+            displacement = -0x18
+        elif proof_fact == "base-page":
+            assert recovery._register_family(base_arguments[2][1].reg) == "ebp"
+            return
+        elif proof_fact == "base-previous":
+            assert base_arguments[3][1].type == capstone.x86.X86_OP_IMM
+            assert base_arguments[3][1].imm == 0
+            return
+        elif proof_fact == "base-allocated":
+            assert base_arguments[4][1].type == capstone.x86.X86_OP_IMM
+            assert base_arguments[4][1].imm == 0
+            return
+        else:
+            assert proof_fact == "base-header-effect"
+            owner = fixture.block_initializer
+            initializer_instructions = tuple(
+                recovery._owned_decoded(address)
+                for address in recovery._function_instruction_addresses(owner)
+            )
+            size_load = next(
+                decoded
+                for decoded in initializer_instructions
+                if decoded.id == capstone.x86.X86_INS_MOV
+                and decoded.operands[0].type == capstone.x86.X86_OP_REG
+                and recovery._register_family(decoded.operands[0].reg) == "esi"
+                and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+                and decoded.operands[1].mem.base == capstone.x86.X86_REG_ESP
+                and decoded.operands[1].mem.disp == 0x18
+            )
+            size_family = recovery._register_family(size_load.operands[0].reg)
+            assert not any(
+                decoded.id == capstone.x86.X86_INS_AND
+                and decoded.operands[0].type == capstone.x86.X86_OP_REG
+                and recovery._register_family(decoded.operands[0].reg)
+                == size_family
+                and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+                and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFF8
+                for decoded in initializer_instructions
+            )
+            header_store = next(
+                decoded
+                for decoded in initializer_instructions
+                if decoded.id == capstone.x86.X86_INS_MOV
+                and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+                and recovery._register_family(decoded.operands[0].mem.base)
+                == "ebx"
+                and decoded.operands[0].mem.disp == 0
+                and decoded.operands[1].type == capstone.x86.X86_OP_REG
+                and recovery._register_family(decoded.operands[1].reg)
+                == size_family
+            )
+            assert recovery._register_argument_index_across_blocks(
+                header_store.address,
+                "ebx",
+                owner,
+            ) == 0
+            assert recovery._register_definitions_across_blocks(
+                header_store.address,
+                size_family,
+                owner,
+            ) == {size_load.address}
+            page_store = next(
+                decoded
+                for decoded in initializer_instructions
+                if decoded.id == capstone.x86.X86_INS_MOV
+                and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+                and recovery._register_family(decoded.operands[0].mem.base)
+                == "ebx"
+                and decoded.operands[0].mem.disp == 4
+            )
+            assert page_store.address < header_store.address
+
+            base_block = base_arguments[0]
+            assert recovery._register_family(base_block[1].reg) == "edi"
+            block_definitions = recovery._register_definitions_across_blocks(
+                base_block[0].address,
+                "edi",
+                fixture.page_initializer,
+            )
+            assert block_definitions is not None and len(block_definitions) == 1
+            block_definition = recovery._owned_decoded(
+                next(iter(block_definitions))
+            )
+            assert block_definition.id == capstone.x86.X86_INS_LEA
+            assert block_definition.operands[1].type == capstone.x86.X86_OP_MEM
+            assert block_definition.operands[1].mem.disp == 0x10
+
+            base_size = base_arguments[1]
+            assert recovery._register_family(base_size[1].reg) == "esi"
+            size_definitions = recovery._register_definitions_across_blocks(
+                base_size[0].address,
+                "esi",
+                fixture.page_initializer,
+            )
+            assert size_definitions is not None and len(size_definitions) == 1
+            size_definition = recovery._owned_decoded(
+                next(iter(size_definitions))
+            )
+            assert size_definition.id == capstone.x86.X86_INS_LEA
+            assert size_definition.operands[1].type == capstone.x86.X86_OP_MEM
+            assert size_definition.operands[1].mem.disp == -0x18
+
+            assert all(
+                argument[1].type == capstone.x86.X86_OP_IMM
+                for argument in base_arguments[3:]
+            )
+            assert tuple(
+                argument[1].imm for argument in base_arguments[3:]
+            ) == (0, 0)
+            header_flag_ors = tuple(
+                decoded
+                for decoded in initializer_instructions
+                if decoded.id == capstone.x86.X86_INS_OR
+                and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+                and recovery._register_family(decoded.operands[0].mem.base)
+                == "ebx"
+                and decoded.operands[0].mem.disp == 0
+                and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+                and decoded.operands[1].imm in {2, 4}
+            )
+            assert {
+                decoded.operands[1].imm for decoded in header_flag_ors
+            } == {2, 4}
+            assert all(
+                header_store.address < decoded.address
+                for decoded in header_flag_ors
+            )
+            return
+        assert recovery._register_family(argument[1].reg) == family
+        definitions = recovery._register_definitions_across_blocks(
+            argument[0].address,
+            family,
+            fixture.page_initializer,
+        )
+        assert definitions is not None and len(definitions) == 1
+        definition = recovery._owned_decoded(next(iter(definitions)))
+        assert definition.id == capstone.x86.X86_INS_LEA
+        assert definition.operands[1].mem.disp == displacement
+        return
+
+    if proof_fact.startswith("resize-"):
+        insert_calls = tuple(
+            call
+            for call in recovery._function_direct_calls(fixture.reallocator)
+            if call.target == fixture.block_inserter
+        )
+        assert len(insert_calls) == 2
+        call_index = 0 if proof_fact == "resize-shrink-page" else 1
+        page_argument = recovery._pushed_call_argument(
+            insert_calls[call_index].address,
+            0,
+        )
+        assert page_argument is not None
+        resize_page_untag = next(
+            recovery._owned_decoded(address)
+            for address in recovery._function_instruction_addresses(
+                fixture.reallocator
+            )
+            if (decoded := recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_AND
+            and decoded.operands[0].type == capstone.x86.X86_OP_REG
+            and recovery._register_family(decoded.operands[0].reg) == "edi"
+            and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+            and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFFE
+        )
+        assert recovery._register_definitions_across_blocks(
+            page_argument[0].address,
+            "edi",
+            fixture.reallocator,
+        ) == {resize_page_untag.address}
+        return
+
+    assert proof_fact == "inserter-destination"
+    insert_instructions = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(
+            fixture.block_inserter
+        )
+    )
+    size_mask = next(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFF8
+    )
+    size_family = recovery._register_family(size_mask.operands[0].reg)
+    successor = next(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_LEA
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and {
+            recovery._register_family(decoded.operands[1].mem.base),
+            recovery._register_family(decoded.operands[1].mem.index),
+        }
+        == {"esi", size_family}
+        and decoded.operands[1].mem.disp == 0
+    )
+    assert recovery._register_definitions_across_blocks(
+        successor.address,
+        size_family,
+        fixture.block_inserter,
+    ) == {size_mask.address}
+    successor_family = recovery._register_family(successor.operands[0].reg)
+    consumers = tuple(
+        decoded
+        for decoded in insert_instructions
+        if decoded.address > successor.address
+        and decoded.operands
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[0].mem.base)
+        == successor_family
+        and decoded.operands[0].mem.disp in {0, -4}
+    )
+    assert {decoded.operands[0].mem.disp for decoded in consumers} >= {0, -4}
+
+
+def test_private_page_arena_block_initializer_arms_have_exact_successor_flag_ownership():
+    fixture = private_page_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+
+    owner = fixture.block_initializer
+    function_end = recovery._following_function_entry(owner)
+    instructions = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(owner)
+    )
+    allocation_compare = max(
+        (
+            decoded
+            for decoded in instructions
+            if decoded.id == capstone.x86.X86_INS_CMP
+            and decoded.operands[0].type == capstone.x86.X86_OP_REG
+            and recovery._register_family(decoded.operands[0].reg) == "edx"
+            and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+            and decoded.operands[1].imm == 0
+        ),
+        key=lambda decoded: decoded.address,
+    )
+    free_branch = recovery._owned_decoded(
+        allocation_compare.address + allocation_compare.size
+    )
+    assert free_branch.mnemonic in {"je", "jz"}
+    free_start = recovery._direct_target(free_branch)
+    assert free_start is not None
+    allocated_start = free_branch.address + free_branch.size
+    assert set(
+        recovery._summary_successors(
+            free_branch.address,
+            owner,
+            function_end,
+        )
+    ) == {allocated_start, free_start}
+
+    allocated_jump = next(
+        decoded
+        for decoded in instructions
+        if allocated_start <= decoded.address < free_start
+        and decoded.mnemonic == "jmp"
+    )
+    join = recovery._direct_target(allocated_jump)
+    assert join is not None
+    allocated_or_4 = tuple(
+        decoded
+        for decoded in instructions
+        if allocated_start <= decoded.address < allocated_jump.address
+        and decoded.id == capstone.x86.X86_INS_OR
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[0].mem.base) == "eax"
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 4
+    )
+    assert len(allocated_or_4) == 1
+    assert recovery._summary_successors(
+        allocated_jump.address,
+        owner,
+        function_end,
+    ) == (join,)
+
+    free_path = []
+    cursor = free_start
+    while cursor != join:
+        assert cursor not in {decoded.address for decoded in free_path}
+        decoded = recovery._owned_decoded(cursor)
+        free_path.append(decoded)
+        successors = recovery._summary_successors(cursor, owner, function_end)
+        assert len(successors) == 1
+        cursor = successors[0]
+
+    free_memory_writes = tuple(
+        decoded
+        for decoded in free_path
+        if any(
+            operand.type == capstone.x86.X86_OP_MEM
+            and operand.access & capstone.CS_AC_WRITE
+            for operand in decoded.operands
+        )
+    )
+    assert len(free_memory_writes) == 1
+    footer_store = free_memory_writes[0]
+    assert footer_store.id == capstone.x86.X86_INS_MOV
+    assert footer_store.operands[0].type == capstone.x86.X86_OP_MEM
+    assert recovery._register_family(footer_store.operands[0].mem.base) == "eax"
+    assert footer_store.operands[0].mem.disp == -4
+    assert footer_store.operands[1].type == capstone.x86.X86_OP_REG
+    assert recovery._register_family(footer_store.operands[1].reg) == "ecx"
+    size_copy = recovery._owned_decoded(footer_store.address - 2)
+    assert size_copy.id == capstone.x86.X86_INS_MOV
+    assert recovery._register_family(size_copy.operands[0].reg) == "ecx"
+    assert recovery._register_family(size_copy.operands[1].reg) == "ebp"
+    assert not any(
+        decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFFB
+        for decoded in free_path
+    )
+
+
+def test_private_page_arena_block_state_transitions_are_explicit():
+    fixture = private_page_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(
+            fixture.arena.image,
+            (audit_anchor(fixture.arena.image, fixture.realloc_driver),),
+        ),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+
+    role_entries = (
+        fixture.selector,
+        fixture.splitter,
+        fixture.unlinker,
+        fixture.block_inserter,
+        *fixture.coalescers,
+        fixture.arena_free,
+        fixture.block_initializer,
+        fixture.reallocator,
+    )
+    instructions_by_owner = {
+        owner: tuple(
+            recovery._owned_decoded(address)
+            for address in recovery._function_instruction_addresses(owner)
+        )
+        for owner in role_entries
+    }
+
+    page_field_writers = {
+        owner
+        for owner, instructions in instructions_by_owner.items()
+        for decoded in instructions
+        for operand in decoded.operands
+        if operand.type == capstone.x86.X86_OP_MEM
+        and operand.access & capstone.CS_AC_WRITE
+        and operand.mem.disp == 4
+    }
+    assert page_field_writers == {fixture.block_initializer}
+    initializer_instructions = instructions_by_owner[fixture.block_initializer]
+    page_tag_or = next(
+        decoded
+        for decoded in initializer_instructions
+        if decoded.id == capstone.x86.X86_INS_OR
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 1
+    )
+    page_store = next(
+        decoded
+        for decoded in initializer_instructions
+        if decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 4
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+    )
+    assert page_tag_or.address < page_store.address
+    assert recovery._register_family(page_tag_or.operands[0].reg) == (
+        recovery._register_family(page_store.operands[1].reg)
+    )
+
+    selector_instructions = instructions_by_owner[fixture.selector]
+    selector_header_bit2_writes = tuple(
+        decoded
+        for decoded in selector_instructions
+        if decoded.id == capstone.x86.X86_INS_OR
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 2
+    )
+    assert not selector_header_bit2_writes
+
+    unlink_instructions = instructions_by_owner[fixture.unlinker]
+    unlink_header_or_2 = next(
+        decoded
+        for decoded in unlink_instructions
+        if decoded.id == capstone.x86.X86_INS_OR
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 2
+    )
+    unlink_detach_writes = tuple(
+        decoded
+        for decoded in unlink_instructions
+        if decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp in {8, 12}
+    )
+    assert {decoded.operands[0].mem.disp for decoded in unlink_detach_writes} == {
+        8,
+        12,
+    }
+    assert unlink_header_or_2.address < unlink_detach_writes[0].address
+
+    insert_instructions = instructions_by_owner[fixture.block_inserter]
+    insert_size_loads = tuple(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[1].mem.base) == "esi"
+        and decoded.operands[1].mem.disp == 0
+    )
+    assert len(insert_size_loads) == 1
+    insert_size_load = insert_size_loads[0]
+    size_family = recovery._register_family(insert_size_load.operands[0].reg)
+    insert_header_and_not_2 = next(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFFD
+    )
+    insert_size_mask = next(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == size_family
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFF8
+    )
+    insert_successor = next(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_LEA
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and {
+            recovery._register_family(decoded.operands[1].mem.base),
+            recovery._register_family(decoded.operands[1].mem.index),
+        }
+        == {"esi", size_family}
+        and decoded.operands[1].mem.disp == 0
+    )
+    assert recovery._register_definitions_across_blocks(
+        insert_successor.address,
+        size_family,
+        fixture.block_inserter,
+    ) == {insert_size_mask.address}
+    successor_family = recovery._register_family(
+        insert_successor.operands[0].reg
+    )
+    insert_successor_and_not_4 = next(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[0].mem.base)
+        == successor_family
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFFB
+    )
+    insert_footer_store = next(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[0].mem.base)
+        == successor_family
+        and decoded.operands[0].mem.disp == -4
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[1].reg) == size_family
+    )
+    first_insert_link_write = next(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp in {8, 12}
+    )
+    assert (
+        insert_size_load.address
+        < insert_header_and_not_2.address
+        < insert_size_mask.address
+        < insert_successor.address
+        < insert_successor_and_not_4.address
+        < insert_footer_store.address
+        < first_insert_link_write.address
+    )
+
+    arena_instructions = instructions_by_owner[fixture.arena_free]
+    assert not any(
+        decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFFD
+        for decoded in arena_instructions
+    )
+    assert not any(
+        decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFFB
+        for decoded in arena_instructions
+    )
+    assert not any(
+        operand.type == capstone.x86.X86_OP_MEM
+        and operand.access & capstone.CS_AC_WRITE
+        and operand.mem.disp == -4
+        for decoded in arena_instructions
+        for operand in decoded.operands
+    )
+
+    previous_instructions = instructions_by_owner[fixture.coalescers[0]]
+    assert any(
+        decoded.id == capstone.x86.X86_INS_TEST
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 4
+        for decoded in previous_instructions
+    )
+    assert any(
+        operand.type == capstone.x86.X86_OP_MEM
+        and operand.access & capstone.CS_AC_READ
+        and operand.mem.disp == -4
+        for decoded in previous_instructions
+        for operand in decoded.operands
+    )
+    next_instructions = instructions_by_owner[fixture.coalescers[1]]
+    assert any(
+        decoded.id == capstone.x86.X86_INS_TEST
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 2
+        for decoded in next_instructions
+    )
+    assert {
+        decoded.operands[1].imm & 0xFFFF_FFFF
+        for decoded in next_instructions
+        if decoded.id in {capstone.x86.X86_INS_AND, capstone.x86.X86_INS_OR}
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+    } >= {4, 0xFFFF_FFFB}
+
+    realloc_calls = recovery._function_direct_calls(fixture.reallocator)
+    split_calls = tuple(
+        call.address
+        for call in realloc_calls
+        if call.target == fixture.splitter
+    )
+    insert_calls = tuple(
+        call.address
+        for call in realloc_calls
+        if call.target == fixture.block_inserter
+    )
+    next_call = next(
+        call.address
+        for call in realloc_calls
+        if call.target == fixture.coalescers[1]
+    )
+    assert len(split_calls) == len(insert_calls) == 2
+    assert split_calls[0] < insert_calls[0] < next_call
+    assert next_call < split_calls[1] < insert_calls[1]
+    realloc_instructions = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(
+            fixture.reallocator
+        )
+    )
+    normalization = tuple(
+        decoded
+        for decoded in realloc_instructions
+        if decoded.id == capstone.x86.X86_INS_LEA
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[1].mem.base == decoded.operands[0].reg
+        and decoded.operands[1].mem.disp == 0xF
+    )
+    assert len(normalization) == 1
+    normalized_family = recovery._register_family(
+        normalization[0].operands[0].reg
+    )
+    normalization_mask = next(
+        decoded
+        for decoded in realloc_instructions
+        if normalization[0].address < decoded.address
+        and decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg)
+        == normalized_family
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFF8
+    )
+    floor_comparison = next(
+        decoded
+        for decoded in realloc_instructions
+        if normalization_mask.address < decoded.address
+        and decoded.id == capstone.x86.X86_INS_CMP
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg)
+        == normalized_family
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 0x50
+    )
+    floor_assignment = next(
+        decoded
+        for decoded in realloc_instructions
+        if floor_comparison.address < decoded.address
+        and decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg)
+        == normalized_family
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 0x50
+    )
+    assert all(
+        decoded.address > floor_comparison.address
+        for decoded in realloc_instructions
+        if decoded.id == capstone.x86.X86_INS_CMP
+        and all(
+            operand.type == capstone.x86.X86_OP_REG
+            for operand in decoded.operands
+        )
+    )
+    assert floor_assignment.address < split_calls[0]
+    assert sum(
+        decoded.id == capstone.x86.X86_INS_CMP
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 0x50
+        for decoded in realloc_instructions
+    ) == 3
+    realloc_register_comparisons = tuple(
+        (index, decoded)
+        for index, decoded in enumerate(realloc_instructions)
+        if decoded.id == capstone.x86.X86_INS_CMP
+        and all(
+            operand.type == capstone.x86.X86_OP_REG
+            for operand in decoded.operands
+        )
+    )
+    assert len(realloc_register_comparisons) == 2
+    assert all(
+        recovery._register_family(decoded.operands[0].reg) == "eax"
+        and recovery._register_family(decoded.operands[1].reg) == normalized_family
+        for _, decoded in realloc_register_comparisons
+    )
+    assert all(
+        realloc_instructions[index + 1].mnemonic in {"jb", "jnae"}
+        for index, _ in realloc_register_comparisons
+    )
+
+    assert recovery._function_direct_calls(fixture.block_initializer) == ()
+    initializer_writes = {
+        operand.mem.disp
+        for decoded in initializer_instructions
+        for operand in decoded.operands
+        if operand.type == capstone.x86.X86_OP_MEM
+        and operand.access & capstone.CS_AC_WRITE
+    }
+    assert {0, 4, -4} <= initializer_writes
+    assert not ({8, 12} & initializer_writes)
+    assert all(
+        decoded.operands[0].type == capstone.x86.X86_OP_REG
+        for instructions in instructions_by_owner.values()
+        for decoded in instructions
+        if decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFF8
+    )
+
+
+def test_private_page_arena_nonbase_insert_calls_share_complete_free_transition():
+    fixture = private_page_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(
+            fixture.arena.image,
+            (audit_anchor(fixture.arena.image, fixture.realloc_driver),),
+        ),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+
+    insert_sites = frozenset(
+        recovery.direct_call_sources_by_target.get(
+            fixture.block_inserter,
+            (),
+        )
+    )
+    assert recovery._raw_direct_call_sites(fixture.block_inserter) == insert_sites
+    assert Counter(
+        recovery._registrar_function_entry(address) for address in insert_sites
+    ) == Counter(
+        {
+            fixture.page_initializer: 1,
+            fixture.arena_free: 1,
+            fixture.reallocator: 2,
+        }
+    )
+
+    arena_call = next(
+        call
+        for call in recovery._function_direct_calls(fixture.arena_free)
+        if call.target == fixture.block_inserter
+    )
+    arena_arguments = tuple(
+        recovery._pushed_call_argument(arena_call.address, index)
+        for index in range(2)
+    )
+    assert all(argument is not None for argument in arena_arguments)
+    assert tuple(
+        recovery._register_family(argument[1].reg)
+        for argument in arena_arguments[:2]
+    ) == ("esi", "ebx")
+    assert recovery._pushed_call_argument(arena_call.address, 2) is None
+    arena_instructions = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(
+            fixture.arena_free
+        )
+    )
+    block_recovery = next(
+        decoded
+        for decoded in arena_instructions
+        if decoded.id == capstone.x86.X86_INS_SUB
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == "ebx"
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 8
+    )
+    page_recovery = next(
+        decoded
+        for decoded in arena_instructions
+        if decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == "esi"
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[1].mem.base) == "ebx"
+        and decoded.operands[1].mem.disp == 4
+    )
+    page_untag = next(
+        decoded
+        for decoded in arena_instructions
+        if decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == "esi"
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFFE
+    )
+    assert (
+        block_recovery.address
+        < page_recovery.address
+        < page_untag.address
+        < arena_arguments[1][0].address
+        < arena_call.address
+    )
+
+    reallocator_calls = recovery._function_direct_calls(fixture.reallocator)
+    split_calls = tuple(
+        call for call in reallocator_calls if call.target == fixture.splitter
+    )
+    insert_calls = tuple(
+        call
+        for call in reallocator_calls
+        if call.target == fixture.block_inserter
+    )
+    assert len(split_calls) == len(insert_calls) == 2
+    reallocator_instructions = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(
+            fixture.reallocator
+        )
+    )
+    page_lineage = next(
+        decoded
+        for decoded in reallocator_instructions
+        if decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == "edi"
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[1].mem.base) == "ebx"
+        and decoded.operands[1].mem.disp == 4
+    )
+    resize_page_untag = next(
+        decoded
+        for decoded in reallocator_instructions
+        if decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == "edi"
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFFE
+    )
+    assert page_lineage.address < resize_page_untag.address
+    for split_call, insert_call in zip(split_calls, insert_calls):
+        assert split_call.address < insert_call.address
+        result_lineage = next(
+            decoded
+            for decoded in reallocator_instructions
+            if split_call.address < decoded.address < insert_call.address
+            and decoded.id == capstone.x86.X86_INS_MOV
+            and decoded.operands[0].type == capstone.x86.X86_OP_REG
+            and recovery._register_family(decoded.operands[0].reg) == "ebp"
+            and decoded.operands[1].type == capstone.x86.X86_OP_REG
+            and recovery._register_family(decoded.operands[1].reg) == "eax"
+        )
+        arguments = tuple(
+            recovery._pushed_call_argument(insert_call.address, index)
+            for index in range(2)
+        )
+        assert all(argument is not None for argument in arguments)
+        assert tuple(
+            recovery._register_family(argument[1].reg)
+            for argument in arguments[:2]
+        ) == ("edi", "ebp")
+        assert recovery._pushed_call_argument(insert_call.address, 2) is None
+        page_push = arguments[0][0]
+        assert recovery._register_definitions_across_blocks(
+            page_push.address,
+            "edi",
+            fixture.reallocator,
+        ) == {resize_page_untag.address}
+        assert resize_page_untag.id == capstone.x86.X86_INS_AND
+        assert (
+            resize_page_untag.operands[1].imm & 0xFFFF_FFFF
+            == 0xFFFF_FFFE
+        )
+        assert resize_page_untag.address < page_push.address
+        assert result_lineage.address < arguments[1][0].address
+
+    insert_instructions = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(
+            fixture.block_inserter
+        )
+    )
+    size_load = next(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[1].mem.base) == "esi"
+        and decoded.operands[1].mem.disp == 0
+    )
+    size_family = recovery._register_family(size_load.operands[0].reg)
+    clear_allocated = next(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[0].mem.base) == "esi"
+        and decoded.operands[0].mem.disp == 0
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFFD
+    )
+    size_mask = next(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == size_family
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFF8
+    )
+    successor = next(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_LEA
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and {
+            recovery._register_family(decoded.operands[1].mem.base),
+            recovery._register_family(decoded.operands[1].mem.index),
+        }
+        == {"esi", size_family}
+        and decoded.operands[1].mem.disp == 0
+    )
+    assert recovery._register_definitions_across_blocks(
+        successor.address,
+        size_family,
+        fixture.block_inserter,
+    ) == {size_mask.address}
+    successor_family = recovery._register_family(successor.operands[0].reg)
+    clear_previous_allocated = next(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[0].mem.base)
+        == successor_family
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFFB
+    )
+    footer_store = next(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[0].mem.base)
+        == successor_family
+        and decoded.operands[0].mem.disp == -4
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[1].reg) == size_family
+    )
+    first_list_write = next(
+        decoded
+        for decoded in insert_instructions
+        if decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.disp in {8, 12}
+    )
+    coalescer_calls = recovery._function_direct_calls(fixture.block_inserter)
+    assert tuple(call.target for call in coalescer_calls) == fixture.coalescers
+    assert (
+        size_load.address
+        < clear_allocated.address
+        < size_mask.address
+        < successor.address
+        < clear_previous_allocated.address
+        < footer_store.address
+        < first_list_write.address
+        < coalescer_calls[0].address
+        < coalescer_calls[1].address
+    )
+    assert not any(
+        decoded.address < footer_store.address
+        and decoded.group(capstone.CS_GRP_JUMP)
+        for decoded in insert_instructions
+    )
+
+
+def test_private_page_arena_inserter_refreshes_largest_free_from_survivor():
+    fixture = private_page_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+
+    calls = recovery._function_direct_calls(fixture.block_inserter)
+    assert tuple(call.target for call in calls) == fixture.coalescers
+    instructions = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(
+            fixture.block_inserter
+        )
+    )
+    survivor_load = next(
+        decoded
+        for decoded in instructions
+        if decoded.address > calls[1].address
+        and decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[1].mem.disp == 0
+        and recovery._register_family(decoded.operands[1].mem.base) == "eax"
+    )
+    size_family = recovery._register_family(survivor_load.operands[0].reg)
+    size_mask = next(
+        decoded
+        for decoded in instructions
+        if decoded.address > survivor_load.address
+        and decoded.id == capstone.x86.X86_INS_AND
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[0].reg) == size_family
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFF8
+    )
+    size_comparison = next(
+        decoded
+        for decoded in instructions
+        if decoded.address > size_mask.address
+        and decoded.id == capstone.x86.X86_INS_CMP
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[0].mem.base) == "ebx"
+        and decoded.operands[0].mem.disp == 8
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[1].reg) == size_family
+    )
+    size_store = next(
+        decoded
+        for decoded in instructions
+        if decoded.address > size_comparison.address
+        and decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and recovery._register_family(decoded.operands[0].mem.base) == "ebx"
+        and decoded.operands[0].mem.disp == 8
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and recovery._register_family(decoded.operands[1].reg) == size_family
+    )
+    guard = recovery._owned_decoded(
+        size_comparison.address + size_comparison.size
+    )
+    assert guard.mnemonic in {"jae", "jnb"}
+    assert recovery._direct_target(guard) > size_store.address
+    assert calls[1].address < survivor_load.address < size_store.address
+    assert not any(
+        decoded.address > calls[1].address
+        and decoded.id == capstone.x86.X86_INS_MOV
+        and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[1].mem.disp in {8, 12}
+        and recovery._register_family(decoded.operands[1].mem.base) != "ebx"
+        for decoded in instructions
+    )
+
+
+def test_private_page_arena_split_guard_mutation_is_one_branch_seam():
+    default = private_page_arena_image()
+    mutated = private_page_arena_image(mutation="split-missing-guard")
+    recoveries = []
+    for fixture in (default, mutated):
+        recovery = _DirectCfgRecovery(
+            fixture.arena.image,
+            build_seed_inventory(fixture.arena.image, ()),
+            replace(
+                generous_limits(fixture.arena.image),
+                max_instructions=1024,
+                max_blocks=1024,
+            ),
+        )
+        recovery.recover()
+        recoveries.append(recovery)
+    default_recovery, mutated_recovery = recoveries
+    threshold = next(
+        default_recovery._owned_decoded(address)
+        for address in default_recovery._function_instruction_addresses(
+            default.selector
+        )
+        if (decoded := default_recovery._owned_decoded(address)).id
+        == capstone.x86.X86_INS_CMP
+        and len(decoded.operands) == 2
+        and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        and decoded.operands[1].imm == 0x50
+    )
+    guard_address = threshold.address + threshold.size
+    guard = default_recovery._owned_decoded(guard_address)
+    assert guard.mnemonic in {"jb", "jnae"}
+    assert mutated.arena.image.read(guard_address, guard.size) == b"\x90\x90"
+    changed_addresses = {
+        address
+        for address in range(default.selector, default.splitter)
+        if default.arena.image.read(address, 1)
+        != mutated.arena.image.read(address, 1)
+    }
+    assert changed_addresses == set(
+        range(guard.address, guard.address + guard.size)
+    )
+    assert {
+        (call.address, call.target) for call in default_recovery.direct_calls
+    } == {
+        (call.address, call.target) for call in mutated_recovery.direct_calls
+    }
+
+
+_PRIVATE_PAGE_ARENA_MUTATION_COVERAGE = (
+    ("extent-mask", "one-fact-matrix"),
+    ("sentinel-displacement", "one-fact-matrix"),
+    ("missing-first-block", "one-fact-matrix"),
+    ("boundary-out-of-range", "one-fact-matrix"),
+    ("ring-broken-singleton", "one-fact-matrix"),
+    ("selector-foreign-page", "one-fact-matrix"),
+    ("unlink-partial", "one-fact-matrix"),
+    ("split-missing-second-initializer", "one-fact-matrix"),
+    ("unlink-missing-empty-largest", "one-fact-matrix"),
+    ("insert-keeps-allocated", "one-fact-matrix"),
+    ("insert-keeps-successor-prev-allocated", "one-fact-matrix"),
+    ("block-initializer-free-clears-successor", "one-fact-matrix"),
+    ("block-initializer-masks-header", "one-fact-matrix"),
+    ("block-initializer-header-before-page", "one-fact-matrix"),
+    ("insert-missing-footer", "one-fact-matrix"),
+    ("resize-insert-missing-page-untag", "one-fact-matrix"),
+    ("insert-uses-unmasked-size", "one-fact-matrix"),
+    ("initial-block-prev-allocated", "one-fact-matrix"),
+    ("split-missing-guard", "split-guard-seam"),
+    ("coalesce-prev-missing", "missing-coalescer-seam"),
+    ("coalesce-next-missing", "missing-coalescer-seam"),
+    ("missing-largest-free", "largest-free-store-seam"),
+    ("block-page-flags", "page-tag-or-seam"),
+)
+
+
+def test_private_page_arena_mutation_coverage_is_complete():
+    expected = {
+        "extent-mask",
+        "sentinel-displacement",
+        "missing-first-block",
+        "boundary-out-of-range",
+        "missing-largest-free",
+        "ring-broken-singleton",
+        "selector-foreign-page",
+        "split-missing-guard",
+        "split-missing-second-initializer",
+        "unlink-partial",
+        "unlink-missing-empty-largest",
+        "insert-keeps-allocated",
+        "insert-keeps-successor-prev-allocated",
+        "block-initializer-free-clears-successor",
+        "block-initializer-masks-header",
+        "block-initializer-header-before-page",
+        "insert-missing-footer",
+        "resize-insert-missing-page-untag",
+        "insert-uses-unmasked-size",
+        "initial-block-prev-allocated",
+        "coalesce-prev-missing",
+        "coalesce-next-missing",
+        "block-page-flags",
+    }
+    assert {mutation for mutation, _case in _PRIVATE_PAGE_ARENA_MUTATION_COVERAGE} == expected
+    default = private_page_arena_image()
+    for mutation, semantic_case in _PRIVATE_PAGE_ARENA_MUTATION_COVERAGE:
+        assert semantic_case
+        mutated = private_page_arena_image(mutation=mutation)
+        assert mutated.arena.image.sha256 != default.arena.image.sha256
+
+
+def _private_page_normalized_effects_for_fixture(fixture):
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.arena.private_allocator,
+        frozenset({fixture.arena.callback_slot}),
+    )
+    assert contract is not None
+    witness = recovery._publication_private_heap_extent_witness(
+        contract,
+        fixture.arena.private_page_helper,
+    )
+    assert witness is not None
+    effects = recovery._publication_private_heap_effect_closure(witness)
+    assert effects is not None
+    assert recovery._publication_private_heap_effect_closure_is_current(
+        effects
+    )
+    assert len(effects.symbolic_writes) == 13
+    normalized = _normalize_private_page_symbolic_writes(
+        effects.symbolic_writes,
+        _private_page_effect_role_map(fixture),
+    )
+    return recovery, effects, normalized
+
+
+def test_private_page_arena_block_initializer_masks_header_is_provenance_hostile():
+    default = private_page_arena_image()
+    mutated = private_page_arena_image(
+        mutation="block-initializer-masks-header"
+    )
+    seam = default.block_initializer + 0x18
+    assert default.arena.image.read(seam, 3) == b"\x90" * 3
+    assert mutated.arena.image.read(seam, 3) == bytes.fromhex("83 e6 f8")
+    assert {
+        address
+        for address in range(default.block_initializer, default.reallocator)
+        if default.arena.image.read(address, 1)
+        != mutated.arena.image.read(address, 1)
+    } == set(range(seam, seam + 3))
+
+    default_recovery, _default_effects, default_normalized = (
+        _private_page_normalized_effects_for_fixture(default)
+    )
+    mutated_recovery, _mutated_effects, mutated_normalized = (
+        _private_page_normalized_effects_for_fixture(mutated)
+    )
+    assert {
+        (call.address, call.target) for call in default_recovery.direct_calls
+    } == {
+        (call.address, call.target) for call in mutated_recovery.direct_calls
+    }
+    assert tuple(
+        (
+            instruction.address,
+            instruction.mnemonic,
+            default_recovery._direct_target(instruction),
+        )
+        for address in default_recovery._function_instruction_addresses(
+            default.block_initializer
+        )
+        if (instruction := default_recovery._owned_decoded(address)).group(
+            capstone.CS_GRP_JUMP
+        )
+    ) == tuple(
+        (
+            instruction.address,
+            instruction.mnemonic,
+            mutated_recovery._direct_target(instruction),
+        )
+        for address in mutated_recovery._function_instruction_addresses(
+            mutated.block_initializer
+        )
+        if (instruction := mutated_recovery._owned_decoded(address)).group(
+            capstone.CS_GRP_JUMP
+        )
+    )
+    assert default_normalized == (
+        _RETAIL_PRIVATE_PAGE_INITIALIZER_NORMALIZED_WRITES
+    )
+    assert mutated_normalized != (
+        _RETAIL_PRIVATE_PAGE_INITIALIZER_NORMALIZED_WRITES
+    )
+    assert tuple(row[1:9] for row in mutated_normalized) == tuple(
+        row[1:9] for row in default_normalized
+    )
+
+
+def test_private_page_arena_block_initializer_header_before_page_is_order_hostile():
+    default = private_page_arena_image()
+    mutated = private_page_arena_image(
+        mutation="block-initializer-header-before-page"
+    )
+    seam = default.block_initializer + 0x20
+    assert default.arena.image.read(seam, 5) == bytes.fromhex(
+        "89 43 04 89 33"
+    )
+    assert mutated.arena.image.read(seam, 5) == bytes.fromhex(
+        "89 33 89 43 04"
+    )
+    assert {
+        address
+        for address in range(default.block_initializer, default.reallocator)
+        if default.arena.image.read(address, 1)
+        != mutated.arena.image.read(address, 1)
+    } == set(range(seam + 1, seam + 5))
+
+    default_recovery, _default_effects, default_normalized = (
+        _private_page_normalized_effects_for_fixture(default)
+    )
+    mutated_recovery, _mutated_effects, mutated_normalized = (
+        _private_page_normalized_effects_for_fixture(mutated)
+    )
+    assert {
+        (call.address, call.target) for call in default_recovery.direct_calls
+    } == {
+        (call.address, call.target) for call in mutated_recovery.direct_calls
+    }
+    for owner in (default.arena.private_page_helper, default.block_initializer):
+        assert tuple(
+            (
+                instruction.address,
+                instruction.mnemonic,
+                default_recovery._direct_target(instruction),
+            )
+            for address in default_recovery._function_instruction_addresses(owner)
+            if (instruction := default_recovery._owned_decoded(address)).group(
+                capstone.CS_GRP_JUMP
+            )
+        ) == tuple(
+            (
+                instruction.address,
+                instruction.mnemonic,
+                mutated_recovery._direct_target(instruction),
+            )
+            for address in mutated_recovery._function_instruction_addresses(owner)
+            if (instruction := mutated_recovery._owned_decoded(address)).group(
+                capstone.CS_GRP_JUMP
+            )
+        )
+    assert default_normalized == (
+        _RETAIL_PRIVATE_PAGE_INITIALIZER_NORMALIZED_WRITES
+    )
+    assert mutated_normalized != (
+        _RETAIL_PRIVATE_PAGE_INITIALIZER_NORMALIZED_WRITES
+    )
+    assert Counter(row[1:] for row in mutated_normalized) == Counter(
+        row[1:] for row in default_normalized
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    tuple(
+        mutation
+        for mutation, semantic_case in _PRIVATE_PAGE_ARENA_MUTATION_COVERAGE
+        if semantic_case == "one-fact-matrix"
+    ),
+)
+def test_private_page_arena_declared_mutation_is_one_decoded_fact(mutation):
+    default = private_page_arena_image()
+    mutated = private_page_arena_image(mutation=mutation)
+    recoveries = []
+    for fixture in (default, mutated):
+        recovery = _DirectCfgRecovery(
+            fixture.arena.image,
+            build_seed_inventory(
+                fixture.arena.image,
+                (
+                    audit_anchor(
+                        fixture.arena.image,
+                        fixture.page_initializer,
+                    ),
+                    audit_anchor(
+                        fixture.arena.image,
+                        fixture.realloc_driver,
+                    ),
+                ),
+            ),
+            replace(
+                generous_limits(fixture.arena.image),
+                max_instructions=1024,
+                max_blocks=1024,
+            ),
+        )
+        recovery.recover()
+        recoveries.append(recovery)
+    default_recovery, mutated_recovery = recoveries
+
+    default_calls = {
+        (call.address, call.target) for call in default_recovery.direct_calls
+    }
+    mutated_calls = {
+        (call.address, call.target) for call in mutated_recovery.direct_calls
+    }
+    changed = {
+        address
+        for address in range(0x00401000, 0x00401F00)
+        if default.arena.image.read(address, 1)
+        != mutated.arena.image.read(address, 1)
+    }
+    assert changed
+
+    if mutation == "extent-mask":
+        owner = default.arena.private_page_helper
+        seam = next(
+            default_recovery._owned_decoded(address)
+            for address in default_recovery._function_instruction_addresses(owner)
+            if (decoded := default_recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_AND
+            and decoded.operands[0].type == capstone.x86.X86_OP_REG
+            and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+            and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFF8
+        )
+        hostile = mutated_recovery._owned_decoded(seam.address)
+        assert hostile.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFF0
+    elif mutation == "sentinel-displacement":
+        owner = default.arena.private_page_helper
+        seam = next(
+            default_recovery._owned_decoded(address)
+            for address in default_recovery._function_instruction_addresses(owner)
+            if (decoded := default_recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_LEA
+            and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+            and decoded.operands[1].mem.disp == -4
+        )
+        hostile = mutated_recovery._owned_decoded(seam.address)
+        assert hostile.operands[1].mem.disp == -8
+    elif mutation == "missing-first-block":
+        call = next(
+            call
+            for call in default_recovery._function_direct_calls(
+                default.arena.private_page_helper
+            )
+            if call.target == default.block_initializer
+        )
+        seam_start = call.address
+        seam_end = call.address + 5
+        assert mutated.arena.image.read(seam_start, 5) == b"\x90" * 5
+        assert changed == set(range(seam_start, seam_end))
+        assert mutated_calls == default_calls - {(call.address, call.target)}
+        assert mutated_recovery._raw_direct_call_sites(call.target) == (
+            default_recovery._raw_direct_call_sites(call.target)
+            - {call.address}
+        )
+        return
+    elif mutation == "boundary-out-of-range":
+        owner = default.block_initializer
+        seam = next(
+            default_recovery._owned_decoded(address)
+            for address in default_recovery._function_instruction_addresses(owner)
+            if (decoded := default_recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_LEA
+            and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+            and decoded.operands[1].mem.disp == 0
+        )
+        hostile = mutated_recovery._owned_decoded(seam.address)
+        assert hostile.operands[1].mem.disp == 4
+    elif mutation == "ring-broken-singleton":
+        owner = default.page_inserter
+        seam = max(
+            (
+                default_recovery._owned_decoded(address)
+                for address in default_recovery._function_instruction_addresses(
+                    owner
+                )
+                if (decoded := default_recovery._owned_decoded(address)).id
+                == capstone.x86.X86_INS_MOV
+                and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+                and default_recovery._register_family(
+                    decoded.operands[0].mem.base
+                )
+                == "edx"
+                and decoded.operands[0].mem.disp == 4
+                and decoded.operands[1].type == capstone.x86.X86_OP_REG
+            ),
+            key=lambda decoded: decoded.address,
+        )
+        hostile = mutated_recovery._owned_decoded(seam.address)
+        assert (
+            mutated_recovery._register_family(hostile.operands[1].reg)
+            == "eax"
+        )
+    elif mutation == "selector-foreign-page":
+        owner = default.large_allocator
+        selector_calls = tuple(
+            call
+            for call in default_recovery._function_direct_calls(owner)
+            if call.target == default.selector
+        )
+        assert len(selector_calls) == 2
+        default_argument = default_recovery._pushed_call_argument(
+            selector_calls[1].address, 0
+        )
+        mutated_argument = mutated_recovery._pushed_call_argument(
+            selector_calls[1].address, 0
+        )
+        assert default_argument is not None and mutated_argument is not None
+        seam = default_argument[0]
+        assert (
+            default_recovery._register_family(default_argument[1].reg)
+            == "esi"
+        )
+        assert (
+            mutated_recovery._register_family(mutated_argument[1].reg)
+            == "ebx"
+        )
+    elif mutation == "split-missing-second-initializer":
+        owner = default.splitter
+        initializer_calls = tuple(
+            call
+            for call in default_recovery._function_direct_calls(owner)
+            if call.target == default.block_initializer
+        )
+        assert len(initializer_calls) == 2
+        call = initializer_calls[1]
+        seam = default_recovery._owned_decoded(call.address)
+        assert seam.id == capstone.x86.X86_INS_CALL
+        assert seam.size == 5
+        assert mutated.arena.image.read(seam.address, seam.size) == b"\x90" * 5
+        assert changed == set(range(seam.address, seam.address + seam.size))
+        assert mutated_calls == default_calls - {(call.address, call.target)}
+        assert mutated_recovery._raw_direct_call_sites(call.target) == (
+            default_recovery._raw_direct_call_sites(call.target)
+            - {call.address}
+        )
+        return
+    elif mutation == "unlink-missing-empty-largest":
+        owner = default.unlinker
+        seam = next(
+            default_recovery._owned_decoded(address)
+            for address in default_recovery._function_instruction_addresses(owner)
+            if (decoded := default_recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_MOV
+            and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+            and decoded.operands[0].mem.disp == 8
+            and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+            and decoded.operands[1].imm == 0
+        )
+        assert seam.size == 7
+        assert mutated.arena.image.read(seam.address, seam.size) == b"\x90" * 7
+        assert changed == set(range(seam.address, seam.address + seam.size))
+    elif mutation == "insert-keeps-allocated":
+        owner = default.block_inserter
+        seam = next(
+            default_recovery._owned_decoded(address)
+            for address in default_recovery._function_instruction_addresses(owner)
+            if (decoded := default_recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_AND
+            and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+            and decoded.operands[0].mem.disp == 0
+            and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+            and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFFD
+        )
+        assert seam.size == 6
+        assert mutated.arena.image.read(seam.address, seam.size) == b"\x90" * 6
+        assert changed == set(range(seam.address, seam.address + seam.size))
+    elif mutation == "insert-keeps-successor-prev-allocated":
+        owner = default.block_inserter
+        seam = next(
+            default_recovery._owned_decoded(address)
+            for address in default_recovery._function_instruction_addresses(owner)
+            if (decoded := default_recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_AND
+            and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+            and decoded.operands[0].mem.disp == 0
+            and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+            and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFFB
+        )
+        assert seam.size == 3
+        assert mutated.arena.image.read(seam.address, seam.size) == b"\x90" * 3
+        assert changed == set(range(seam.address, seam.address + seam.size))
+    elif mutation == "insert-missing-footer":
+        owner = default.block_inserter
+        seam = next(
+            default_recovery._owned_decoded(address)
+            for address in default_recovery._function_instruction_addresses(owner)
+            if (decoded := default_recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_MOV
+            and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+            and decoded.operands[0].mem.disp == -4
+            and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        )
+        assert seam.size == 3
+        assert mutated.arena.image.read(seam.address, seam.size) == b"\x90" * 3
+        assert changed == set(range(seam.address, seam.address + seam.size))
+    elif mutation == "resize-insert-missing-page-untag":
+        owner = default.reallocator
+        seam = next(
+            default_recovery._owned_decoded(address)
+            for address in default_recovery._function_instruction_addresses(owner)
+            if (decoded := default_recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_AND
+            and decoded.operands[0].type == capstone.x86.X86_OP_REG
+            and default_recovery._register_family(decoded.operands[0].reg)
+            == "edi"
+            and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+            and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFFE
+        )
+        assert seam.size == 3
+        assert mutated.arena.image.read(seam.address, seam.size) == b"\x90" * 3
+        assert changed == set(range(seam.address, seam.address + seam.size))
+        mutated_insert_calls = tuple(
+            call
+            for call in mutated_recovery._function_direct_calls(
+                mutated.reallocator
+            )
+            if call.target == mutated.block_inserter
+        )
+        assert len(mutated_insert_calls) == 2
+        for insert_call in mutated_insert_calls:
+            page_argument = mutated_recovery._pushed_call_argument(
+                insert_call.address,
+                0,
+            )
+            assert page_argument is not None
+            assert mutated_recovery._register_definitions_across_blocks(
+                page_argument[0].address,
+                "edi",
+                mutated.reallocator,
+            ) != {seam.address}
+    elif mutation == "insert-uses-unmasked-size":
+        owner = default.block_inserter
+        seam = next(
+            default_recovery._owned_decoded(address)
+            for address in default_recovery._function_instruction_addresses(owner)
+            if (decoded := default_recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_AND
+            and decoded.operands[0].type == capstone.x86.X86_OP_REG
+            and default_recovery._register_family(decoded.operands[0].reg)
+            == "edx"
+            and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+            and decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFF8
+        )
+        assert seam.size == 3
+        assert mutated.arena.image.read(seam.address, seam.size) == b"\x90" * 3
+        assert changed == set(range(seam.address, seam.address + seam.size))
+        successor = next(
+            default_recovery._owned_decoded(address)
+            for address in default_recovery._function_instruction_addresses(owner)
+            if address > seam.address
+            and (decoded := default_recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_LEA
+            and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+            and {
+                default_recovery._register_family(
+                    decoded.operands[1].mem.base
+                ),
+                default_recovery._register_family(
+                    decoded.operands[1].mem.index
+                ),
+            }
+            == {"esi", "edx"}
+            and decoded.operands[1].mem.disp == 0
+        )
+        assert mutated.arena.image.read(
+            successor.address,
+            successor.size,
+        ) == default.arena.image.read(successor.address, successor.size)
+        assert mutated_recovery._register_definitions_across_blocks(
+            successor.address,
+            "edx",
+            mutated.block_inserter,
+        ) != {seam.address}
+    elif mutation == "initial-block-prev-allocated":
+        owner = default.page_initializer
+        default_call = next(
+            call
+            for call in default_recovery._function_direct_calls(owner)
+            if call.target == default.block_initializer
+        )
+        mutated_call = next(
+            call
+            for call in mutated_recovery._function_direct_calls(owner)
+            if call.target == mutated.block_initializer
+        )
+        assert mutated_call.address == default_call.address
+        default_argument = default_recovery._pushed_call_argument(
+            default_call.address,
+            3,
+        )
+        mutated_argument = mutated_recovery._pushed_call_argument(
+            mutated_call.address,
+            3,
+        )
+        assert default_argument is not None and mutated_argument is not None
+        seam = default_recovery._owned_decoded(default_argument[0].address)
+        assert seam.id == capstone.x86.X86_INS_PUSH
+        assert seam.size == 2
+        assert default_argument[1].type == capstone.x86.X86_OP_IMM
+        assert mutated_argument[1].type == capstone.x86.X86_OP_IMM
+        assert default_argument[1].imm == 0
+        assert mutated_argument[1].imm == 4
+        assert default.arena.image.read(seam.address + 1, 1) == b"\x00"
+        assert mutated.arena.image.read(seam.address + 1, 1) == b"\x04"
+        assert changed == {seam.address + 1}
+        assert default_recovery._raw_direct_call_sites(
+            default.block_initializer
+        ) == mutated_recovery._raw_direct_call_sites(
+            mutated.block_initializer
+        )
+    elif mutation == "block-initializer-masks-header":
+        owner = default.block_initializer
+        default_instructions = tuple(
+            default_recovery._owned_decoded(address)
+            for address in default_recovery._function_instruction_addresses(owner)
+        )
+        header_store = next(
+            decoded
+            for decoded in default_instructions
+            if decoded.id == capstone.x86.X86_INS_MOV
+            and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+            and default_recovery._register_family(decoded.operands[0].mem.base)
+            == "ebx"
+            and decoded.operands[0].mem.disp == 0
+            and decoded.operands[1].type == capstone.x86.X86_OP_REG
+            and default_recovery._register_family(decoded.operands[1].reg)
+            == "esi"
+        )
+        definitions = mutated_recovery._register_definitions_across_blocks(
+            header_store.address,
+            "esi",
+            owner,
+        )
+        assert definitions is not None and len(definitions) == 1
+        seam = mutated_recovery._owned_decoded(next(iter(definitions)))
+        assert seam.address == owner + 0x18
+        assert seam.id == capstone.x86.X86_INS_AND
+        assert seam.size == 3
+        assert seam.operands[0].type == capstone.x86.X86_OP_REG
+        assert mutated_recovery._register_family(seam.operands[0].reg) == "esi"
+        assert seam.operands[1].type == capstone.x86.X86_OP_IMM
+        assert seam.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFF8
+        assert default.arena.image.read(seam.address, seam.size) == b"\x90" * 3
+        assert mutated.arena.image.read(
+            seam.address,
+            seam.size,
+        ) == bytes.fromhex("83 e6 f8")
+        assert changed == set(range(seam.address, seam.address + seam.size))
+
+        default_header_store = default_recovery._owned_decoded(
+            header_store.address
+        )
+        assert default_header_store.id == capstone.x86.X86_INS_MOV
+        assert default.arena.image.read(
+            header_store.address,
+            header_store.size,
+        ) == mutated.arena.image.read(
+            header_store.address,
+            header_store.size,
+        )
+        default_size_load = next(
+            decoded
+            for address in default_recovery._function_instruction_addresses(owner)
+            if (decoded := default_recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_MOV
+            and decoded.operands[0].type == capstone.x86.X86_OP_REG
+            and default_recovery._register_family(decoded.operands[0].reg)
+            == "esi"
+            and decoded.operands[1].type == capstone.x86.X86_OP_MEM
+            and default_recovery._register_family(decoded.operands[1].mem.base)
+            == "esp"
+            and decoded.operands[1].mem.disp == 0x18
+        )
+        assert default_recovery._register_definitions_across_blocks(
+            default_header_store.address,
+            "esi",
+            owner,
+        ) == {default_size_load.address}
+    elif mutation == "block-initializer-header-before-page":
+        owner = default.block_initializer
+        page_store = next(
+            default_recovery._owned_decoded(address)
+            for address in default_recovery._function_instruction_addresses(owner)
+            if (decoded := default_recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_MOV
+            and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+            and default_recovery._register_family(decoded.operands[0].mem.base)
+            == "ebx"
+            and decoded.operands[0].mem.disp == 4
+        )
+        header_store = default_recovery._owned_decoded(
+            page_store.address + page_store.size
+        )
+        assert default.arena.image.read(
+            page_store.address,
+            page_store.size + header_store.size,
+        ) == bytes.fromhex("89 43 04 89 33")
+        assert mutated.arena.image.read(
+            page_store.address,
+            page_store.size + header_store.size,
+        ) == bytes.fromhex("89 33 89 43 04")
+        assert changed == set(range(page_store.address + 1, page_store.address + 5))
+        assert default_calls == mutated_calls
+        targets = {target for _address, target in default_calls}
+        assert {
+            target: default_recovery._raw_direct_call_sites(target)
+            for target in targets
+        } == {
+            target: mutated_recovery._raw_direct_call_sites(target)
+            for target in targets
+        }
+        return
+    elif mutation == "block-initializer-free-clears-successor":
+        owner = default.block_initializer
+        allocation_compare = max(
+            (
+                default_recovery._owned_decoded(address)
+                for address in default_recovery._function_instruction_addresses(
+                    owner
+                )
+                if (decoded := default_recovery._owned_decoded(address)).id
+                == capstone.x86.X86_INS_CMP
+                and decoded.operands[0].type == capstone.x86.X86_OP_REG
+                and default_recovery._register_family(
+                    decoded.operands[0].reg
+                )
+                == "edx"
+                and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+                and decoded.operands[1].imm == 0
+            ),
+            key=lambda decoded: decoded.address,
+        )
+        free_branch = default_recovery._owned_decoded(
+            allocation_compare.address + allocation_compare.size
+        )
+        seam_address = default_recovery._direct_target(free_branch)
+        assert seam_address is not None
+        seam = mutated_recovery._owned_decoded(seam_address)
+        assert seam.id == capstone.x86.X86_INS_AND
+        assert seam.size == 3
+        assert seam.operands[0].type == capstone.x86.X86_OP_MEM
+        assert mutated_recovery._register_family(seam.operands[0].mem.base) == "eax"
+        assert seam.operands[0].mem.disp == 0
+        assert seam.operands[1].type == capstone.x86.X86_OP_IMM
+        assert seam.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFFB
+        assert default.arena.image.read(seam.address, seam.size) == b"\x90" * 3
+        assert mutated.arena.image.read(seam.address, seam.size) == bytes.fromhex(
+            "83 20 fb"
+        )
+        assert changed == set(range(seam.address, seam.address + seam.size))
+
+        default_footer = default_recovery._owned_decoded(seam.address + seam.size + 2)
+        mutated_footer = mutated_recovery._owned_decoded(seam.address + seam.size + 2)
+        assert default_footer.id == mutated_footer.id == capstone.x86.X86_INS_MOV
+        assert default_footer.operands[0].type == capstone.x86.X86_OP_MEM
+        assert default_footer.operands[0].mem.disp == -4
+        assert default.arena.image.read(
+            default_footer.address,
+            default_footer.size,
+        ) == mutated.arena.image.read(mutated_footer.address, mutated_footer.size)
+    else:
+        assert mutation == "unlink-partial"
+        owner = default.unlinker
+        reciprocal = tuple(
+            default_recovery._owned_decoded(address)
+            for address in default_recovery._function_instruction_addresses(owner)
+            if (decoded := default_recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_MOV
+            and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+            and decoded.operands[0].mem.disp in {8, 12}
+            and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        )
+        assert len(reciprocal) == 2
+        seam = reciprocal[0]
+        assert mutated.arena.image.read(seam.address, seam.size) == b"\x90" * seam.size
+        hostile_displacements = {
+            decoded.operands[0].mem.disp
+            for address in mutated_recovery._function_instruction_addresses(owner)
+            if (decoded := mutated_recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_MOV
+            and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+            and decoded.operands[0].mem.disp in {8, 12}
+            and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        }
+        assert hostile_displacements == {12}
+
+    assert changed <= set(range(seam.address, seam.address + seam.size))
+    assert default_calls == mutated_calls
+    targets = {target for _address, target in default_calls}
+    assert {
+        target: default_recovery._raw_direct_call_sites(target)
+        for target in targets
+    } == {
+        target: mutated_recovery._raw_direct_call_sites(target)
+        for target in targets
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "coalescer_index"),
+    (
+        ("coalesce-prev-missing", 0),
+        ("coalesce-next-missing", 1),
+    ),
+)
+def test_private_page_arena_missing_coalescer_is_one_call_seam(
+    mutation,
+    coalescer_index,
+):
+    default = private_page_arena_image()
+    mutated = private_page_arena_image(mutation=mutation)
+    recoveries = []
+    for fixture in (default, mutated):
+        recovery = _DirectCfgRecovery(
+            fixture.arena.image,
+            build_seed_inventory(fixture.arena.image, ()),
+            replace(
+                generous_limits(fixture.arena.image),
+                max_instructions=1024,
+                max_blocks=1024,
+            ),
+        )
+        recovery.recover()
+        recoveries.append(recovery)
+
+    default_recovery, mutated_recovery = recoveries
+    target = default.coalescers[coalescer_index]
+    call = next(
+        call
+        for call in default_recovery._function_direct_calls(
+            default.block_inserter
+        )
+        if call.target == target
+    )
+    assert mutated.arena.image.read(call.address, 5) == b"\x90" * 5
+    changed_addresses = {
+        address
+        for address in range(default.block_inserter, default.coalescers[0])
+        if default.arena.image.read(address, 1)
+        != mutated.arena.image.read(address, 1)
+    }
+    assert changed_addresses == set(range(call.address, call.address + 5))
+    default_raw_sites = default_recovery._raw_direct_call_sites(target)
+    assert call.address in default_raw_sites
+    assert mutated_recovery._raw_direct_call_sites(target) == (
+        default_raw_sites - {call.address}
+    )
+
+
+def test_private_page_arena_coalescers_detach_nodes_before_guarded_removal():
+    fixture = private_page_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+
+    for coalescer in fixture.coalescers:
+        calls = recovery._function_direct_calls(coalescer)
+        assert calls == ()
+        addresses = recovery._function_instruction_addresses(coalescer)
+        reciprocal_write_displacements = {
+            operand.mem.disp
+            for address in addresses
+            for operand in recovery._owned_decoded(address).operands
+            if operand.type == capstone.x86.X86_OP_MEM
+            and operand.access & capstone.CS_AC_WRITE
+        }
+        assert reciprocal_write_displacements >= {8, 12}
+        assert -4 in reciprocal_write_displacements
+
+    arena_free = fixture.arena_free
+    addresses = recovery._function_instruction_addresses(arena_free)
+    arena_calls = recovery._function_direct_calls(arena_free)
+    assert tuple(call.target for call in arena_calls[:2]) == (
+        fixture.block_inserter,
+        fixture.page_remover,
+    )
+    assert len(arena_calls) == 3
+    removal_call = arena_calls[1].address
+    insertion_call = arena_calls[0].address
+    assert not any(
+        operand.type == capstone.x86.X86_OP_MEM
+        and operand.access & capstone.CS_AC_WRITE
+        and operand.mem.base != capstone.x86.X86_REG_INVALID
+        and operand.mem.disp == 0
+        for address in addresses
+        if address < insertion_call
+        for operand in recovery._owned_decoded(address).operands
+    )
+    guarding_branches = tuple(
+        address
+        for address in addresses
+        if address < removal_call
+        and recovery._owned_decoded(address).group(capstone.CS_GRP_JUMP)
+        and recovery._owned_decoded(address).mnemonic != "jmp"
+    )
+    assert len(guarding_branches) == 5
+    assert all(
+        (target := recovery._direct_target(recovery._owned_decoded(address)))
+        is not None
+        and target > removal_call
+        for address in guarding_branches
+    )
+    guarded_read_displacements = {
+        operand.mem.disp
+        for address in addresses
+        if address < removal_call
+        for operand in recovery._owned_decoded(address).operands
+        if operand.type == capstone.x86.X86_OP_MEM
+        and operand.access & capstone.CS_AC_READ
+        and operand.mem.base != capstone.x86.X86_REG_ESP
+    }
+    assert guarded_read_displacements >= {0, 4, 8, 12}
+    assert not any(
+        operand.type == capstone.x86.X86_OP_MEM
+        and operand.access & capstone.CS_AC_READ
+        and operand.mem.disp == 8
+        and operand.mem.base == capstone.x86.X86_REG_ESI
+        for address in addresses
+        for operand in recovery._owned_decoded(address).operands
+    )
+
+
+def test_private_page_arena_missing_largest_free_is_one_store_seam():
+    default = private_page_arena_image()
+    mutated = private_page_arena_image(mutation="missing-largest-free")
+    recoveries = []
+    for fixture in (default, mutated):
+        recovery = _DirectCfgRecovery(
+            fixture.arena.image,
+            build_seed_inventory(fixture.arena.image, ()),
+            replace(
+                generous_limits(fixture.arena.image),
+                max_instructions=1024,
+                max_blocks=1024,
+            ),
+        )
+        recovery.recover()
+        recoveries.append(recovery)
+
+    default_recovery, mutated_recovery = recoveries
+    helper = default.arena.private_page_helper
+    largest_free_store = next(
+        default_recovery._owned_decoded(address)
+        for address in default_recovery._function_instruction_addresses(
+            helper
+        )
+        if any(
+            operand.type == capstone.x86.X86_OP_MEM
+            and operand.access & capstone.CS_AC_WRITE
+            and operand.mem.base == capstone.x86.X86_REG_EBP
+            and operand.mem.disp == 8
+            for operand in default_recovery._owned_decoded(address).operands
+        )
+    )
+    changed_addresses = {
+        address
+        for address in range(helper, default.splitter)
+        if default.arena.image.read(address, 1)
+        != mutated.arena.image.read(address, 1)
+    }
+    assert changed_addresses
+    assert changed_addresses <= set(
+        range(
+            largest_free_store.address,
+            largest_free_store.address + largest_free_store.size,
+        )
+    )
+
+    contracts = tuple(
+        recovery._private_heap_allocator_contract(
+            fixture.arena.private_allocator,
+            frozenset({fixture.arena.callback_slot}),
+        )
+        for fixture, recovery in zip(
+            (default, mutated), recoveries, strict=True
+        )
+    )
+    assert all(contract is not None for contract in contracts)
+    assert contracts[0].page_provider == contracts[1].page_provider
+    assert contracts[0].large_allocator == contracts[1].large_allocator
+    effects = []
+    for fixture, recovery, contract in zip(
+        (default, mutated), recoveries, contracts, strict=True
+    ):
+        extent = recovery._publication_private_heap_extent_witness(
+            contract, fixture.arena.private_page_helper
+        )
+        assert extent is not None
+        effect = recovery._publication_private_heap_effect_closure(extent)
+        effects.append(effect)
+    assert effects[0] is not None
+    assert effects[1] is None
+    assert {
+        call.target
+        for call in default_recovery._function_direct_calls(helper)
+    } == {
+        call.target
+        for call in mutated_recovery._function_direct_calls(helper)
+    }
+
+
+def test_private_page_arena_block_page_flags_is_register_only_or_seam():
+    default = private_page_arena_image()
+    mutated = private_page_arena_image(mutation="block-page-flags")
+    recoveries = []
+    for fixture in (default, mutated):
+        recovery = _DirectCfgRecovery(
+            fixture.arena.image,
+            build_seed_inventory(fixture.arena.image, ()),
+            replace(
+                generous_limits(fixture.arena.image),
+                max_instructions=1024,
+                max_blocks=1024,
+            ),
+        )
+        recovery.recover()
+        recoveries.append(recovery)
+    default_recovery, mutated_recovery = recoveries
+    initializer = default.block_initializer
+    default_or = next(
+        default_recovery._owned_decoded(address)
+        for address in default_recovery._function_instruction_addresses(
+            initializer
+        )
+        if default_recovery._owned_decoded(address).id
+        == capstone.x86.X86_INS_OR
+        and default_recovery._owned_decoded(address).operands[1].type
+        == capstone.x86.X86_OP_IMM
+        and default_recovery._owned_decoded(address).operands[1].imm == 1
+    )
+    mutated_or = mutated_recovery._owned_decoded(default_or.address)
+    assert default_or.operands[0].type == capstone.x86.X86_OP_REG
+    assert default_or.operands[1].type == capstone.x86.X86_OP_IMM
+    assert default_or.operands[1].imm == 1
+    assert mutated_or.operands[0].type == capstone.x86.X86_OP_REG
+    assert mutated_or.operands[1].type == capstone.x86.X86_OP_IMM
+    assert mutated_or.operands[1].imm == 2
+    changed_addresses = {
+        address
+        for address in range(initializer, default.reallocator)
+        if default.arena.image.read(address, 1)
+        != mutated.arena.image.read(address, 1)
+    }
+    assert changed_addresses
+    assert changed_addresses <= set(
+        range(default_or.address, default_or.address + default_or.size)
+    )
+    assert {
+        (call.address, call.target) for call in default_recovery.direct_calls
+    } == {
+        (call.address, call.target) for call in mutated_recovery.direct_calls
+    }
+    for recovery in recoveries:
+        alignment_masks = tuple(
+            recovery._owned_decoded(address)
+            for function_entry in (
+                default.selector,
+                default.splitter,
+                default.unlinker,
+                default.block_inserter,
+                *default.coalescers,
+                default.block_initializer,
+            )
+            for address in recovery._function_instruction_addresses(
+                function_entry
+            )
+            if recovery._owned_decoded(address).id
+            == capstone.x86.X86_INS_AND
+            and recovery._owned_decoded(address).operands[1].type
+            == capstone.x86.X86_OP_IMM
+            and recovery._owned_decoded(address).operands[1].imm
+            & 0xFFFF_FFFF
+            == 0xFFFF_FFF8
+        )
+        assert alignment_masks
+        assert all(
+            instruction.operands[0].type == capstone.x86.X86_OP_REG
+            and instruction.operands[1].type == capstone.x86.X86_OP_IMM
+            for instruction in alignment_masks
+        )
+        arena_masks = {
+            instruction.operands[1].imm & 0xFFFF_FFFF
+            for address in recovery._function_instruction_addresses(
+                default.arena_free
+            )
+            if (instruction := recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_AND
+        }
+        assert arena_masks == {0xFFFF_FFF8, 0xFFFF_FFFE}
+        inserter_masks = {
+            instruction.operands[1].imm & 0xFFFF_FFFF
+            for address in recovery._function_instruction_addresses(
+                default.block_inserter
+            )
+            if (instruction := recovery._owned_decoded(address)).id
+            == capstone.x86.X86_INS_AND
+            and instruction.operands[1].type == capstone.x86.X86_OP_IMM
+        }
+        assert inserter_masks == {
+            0xFFFF_FFF8,
+            0xFFFF_FFFD,
+            0xFFFF_FFFB,
+        }
+
+
+def test_private_page_provider_returns_with_balanced_stack():
+    fixture = private_page_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+    function_entry = fixture.page_provider
+    following_entry = recovery._following_function_entry(function_entry)
+    pending = [(function_entry, 0)]
+    seen = set()
+    returns = []
+    while pending:
+        address, incoming_delta = pending.pop()
+        state = (address, incoming_delta)
+        if state in seen:
+            continue
+        seen.add(state)
+        decoded = recovery._owned_decoded(address)
+        outgoing_delta = incoming_delta
+        if decoded.mnemonic == "push":
+            outgoing_delta -= 4
+        elif decoded.mnemonic == "pop":
+            outgoing_delta += 4
+        elif (
+            decoded.id in {
+                capstone.x86.X86_INS_ADD,
+                capstone.x86.X86_INS_SUB,
+            }
+            and len(decoded.operands) == 2
+            and decoded.operands[0].type == capstone.x86.X86_OP_REG
+            and decoded.operands[0].reg == capstone.x86.X86_REG_ESP
+            and decoded.operands[1].type == capstone.x86.X86_OP_IMM
+        ):
+            amount = decoded.operands[1].imm
+            outgoing_delta += (
+                amount
+                if decoded.id == capstone.x86.X86_INS_ADD
+                else -amount
+            )
+        if decoded.group(capstone.CS_GRP_RET):
+            returns.append((address, outgoing_delta))
+            continue
+        pending.extend(
+            (successor, outgoing_delta)
+            for successor in recovery._summary_successors(
+                address, function_entry, following_entry
+            )
+        )
+
+    assert len(returns) == 2
+    assert {delta for _address, delta in returns} == {0}
+
+
+def test_private_page_arena_still_requires_an_inductive_witness(
+    monkeypatch,
+):
+    fixture = private_page_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+    contract = recovery._private_heap_allocator_contract(
+        fixture.arena.private_allocator,
+        frozenset({fixture.arena.callback_slot}),
+    )
+    assert contract is not None
+    extent = recovery._publication_private_heap_extent_witness(
+        contract, fixture.arena.private_page_helper
+    )
+    assert extent is not None
+    effects = recovery._publication_private_heap_effect_closure(extent)
+    assert effects is not None
+    assert fixture.selector not in effects.function_entries
+    assert any(
+        recovery._owned_decoded(address).group(capstone.CS_GRP_JUMP)
+        and (target := recovery._direct_target(recovery._owned_decoded(address)))
+        is not None
+        and fixture.large_allocator <= target < address
+        for address in recovery._function_instruction_addresses(
+            fixture.large_allocator
+        )
+    )
+    returning_entries = recovery._direct_function_call_closure(
+        fixture.arena.private_allocator
+    )
+    assert {
+        fixture.large_allocator,
+        fixture.page_provider,
+        fixture.page_inserter,
+        fixture.selector,
+        fixture.splitter,
+        fixture.unlinker,
+        fixture.block_inserter,
+    } <= returning_entries
+    returning_bodies = tuple(
+        recovery._publication_function_body(entry)
+        for entry in sorted(returning_entries)
+    )
+    assert all(body is not None for body in returning_bodies)
+    root_calls = tuple(
+        call
+        for call in recovery._function_direct_calls(
+            fixture.arena.publication_body
+        )
+        if call.target == fixture.arena.private_allocator
+    )
+    assert len(root_calls) == 1
+    internal_calls = tuple(
+        call
+        for owner in sorted(returning_entries)
+        for call in recovery._function_direct_calls(owner)
+        if call.target in returning_entries
+    )
+    edge_calls = tuple(
+        sorted(
+            {*root_calls, *internal_calls},
+            key=lambda call: (call.address, call.target),
+        )
+    )
+    call_edges = tuple(
+        x86_cfg_module._PublicationCallEdge(
+            source_address=call.address,
+            target_address=call.target,
+            flow_kind="direct",
+            returns_to_continuation=True,
+        )
+        for call in edge_calls
+    )
+    assert internal_calls
+    assert all(
+        recovery.direct_call_targets_by_source[edge.source_address]
+        == edge.target_address
+        for edge in call_edges
+    )
+    import_witnesses = tuple(
+        witness
+        for terminal in sorted(
+            recovery.terminal_external_edges,
+            key=lambda row: row.source,
+        )
+        if recovery._registrar_function_entry(terminal.source)
+        in returning_entries
+        if (
+            witness := recovery._exact_publication_import_effect(
+                terminal.source,
+                fixture.arena.callback_slot,
+            )
+        )
+        is not None
+    )
+    assert import_witnesses
+    import_edges = tuple(
+        x86_cfg_module._PublicationCallEdge(
+            source_address=witness.call_address,
+            target_address=witness.iat_va,
+            flow_kind="import",
+            returns_to_continuation=True,
+        )
+        for witness in import_witnesses
+    )
+    closure = x86_cfg_module._ReturningPublicationClosure(
+        bodies=tuple(
+            returning_body
+            for returning_body in returning_bodies
+            if returning_body is not None
+        ),
+        call_edges=call_edges + import_edges,
+        candidate_targets=frozenset(
+            edge.target_address for edge in call_edges
+        ),
+        imports=import_witnesses,
+    )
+    assert {
+        returning_body.function_entry for returning_body in closure.bodies
+    } == returning_entries
+    root_call = root_calls[0]
+    call_return_domains = (
+        (
+            root_call.address,
+            "private-heap",
+            frozenset(),
+        ),
+    )
+    allocator_certificate = SimpleNamespace(
+        call_return_domains=call_return_domains
+    )
+    bridge = x86_cfg_module._PublicationBackendBridge(
+        consumer_entry=fixture.arena.publication_body,
+        incoming_calls=(),
+        allocator_certificate=allocator_certificate,
+        backend_root=fixture.arena.private_allocator,
+        backend_bodies=closure.bodies,
+    )
+    body_entries = frozenset(
+        returning_body.function_entry for returning_body in closure.bodies
+    )
+    root_edges = tuple(
+        edge
+        for edge in closure.call_edges
+        if recovery._registrar_function_entry(edge.source_address)
+        not in body_entries
+    )
+    assert len(root_edges) == 1
+    assert (
+        root_edges[0].source_address
+        == fixture.arena.publication_body_private_call
+    )
+    assert root_edges[0].target_address == fixture.arena.private_allocator
+    assert {
+        call_address
+        for call_address, _kind, _values in (
+            bridge.allocator_certificate.call_return_domains
+        )
+    } == {root_edges[0].source_address}
+
+    assert recovery._publication_body_address_domains(
+        fixture.arena.callback_slot,
+        closure,
+        (bridge,),
+        excluded_functions=returning_entries,
+    ) == ()
+
+    intended_address = fixture.selector + 0xC
+    intended = recovery._owned_decoded(intended_address)
+    assert intended.id == capstone.x86.X86_INS_MOV
+    assert len(intended.operands) == 2
+    intended_memory = intended.operands[1]
+    assert intended_memory.type == capstone.x86.X86_OP_MEM
+    assert intended_memory.access & capstone.CS_AC_READ
+    assert intended_memory.mem.base == capstone.x86.X86_REG_EBX
+    assert intended_memory.mem.disp == 0xC
+
+    definition_queries = []
+    original_definitions = recovery._register_definitions_across_blocks
+
+    def traced_definitions(address, register_family, function_entry):
+        if function_entry == fixture.selector:
+            definition_queries.append((address, register_family))
+        return original_definitions(
+            address,
+            register_family,
+            function_entry,
+        )
+
+    monkeypatch.setattr(
+        recovery,
+        "_register_definitions_across_blocks",
+        traced_definitions,
+    )
     assert (
         recovery._publication_body_address_domains(
-            fixture.arena.callback_slot, closure, (bridge,)
+            fixture.arena.callback_slot,
+            closure,
+            (bridge,),
+            excluded_functions=frozenset(
+                returning_entries - {fixture.selector}
+            ),
         )
         is None
     )
+    intended_queries = tuple(
+        index
+        for index, (address, register_family) in enumerate(
+            definition_queries
+        )
+        if address == intended_address and register_family == "ebx"
+    )
+    assert intended_queries
+    assert max(
+        address
+        for address, _register_family in definition_queries[
+            intended_queries[-1] :
+        ]
+    ) == intended_address
 
 
 @pytest.mark.parametrize(
