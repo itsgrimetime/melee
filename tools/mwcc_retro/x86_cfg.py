@@ -22782,6 +22782,18 @@ class _DirectCfgRecovery:
         lifetime_roots: frozenset[int] = frozenset(),
     ) -> _AllocatorTotalityCertificate | None:
         """Prove arena allocation total inside one checked backend session."""
+        # The retired transaction slice used to incidentally reject a changed
+        # callback generation on legacy callers that have not yet named a
+        # returning lifetime.  Preserve that independent Phase-A boundary:
+        # an unscoped totality query may proceed only after the structural
+        # session proof has closed callback installation through backend
+        # entry.  Final publication still consumes totality solely through
+        # `_allocator_totality_from_returning_closure`, with a non-null seal.
+        if not lifetime_roots and self._allocator_session_certificate(
+            allocator,
+            allocation_caller,
+        ) is None:
+            return None
         result = self._allocator_certificate_candidate(
             allocator,
             allocation_caller,
