@@ -4081,6 +4081,188 @@ def finalized_handle_arena_image(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class PrivatePageArenaFixture:
+    """Addresses for the synthetic closed page-ring/block-arena graph."""
+
+    arena: FinalizedHandleArenaFixture
+    page_head_slot: int
+    page_provider: int
+    large_allocator: int
+    page_inserter: int
+    page_remover: int
+    selector: int
+    selector_calls: tuple[int, int]
+    splitter: int
+    unlinker: int
+    block_inserter: int
+    coalescers: tuple[int, int]
+
+
+def private_page_arena_image(
+    *, mutation: str | None = None,
+) -> PrivatePageArenaFixture:
+    """Return a closed synthetic page ring with a split/coalesce block arena.
+
+    This deliberately remains fixture-only evidence.  The graph is reachable
+    from a replacement PE entrypoint and is composed of decoded x86 writes,
+    calls, and loops rather than test metadata or named-role shortcuts.
+    """
+    assert mutation is None
+    base = finalized_handle_arena_image()
+    text_va = 0x00401000
+    data_va = 0x00403000
+    text_size = 0xE00
+    data_size = 0x400
+    raw = bytearray(text_size + data_size)
+    raw[:0x800] = base.image.data[:0x800]
+    raw[text_size:] = base.image.data[0x800:0xC00]
+    page_head_slot = data_va + 0x180
+    arena_root = text_va + 0x800
+    page_provider = text_va + 0x840
+    large_allocator = text_va + 0x900
+    page_inserter = text_va + 0x940
+    page_remover = text_va + 0x980
+    selector = text_va + 0x9C0
+    splitter = text_va + 0xA40
+    unlinker = text_va + 0xA80
+    block_inserter = text_va + 0xAC0
+    coalesce_left = text_va + 0xB00
+    coalesce_right = text_va + 0xB40
+    arena_free = text_va + 0xB80
+
+    def emit(address: int, encoded: str) -> int:
+        code = bytes.fromhex(encoded)
+        offset = address - text_va
+        raw[offset : offset + len(code)] = code
+        return address + len(code)
+
+    def emit_call(address: int, target: int) -> int:
+        offset = address - text_va
+        raw[offset] = 0xE8
+        raw[offset + 1 : offset + 5] = (target - address - 5).to_bytes(
+            4, "little", signed=True
+        )
+        return address + 5
+
+    def emit_abs(address: int, prefix: str, target: int) -> int:
+        return emit(address, prefix + target.to_bytes(4, "little").hex())
+
+    # The root gives CFG recovery a finite owner for every arena role.
+    cursor = emit(arena_root, "6a 00")
+    cursor = emit_call(cursor, large_allocator)
+    cursor = emit(cursor, "59 50")
+    cursor = emit_call(cursor, page_remover)
+    cursor = emit(cursor, "59 50")
+    cursor = emit_call(cursor, arena_free)
+    emit(cursor, "59 c3")
+
+    # Provider allocates one page, makes it a singleton circular ring, records
+    # its extent and largest-free pointer, and constructs free-block/sentinel
+    # boundary tags.  P+0x20 is the first free block; P+0xffc is the sentinel.
+    cursor = emit(page_provider, "53 68 00 10 00 00")
+    cursor = emit_call(cursor, base.private_factory)
+    cursor = emit(cursor, "59 85 c0 74 3e 89 c3")
+    cursor = emit(cursor, "89 1b 89 5b 04 8d 43 20 89 43 08")
+    cursor = emit(cursor, "c7 43 0c 00 10 00 00")
+    cursor = emit(cursor, "8d 53 20 89 53 20 89 53 24")
+    cursor = emit(cursor, "c7 43 28 d8 0f 00 00 c7 43 2c 01 00 00 00")
+    cursor = emit(cursor, "c7 83 fc 0f 00 00 00 00 00 00")
+    cursor = emit(cursor, "53")
+    cursor = emit_call(cursor, page_inserter)
+    emit(cursor, "59 89 d8 5b c3")
+
+    # Both selector paths are real calls: an existing ring member and the
+    # exact fresh provider result.  This is intentionally the page role the
+    # future inductive recognizer must distinguish.
+    cursor = emit_abs(large_allocator, "a1", page_head_slot)
+    cursor = emit(cursor, "50")
+    selector_existing = cursor
+    cursor = emit_call(cursor, selector)
+    cursor = emit(cursor, "59")
+    cursor = emit_call(cursor, page_provider)
+    cursor = emit(cursor, "50")
+    selector_provider = cursor
+    cursor = emit_call(cursor, selector)
+    emit(cursor, "59 c3")
+
+    # Ring insertion/removal update head and both reciprocal page links.
+    cursor = emit(page_inserter, "8b 44 24 04")
+    cursor = emit_abs(cursor, "8b 0d", page_head_slot)
+    cursor = emit(cursor, "89 00 89 40 04 8b 51 04")
+    cursor = emit(cursor, "89 50 04 89 42 04 89 01")
+    cursor = emit_abs(cursor, "a3", page_head_slot)
+    emit(cursor, "c3")
+    cursor = emit(page_remover, "8b 44 24 04 8b 08 8b 50 04 89 51 04 89 0a")
+    cursor = emit_abs(cursor, "a3", page_head_slot)
+    emit(cursor, "c3")
+
+    # Selector follows the page's free-list, conditionally splits a usable
+    # block, unlinks the selected node, and returns its payload interior.
+    cursor = emit(selector, "53 56 8b 5c 24 0c 8b 73 08 85 f6 74 1b")
+    loop = cursor
+    cursor = emit(cursor, "8b 46 04 83 f8 20 72 08 56")
+    cursor = emit_call(cursor, splitter)
+    cursor = emit(cursor, "59 56")
+    cursor = emit_call(cursor, unlinker)
+    cursor = emit(cursor, "59 8d 46 08 5e 5b c3")
+    cursor = emit(cursor, "8b 76 00 39 f3 75 e0 31 c0 5e 5b c3")
+    assert loop == selector + 13
+
+    # Split preserves a remainder free block; unlink removes a node from the
+    # circular block list.  Together these are actual transfer operations,
+    # rather than comments standing in for allocator behavior.
+    cursor = emit(splitter, "8b 44 24 04 8b 48 04 8d 50 20 83 e9 20")
+    emit(cursor, "89 4a 04 8b 08 89 0a 89 02 c3")
+    cursor = emit(unlinker, "8b 44 24 04 8b 08 8b 50 04 89 11 89 0a c3")
+    cursor = emit(block_inserter, "8b 44 24 04 8b 4c 24 08 8b 11 89 10 89 50 04 89 02 c3")
+
+    # The companion free path invokes insertion and both directional mergers.
+    cursor = emit(coalesce_left, "8b 44 24 04 8b 48 fc 01 48 04 c3")
+    cursor = emit(coalesce_right, "8b 44 24 04 8b 48 04 8b 11 01 50 04 c3")
+    cursor = emit(arena_free, "8b 44 24 04 50 6a 00")
+    cursor = emit_call(cursor, block_inserter)
+    cursor = emit(cursor, "83 c4 08 50")
+    cursor = emit_call(cursor, coalesce_left)
+    cursor = emit(cursor, "59 50")
+    cursor = emit_call(cursor, coalesce_right)
+    emit(cursor, "59 c3")
+
+    image = pe_mod.Image(
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=arena_root,
+        directories=(),
+        sections=(
+            pe_mod.Section(".text", text_va, 0, text_size, text_size, 0x60000020),
+            pe_mod.Section(".data", data_va, text_size, data_size, data_size, 0xC0000040),
+        ),
+        imports=base.image.imports,
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + text_size),),
+    )
+    arena = replace(base, image=image)
+    return PrivatePageArenaFixture(
+        arena=arena,
+        page_head_slot=page_head_slot,
+        page_provider=page_provider,
+        large_allocator=large_allocator,
+        page_inserter=page_inserter,
+        page_remover=page_remover,
+        selector=selector,
+        selector_calls=(selector_existing, selector_provider),
+        splitter=splitter,
+        unlinker=unlinker,
+        block_inserter=block_inserter,
+        coalescers=(coalesce_left, coalesce_right),
+    )
+
+
 _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
     {
         "alternate-slice-entry",
@@ -11483,6 +11665,42 @@ def test_private_heap_allocator_binds_one_factory_and_zeroed_state():
     assert fixture.private_free in contract.dependency_functions
     assert contract.mutable_state
     assert fixture.callback_slot not in contract.mutable_state
+
+
+def test_private_page_arena_still_requires_an_inductive_witness():
+    fixture = private_page_arena_image()
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        generous_limits(fixture.arena.image),
+    )
+    recovery.recover()
+    body = recovery._publication_function_body(fixture.selector)
+    assert body is not None
+    closure = x86_cfg_module._ReturningPublicationClosure(
+        bodies=(body,),
+        call_edges=(),
+        candidate_targets=frozenset(),
+        imports=(),
+    )
+    bridge = SimpleNamespace(
+        allocator_certificate=SimpleNamespace(
+            call_return_domains=(
+                (
+                    fixture.arena.publication_body_private_call,
+                    "private-heap",
+                    frozenset(),
+                ),
+            )
+        )
+    )
+
+    assert (
+        recovery._publication_body_address_domains(
+            fixture.arena.callback_slot, closure, (bridge,)
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize(
