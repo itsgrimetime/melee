@@ -5901,6 +5901,7 @@ _PRIVATE_PAGE_PUBLISHER_HOSTILE_CHANGED_OFFSETS = {
             0x24,
         }
     ),
+    "unresolved-indirect-mutation": frozenset({0x32, 0x33}),
 }
 
 
@@ -5988,7 +5989,7 @@ def private_page_ring_hostile(mutation: str) -> PrivatePageArenaFixture:
             "89 15 " + head + " 8b 01 89 02 89 50 04 89 4a 04 89 11",
         )
     elif mutation == "unresolved-indirect-mutation":
-        patch(publisher + 0x32, "c3 90 90", "ff d0 c3")
+        patch(publisher + 0x32, "c3 90", "ff e0")
     elif mutation == "raw-decoded-call-disagreement":
         patch(
             publisher + 0x33,
@@ -16892,25 +16893,6 @@ def test_private_page_ring_rejects_one_fact_hostiles(mutation):
         assert changed_addresses == {
             default.page_inserter + offset for offset in publisher_offsets
         }
-    if mutation == "unresolved-indirect-mutation":
-        recovery = _DirectCfgRecovery(
-            fixture.arena.image,
-            build_seed_inventory(fixture.arena.image, ()),
-            replace(
-                generous_limits(fixture.arena.image),
-                max_instructions=1024,
-                max_blocks=1024,
-            ),
-        )
-        recovery.recover()
-        assert (
-            recovery._private_heap_allocator_contract(
-                fixture.arena.private_allocator,
-                frozenset({fixture.arena.callback_slot}),
-            )
-            is None
-        )
-        return
     recovery, contract, extent, effects = private_page_arena_contract(fixture)
     if publisher_offsets is not None:
         assert contract is not None
@@ -16927,6 +16909,69 @@ def test_private_page_ring_rejects_one_fact_hostiles(mutation):
     assert layout is not None
     if publisher_offsets is not None:
         assert layout.page_link_offsets is None
+    if mutation == "unresolved-indirect-mutation":
+        assert len(effects.symbolic_writes) == 13
+        assert len(effects.terminal_symbolic_memory) == 9
+        default = private_page_arena_image()
+        (
+            default_recovery,
+            default_contract,
+            default_extent,
+            default_effects,
+        ) = private_page_arena_contract(default)
+        default_layout = default_recovery._publication_private_page_layout(
+            default_contract,
+            default_extent,
+            default_effects,
+        )
+        assert default_layout is not None
+        assert contract == default_contract
+        assert layout == default_layout
+
+        transfer = fixture.page_inserter + 0x32
+        publisher_addresses = recovery._function_instruction_addresses(
+            fixture.page_inserter
+        )
+        assert transfer in publisher_addresses
+        decoded = recovery._owned_decoded(transfer)
+        assert decoded.group(capstone.CS_GRP_JUMP)
+        assert recovery._direct_target(decoded) is None
+        cfg = recover_cfg(
+            fixture.arena.image,
+            build_seed_inventory(fixture.arena.image, ()),
+            replace(
+                generous_limits(fixture.arena.image),
+                max_instructions=1024,
+                max_blocks=1024,
+            ),
+        )
+        unresolved = [
+            row
+            for row in cfg.control_targets.unresolved
+            if row.address == transfer
+        ]
+        assert [
+            (row.kind, row.detail) for row in unresolved
+        ] == [
+            (
+                "indirect-flow",
+                "unresolved indirect jump: jmp eax",
+            )
+        ]
+
+        default_transfer = default_recovery._owned_decoded(
+            default.page_inserter + 0x32
+        )
+        assert default_transfer.group(capstone.CS_GRP_RET)
+        default_evidence = (
+            default_recovery._publication_private_page_ring_role(
+                default_contract,
+                default_extent,
+                default_layout,
+            )
+        )
+        assert default_evidence is not None
+        assert default_evidence.role.head_slot == fixture.page_head_slot
 
     assert (
         recovery._publication_private_page_ring_role(
