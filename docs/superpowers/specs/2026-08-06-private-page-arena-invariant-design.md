@@ -70,13 +70,17 @@ replenishment path.
 
 The exact mutation graph is context-sensitive:
 
-- block initializer `0x403fd0` is called from initializer `0x403dfd` and split
-  sites `0x40408f` and `0x4040a6`;
+- block initializer `0x403fd0` is called from initializer `0x403dfd`. Every
+  split invocation then executes both sites `0x40408f` and `0x4040a6`
+  sequentially; they are not context alternatives. Split snapshots input
+  block-header bit `2` and passes that same allocation value for both `B` and
+  `B2=B+R`;
 - insert `0x403ed0` is called from initializer `0x403e22`, arena free
   `0x4043a7`, and resize sites `0x4047c4` and `0x40486b`;
-- arena free is entry `0x404390`; its complete structurally classified
-  deallocator invocation domain is part of the compound transfer rather than
-  being inferred from the insert call alone;
+- arena free is entry `0x404390`, called from small-free page retirement at
+  `0x4045e4` and the direct arena branch of private-free at `0x4046b1`; its
+  complete structurally classified deallocator invocation domain is part of
+  the compound transfer rather than being inferred from the insert call alone;
 - split `0x404020` is called from selector `0x403ea0` and resize sites
   `0x4047b3` and `0x40485a`;
 - unlink `0x403f60` is called from selector `0x403ebc`;
@@ -90,14 +94,20 @@ reused by ordinary arena transfers. Their initializer-base executions remain
 induction evidence, but they cannot authorize later helper-body dereferences;
 those later contexts require complete arena transfers and spans.
 
-The two split-to-initializer sites encode different transient state contracts,
-not one overloaded stable-state mode. Site
-`0x40408f` initializes with the allocation bit set while the block is still
-listed; selector unlink restores `allocated/unlisted`. Site `0x4040a6`
-initializes with the allocation bit clear while the returned remainder is not
-yet listed; resize insert restores `free/listed`. The initializer-base call is
-also `free/unlisted` locally before its enclosing exact initializer execution
-inserts the initial block.
+The two split-to-initializer sites are one ordered pair in every split context.
+For selector input, `B` is `free/listed`: the first call preserves that state,
+the second creates `B2` as `free/unlisted`, and split splices `B2` next to `B`
+before returning with both blocks `free/listed`. Selector then calls unlink,
+which sets header bit `2`, updates the successor previous-allocation bit, and
+detaches `B`, yielding `allocated/unlisted`; its proof includes the exact `D`
+head, singleton, reciprocal-link, and `P+8` largest-free cases. For resize
+input, `B` is `allocated/unlisted`: both initializer calls preserve bit `2`,
+both `B` and returned `B2` remain `allocated/unlisted`, and insert clears bit
+`2` before it lists `B2`. There is no selector split return in
+`allocated/listed`, no resize `free/unlisted` remainder, and no path on which
+only one split initializer site executes. The initializer-base call alone
+returns `free/unlisted` before its enclosing exact initializer inserts the
+initial block.
 
 The resize owner is `0x4046d0`. It is not in the outgoing closure of allocator
 root `0x404610` or companion deallocator root `0x404650`; it is admitted only
@@ -105,6 +115,11 @@ by closing the complete incoming contexts of already discovered roles. The
 deallocator root has raw `E8` byte occurrences in certified unreachable
 executable residue, so raw closure must use the existing least-reachable caller
 and final residue reconciliation rather than blind raw/decoded set equality.
+Private-free `0x404650` classifies a non-null payload once and takes exactly one
+direct branch: small-free `0x404590` at `0x4046a5` or arena-free `0x404390` at
+`0x4046b1`. The small branch may later retire a backing arena page through its
+own certified `0x4045e4` arena-free call, but the original payload cannot flow
+through both direct branches or carry both small and arena capabilities.
 
 Every address and constant in this section is an exact integration assertion.
 Production discovery must not compare a function, call site, slot, owner,
@@ -307,19 +322,26 @@ Allocation and free-list membership are independent facts. Invocation rows
 retain each call site's incoming block state; state-transition rows retain the
 role/context/subject-specific local postcondition. The stable
 combinations at an externally visible arena boundary are `free/listed` and
-`allocated/unlisted`. `free/unlisted` and `allocated/listed` are not globally
-invalid states: they are bounded transients. The original initializer and a
-resize split may return from block initializer with `free/unlisted` before the
-owning initializer or resize inserts the block. Selector split may return from
-block initializer with `allocated/listed` before the owning select transfer
-unlinks it. `none/none` is used when an invocation has no block; mixed `none`
-states reject. Canonically ordered transition rows prevent replay from
-collapsing these distinct call contracts. Every transition to a transient also
-names its exact compound restoration role and owner entry; the final closure
-must prove that owner consumes the transient before return. A page-only or null
-invocation uses `none/none`; its separately proved control-flow return may still
-be null without inventing a block-state alternative. For a block-bearing call,
-the invocation input state must equal the matching transition's `before` state.
+`allocated/unlisted`. `free/unlisted` is a bounded transient after the
+initializer-base block initialization, after selector split initializes `B2`
+but before split links it, and inside insert after bit `2` is cleared but before
+the block is listed. `allocated/listed` may occur only instruction-locally
+inside unlink between setting bit `2` and completing detachment; it is never a
+nested-call return or compound-boundary state. Resize split returns `B2` as
+`allocated/unlisted`, not `free/unlisted`. Although that is a stable pair, the
+resize `B2` row retains a `resize` consumption obligation until insert lists
+the remainder; likewise selector `B` remains `free/listed` across split but
+retains a `select` obligation until unlink allocates and detaches it.
+`none/none` is used when an invocation has no block; mixed `none` states reject.
+Canonically ordered transition rows prevent replay from collapsing the two
+sequential split calls or their different subjects. Every transition to a
+transient, and every stable state that the enclosing compound must still
+consume, names its exact restoration role and owner entry; final closure must
+prove that owner discharges the obligation before return. A page-only or null
+invocation uses `none/none`; its separately proved control-flow return may
+still be null without inventing a block-state alternative. For a block-bearing
+call, the invocation input state must equal the matching transition's `before`
+state.
 
 The initializer effect closure is the unique induction base. There is no
 `initialize` value in the ordinary transfer-role literal. Every helper executed
@@ -336,13 +358,17 @@ effect_executed_helper_entries
 
 Exact retail includes at least insert and block initializer; any additional
 intersecting helper is included by the same rule. One durable
-`block-initialize` transfer binds its helper
-entry, all three call sites, distinct local postconditions, function dependency,
-and exact spans. The insert transfer likewise binds initializer-base, arena-free,
-and resize contexts with complete later-execution spans. Exactly one durable
+`block-initialize` transfer binds its helper entry, all three unique call sites,
+and five contextual invocations: initializer base plus both ordered split calls
+under selector and resize. It retains each `B`/`B2` subject, input bit-2
+lineage, local postcondition, function dependency, and exact spans. The insert
+transfer likewise binds initializer-base, arena-free, and resize contexts with
+complete later-execution spans and proves bit-2 clearing before list insertion.
+Exactly one durable
 `select` transfer covers the selector body and all of its invocation contexts.
 One durable `arena-free` compound transfer binds payload recovery, the
-free/unlisted transient, nested insert/coalesce and page-removal/release paths,
+insert-local free/unlisted transient, nested insert/coalesce and
+page-removal/release paths,
 and restoration at every classified deallocator boundary. Its transfer and
 invocation role is `arena-free`, each invocation context is `deallocator`, and
 every transient state-transition row names `restoration_role="deallocator"`
@@ -372,11 +398,13 @@ links at `P+0` and `P+4`.
 The block `+8/+0xc` words are a state-dependent overlay. They are reciprocal
 free-list links only while membership is `listed`, independently of the
 allocation bit. For stable `allocated/unlisted` blocks, payload begins at
-`B+8` and those words are client storage. The transient `allocated/listed`
-selector block retains link capability only until its compound select transfer
-unlinks it; the transient `free/unlisted` block has no link capability until
-its compound initializer or resize context inserts it. A load does not become
-a page, block, size, sentinel, or link capability because its displacement is
+`B+8` and those words are client storage. Selector split preserves
+`free/listed` `B` and links free `B2` before returning; unlink alone converts
+that listed `B` to `allocated/unlisted`. An instruction-local
+`allocated/listed` state inside unlink retains link capability only until the
+same helper completes detachment. A `free/unlisted` block has no link capability
+until the owning splitter or insert transfer lists it. A load does not become a
+page, block, size, sentinel, or link capability because its displacement is
 familiar. After the exact initializer induction base, every writer of a typed
 field must be a certified contextual transfer.
 
@@ -407,8 +435,10 @@ extent witness, and its current initializer effects.
    its exact outgoing dependency/call graph. From selector and that closure,
    classify block initializer, arena free, split, unlink, insert, and
    coalescers by successful transfer. Block initializer's complete incoming
-   inventory must retain the initializer-base call and both split call sites
-   with their distinct allocation/list-membership postconditions. Arena free's
+   inventory must retain the initializer-base call plus both sequential split
+   calls under both selector and resize contexts, with input bit-2 lineage,
+   `B`/`B2` subjects, and distinct allocation/list-membership postconditions.
+   Arena free's
    compound transfer must be rooted in that closed deallocator context and bind
    every nested mutation/release edge before the boundary returns.
 7. Close the complete incoming domain of every discovered mutation role. An
@@ -452,11 +482,13 @@ circular-list backedge. Unknown predicates explore both successors; an
 unsupported value, relation, call context, or state-cap fails closed.
 
 The interpreter distinguishes local helper postconditions from compound
-restoration obligations. A nested return may carry `allocated/listed` or
-`free/unlisted` only when its state-transition row names the enclosing select,
-resize, deallocator, or initializer-base restoration boundary. Such a transient
-cannot reach any other caller, loop backedge, public return, or body-domain
-handoff.
+restoration obligations. A nested block-initialize return may carry
+`free/unlisted` only for initializer base or selector `B2`, with the exact
+initializer/select restoration boundary. Insert may carry `free/unlisted` only
+between clearing bit `2` and linking the same block. `allocated/listed` is
+bounded to unlink instructions after the bit set and before detachment; no call
+return may carry it. Resize split returns `allocated/unlisted`. No transient
+can reach another caller, loop backedge, public return, or body-domain handoff.
 
 Arithmetic remains mathematical until a relation proves a concrete 32-bit
 interval. Retail coalescers do not branch on carry. Their size sums are safe
@@ -497,9 +529,11 @@ For `Block(P, E, B, S)`:
   itself prove list membership. At a compound restoration boundary, a free
   block appears exactly once in the page's reciprocal free ring and an
   allocated block is unlisted with payload beginning at `B+8`;
-- between certified nested calls, `free/unlisted` and `allocated/listed` are
-  permitted only as invocation-specific transients with a unique enclosing
-  restoration obligation. Membership, not the allocation bit, controls whether
+- between certified nested calls, `free/unlisted` is permitted only for the
+  initializer-base block, selector `B2` before split links it, or insert after
+  bit-2 clearing, with a unique enclosing restoration obligation.
+  `allocated/listed` is permitted only inside unlink and must be gone before
+  that helper returns. Membership, not the allocation bit, controls whether
   `B+8`/`B+0xc` may be interpreted as reciprocal links;
 - previous-allocated clear proves that `B-4` is the exact boundary tag of an
   adjacent free predecessor; previous-allocated set forbids using `B-4` as a
@@ -524,26 +558,39 @@ The durable contextual obligations are:
 - ring insert/remove/rotate preserve reciprocal page links and exact head
   semantics;
 - `block-initialize` has the complete incoming inventory for initializer base
-  and both split call sites. It proves the new header, page/flags association,
-  size, boundary tag, successor relationship, and context-selected allocation
-  bit without inventing list membership. Its local postcondition is
-  `free/unlisted` for initializer-base and resize-split calls and
-  `allocated/listed` for the selector-split call;
+  and both sequential split call sites in both split contexts. It proves the new
+  header, page/flags association, size, boundary tag, successor relationship,
+  and the allocation value copied from input `B` header bit `2` without
+  inventing list membership. The five contextual postconditions are:
+  initializer-base initial `B` is `free/unlisted`; selector first-call `B` is
+  `free/listed`; selector second-call `B2` is `free/unlisted` until split links
+  it; and resize first-call `B` plus second-call `B2` are both
+  `allocated/unlisted`. Both selector rows retain the `select` restoration
+  owner, and resize `B2` retains the `resize` owner even though its abstract
+  state pair is stable;
 - the single `select` transfer follows only same-page free-list links, tracks
   and writes largest-free on failure, conditionally splits, writes the exact
-  sentinel head from the selected block's successor, consumes the
-  `allocated/listed` split transient through unlink, and returns only an
-  `allocated/unlisted` selected block or null with the full invariant restored;
+  `D` head from the selected block's successor, and enters split with
+  `free/listed` `B`. After split returns both `B` and `B2` free/listed, unlink
+  sets `B` bit `2`, updates the successor previous-allocation flag, repairs the
+  exact `D`, singleton, reciprocal-link, sentinel-head, and `P+8` cases, and
+  returns only `allocated/unlisted` `B` or null with the full invariant
+  restored;
 - split requires `R <= S`, `S-R >= minimum_split_remainder`, and a nonwrapping
-  `B+R` at every incoming call. It invokes the exact `block-initialize` call
-  site for its context and may return its proved transient to the unique
-  enclosing compound transfer; it does not claim the global invariant there;
-- unlink consumes only an `allocated/listed` selector transient (or another
-  separately proved listed input), yields `allocated/unlisted`, updates the
-  successor-header previous-allocation flag, and repairs both reciprocal list
-  directions and sentinel empty/nonempty behavior;
-- insert consumes `free/unlisted`, yields `free/listed`, then invokes previous
-  and next coalescing before the compound owner updates largest-free. Its
+  `B+R` at every incoming call. It snapshots input `B` bit `2`, invokes both
+  exact `block-initialize` sites sequentially with that allocation value for
+  `B` and `B2`, and never treats the sites as mutually exclusive. Free/listed
+  selector input causes split to splice free `B2` after `B`; allocated/unlisted
+  resize input causes no list operation and returns allocated/unlisted `B2`;
+- unlink consumes `free/listed` selector `B`, sets bit `2`, yields
+  `allocated/unlisted`, updates the successor-header previous-allocation flag,
+  and repairs the exact `D`, singleton, reciprocal-link, sentinel-head, and
+  `P+8` largest-free cases. Its instruction-local `allocated/listed` interval
+  cannot escape the helper;
+- insert consumes either initializer-base `free/unlisted` or structurally
+  proved arena-free/resize `allocated/unlisted`, clears bit `2` before any list
+  link use, yields `free/listed`, then invokes previous and next coalescing
+  before the compound owner updates largest-free. Its
   initializer-base execution is induction evidence; every later arena-free or
   resize execution is covered by the same durable insert transfer and complete
   arena spans;
@@ -552,17 +599,21 @@ The durable contextual obligations are:
 - coalesce-next requires `N=B+S`, removes free `N`, leaves `B` as the listed
   survivor, and updates the next successor header or exact page-end tag;
 - resize proves both grow and shrink contexts, including request normalization,
-  grow-side next coalescing, fit/remainder guards, the `free/unlisted`
-  block-initialize/split postcondition, insertion of every returned remainder,
-  and full restoration before every resize exit;
+  grow-side next coalescing, fit/remainder guards, allocated/unlisted input to
+  split, bit-2 preservation by both block-initialize calls, an
+  `allocated/unlisted` returned `B2`, insert's bit-2 clear before listing every
+  returned remainder, and full restoration before every resize exit;
 - the `arena-free` compound transfer starts with an
   `allocated/unlisted` payload block, recovers `B=Q-payload_offset` and `P`
-  from the tagged page word, records the local `free/unlisted` pre-insert
-  transition, calls the certified insert/coalescers, and then either returns a
-  stable `free/listed` survivor or proves the whole-page predicate before ring
-  removal and release to `none/none`. Every nested call edge, operand span,
-  fingerprint, and dependency is bound, and no transient escapes the exact
-  deallocator restoration boundary.
+  from the tagged page word, calls insert with `allocated/unlisted` `B`, binds
+  insert's bit-2-clear `free/unlisted` transient and subsequent listing/
+  coalescing, and then either returns a stable `free/listed` survivor or proves
+  the whole-page predicate before ring removal and release to `none/none`.
+  Private-free's small and arena branches are mutually exclusive; the small
+  path may reach arena-free only through its separately certified backing-page
+  retirement call. Every nested call edge, operand span, fingerprint, and
+  dependency is bound, and no transient escapes the exact deallocator
+  restoration boundary.
 
 The certificate covers allocator metadata accesses. Non-arena branches of a
 validated resize context may contain unrelated read-only metadata or hand off
@@ -652,9 +703,11 @@ Replay has one fail-closed ordering:
    raw/decoded/provisional-residue call closure, contextual incoming calls, and
    exact function fingerprints.
 4. Freshly recompute layout, ring, selector, every induction-substituted helper,
-   block-initializer/insert contexts and local postconditions, arena-free and
-   resize compound restoration obligations, mutation contexts, typed edges,
-   transfers, and spans with no arena memo lookup.
+   both ordered block-initializer calls in every split context, input bit-2
+   lineage, insert clear-before-list postconditions, the private-free
+   small/arena branch partition, arena-free and resize compound restoration
+   obligations, mutation contexts, typed edges, transfers, and spans with no
+   arena memo lookup.
 5. Require exact dataclass equality between the freshly assembled invariant
    and the supplied invariant.
 6. Only after equality succeeds, propagate/note its dependencies and permit an
@@ -682,21 +735,28 @@ certificate rejects:
   confusion, unknown loop branch, missing fit guard, missing minimum-remainder
   guard, wrong failure largest-free value, or omitted select invocation;
 - missing/stale block-initializer entry, call site, invocation, dependency,
-  span, or transfer; a changed allocation argument; inferred membership from
-  the allocation bit; or the selector/resize call sites assigned the same
-  local postcondition or a missing/retargeted compound restoration owner;
+  span, or transfer; either split initializer call skipped, reordered, or made
+  context-exclusive; either allocation argument not copied from input `B` bit
+  `2`; `B`/`B2` subjects collapsed; inferred membership from the allocation
+  bit; a selector first/second result other than `free/listed` and then
+  `free/unlisted`, a resize first/second result other than
+  `allocated/unlisted`, or a missing/retargeted compound restoration owner;
 - a missing/stale insert initializer-base or later invocation, missing insert
   arena span/dependency/transition, incomplete
   `induction_substituted_entries`, an entry not in the exact effects/transfer
   intersection, or an installed exact effect/arena key collision for either
   insert or block initializer;
-- split on `R>S`, too-small remainder, wrapping `B+R`, swapped transient mode,
-  a `free/unlisted` block used as a list node before insert, an
-  `allocated/listed` block exposed as payload before unlink, or either
-  transient escaping its unique compound restoration boundary;
-- unlink/insert with foreign links, either missing reciprocal update, wrong
-  sentinel transition, partial metadata write, insert after coalescing, or an
-  arbitrary block/page argument;
+- split on `R>S`, too-small remainder, wrapping `B+R`, selector input not
+  `free/listed`, selector `B2` not linked before split return, resize input or
+  returned `B2` not `allocated/unlisted`, a fabricated resize
+  `free/unlisted` remainder, or a transient escaping its unique compound
+  restoration boundary;
+- unlink that does not consume `free/listed` `B`, set bit `2`, detach to
+  `allocated/unlisted`, update the successor previous-allocation bit, or cover
+  exact `D`/singleton/reciprocal/`P+8` cases; insert that does not clear bit `2`
+  before listing an allocated/unlisted input; either helper with foreign links,
+  partial metadata writes, wrong sentinel transition, coalescing before
+  insertion, or an arbitrary block/page argument;
 - previous coalescing without the previous-free flag and exact boundary tag,
   next coalescing without exact adjacency, removal of the wrong survivor,
   successor-header/page-end confusion, or a relationally unproved sum/overrun;
@@ -705,8 +765,10 @@ certificate rejects:
   remainder guard, omitted returned-remainder insert, or an unclassified write;
 - a missing/duplicate arena-free role, entry, invocation, or transfer; arena
   free without an exact allocated-payload input; missing
-  `allocated/unlisted -> free/unlisted` transition, insert/coalesce before/after
-  order changed, transient escaping a deallocator return, whole-page release
+  insert-local `allocated/unlisted -> free/unlisted -> free/listed` ordering,
+  private-free allowing both or neither direct small/arena branch, small payload
+  reinterpreted as direct arena payload, insert/coalesce before/after order
+  changed, transient escaping a deallocator return, whole-page release
   without the exact single-usable-block predicate, page removal/release in the
   wrong order, or missing arena-free body/call/span/fingerprint/dependency;
 - a live mutation-role caller that cannot be classified as selector,
@@ -727,7 +789,10 @@ certificate rejects:
 1. Focused synthetic RED/GREEN tests cover the coherent fixture, role
    discovery, induction base, exact generic substitution of insert and shared
    block initializer, positive and hostile exact-key collision behavior, all
-   four allocation/membership combinations, nested local postconditions, the
+   four allocation/membership combinations at their exact stable or
+   instruction-local boundaries, both sequential split initializer calls with
+   bit-2 preservation, selector unlink and resize insert correction, nested
+   local postconditions, the mutually exclusive private-free branches, the
    arena-free retained-page and page-release compound paths, selector, every
    invocation context, resize, Task 6 fresh dependency/compound-transfer replay,
    and Task 7 operand-specific body use and installed-collision rejection.

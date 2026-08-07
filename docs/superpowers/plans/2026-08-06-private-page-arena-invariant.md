@@ -45,9 +45,14 @@ hydrated raw-CFG diagnostic.
   caller, writer, unknown value/relation, conflicting role, unclassified arena
   operand, or stale dependency fails closed.
 - Treat allocation and free-list membership as independent state components.
-  Permit `free/unlisted` and `allocated/listed` only as contextual nested
-  transients with one proven initializer/select/resize/deallocator restoration
-  owner; require stable state at compound returns, not every helper return.
+  Permit `free/unlisted` only at the exact initializer/selector-B2/insert
+  transients and `allocated/listed` only inside unlink after bit-2 set and
+  before detachment. Resize split returns `allocated/unlisted`; require stable
+  state at compound returns, not every instruction.
+- Treat split's `0x40408f` and `0x4040a6` block-initializer sites as an ordered
+  pair executed in every selector and resize invocation. Both calls receive the
+  allocation value copied from input `B` header bit `2`; never classify them as
+  mutually exclusive or context-selected sites.
 - Derive `induction_substituted_entries` as the exact intersection of helpers
   executed by the initializer effects and helpers active in later arena
   transfers. Retail includes both insert and block initializer. Replay their
@@ -59,6 +64,10 @@ hydrated raw-CFG diagnostic.
   context. It must bind allocated payload recovery, the `free/unlisted`
   transient, insert/coalescing, optional whole-page ring removal/release, and
   restoration before the deallocator boundary returns.
+- Prove private-free's direct small and arena branches mutually exclusive. A
+  small payload reaches small-free only; any later arena-free call is a
+  separately certified backing-page retirement, not a second interpretation of
+  the original payload.
 - Use `(function_entry, instruction_address, operand_index)` as the only arena
   span key. Instruction-address inventories and two-component keys are not
   authority.
@@ -158,28 +167,41 @@ them in comments:
   fit and the minimum remainder, calls split before it writes the sentinel from
   `B.next`, then unlinks and returns `B`. No selector or split-local request
   renormalization is allowed.
-- Split has two contexts and calls the same block initializer at two distinct
-  sites. The selector site passes allocation set, so its local postcondition is
-  `allocated/listed` until the enclosing selector unlinks the block. The resize
-  site passes allocation clear, so its returned remainder is `free/unlisted`
-  until the enclosing reallocator inserts it. Allocation and membership are
-  independent fixture facts; no helper may infer one from the other.
+- Split has selector and resize contexts, and every invocation executes both
+  block-initializer sites sequentially. It snapshots input `B` header bit `2`
+  and passes that allocation value to both `B` and `B2=B+R`; neither site is a
+  context alternative. Selector enters with `free/listed` `B`: the first call
+  preserves `B`, the second produces `free/unlisted` `B2`, and split links `B2`
+  before returning both blocks `free/listed`. Selector then unlinks `B`, setting
+  bit `2` and detaching it to `allocated/unlisted` while covering exact `D`,
+  singleton, reciprocal-link, sentinel-head, and `P+8` updates. Resize enters
+  with `allocated/unlisted` `B`; both calls preserve that state and returned
+  `B2` remains `allocated/unlisted` until insert clears bit `2` and lists it.
+  There is no resize `free/unlisted` remainder or selector
+  `allocated/listed` helper return.
 - The payload begins at `B+8`, overlaying the free block's `+8/+0xc` links.
   Arena free recovers `B` by subtracting the same offset and masks the distinct
   page-pointer flag from `B+4`. Its compound path starts from an
-  `allocated/unlisted` payload block, records `free/unlisted`, inserts and
-  coalesces it, and either returns the stable `free/listed` survivor or proves
+  `allocated/unlisted` payload block; insert clears bit `2` to the bounded
+  `free/unlisted` state before it links and coalesces the block. The transfer
+  either returns the stable `free/listed` survivor or proves
   the exact whole-page predicate before page-ring removal and release. No
   transient may reach the deallocator return.
-- Insert marks and links the block before calling coalesce-prev and
+- Insert accepts initializer `free/unlisted` or proved arena-free/resize
+  `allocated/unlisted`, clears bit `2` before it links the block, then calls
+  coalesce-prev and
   coalesce-next. Previous coalescing unlinks current `B` and leaves the
   predecessor as survivor; next coalescing unlinks `N=B+S` and leaves `B` as
   survivor. Largest-free is updated after coalescing.
 - A reachable resize driver passes an exact large-allocator payload to the
   reallocator. Its grow path coalesces next before guarded split+insert; its
   shrink path performs guarded split+insert. Both paths must consume every
-  `free/unlisted` remainder before returning. The selector must likewise
-  consume every `allocated/listed` transient through unlink before returning.
+  `allocated/unlisted` returned `B2` through insert's bit-2 clear and listing
+  before returning.
+- Private-free classifies a non-null payload once and takes exactly one direct
+  branch to small-free or arena-free. The small branch may retire a backing
+  arena page through a separate nested arena-free call, but the original
+  payload never traverses both direct branches.
 
 The exact fixture constants may mirror retail for integration clarity, but no
 production recognizer may use them as selectors.
@@ -614,9 +636,11 @@ loop branch, unsupported join, state-cap exhaustion, sentinel/page-end
 off-by-one, successor-header/sentinel confusion, wrap in `B+S` or `B+R`, a
 transfer with only some selector invocations, an extra select transfer, and an
 extra unclassified memory operand or operand index. Also mutate the selector
-split to collapse allocation and membership, expose the `allocated/listed`
-transient as payload, omit its later unlink, or require stable-state restoration
-at the nested split return rather than the compound select return.
+input to split away from `free/listed`, make either ordered initializer call
+conditional, alter either call's copied bit-2 argument, omit `B2` relinking,
+make split return `allocated/listed`, omit unlink, omit unlink's bit-2 set or
+exact `D`/singleton/reciprocal/`P+8` updates, or demand restoration before the
+compound select return.
 
 - [ ] **Step 2: Verify RED**
 
@@ -679,13 +703,14 @@ the certified circular-list backedge, so the proof never enumerates block or
 page members.
 
 Track allocation and free-list membership as independent components. Stable
-compound boundaries admit `free/listed` and `allocated/unlisted`; local nested
-returns may carry `allocated/listed` for selector split or `free/unlisted` for
-initializer/resize split. Mixed `none` states reject. Do not infer links from
-the allocation bit, allocation from link loads, or demand the full invariant
-at a nested call return. Instead attach each transient to the unique compound
-select/initializer/resize restoration obligation and reject escape or widening
-of that obligation.
+compound boundaries admit `free/listed` and `allocated/unlisted`. A nested
+block-initializer return may carry `free/unlisted` for initializer base or
+selector `B2` before split links it. `allocated/listed` is allowed only between
+unlink's bit-2 set and detachment instructions, never at a call return. Resize
+split returns `allocated/unlisted`. Mixed `none` states reject. Do not infer
+links from the allocation bit, allocation from link loads, or demand the full
+invariant at an instruction-local transient. Attach each transient to its exact
+initializer/select/insert restoration obligation and reject escape or widening.
 
 Bind the normalized request formal, tagged/masked extent, page end, exact
 sentinel, tagged/masked block size, free-list recurrence, unsigned fit and
@@ -701,9 +726,11 @@ whose invocation tuple contains all sites/contexts and whose span keys are
 exact `(function_entry, instruction_address, operand_index)` triples. No
 abstract state, worklist result, or inferred capability survives construction;
 only the immutable layout, role seed, transfer, and spans are durable. The
-transfer records that its split path may pass through `allocated/listed` and
-must return `allocated/unlisted`; Task 5 must bind its exact nested
-`block-initialize`, split, and unlink evidence before Task 6 may publish it.
+transfer records `free/listed` input and output around split, both sequential
+block-initializer calls with copied input bit `2`, then unlink's
+`free/listed -> allocated/unlisted` compound transition. Task 5 must bind exact
+split, block-initialize, relinking, and unlink evidence before Task 6 may
+publish it.
 
 - [ ] **Step 4: Run selector tests and commit**
 
@@ -771,27 +798,44 @@ def test_private_arena_transfer_proves_contextual_postcondition(role):
 
 Assert that `role.block_initializer_entries == (fixture.block_initializer,)`
 and that the one `block-initialize` transfer binds its complete incoming
-inventory: initializer base plus both split sites. Its invocation rows retain
-the incoming contexts; its state-transition rows separate allocation and
-membership and prove the exact local postconditions
-`free/unlisted` for initializer base, `allocated/listed` for selector split,
-and `free/unlisted` for resize split. Require its function dependency,
+inventory: initializer base plus both sequential split sites under both
+selector and resize contexts. This is three unique call addresses but five
+contextual invocation rows. The split rows retain `B` versus `B2`, prove both
+calls receive the allocation value copied from input `B` bit `2`, and serialize
+these postconditions: initializer-base initial `B` is `free/unlisted`;
+selector first-call `B` is `free/listed`; selector second-call `B2` is
+`free/unlisted` until split links it; resize first-call `B` and second-call `B2`
+are both `allocated/unlisted`. Both selector rows retain the `select`
+restoration owner, and resize `B2` retains the `resize` owner even though its
+abstract state pair is stable. Require the transfer's function dependency,
 fingerprint, exact triple-keyed spans, and typed mutation edges.
 
 ```python
 block_initialize_transfer = next(
     transfer for transfer in transfers if transfer.role == "block-initialize"
 )
+initializer_call, split_first_call, split_second_call = (
+    fixture.block_initializer_calls
+)
 assert {
-    invocation.call_address
+    (invocation.call_address, invocation.context)
     for invocation in block_initialize_transfer.invocations
-} == set(fixture.block_initializer_calls)
+} == {
+    (initializer_call, "initializer-base"),
+    (split_first_call, "selector-split"),
+    (split_second_call, "selector-split"),
+    (split_first_call, "resize-split"),
+    (split_second_call, "resize-split"),
+}
 ```
 
-Add positive compound tests showing selector split's `allocated/listed`
-transient is consumed by unlink before select returns and resize split's
-`free/unlisted` remainder is consumed by insert before either grow or shrink
-returns. Require the one insert transfer to bind its initializer-base,
+Add positive compound tests showing selector split starts and returns with
+free/listed `B`, links free `B2`, and then unlink sets `B` bit `2` and detaches
+it to `allocated/unlisted`, including exact `D`, singleton, reciprocal,
+sentinel-head, and `P+8` handling. Resize split starts with
+`allocated/unlisted` `B`, returns `allocated/unlisted` `B2`, and insert clears
+bit `2` before listing the remainder on both grow and shrink paths. Require the
+one insert transfer to bind its initializer-base,
 arena-free, resize-grow, and resize-shrink invocation inventory with complete
 spans, transitions, typed edges, fingerprints, and dependencies. The
 initializer-base executions of insert and block initializer remain part of the
@@ -801,10 +845,14 @@ authorized only by their ordinary arena transfers.
 Assert `role.arena_free_entries == (fixture.arena_free,)` and exactly one
 `arena-free` transfer rooted in the closed deallocator context. Positive
 retained-page and whole-page-release cases must serialize
-`allocated/unlisted -> free/unlisted`, exact payload and tagged-page recovery,
-nested insert/coalescer edges, and then either `free/listed` at the deallocator
-restoration boundary or the exact whole-page predicate followed by page-ring
-removal/release and `none/none`. Require the arena-free function dependency,
+`allocated/unlisted ->` insert-local `free/unlisted -> free/listed`, exact
+payload and tagged-page recovery, nested insert/coalescer edges, and then either
+the retained survivor at the deallocator restoration boundary or the exact
+whole-page predicate followed by page-ring removal/release and `none/none`.
+Prove private-free selects exactly one direct small/arena branch; retain the
+small-free backing-page retirement call as a distinct arena-free invocation,
+not a second direct interpretation of the original payload. Require the
+arena-free function dependency,
 fingerprint, complete triple-keyed spans, exact invocation/state-transition
 rows, and every nested mutation/release edge. Every invocation has
 `role="arena-free"`, `context="deallocator"`; every transient transition has
@@ -812,23 +860,29 @@ the exact enclosing deallocator restoration role and entry. Also prove
 fixed-point admission of the bounded resize owner without adding it to the
 deallocator closure.
 
-Together the positive role tests must exercise all four independent state
-combinations: stable `free/listed`, stable `allocated/unlisted`, transient
-`free/unlisted`, and transient `allocated/listed`. Add malformed `none` pair
-tests so `none/free`, `allocated/none`, and analogous partial states reject.
+Together the positive role tests must exercise stable `free/listed` and
+`allocated/unlisted`, bounded `free/unlisted` at its exact nested locations,
+and instruction-local `allocated/listed` only inside unlink. No invocation or
+helper return may expose `allocated/listed`. Add malformed `none` pair tests so
+`none/free`, `allocated/none`, and analogous partial states reject.
 
 - [ ] **Step 2: Add the one-fact hostile matrix**
 
-Add separate mutations for a missing/extra block-initializer call, changed
-allocation argument at either split site, collapsed allocation/membership
-state, missing initializer entry/dependency/span/transfer, split without
+Add separate mutations for a missing/extra/reordered block-initializer call,
+either split site made conditional or context-exclusive, an allocation argument
+not copied from input `B` bit `2`, collapsed `B`/`B2` subjects, collapsed
+allocation/membership state, missing initializer entry/dependency/span/transfer,
+split without
 `requested <= old_size`, split without the recovered minimum remainder,
-overflowing/out-of-page split address, transient mode swap, list use before
-insertion of a `free/unlisted` remainder, payload use before unlinking an
-`allocated/listed` selector block, transient escape at a compound return,
-foreign predecessor/successor, either missing reciprocal unlink update,
+overflowing/out-of-page split address, selector input not `free/listed`, omitted
+selector `B2` relink, selector split return marked `allocated/listed`, resize
+input/remainder not `allocated/unlisted`, a fabricated resize `free/unlisted`
+remainder, transient escape at a compound return, unlink missing its bit-2 set,
+successor flag, `D`, singleton, `P+8`, or reciprocal update, foreign
+predecessor/successor,
 arbitrary inserted block, missing head/sentinel transition, insert after
-coalescing, previous coalesce without the previous-free flag and boundary tag,
+coalescing, insert listing before clearing bit `2`, previous coalesce without
+the previous-free flag and boundary tag,
 next coalesce without exact adjacency, removal of the wrong survivor,
 successor/page-end confusion, relationally unproved coalesce sum or page
 overrun, changed payload offset/page-pointer mask/flag, resize without complete
@@ -843,9 +897,12 @@ invocation, missing later body span/dependency/transition/fingerprint, and an
 effect authority installed simultaneously with arena authority at one exact
 insert key. Add arena-free hostiles for a missing/duplicate role or compound
 transfer, foreign payload, changed payload offset/tag mask, missing
-`allocated/unlisted -> free/unlisted` transition, reordered insert/coalescing,
-escaped transient, false whole-page predicate, reordered page removal/release,
-and every missing body/call/span/fingerprint/dependency fact.
+insert-local `allocated/unlisted -> free/unlisted -> free/listed` ordering,
+private-free taking both or neither direct small/arena branch, a small payload
+fed directly to arena-free, collapsed direct-arena and backing-page-retirement
+invocations, reordered insert/coalescing, escaped transient, false whole-page
+predicate, reordered page removal/release, and every missing
+body/call/span/fingerprint/dependency fact.
 
 - [ ] **Step 3: Verify RED**
 
@@ -900,7 +957,8 @@ def _publication_private_block_arena_role(
 ```
 
 Seed formals separately for every durable invocation, including
-initializer-base block-initialize/insert, selector split, resize split,
+initializer-base block-initialize/insert, both ordered block-initialize sites
+in selector split, both ordered sites in resize split,
 arena-free/deallocator, grow, and shrink contexts. Use
 `_PublicationPrivateArenaBlockState` with independent `allocation` and
 `membership` components on invocation inputs and transition `before`/`after`
@@ -917,10 +975,13 @@ block role. A null deallocator is allowed only when no certified returning path
 or inventoried metadata writer needs free/coalesce semantics.
 
 Discover the unique shared block initializer by successful structural checking
-of its bounded header/page-flags/boundary writes, then require all three exact
-contextual calls and store its entry in `block_initializer_entries`. Its local
-postcondition may be `free/unlisted` or `allocated/listed` only according to
-the proved allocation argument and caller context. Discover the unique arena
+of its bounded header/page-flags/boundary writes, then require three exact call
+addresses and five contextual invocation rows and store its entry in
+`block_initializer_entries`. Every split execution must call first for `B` and
+then for `B2`, passing the same allocation value copied from input `B` bit `2`.
+Retain the exact subject and the five local postconditions described by the
+positive test; reject mutually exclusive sites or a resize `free/unlisted`
+result. Discover the unique arena
 free owner by successful compound checking inside the deallocator closure,
 store it in `arena_free_entries`, and bind its complete deallocator invocations
 and nested call inventory in one `arena-free` transfer. Discover all other
@@ -936,23 +997,34 @@ caller domain, or fixed-point overflow.
 
 Interpret both successors of an inexact branch and refine only relations
 proved by its comparison. Prove block-initialize's local geometry and state,
-split's guarded local transition, unlink's `allocated/listed` to
-`allocated/unlisted` transition and successor previous-allocation update,
-insert's `free/unlisted` to `free/listed` transition before coalescing, previous
-boundary-tag adjacency, next adjacency, survivor identity, resize request
-normalization, grow/shrink guards, and insertion of every returned remainder.
+split's guards, both sequential initializer calls, copied bit-2 allocation
+argument, and context-dependent list repair. Prove unlink's
+`free/listed -> allocated/unlisted` transition, bit-2 set, successor
+previous-allocation update, and exact `D`/singleton/reciprocal/sentinel/`P+8`
+cases. Prove insert accepts either free or allocated unlisted input, clears bit
+`2` before list use, reaches `free/listed`, and only then coalesces. Also prove
+previous boundary-tag adjacency, next adjacency, survivor identity, resize
+request normalization, grow/shrink guards, allocated/unlisted split remainder,
+and insertion of every returned remainder.
 Coalesce size arithmetic is accepted only from mathematical adjacency plus the
 already-proved successor bound; retail does not need a carry instruction it
 does not contain.
 
 Prove arena-free as one ordered compound transfer: begin with an
 `allocated/unlisted` payload, recover `B=Q-payload_offset` and `P` from the
-tagged page word, transition to `free/unlisted`, invoke the certified insert
-and coalescers, and then either restore stable `free/listed` or prove the exact
+tagged page word, invoke certified insert, bind its bit-2 clear to
+`free/unlisted` before listing and coalescing, and then either restore stable
+`free/listed` or prove the exact
 single-usable-block page predicate before certified ring removal and release to
 `none/none`. Every branch and nested edge must restore at the exact
 deallocator root; deallocator closure entries and an insert transfer alone are
 not equivalent evidence.
+
+Within private-free, prove the classifying predicate partitions the direct
+small-free and arena-free edges: exactly one is taken for the original payload.
+If small-free later retires its backing arena page, bind that separate nested
+arena-free invocation and its distinct payload lineage; do not merge it with
+the direct arena branch.
 
 Bind block payload offset and page-pointer/allocated/previous-allocated flag
 semantics from these complete contextual paths. At each nested helper return,
@@ -1030,18 +1102,23 @@ def test_private_page_arena_invariant_serializes_complete_evidence():
     assert {
         (
             transition.context,
+            transition.subject,
             transition.after.allocation,
             transition.after.membership,
             transition.restoration_role,
         )
         for transition in block_initializers[0].state_transitions
     } == {
-        ("initializer-base", "free", "unlisted", "initializer-base"),
-        ("selector-split", "allocated", "listed", "select"),
-        ("resize-split", "free", "unlisted", "resize"),
+        ("initializer-base", "initial-block", "free", "unlisted",
+         "initializer-base"),
+        ("selector-split", "split-block", "free", "listed", "select"),
+        ("selector-split", "remainder-block", "free", "unlisted", "select"),
+        ("resize-split", "split-block", "allocated", "unlisted", "none"),
+        ("resize-split", "remainder-block", "allocated", "unlisted", "resize"),
     }
     assert all(
-        transition.restoration_entry is not None
+        (transition.restoration_entry is not None)
+        == (transition.restoration_role != "none")
         for transition in block_initializers[0].state_transitions
     )
     assert all(row.role != "initialize" for row in invariant.transfers)
@@ -1070,6 +1147,11 @@ edge, changed head slot, removed/duplicate/conflicting triple span key, changed
 invocation or invocation order, collapsed/changed block state transition,
 missing/retargeted restoration role or owner,
 removed/duplicated block-initialize entry/transfer/call site, removed or extra
+ordered split invocation, swapped split call order, changed `B`/`B2` subject,
+changed copied bit-2 lineage, selector split marked `allocated/listed`, resize
+remainder marked `free/unlisted`, unlink or insert correction omitted,
+private-free small/arena exclusivity removed, direct and backing-page arena-free
+invocations collapsed,
 `induction_substituted_entries`, an entry outside the exact effect/transfer
 intersection, a missing/duplicated/changed arena-free entry/transfer/invocation/
 transition/restoration, changed role, an added ordinary `initialize` transfer,
@@ -1118,11 +1200,12 @@ global slot, and absolute reference in `_PublicationPrivateArenaDependency`
 rows. Copy the complete allocator dependency fingerprint tuple and embed the
 exact current initializer effect closure. Fingerprint every ring, selector,
 mutation, block-initializer, insert, arena-free, deallocator, incoming-context,
-and resize owner.
-Require the block-initialize transfer's helper entry, all three contextual
-invocations, independent canonical state-transition rows, exact call edges,
-spans, and function dependency even though its initializer-base invocation
-also appears inside the embedded induction-base effects.
+and resize owner. Require the block-initialize transfer's helper entry, three
+unique call addresses, five contextual invocations, ordered split-call pairs,
+copied input bit-2 lineage, `B`/`B2` subjects, independent canonical
+state-transition rows, exact call edges, spans, and function dependency even
+though its initializer-base invocation also appears inside the embedded
+induction-base effects.
 
 Require the arena-free transfer's exact owner entry, deallocator invocation,
 payload recovery, ordered state transitions, nested insert/coalescer and
@@ -1134,9 +1217,12 @@ replay allocator fingerprints and embedded initializer effects; replay
 canonical dependencies plus raw/decoded/provisional-residue and contextual
 incoming call closure; freshly recompute layout, ring, selector,
 every induction-substituted helper, block-initializer/insert invocations and
-local postconditions, arena-free and resize compound restoration obligations,
-mutation contexts, edges, transfers, and spans with no arena memo lookup; then
-require exact dataclass equality. Only after equality may
+local postconditions, both split calls and their bit-2/list effects, unlink's
+selector correction, resize insert's clear-before-list correction,
+private-free's mutually exclusive small/arena branch partition, arena-free and
+resize compound restoration obligations, mutation contexts, edges, transfers,
+and spans with no arena memo lookup; then require exact dataclass equality. Only
+after equality may
 dependencies be propagated or noted. Reject final assembly unless ring offsets
 are distinct, the split minimum is positive, all flag meanings are distinct
 and proved, there is one
@@ -1212,7 +1298,10 @@ def test_publication_body_uses_private_page_arena_invariant():
 Add integration hostiles for a missing body named by an active transfer edge,
 especially an active induction-substituted helper or arena-free, a missing
 block-initialize/insert/arena-free operand span or function dependency, a
-collapsed/changed transient transition,
+collapsed/changed transient transition, either split initializer body context
+missing, the two split sites treated as alternatives, changed copied bit-2
+lineage, selector unlink or resize insert correction missing, private-free
+small/arena contexts simultaneously active for one payload,
 an extra body memory operand, conflicting arena contexts, a simultaneously
 installed effect/arena exact-key overlap, disjoint arena/effect contexts
 whose arena invariant embeds different effects, live alternate incoming edge,
@@ -1228,7 +1317,9 @@ them as competing body-address contexts, then authorize later executions only
 through complete arena spans. Separate hostiles that install both authorities
 at one exact key for either helper must reject. Arena-free positives must cover
 both retained-page and page-release outcomes; hostile omissions or reordering
-of its compound transition/edges must reject.
+of its compound transition/edges must reject. Include a positive private-free
+partition test covering the direct small and direct arena arms separately plus
+small-free backing-page retirement, and reject any merged payload lineage.
 
 - [ ] **Step 2: Verify RED**
 
@@ -1263,12 +1354,16 @@ Build an O(1) function-to-context map. Reconcile the returning closure's active
 edges with all contextual invocation rows, including every
 `induction_substituted_entries` helper, arena-free/deallocator, and resize
 context. Block-initialize gets one body context whose durable invocation tuple
-covers initializer-base, selector-split, and resize-split call sites; insert
-gets one covering initializer-base plus arena-free and resize calls; each
-transition tuple covers its independent before/after states. Neither helper's
+covers initializer-base plus both sequential call sites under selector-split
+and resize-split, retaining all five invocation rows, copied bit-2 lineage, and
+`B`/`B2` subjects; insert gets one covering initializer-base plus arena-free
+and resize calls with clear-before-list transitions. Each tuple covers its
+independent before/after states. Neither helper's
 exact operands are authorized merely because the original initializer effect
 closure executed it. Arena-free gets its complete compound transfer context,
-including the optional page-removal/release branch.
+including the optional page-removal/release branch and both direct-arena and
+small-free backing-page-retirement invocations. Private-free's direct small and
+arena contexts remain mutually exclusive for the original payload.
 Missing bodies reject only when an active transfer edge names them; any arena
 transfer/invocation owner present in `excluded_functions` rejects.
 For every function with an arena context, scan the complete body's memory
@@ -1343,9 +1438,11 @@ Expected: every command exits zero. Record exact pass counts in this plan.
 Within the current `--private-heap-extent` branch, print the arena invariant,
 selector calls and per-site origin contexts, page-head slot, typed role/call
 edge counts, induction-substituted entries, block-initializer and insert
-entries/invocations/state transitions, arena-free/deallocator and resize
-entries, canonical dependency-kind counts, transfer roles, span count, and
-body-domain count. Do not add a parser option or new artifact.
+entries/invocations/state transitions, ordered split call pairs and copied bit-2
+lineage, unlink/insert state corrections, private-free branch partition,
+arena-free/deallocator and resize entries, canonical dependency-kind counts,
+transfer roles, span count, and body-domain count. Do not add a parser option or
+new artifact.
 
 - [ ] **Step 3: Run the exact retail mini-query**
 
@@ -1364,8 +1461,15 @@ provider/ring origin coverage; exactly one select transfer; no initialize
 transfer; the exact derived induction-substitution set includes at least insert
 `0x403ed0` and block initializer `0x403fd0`, with every additional intersecting
 helper retained; one block-initialize transfer with the three exact
-contexts and `free/unlisted`, `allocated/listed`, `free/unlisted` local
-postconditions; one arena-free compound transfer for entry `0x404390`, rooted
+call addresses and five contextual invocations: initializer initial `B`
+`free/unlisted`; selector first `B` `free/listed`, then `B2` `free/unlisted`
+before relinking; resize `B` and `B2` both `allocated/unlisted`. Both split
+sites execute sequentially and receive input `B` bit `2`. Selector unlink
+produces `allocated/unlisted` with exact `D`/singleton/reciprocal/`P+8`
+handling; resize insert clears bit `2` before listing, with no resize
+`free/unlisted` return. Private-free selects exactly one direct small/arena
+branch while retaining the distinct small-free backing-page retirement call;
+one arena-free compound transfer for entry `0x404390`, rooted
 in the complete classified deallocator closure with both retained-page and
 exact whole-page-release obligations;
 resize `0x4046d0`; function/global-slot/absolute-reference dependencies;
