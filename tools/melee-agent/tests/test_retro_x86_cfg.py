@@ -5670,6 +5670,224 @@ def private_page_ring_hostile(mutation: str) -> PrivatePageArenaFixture:
     return replace(fixture, arena=replace(fixture.arena, image=image))
 
 
+def private_page_ring_remover_path_image(
+    mutation: str | None = None,
+) -> PrivatePageArenaFixture:
+    """Rebuild only the fixed remover slot with one path-proof mutation."""
+    mutations = {
+        None,
+        "singleton-branch-inverted",
+        "head-branch-inverted",
+        "head-compare-counterfeit",
+        "prev-next-self",
+        "next-prev-self",
+        "prev-next-clobber-zero",
+        "prev-next-clobber-self",
+        "next-prev-clobber-zero",
+        "next-prev-clobber-self",
+        "singleton-final-nonnull",
+        "nonempty-current-final-null",
+        "nonempty-current-wrong-page",
+        "detach-before-repair",
+        "early-return-entry",
+        "early-return-between-repairs",
+        "early-return-before-detach",
+        "partial-page-load",
+        "partial-singleton-compare",
+        "partial-p-definition",
+        "partial-next-definition",
+        "partial-prev-definition",
+        "partial-head-definition",
+        "harmless-partial-scalar",
+    }
+    assert mutation in mutations
+    fixture = private_page_arena_image()
+    code = bytearray()
+    labels = {}
+    fixups = []
+    head = fixture.page_head_slot.to_bytes(4, "little")
+
+    def emit(value: str | bytes) -> int:
+        start = len(code)
+        code.extend(bytes.fromhex(value) if isinstance(value, str) else value)
+        return start
+
+    def mark(label: str) -> None:
+        assert label not in labels
+        labels[label] = len(code)
+
+    def branch(opcode: int, label: str) -> int:
+        start = len(code)
+        code.extend((opcode, 0))
+        fixups.append((start, label))
+        return start
+
+    def unknown_early_return_guard() -> None:
+        emit("39 fe")
+        branch(0x74, "early-return")
+
+    if mutation == "harmless-partial-scalar":
+        emit("b1 01")
+    emit("53")
+    emit("8a 5c 24 08" if mutation == "partial-page-load" else "8b 5c 24 08")
+    if mutation == "partial-p-definition":
+        emit("88 db")
+    if mutation == "early-return-entry":
+        unknown_early_return_guard()
+    emit("8b 03")
+    if mutation == "partial-next-definition":
+        emit("88 c0")
+    emit("38 d8" if mutation == "partial-singleton-compare" else "39 d8")
+    branch(
+        0x74 if mutation == "singleton-branch-inverted" else 0x75,
+        "nonempty",
+    )
+    emit("c7 05")
+    emit(head)
+    emit("00 00 00 00")
+    if mutation == "singleton-final-nonnull":
+        emit("a3")
+        emit(head)
+    branch(0xEB, "detach")
+
+    mark("nonempty")
+    emit("8b 53 04")
+    if mutation == "partial-prev-definition":
+        emit("88 d2")
+    if mutation == "detach-before-repair":
+        emit("c7 03 00 00 00 00 c7 43 04 00 00 00 00")
+    emit("89 12" if mutation == "prev-next-self" else "89 02")
+    if mutation == "prev-next-clobber-zero":
+        emit("c7 02 00 00 00 00")
+    elif mutation == "prev-next-clobber-self":
+        emit("89 12")
+    if mutation == "early-return-between-repairs":
+        unknown_early_return_guard()
+    emit("89 40 04" if mutation == "next-prev-self" else "89 50 04")
+    if mutation == "next-prev-clobber-zero":
+        emit("c7 40 04 00 00 00 00")
+    elif mutation == "next-prev-clobber-self":
+        emit("89 40 04")
+    if mutation == "partial-head-definition":
+        emit("8b 0d")
+        emit(head)
+        emit("88 c9 39 cb")
+    elif mutation == "head-compare-counterfeit":
+        emit("39 db 90 90 90 90")
+    else:
+        emit("3b 1d")
+        emit(head)
+    branch(
+        0x74 if mutation == "head-branch-inverted" else 0x75,
+        "head-ready",
+    )
+    if mutation == "nonempty-current-wrong-page":
+        emit("89 1d")
+        emit(head)
+    else:
+        emit("a3")
+        emit(head)
+    if mutation == "nonempty-current-final-null":
+        emit("c7 05")
+        emit(head)
+        emit("00 00 00 00")
+    mark("head-ready")
+    if mutation == "early-return-before-detach":
+        unknown_early_return_guard()
+    if mutation == "detach-before-repair":
+        branch(0xEB, "return")
+
+    mark("detach")
+    emit("c7 03 00 00 00 00 c7 43 04 00 00 00 00")
+    if mutation == "detach-before-repair":
+        mark("return")
+    emit("5b c3")
+    if mutation in {
+        "early-return-entry",
+        "early-return-between-repairs",
+        "early-return-before-detach",
+    }:
+        mark("early-return")
+        emit("5b c3")
+
+    for start, label in fixups:
+        displacement = labels[label] - start - 2
+        assert -0x80 <= displacement <= 0x7F
+        code[start + 1] = displacement & 0xFF
+    assert code[-1] == 0xC3
+    assert len(code) <= 0x80
+
+    raw = bytearray(fixture.arena.image.data)
+    section = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.va
+        <= fixture.page_remover
+        < section.va + section.raw_size
+    )
+    offset = section.raw_offset + fixture.page_remover - section.va
+    original = bytes(raw[offset : offset + 0x80])
+    replacement = bytes(code) + b"\x90" * (0x80 - len(code))
+    if mutation is None:
+        assert replacement == original
+    raw[offset : offset + 0x80] = replacement
+    changed_addresses = {
+        address
+        for section in fixture.arena.image.sections
+        for address in range(section.va, section.va + section.raw_size)
+        if fixture.arena.image.read(address, 1)
+        != bytes(
+            raw[
+                section.raw_offset
+                + address
+                - section.va : section.raw_offset
+                + address
+                - section.va
+                + 1
+            ]
+        )
+    }
+    assert changed_addresses <= set(
+        range(fixture.page_remover, fixture.page_remover + 0x80)
+    )
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
+def private_page_ring_remover_stack_image(
+    prefix: str,
+) -> PrivatePageArenaFixture:
+    """Prepend a fixed-width stack probe to the exact default remover."""
+    fixture = private_page_arena_image()
+    prefix_bytes = bytes.fromhex(prefix)
+    assert len(prefix_bytes) == 3
+    raw = bytearray(fixture.arena.image.data)
+    section = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.va
+        <= fixture.page_remover
+        < section.va + section.raw_size
+    )
+    offset = section.raw_offset + fixture.page_remover - section.va
+    body = bytes(raw[offset : offset + 0x3B])
+    assert body[-1] == 0xC3
+    assert raw[offset + 0x3B : offset + 0x80] == b"\x90" * 0x45
+    code = prefix_bytes + body
+    assert len(code) <= 0x80
+    raw[offset : offset + 0x80] = code + b"\x90" * (0x80 - len(code))
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
 def private_page_ring_joined_removal_image() -> PrivatePageArenaFixture:
     """Use retail's guarded nullable successor in the page remover."""
     fixture = private_page_arena_image()
@@ -5764,6 +5982,30 @@ def private_page_ring_task3_evidence(fixture):
     )
 
 
+def private_page_ring_remover_path_evidence(fixture):
+    """Reach remover authorization with all earlier evidence intact."""
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    assert recovery._publication_private_heap_effect_closure_is_current(
+        effects
+    )
+    layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert layout is not None
+    assert layout.page_link_offsets is None
+    assert any(
+        call.target == fixture.page_remover
+        for call in recovery._function_direct_calls(fixture.arena_free)
+    )
+    return recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    )
+
+
 def private_page_image_changed_addresses(baseline, hostile):
     """Return complete image byte differences for paired arena fixtures."""
     return {
@@ -5773,6 +6015,14 @@ def private_page_image_changed_addresses(baseline, hostile):
         if baseline.arena.image.read(address, 1)
         != hostile.arena.image.read(address, 1)
     }
+
+
+def assert_private_page_ring_remover_path_rejects(mutation):
+    """Require one remover-only mutation to fail at Task 3 authorization."""
+    baseline = private_page_ring_remover_path_image()
+    hostile = private_page_ring_remover_path_image(mutation)
+    assert private_page_ring_remover_path_evidence(baseline) is not None
+    assert private_page_ring_remover_path_evidence(hostile) is None
 
 
 _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
@@ -14324,6 +14574,218 @@ def test_private_page_ring_proves_both_selector_page_arguments():
     assert all(key in span_keys for transfer in ring_evidence.transfers for key in transfer.span_keys)
 
 
+def test_private_page_ring_remover_path_default_builder_is_exact():
+    """The mutation builder preserves the active default remover exactly."""
+    baseline = private_page_arena_image()
+    rebuilt = private_page_ring_remover_path_image()
+
+    assert private_page_image_changed_addresses(baseline, rebuilt) == set()
+    ring_evidence = private_page_ring_remover_path_evidence(rebuilt)
+    assert ring_evidence is not None
+    assert ring_evidence.layout.page_link_offsets == (0, 4)
+
+
+def test_private_page_ring_remover_path_rejects_inverted_singleton_branch():
+    """The singleton equality must select only the null-head arm."""
+    baseline = private_page_ring_remover_path_image()
+    hostile = private_page_ring_remover_path_image(
+        "singleton-branch-inverted"
+    )
+    address = baseline.page_remover + 0x09
+    assert baseline.arena.image.read(address, 2)[0] == 0x75
+    assert hostile.arena.image.read(address, 2)[0] == 0x74
+    assert private_page_image_changed_addresses(baseline, hostile) == {
+        address
+    }
+    assert private_page_ring_remover_path_evidence(baseline) is not None
+
+    assert private_page_ring_remover_path_evidence(hostile) is None
+
+
+def test_private_page_ring_remover_path_rejects_inverted_head_branch():
+    """Only removal of the current head may execute the head store."""
+    baseline = private_page_ring_remover_path_image()
+    hostile = private_page_ring_remover_path_image("head-branch-inverted")
+    address = baseline.page_remover + 0x25
+    assert baseline.arena.image.read(address, 2)[0] == 0x75
+    assert hostile.arena.image.read(address, 2)[0] == 0x74
+    assert private_page_image_changed_addresses(baseline, hostile) == {
+        address
+    }
+    assert private_page_ring_remover_path_evidence(baseline) is not None
+
+    assert private_page_ring_remover_path_evidence(hostile) is None
+
+
+def test_private_page_ring_remover_path_rejects_counterfeit_head_compare():
+    """Comparing P with itself cannot authorize current-head replacement."""
+    baseline = private_page_ring_remover_path_image()
+    hostile = private_page_ring_remover_path_image(
+        "head-compare-counterfeit"
+    )
+    address = baseline.page_remover + 0x1F
+    head = baseline.page_head_slot.to_bytes(4, "little")
+    assert baseline.arena.image.read(address, 6) == b"\x3b\x1d" + head
+    assert hostile.arena.image.read(address, 6) == bytes.fromhex(
+        "39 db 90 90 90 90"
+    )
+    assert private_page_ring_remover_path_evidence(baseline) is not None
+
+    assert private_page_ring_remover_path_evidence(hostile) is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "prev-next-self",
+        "next-prev-self",
+        "prev-next-clobber-zero",
+        "prev-next-clobber-self",
+        "next-prev-clobber-zero",
+        "next-prev-clobber-self",
+    ),
+)
+def test_private_page_ring_remover_path_rejects_wrong_terminal_reciprocal(
+    mutation,
+):
+    """Both reciprocal neighbors must retain their exact final relation."""
+    assert_private_page_ring_remover_path_rejects(mutation)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("singleton-final-nonnull", "nonempty-current-final-null"),
+)
+def test_private_page_ring_remover_path_rejects_wrong_terminal_head(mutation):
+    """Earlier valid head writes cannot hide a wrong terminal head."""
+    assert_private_page_ring_remover_path_rejects(mutation)
+
+
+def test_private_page_ring_remover_path_wrong_page_head_is_rejection_control():
+    """A removed or opaque page is never an allowed surviving head."""
+    baseline = private_page_ring_remover_path_image()
+    hostile = private_page_ring_remover_path_image(
+        "nonempty-current-wrong-page"
+    )
+    assert private_page_ring_remover_path_evidence(baseline) is not None
+    assert private_page_ring_remover_path_evidence(hostile) is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "detach-before-repair",
+        "early-return-entry",
+        "early-return-between-repairs",
+        "early-return-before-detach",
+    ),
+)
+def test_private_page_ring_remover_path_rejects_order_or_incomplete_return(
+    mutation,
+):
+    """Every return must follow complete repair-before-detach semantics."""
+    assert_private_page_ring_remover_path_rejects(mutation)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("partial-page-load", "partial-singleton-compare"),
+)
+def test_private_page_ring_remover_path_rejects_partial_identity_origin(
+    mutation,
+):
+    """Partial argument loads and predicates cannot create identities."""
+    assert_private_page_ring_remover_path_rejects(mutation)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "partial-p-definition",
+        "partial-next-definition",
+        "partial-prev-definition",
+        "partial-head-definition",
+    ),
+)
+def test_private_page_ring_remover_path_rejects_partial_identity_definition(
+    mutation,
+):
+    """Partial definitions kill every tracked identity before its use."""
+    assert_private_page_ring_remover_path_rejects(mutation)
+
+
+@pytest.mark.parametrize(
+    ("baseline_prefix", "hostile_prefix", "changed_offsets"),
+    (
+        pytest.param("50 90 5b", "50 66 5b", (0x01,), id="partial-pop"),
+        pytest.param("50 5b 90", "50 5c 90", (0x01,), id="pop-esp"),
+        pytest.param("50 90 5b", "50 66 5c", (0x01, 0x02), id="pop-sp"),
+        pytest.param("90 50 5b", "66 50 5b", (0x00,), id="partial-push"),
+        pytest.param(
+            "90 50 5b",
+            "67 50 5b",
+            (0x00,),
+            id="address-size-push",
+        ),
+        pytest.param(
+            "50 90 5b",
+            "50 67 5b",
+            (0x01,),
+            id="address-size-pop",
+        ),
+    ),
+)
+def test_private_page_ring_remover_path_rejects_stack_width(
+    baseline_prefix,
+    hostile_prefix,
+    changed_offsets,
+):
+    """Remover stack transfers stay inside the dword ESP proof model."""
+    baseline = private_page_ring_remover_stack_image(baseline_prefix)
+    hostile = private_page_ring_remover_stack_image(hostile_prefix)
+    assert private_page_image_changed_addresses(baseline, hostile) == {
+        baseline.page_remover + offset for offset in changed_offsets
+    }
+    assert private_page_ring_remover_path_evidence(baseline) is not None
+
+    assert private_page_ring_remover_path_evidence(hostile) is None
+
+
+@pytest.mark.parametrize("prefix", ("50 90 5b", "50 5b 90"))
+def test_private_page_ring_remover_path_accepts_balanced_full_width_stack(
+    prefix,
+):
+    """Balanced dword stack transfers preserve remover argument proof."""
+    fixture = private_page_ring_remover_stack_image(prefix)
+
+    ring_evidence = private_page_ring_remover_path_evidence(fixture)
+
+    assert ring_evidence is not None
+    assert ring_evidence.layout.page_link_offsets == (0, 4)
+
+
+def test_private_page_ring_remover_path_accepts_harmless_partial_scalar():
+    """An unused byte scalar does not carry a remover identity."""
+    fixture = private_page_ring_remover_path_image(
+        "harmless-partial-scalar"
+    )
+
+    ring_evidence = private_page_ring_remover_path_evidence(fixture)
+
+    assert ring_evidence is not None
+    assert ring_evidence.layout.page_link_offsets == (0, 4)
+
+
+def test_private_page_ring_remover_path_accepts_two_page_neighbor_alias():
+    """The proof includes the derived Next-equals-Prev two-page scenario."""
+    fixture = private_page_ring_remover_path_image()
+
+    ring_evidence = private_page_ring_remover_path_evidence(fixture)
+
+    assert ring_evidence is not None
+    assert ring_evidence.role.remover_entry == fixture.page_remover
+
+
 def test_private_page_ring_retains_singleton_and_nonempty_removal_evidence():
     """Retain null-head and reciprocal-link removal in one durable transfer."""
     fixture = private_page_arena_image()
@@ -14342,16 +14804,49 @@ def test_private_page_ring_retains_singleton_and_nonempty_removal_evidence():
     )
 
     assert ring_evidence is not None
-    remover = next(transfer for transfer in ring_evidence.transfers if transfer.role == "ring-remove")
+    remover_transfers = tuple(
+        transfer
+        for transfer in ring_evidence.transfers
+        if transfer.role == "ring-remove"
+    )
+    assert len(remover_transfers) == 1
+    remover = remover_transfers[0]
     assert remover.function_entry == fixture.page_remover
     assert remover.invocations
-    remover_spans = tuple(span for span in ring_evidence.spans if span.function_entry == fixture.page_remover)
-    assert {span.displacement for span in remover_spans} == {0, 4}
-    assert {span.access for span in remover_spans} >= {"read", "write"}
-    assert remover.span_keys == tuple(
-        (span.function_entry, span.instruction_address, span.operand_index) for span in remover_spans
+    remover_spans = tuple(
+        span
+        for span in ring_evidence.spans
+        if span.function_entry == fixture.page_remover
     )
-    assert len(set(ring_evidence.role.head_writes) & set(remover.instruction_addresses)) >= 2
+    assert tuple(
+        (
+            span.instruction_address - fixture.page_remover,
+            span.operand_index,
+            span.access,
+            span.displacement,
+            span.width,
+        )
+        for span in remover_spans
+    ) == (
+        (0x05, 1, "read", 0, 4),
+        (0x17, 1, "read", 4, 4),
+        (0x1A, 0, "write", 0, 4),
+        (0x1C, 0, "write", 4, 4),
+        (0x2C, 0, "write", 0, 4),
+        (0x32, 0, "write", 4, 4),
+    )
+    assert remover.span_keys == tuple(
+        (span.function_entry, span.instruction_address, span.operand_index)
+        for span in remover_spans
+    )
+    assert all(
+        span.instruction_address in remover.instruction_addresses
+        for span in remover_spans
+    )
+    assert len(
+        set(ring_evidence.role.head_writes)
+        & set(remover.instruction_addresses)
+    ) >= 2
 
 
 def test_private_page_ring_accepts_guarded_nullable_removal_successor():
@@ -14373,10 +14868,44 @@ def test_private_page_ring_accepts_guarded_nullable_removal_successor():
 
     assert ring_evidence is not None
     assert ring_evidence.role.remover_entry == fixture.page_remover
-    remover_spans = {
-        (span.displacement, span.access) for span in ring_evidence.spans if span.function_entry == fixture.page_remover
-    }
-    assert {(0, "write"), (4, "write")} <= remover_spans
+    remover_transfers = tuple(
+        transfer
+        for transfer in ring_evidence.transfers
+        if transfer.role == "ring-remove"
+    )
+    assert len(remover_transfers) == 1
+    remover = remover_transfers[0]
+    remover_spans = tuple(
+        span
+        for span in ring_evidence.spans
+        if span.function_entry == fixture.page_remover
+    )
+    assert tuple(
+        (
+            span.instruction_address - fixture.page_remover,
+            span.operand_index,
+            span.access,
+            span.displacement,
+            span.width,
+        )
+        for span in remover_spans
+    ) == (
+        (0x05, 1, "read", 4, 4),
+        (0x21, 1, "read", 0, 4),
+        (0x23, 0, "write", 0, 4),
+        (0x25, 1, "read", 0, 4),
+        (0x27, 0, "write", 4, 4),
+        (0x2A, 0, "write", 4, 4),
+        (0x31, 0, "write", 0, 4),
+    )
+    assert remover.span_keys == tuple(
+        (span.function_entry, span.instruction_address, span.operand_index)
+        for span in remover_spans
+    )
+    assert all(
+        span.instruction_address in remover.instruction_addresses
+        for span in remover_spans
+    )
 
 
 def test_private_page_ring_accepts_flag_preserving_rotation_cleanup():
