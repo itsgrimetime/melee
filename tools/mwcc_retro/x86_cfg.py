@@ -2097,6 +2097,84 @@ class _PublicationPrivatePageRingEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class _PublicationPrivateArenaCallEdge:
+    caller_entry: int
+    call_address: int
+    target_entry: int
+    edge_kind: Literal[
+        "ring",
+        "selector",
+        "deallocator-closure",
+        "mutation-role",
+        "resize-context",
+    ]
+    raw_reconciled: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationPrivateBlockArenaRole:
+    selector_entry: int
+    selector_calls: tuple[int, ...]
+    deallocator_root: int | None
+    deallocator_function_entries: tuple[int, ...]
+    deallocator_call_edges: tuple[_PublicationPrivateArenaCallEdge, ...]
+    mutation_context_entries: tuple[int, ...]
+    mutation_call_edges: tuple[_PublicationPrivateArenaCallEdge, ...]
+    block_initializer_entries: tuple[int, ...]
+    arena_free_entries: tuple[int, ...]
+    splitter_entries: tuple[int, ...]
+    unlink_entries: tuple[int, ...]
+    insert_entries: tuple[int, ...]
+    coalescer_entries: tuple[int, ...]
+    resize_entries: tuple[int, ...]
+    block_payload_offset: int
+    block_page_pointer_flag: int
+    block_allocated_flag: int
+    block_previous_allocated_flag: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationPrivateArenaAbstractValue:
+    kind: Literal[
+        "zero",
+        "page",
+        "tagged-extent",
+        "extent",
+        "page-end",
+        "sentinel",
+        "block",
+        "tagged-block-header",
+        "block-size",
+        "request-size",
+        "remainder",
+        "boundary-tag-size",
+        "successor-header",
+        "condition",
+    ]
+    extent_token_sha256: str
+    same_page: bool
+    allocation_state: Literal["none", "free", "allocated"]
+    list_membership: Literal["none", "unlisted", "listed"]
+    expression_token: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationPrivateArenaPredicate:
+    kind: Literal[
+        "unsigned-fit",
+        "minimum-remainder",
+        "equal",
+        "not-equal",
+        "nullable",
+        "adjacent",
+        "flag-test",
+    ]
+    left_token: int
+    right_token: int
+    truth: bool
+
+
+@dataclass(frozen=True, slots=True)
 class _PublicationPrivateStackAddressDomain:
     kind: Literal["private-stack"]
     function_entry: int
@@ -5580,6 +5658,7 @@ class _DirectCfgRecovery:
                     == value_family
                 ):
                     return None
+
                 spill_count += 1
                 cursor = candidate.address
             if sign_extend is None:
@@ -26439,6 +26518,1953 @@ class _DirectCfgRecovery:
             transfers=transfers,
             spans=spans,
         )
+
+    def _publication_private_block_selector_role(
+        self,
+        contract: _PrivateHeapAllocatorContract,
+        extent: _PublicationPrivateHeapExtentWitness,
+        effects: _PublicationPrivateHeapEffectClosure,
+        ring_evidence: _PublicationPrivatePageRingEvidence,
+    ) -> tuple[
+        _PublicationPrivatePageLayout,
+        _PublicationPrivateBlockArenaRole,
+        _PublicationPrivateArenaTransfer,
+        tuple[_PublicationPrivateArenaSpan, ...],
+    ] | None:
+        """Type-check the large selector under the page/block invariant."""
+        if not (
+            isinstance(contract, _PrivateHeapAllocatorContract)
+            and isinstance(extent, _PublicationPrivateHeapExtentWitness)
+            and isinstance(effects, _PublicationPrivateHeapEffectClosure)
+            and isinstance(ring_evidence, _PublicationPrivatePageRingEvidence)
+        ):
+            return None
+        current_contract = self._private_heap_allocator_contract(
+            contract.root,
+            contract.protected_slots,
+        )
+        current_effects = self._publication_private_heap_effect_closure(extent)
+        current_layout = (
+            None
+            if current_effects is None
+            else self._publication_private_page_layout(
+                contract,
+                extent,
+                current_effects,
+            )
+        )
+        current_ring = (
+            None
+            if current_layout is None
+            else self._publication_private_page_ring_role(
+                contract,
+                extent,
+                current_layout,
+            )
+        )
+        if (
+            current_contract != contract
+            or current_effects != effects
+            or current_ring != ring_evidence
+            or ring_evidence != current_ring
+            or current_ring is None
+        ):
+            return None
+        layout = ring_evidence.layout
+        ring = ring_evidence.role
+        none_state = _PublicationPrivateArenaBlockState("none", "none")
+        if (
+            layout.page_link_offsets is None
+            or layout.minimum_split_remainder is not None
+            or not ring.selector_invocations
+            or ring.selector_page_calls != ring.selector_request_calls
+            or tuple(
+                invocation.call_address
+                for invocation in ring.selector_invocations
+            )
+            != ring.selector_page_calls
+            or any(
+                invocation.role != "select"
+                or invocation.block_state != none_state
+                or invocation.callee_entry
+                != ring.selector_invocations[0].callee_entry
+                for invocation in ring.selector_invocations
+            )
+            or any(transfer.role == "select" for transfer in ring_evidence.transfers)
+            or any(len(transfer.span_keys) != len(set(transfer.span_keys)) for transfer in ring_evidence.transfers)
+        ):
+            return None
+        selector_entry = ring.selector_invocations[0].callee_entry
+        if selector_entry not in self.function_addresses:
+            return None
+
+        expression_rows: set[tuple[Any, ...]] = set()
+
+        def expression(kind: str, *parts: Any) -> tuple[Any, ...]:
+            row = (kind, *parts)
+            expression_rows.add(row)
+            if len(expression_rows) > 1024:
+                raise ValueError("private arena expression cap")
+            return row
+
+        def add_expression(
+            left: tuple[Any, ...] | None,
+            right: tuple[Any, ...] | None = None,
+            displacement: int = 0,
+        ) -> tuple[Any, ...] | None:
+            if left is None or (right is not None and right[0] == "unknown"):
+                return None
+            if right is None:
+                if displacement == 0:
+                    return left
+                if left[0] == "add-constant":
+                    return expression(
+                        "add-constant",
+                        left[1],
+                        left[2] + displacement,
+                    )
+                return expression("add-constant", left, displacement)
+            if left[0] == "constant" and left[1] == 0:
+                return add_expression(right, displacement=displacement)
+            if right[0] == "constant" and right[1] == 0:
+                return add_expression(left, displacement=displacement)
+            ordered = tuple(sorted((left, right), key=repr))
+            result = expression("add", *ordered)
+            return add_expression(result, displacement=displacement)
+
+        def clear_mask(value: int) -> int:
+            return (~value) & 0xFFFF_FFFF
+
+        def operand_access(operand, index: int, mnemonic: str) -> str | None:
+            reads = bool(operand.access & CS_AC_READ)
+            writes = bool(operand.access & CS_AC_WRITE)
+            if not reads and not writes:
+                if mnemonic == "mov":
+                    writes = index == 0
+                    reads = index != 0
+                elif mnemonic in {"cmp", "test", "push"}:
+                    reads = True
+                else:
+                    reads = True
+                    writes = index == 0
+            if reads and writes:
+                return "read-write"
+            if writes:
+                return "write"
+            if reads:
+                return "read"
+            return None
+
+        acyclic_reads_by_function: dict[
+            int, frozenset[tuple[int, tuple[Any, ...]]]
+        ] = {}
+
+        def trace_acyclic_function(
+            function_entry: int,
+            argument_count: int,
+        ) -> tuple[tuple[Any, ...], ...] | None:
+            """Execute a finite helper while preserving exact relations."""
+            if function_entry not in self.function_addresses:
+                return None
+            following_entry = self._following_function_entry(function_entry)
+            unknown_registers = tuple(None for _ in _REGISTER_FAMILIES)
+            # registers, sp, stack, memory, predicate, conditions, calls,
+            # writes, instructions
+            initial = (
+                unknown_registers,
+                0,
+                frozenset(),
+                frozenset(),
+                None,
+                (),
+                (),
+                (),
+                frozenset(),
+            )
+            pending = [(function_entry, initial)]
+            seen: set[tuple[int, tuple[Any, ...]]] = set()
+            returns = []
+            iterations = 0
+            function_reads: set[tuple[int, tuple[Any, ...]]] = set()
+
+            def register_value(registers, register: int):
+                family = self._register_family(register)
+                if family not in _REGISTER_FAMILIES:
+                    return None
+                return registers[_REGISTER_FAMILIES.index(family)]
+
+            def set_register(registers, operand, value):
+                if operand.type != X86_OP_REG:
+                    return None
+                family = self._register_family(operand.reg)
+                if family not in _REGISTER_FAMILIES or family == "esp":
+                    return None
+                output = list(registers)
+                output[_REGISTER_FAMILIES.index(family)] = (
+                    value if operand.size == 4 else None
+                )
+                return tuple(output)
+
+            def stack_dict(rows):
+                return dict(rows)
+
+            def memory_dict(rows):
+                return dict(rows)
+
+            def memory_address(operand, registers):
+                memory = operand.mem
+                if memory.segment != X86_REG_INVALID:
+                    return None
+                base = (
+                    None
+                    if memory.base == X86_REG_INVALID
+                    else register_value(registers, memory.base)
+                )
+                index = (
+                    None
+                    if memory.index == X86_REG_INVALID
+                    else register_value(registers, memory.index)
+                )
+                if memory.base == X86_REG_INVALID and memory.index == X86_REG_INVALID:
+                    return expression("absolute", memory.disp & 0xFFFF_FFFF)
+                if memory.base != X86_REG_INVALID and base is None:
+                    return None
+                if memory.index != X86_REG_INVALID:
+                    if index is None or memory.scale != 1:
+                        return None
+                return add_expression(base, index, memory.disp)
+
+            def read_operand(address, operand, state):
+                registers, sp, stack, memory, *_rest = state
+                if operand.type == X86_OP_REG:
+                    return (
+                        register_value(registers, operand.reg)
+                        if operand.size == 4
+                        else None
+                    )
+                if operand.type == X86_OP_IMM:
+                    return expression(
+                        "constant",
+                        operand.imm & 0xFFFF_FFFF,
+                    )
+                if operand.type != X86_OP_MEM or operand.size != 4:
+                    return None
+                mem = operand.mem
+                if (
+                    mem.segment == X86_REG_INVALID
+                    and mem.index == X86_REG_INVALID
+                    and mem.base != X86_REG_INVALID
+                    and self._register_family(mem.base) == "esp"
+                ):
+                    logical = sp + mem.disp
+                    stored = stack_dict(stack).get(logical)
+                    if stored is not None:
+                        return stored
+                    if logical >= 4 and logical % 4 == 0:
+                        index = logical // 4 - 1
+                        if index < argument_count:
+                            return expression("argument", index)
+                    return expression("stack-input", logical)
+                arena_address = memory_address(operand, registers)
+                if arena_address is None or arena_address[0] == "absolute":
+                    return None
+                stored = memory_dict(memory).get(arena_address)
+                function_reads.add((address, arena_address))
+                return (
+                    stored
+                    if stored is not None
+                    else expression("load", arena_address)
+                )
+
+            while pending:
+                address, state = pending.pop()
+                key = (address, state)
+                if key in seen:
+                    continue
+                seen.add(key)
+                iterations += 1
+                if iterations > 2048 or len(seen) > 2048:
+                    return None
+                (
+                    registers,
+                    sp,
+                    stack_rows,
+                    memory_rows,
+                    predicate,
+                    conditions,
+                    calls,
+                    writes,
+                    instructions,
+                ) = state
+                decoded = self._owned_decoded(address)
+                instructions = instructions | {address}
+                stack = stack_dict(stack_rows)
+                memory = memory_dict(memory_rows)
+                mnemonic = decoded.mnemonic
+                operands = decoded.operands
+                if not decoded.group(CS_GRP_JUMP) and mnemonic not in {
+                    "mov",
+                    "lea",
+                    "push",
+                    "pop",
+                    "nop",
+                }:
+                    predicate = None
+
+                if decoded.group(CS_GRP_RET):
+                    returns.append(
+                        (
+                            registers,
+                            sp,
+                            frozenset(stack.items()),
+                            frozenset(memory.items()),
+                            conditions,
+                            calls,
+                            writes,
+                            instructions,
+                        )
+                    )
+                    continue
+                if mnemonic == "push" and len(operands) == 1:
+                    value = read_operand(address, operands[0], state)
+                    sp -= 4
+                    stack[sp] = value
+                elif mnemonic == "pop" and len(operands) == 1:
+                    value = stack.get(sp)
+                    stack.pop(sp, None)
+                    sp += 4
+                    registers = set_register(registers, operands[0], value)
+                    if registers is None:
+                        return None
+                elif (
+                    mnemonic in {"add", "sub"}
+                    and len(operands) == 2
+                    and operands[0].type == X86_OP_REG
+                    and self._register_family(operands[0].reg) == "esp"
+                    and operands[1].type == X86_OP_IMM
+                ):
+                    amount = operands[1].imm & 0xFFFF_FFFF
+                    if amount > 0x1000 or amount % 4:
+                        return None
+                    if mnemonic == "sub":
+                        sp -= amount
+                    else:
+                        for offset in tuple(stack):
+                            if sp <= offset < sp + amount:
+                                stack.pop(offset, None)
+                        sp += amount
+                elif mnemonic == "mov" and len(operands) == 2:
+                    source = read_operand(address, operands[1], state)
+                    destination = operands[0]
+                    if destination.type == X86_OP_REG:
+                        registers = set_register(registers, destination, source)
+                        if registers is None:
+                            return None
+                    elif destination.type == X86_OP_MEM and destination.size == 4:
+                        mem = destination.mem
+                        if (
+                            mem.segment == X86_REG_INVALID
+                            and mem.index == X86_REG_INVALID
+                            and mem.base != X86_REG_INVALID
+                            and self._register_family(mem.base) == "esp"
+                        ):
+                            stack[sp + mem.disp] = source
+                        else:
+                            arena_address = memory_address(destination, registers)
+                            if arena_address is None or arena_address[0] == "absolute":
+                                return None
+                            memory[arena_address] = source
+                            writes = writes + (
+                                (
+                                    address,
+                                    0,
+                                    arena_address,
+                                    source,
+                                    destination.size,
+                                    "mov",
+                                ),
+                            )
+                    else:
+                        return None
+                elif mnemonic == "lea" and len(operands) == 2:
+                    value = memory_address(operands[1], registers)
+                    registers = set_register(registers, operands[0], value)
+                    if registers is None:
+                        return None
+                elif mnemonic == "xor" and len(operands) == 2:
+                    left = operands[0]
+                    right = operands[1]
+                    if (
+                        left.type == X86_OP_REG
+                        and right.type == X86_OP_REG
+                        and self._register_family(left.reg)
+                        == self._register_family(right.reg)
+                    ):
+                        value = expression("constant", 0)
+                    else:
+                        left_value = read_operand(address, left, state)
+                        right_value = read_operand(address, right, state)
+                        value = (
+                            expression("constant", 0)
+                            if left_value is not None
+                            and left_value == right_value
+                            else expression("xor", left_value, right_value)
+                        )
+                    registers = set_register(registers, left, value)
+                    if registers is None:
+                        return None
+                    predicate = (
+                        "test",
+                        value,
+                        expression("constant", 0),
+                    )
+                elif mnemonic in {"and", "or", "add", "sub"} and len(operands) == 2:
+                    destination = operands[0]
+                    left = read_operand(address, destination, state)
+                    right = read_operand(address, operands[1], state)
+                    if left is None or right is None:
+                        return None
+                    if mnemonic == "and":
+                        value = expression("and", left, right)
+                    elif mnemonic == "or":
+                        value = expression("or", left, right)
+                    elif mnemonic == "sub":
+                        value = expression("subtract", left, right)
+                    else:
+                        value = (
+                            add_expression(
+                                left,
+                                displacement=_signed_u32(right[1]),
+                            )
+                            if right[0] == "constant"
+                            else add_expression(left, right)
+                        )
+                    if destination.type == X86_OP_REG:
+                        registers = set_register(registers, destination, value)
+                        if registers is None:
+                            return None
+                    elif destination.type == X86_OP_MEM and destination.size == 4:
+                        mem = destination.mem
+                        if (
+                            mem.segment == X86_REG_INVALID
+                            and mem.index == X86_REG_INVALID
+                            and mem.base != X86_REG_INVALID
+                            and self._register_family(mem.base) == "esp"
+                        ):
+                            stack[sp + mem.disp] = value
+                        else:
+                            arena_address = memory_address(destination, registers)
+                            if arena_address is None or arena_address[0] == "absolute":
+                                return None
+                            memory[arena_address] = value
+                            writes = writes + (
+                                (
+                                    address,
+                                    0,
+                                    arena_address,
+                                    value,
+                                    destination.size,
+                                    mnemonic,
+                                ),
+                            )
+                    else:
+                        return None
+                    predicate = (
+                        "test",
+                        value,
+                        expression("constant", 0),
+                    )
+                elif mnemonic == "inc" and len(operands) == 1:
+                    value = read_operand(address, operands[0], state)
+                    value = add_expression(
+                        value,
+                        expression("constant", 1),
+                    )
+                    registers = set_register(registers, operands[0], value)
+                    if registers is None:
+                        return None
+                    predicate = (
+                        "test",
+                        value,
+                        expression("constant", 0),
+                    )
+                elif mnemonic in {"cmp", "test"} and len(operands) == 2:
+                    left = read_operand(address, operands[0], state)
+                    right = read_operand(address, operands[1], state)
+                    if left is None or right is None:
+                        return None
+                    predicate = (
+                        (mnemonic, left, right)
+                        if mnemonic == "cmp"
+                        else (
+                            mnemonic,
+                            left
+                            if left == right
+                            else expression("and", left, right),
+                            expression("constant", 0),
+                        )
+                    )
+                elif decoded.group(CS_GRP_CALL):
+                    target = self.direct_call_targets_by_source.get(address)
+                    if target is None:
+                        return None
+                    call_arguments = tuple(
+                        stack.get(sp + index * 4) for index in range(8)
+                    )
+                    calls = calls + ((address, target, call_arguments),)
+                    output = list(registers)
+                    for family in ("eax", "ecx", "edx"):
+                        output[_REGISTER_FAMILIES.index(family)] = None
+                    registers = tuple(output)
+                elif decoded.group(CS_GRP_JUMP):
+                    pass
+                elif mnemonic == "nop":
+                    pass
+                else:
+                    return None
+
+                state = (
+                    registers,
+                    sp,
+                    frozenset(stack.items()),
+                    frozenset(memory.items()),
+                    predicate,
+                    conditions,
+                    calls,
+                    writes,
+                    instructions,
+                )
+                successors = self._summary_successors(
+                    address,
+                    function_entry,
+                    following_entry,
+                )
+                if any(successor <= address for successor in successors):
+                    return None
+                if len(successors) > 2:
+                    return None
+                direct = self._direct_target(decoded)
+                for successor in successors:
+                    outgoing = state
+                    if len(successors) == 2:
+                        taken = successor == direct
+                        condition = (predicate, mnemonic, taken)
+                        if predicate is not None and mnemonic in {"je", "jz", "jne", "jnz"}:
+                            equal = taken == (mnemonic in {"je", "jz"})
+                            left = predicate[1]
+                            right = predicate[2]
+                            if left == right and not equal:
+                                continue
+                            if (
+                                equal
+                                and left[0] == "constant"
+                                and right[0] == "constant"
+                                and left != right
+                            ):
+                                continue
+                            opposite = (predicate, "equal", not equal)
+                            if opposite in conditions:
+                                continue
+                            condition = (predicate, "equal", equal)
+                        outgoing = (
+                            *state[:5],
+                            conditions + (condition,),
+                            *state[6:],
+                        )
+                    pending.append((successor, outgoing))
+            if not returns:
+                return None
+            acyclic_reads_by_function[function_entry] = frozenset(
+                function_reads
+            )
+            return tuple(returns)
+
+        extent_token_sha256 = hashlib.sha256(
+            repr(extent).encode("utf-8")
+        ).hexdigest()
+        abstract_tokens: dict[tuple[Any, ...], int] = {}
+        abstract_expressions: dict[int, tuple[Any, ...]] = {}
+
+        def abstract_value(
+            kind: Literal[
+                "zero",
+                "page",
+                "tagged-extent",
+                "extent",
+                "page-end",
+                "sentinel",
+                "block",
+                "tagged-block-header",
+                "block-size",
+                "request-size",
+                "remainder",
+                "boundary-tag-size",
+                "successor-header",
+                "condition",
+            ],
+            row: tuple[Any, ...],
+            *,
+            same_page: bool = False,
+            allocation: Literal["none", "free", "allocated"] = "none",
+            membership: Literal["none", "unlisted", "listed"] = "none",
+        ) -> _PublicationPrivateArenaAbstractValue:
+            token = abstract_tokens.get(row)
+            if token is None:
+                if len(abstract_tokens) >= 256:
+                    raise ValueError("private arena abstract token cap")
+                token = len(abstract_tokens) + 1
+                abstract_tokens[row] = token
+                abstract_expressions[token] = row
+            return _PublicationPrivateArenaAbstractValue(
+                kind=kind,
+                extent_token_sha256=extent_token_sha256,
+                same_page=same_page,
+                allocation_state=allocation,
+                list_membership=membership,
+                expression_token=token,
+            )
+
+        zero_value = abstract_value("zero", ("zero",))
+        page_value = abstract_value(
+            "page",
+            ("selector-page",),
+            same_page=True,
+        )
+        request_value = abstract_value(
+            "request-size",
+            ("normalized-request", clear_mask(layout.size_flag_mask)),
+        )
+        first_block_value = abstract_value(
+            "block",
+            ("first-free-block",),
+            same_page=True,
+            allocation="free",
+            membership="listed",
+        )
+        current_block_value = abstract_value(
+            "block",
+            ("current-free-block",),
+            same_page=True,
+            allocation="free",
+            membership="listed",
+        )
+        empty_values: frozenset[_PublicationPrivateArenaAbstractValue] = (
+            frozenset()
+        )
+
+        def one_kind(values, kind: str):
+            rows = tuple(value for value in values if value.kind == kind)
+            return rows[0] if len(rows) == 1 and len(values) == 1 else None
+
+        def set_abstract_register(registers, operand, values):
+            if operand.type != X86_OP_REG:
+                return None
+            family = self._register_family(operand.reg)
+            if family not in _REGISTER_FAMILIES or family == "esp":
+                return None
+            output = list(registers)
+            output[_REGISTER_FAMILIES.index(family)] = (
+                values if operand.size == 4 else empty_values
+            )
+            return tuple(output)
+
+        def get_abstract_register(registers, register: int):
+            family = self._register_family(register)
+            if family not in _REGISTER_FAMILIES:
+                return empty_values
+            return registers[_REGISTER_FAMILIES.index(family)]
+
+        def arena_span(
+            address: int,
+            operand_index: int,
+            access: str,
+            region: str,
+            field: str,
+            displacement: int,
+            width: int,
+        ) -> _PublicationPrivateArenaSpan:
+            return _PublicationPrivateArenaSpan(
+                function_entry=selector_entry,
+                instruction_address=address,
+                operand_index=operand_index,
+                access=access,
+                region=region,
+                field=field,
+                displacement=displacement,
+                width=width,
+            )
+
+        def selector_read_operand(
+            address: int,
+            operand,
+            operand_index: int,
+            registers,
+        ):
+            if operand.type == X86_OP_REG:
+                return get_abstract_register(registers, operand.reg), (), ()
+            if operand.type == X86_OP_IMM:
+                immediate = operand.imm & 0xFFFF_FFFF
+                value = (
+                    zero_value
+                    if immediate == 0
+                    else abstract_value(
+                        "condition",
+                        ("constant", immediate),
+                    )
+                )
+                return frozenset({value}), (), ()
+            if operand.type != X86_OP_MEM or operand.size != 4:
+                return None
+            argument = self._stack_argument_index_at(
+                address,
+                operand,
+                selector_entry,
+            )
+            if argument is not None:
+                value = page_value if argument == 0 else request_value if argument == 1 else None
+                return (
+                    None
+                    if value is None
+                    else (frozenset({value}), (), ())
+                )
+            memory = operand.mem
+            if (
+                memory.segment != X86_REG_INVALID
+                or memory.index != X86_REG_INVALID
+                or memory.base == X86_REG_INVALID
+                or self._absolute_memory_operand(operand) is not None
+            ):
+                return None
+            bases = get_abstract_register(registers, memory.base)
+            if len(bases) != 1:
+                return None
+            base = next(iter(bases))
+            access = operand_access(operand, operand_index, "mov")
+            if access not in {"read", "read-write"}:
+                return None
+            span = None
+            facts = ()
+            if (
+                base.kind == "page"
+                and memory.disp == layout.page_extent_offset
+            ):
+                value = abstract_value(
+                    "tagged-extent",
+                    ("tagged-extent", base.expression_token),
+                    same_page=True,
+                )
+                span = arena_span(
+                    address,
+                    operand_index,
+                    access,
+                    "page",
+                    "extent",
+                    memory.disp,
+                    operand.size,
+                )
+            elif base.kind == "sentinel" and memory.disp == 0:
+                value = None
+                span = arena_span(
+                    address,
+                    operand_index,
+                    access,
+                    "page-end",
+                    "sentinel",
+                    memory.disp,
+                    operand.size,
+                )
+                return (
+                    frozenset({zero_value, first_block_value}),
+                    (span,),
+                    (),
+                )
+            elif (
+                base.kind == "block"
+                and base.same_page
+                and base.allocation_state == "free"
+                and base.list_membership == "listed"
+                and memory.disp == layout.block_header_offset
+            ):
+                value = abstract_value(
+                    "tagged-block-header",
+                    ("tagged-header", base.expression_token),
+                    same_page=True,
+                    allocation="free",
+                    membership="listed",
+                )
+                span = arena_span(
+                    address,
+                    operand_index,
+                    access,
+                    "block",
+                    "block-header",
+                    memory.disp,
+                    operand.size,
+                )
+            elif (
+                base.kind == "block"
+                and base.same_page
+                and base.allocation_state == "free"
+                and base.list_membership == "listed"
+                and memory.disp == layout.block_next_offset
+            ):
+                value = current_block_value
+                facts = (("recurrence",),)
+                span = arena_span(
+                    address,
+                    operand_index,
+                    access,
+                    "block",
+                    "block-next",
+                    memory.disp,
+                    operand.size,
+                )
+            else:
+                return None
+            return frozenset({value}), (span,), facts
+
+        selector_following = self._following_function_entry(selector_entry)
+        selector_initial = (
+            tuple(empty_values for _ in _REGISTER_FAMILIES),
+            (),
+            None,
+            frozenset(),
+            frozenset(),
+            (),
+            frozenset(),
+        )
+        selector_pending = [(selector_entry, selector_initial)]
+        selector_seen: set[tuple[int, tuple[Any, ...]]] = set()
+        selector_returns = []
+        selector_minimums: set[int] = set()
+        selector_iterations = 0
+        try:
+            while selector_pending:
+                address, state = selector_pending.pop()
+                state_key = (address, state)
+                if state_key in selector_seen:
+                    continue
+                selector_seen.add(state_key)
+                selector_iterations += 1
+                if selector_iterations > 1024 or len(selector_seen) > 1024:
+                    return None
+                (
+                    registers,
+                    stack,
+                    predicate,
+                    facts,
+                    spans,
+                    calls,
+                    instruction_addresses,
+                ) = state
+                decoded = self._owned_decoded(address)
+                operands = decoded.operands
+                mnemonic = decoded.mnemonic
+                instruction_addresses = instruction_addresses | {address}
+                if not decoded.group(CS_GRP_JUMP) and mnemonic not in {
+                    "mov",
+                    "lea",
+                    "push",
+                    "pop",
+                    "nop",
+                }:
+                    predicate = None
+
+                if decoded.group(CS_GRP_RET):
+                    selector_returns.append(
+                        (
+                            registers,
+                            facts,
+                            spans,
+                            calls,
+                            instruction_addresses,
+                        )
+                    )
+                    continue
+                if mnemonic == "push" and len(operands) == 1:
+                    read = selector_read_operand(
+                        address,
+                        operands[0],
+                        0,
+                        registers,
+                    )
+                    values = empty_values if read is None else read[0]
+                    if operands[0].type == X86_OP_MEM and read is None:
+                        return None
+                    if read is not None:
+                        spans = spans | frozenset(read[1])
+                        facts = facts | frozenset(read[2])
+                    stack = stack + (values,)
+                elif mnemonic == "pop" and len(operands) == 1:
+                    values = stack[-1] if stack else empty_values
+                    stack = stack[:-1] if stack else stack
+                    registers = set_abstract_register(
+                        registers,
+                        operands[0],
+                        values,
+                    )
+                    if registers is None:
+                        return None
+                elif (
+                    mnemonic == "add"
+                    and len(operands) == 2
+                    and operands[0].type == X86_OP_REG
+                    and self._register_family(operands[0].reg) == "esp"
+                    and operands[1].type == X86_OP_IMM
+                ):
+                    amount = operands[1].imm & 0xFFFF_FFFF
+                    if amount % 4 or amount // 4 > len(stack):
+                        return None
+                    stack = stack[: len(stack) - amount // 4]
+                elif mnemonic == "mov" and len(operands) == 2:
+                    destination, source_operand = operands
+                    read = selector_read_operand(
+                        address,
+                        source_operand,
+                        1,
+                        registers,
+                    )
+                    if read is None:
+                        return None
+                    values, new_spans, new_facts = read
+                    spans = spans | frozenset(new_spans)
+                    facts = facts | frozenset(new_facts)
+                    if destination.type == X86_OP_REG:
+                        registers = set_abstract_register(
+                            registers,
+                            destination,
+                            values,
+                        )
+                        if registers is None:
+                            return None
+                    elif destination.type == X86_OP_MEM and destination.size == 4:
+                        memory = destination.mem
+                        if (
+                            memory.segment != X86_REG_INVALID
+                            or memory.index != X86_REG_INVALID
+                            or memory.base == X86_REG_INVALID
+                        ):
+                            return None
+                        bases = get_abstract_register(registers, memory.base)
+                        if len(bases) != 1:
+                            return None
+                        base = next(iter(bases))
+                        access = operand_access(destination, 0, mnemonic)
+                        if (
+                            base.kind == "page"
+                            and memory.disp == layout.page_largest_free_offset
+                            and values
+                            and all(value.kind in {"zero", "block-size"} for value in values)
+                        ):
+                            spans = spans | {
+                                arena_span(
+                                    address,
+                                    0,
+                                    access,
+                                    "page",
+                                    "largest-free",
+                                    memory.disp,
+                                    destination.size,
+                                )
+                            }
+                            facts = facts | {("largest-write",)}
+                        elif (
+                            base.kind == "sentinel"
+                            and memory.disp == 0
+                            and one_kind(values, "block") is not None
+                            and ("recurrence",) in facts
+                        ):
+                            spans = spans | {
+                                arena_span(
+                                    address,
+                                    0,
+                                    access,
+                                    "page-end",
+                                    "sentinel",
+                                    memory.disp,
+                                    destination.size,
+                                )
+                            }
+                            facts = facts | {("sentinel-write",)}
+                        else:
+                            return None
+                    else:
+                        return None
+                elif mnemonic == "lea" and len(operands) == 2:
+                    memory = operands[1].mem
+                    if memory.segment != X86_REG_INVALID or memory.scale != 1:
+                        return None
+                    components = []
+                    for register in (memory.base, memory.index):
+                        if register == X86_REG_INVALID:
+                            continue
+                        values = get_abstract_register(registers, register)
+                        if len(values) != 1:
+                            return None
+                        components.append(next(iter(values)))
+                    kinds = {value.kind for value in components}
+                    if kinds == {"page", "extent"} and memory.disp == layout.end_sentinel_displacement:
+                        value = abstract_value(
+                            "sentinel",
+                            ("sentinel",),
+                            same_page=True,
+                        )
+                    else:
+                        return None
+                    registers = set_abstract_register(
+                        registers,
+                        operands[0],
+                        frozenset({value}),
+                    )
+                    if registers is None:
+                        return None
+                elif mnemonic == "and" and len(operands) == 2:
+                    if operands[1].type != X86_OP_IMM:
+                        return None
+                    source = get_abstract_register(registers, operands[0].reg)
+                    immediate = operands[1].imm & 0xFFFF_FFFF
+                    tagged_extent = one_kind(source, "tagged-extent")
+                    tagged_header = one_kind(source, "tagged-block-header")
+                    if immediate != clear_mask(layout.size_flag_mask):
+                        return None
+                    if tagged_extent is not None:
+                        value = abstract_value(
+                            "extent",
+                            ("extent", tagged_extent.expression_token),
+                            same_page=True,
+                        )
+                    elif tagged_header is not None:
+                        value = abstract_value(
+                            "block-size",
+                            ("block-size", tagged_header.expression_token),
+                            same_page=True,
+                            allocation="free",
+                            membership="listed",
+                        )
+                    else:
+                        return None
+                    registers = set_abstract_register(
+                        registers,
+                        operands[0],
+                        frozenset({value}),
+                    )
+                    if registers is None:
+                        return None
+                elif mnemonic == "xor" and len(operands) == 2:
+                    if not (
+                        all(operand.type == X86_OP_REG for operand in operands)
+                        and self._register_family(operands[0].reg)
+                        == self._register_family(operands[1].reg)
+                    ):
+                        return None
+                    registers = set_abstract_register(
+                        registers,
+                        operands[0],
+                        frozenset({zero_value}),
+                    )
+                    if registers is None:
+                        return None
+                elif mnemonic == "add" and len(operands) == 2:
+                    destination = operands[0]
+                    left = get_abstract_register(registers, destination.reg)
+                    if operands[1].type == X86_OP_REG:
+                        right = get_abstract_register(registers, operands[1].reg)
+                        kinds = {
+                            value.kind for value in (*left, *right)
+                        }
+                        if kinds != {"page", "extent"}:
+                            return None
+                        value = abstract_value(
+                            "page-end",
+                            ("page-end",),
+                            same_page=True,
+                        )
+                    elif operands[1].type == X86_OP_IMM:
+                        page_end = one_kind(left, "page-end")
+                        if (
+                            page_end is None
+                            or _signed_u32(operands[1].imm)
+                            != layout.end_sentinel_displacement
+                        ):
+                            return None
+                        value = abstract_value(
+                            "sentinel",
+                            ("sentinel",),
+                            same_page=True,
+                        )
+                    else:
+                        return None
+                    registers = set_abstract_register(
+                        registers,
+                        destination,
+                        frozenset({value}),
+                    )
+                    if registers is None:
+                        return None
+                elif mnemonic == "sub" and len(operands) == 2:
+                    left = get_abstract_register(registers, operands[0].reg)
+                    right = (
+                        get_abstract_register(registers, operands[1].reg)
+                        if operands[1].type == X86_OP_REG
+                        else empty_values
+                    )
+                    size = one_kind(left, "block-size")
+                    request = one_kind(right, "request-size")
+                    if size is None or request is None or not any(
+                        isinstance(fact, _PublicationPrivateArenaPredicate)
+                        and fact.kind == "unsigned-fit"
+                        and fact.left_token == size.expression_token
+                        and fact.right_token == request.expression_token
+                        and fact.truth
+                        for fact in facts
+                    ):
+                        return None
+                    value = abstract_value(
+                        "remainder",
+                        (
+                            "remainder",
+                            size.expression_token,
+                            request.expression_token,
+                        ),
+                        same_page=True,
+                    )
+                    registers = set_abstract_register(
+                        registers,
+                        operands[0],
+                        frozenset({value}),
+                    )
+                    if registers is None:
+                        return None
+                elif mnemonic in {"cmp", "test"} and len(operands) == 2:
+                    left_read = selector_read_operand(
+                        address,
+                        operands[0],
+                        0,
+                        registers,
+                    )
+                    right_read = selector_read_operand(
+                        address,
+                        operands[1],
+                        1,
+                        registers,
+                    )
+                    if left_read is None or right_read is None:
+                        return None
+                    left, left_spans, left_facts = left_read
+                    right, right_spans, right_facts = right_read
+                    spans = spans | frozenset((*left_spans, *right_spans))
+                    facts = facts | frozenset((*left_facts, *right_facts))
+                    if not left:
+                        left = frozenset(
+                            {
+                                abstract_value(
+                                    "condition",
+                                    ("unknown-condition", address, 0),
+                                )
+                            }
+                        )
+                    if not right:
+                        right = frozenset(
+                            {
+                                abstract_value(
+                                    "condition",
+                                    ("unknown-condition", address, 1),
+                                )
+                            }
+                        )
+                    left_kinds = {value.kind for value in left}
+                    right_kinds = {value.kind for value in right}
+                    if (
+                        left_kinds == {"block-size"}
+                        and right_kinds == {"request-size"}
+                    ):
+                        predicate_kind = "unsigned-fit"
+                    elif (
+                        left_kinds == {"remainder"}
+                        and right_kinds == {"condition"}
+                    ):
+                        predicate_kind = "minimum-remainder"
+                        immediate = operands[1].imm & 0xFFFF_FFFF
+                        if immediate <= 0 or immediate % layout.block_alignment:
+                            return None
+                        selector_minimums.add(immediate)
+                    elif left_kinds == {"block"} and right_kinds == {"block"}:
+                        predicate_kind = "equal"
+                    elif (
+                        mnemonic == "test"
+                        and left == right
+                        and left_kinds <= {"zero", "block"}
+                    ):
+                        predicate_kind = "nullable"
+                    elif left_kinds <= {"zero", "block-size"} and right_kinds <= {"zero", "block-size"}:
+                        predicate_kind = "flag-test"
+                        facts = facts | {("max-compared",)}
+                    else:
+                        predicate_kind = "flag-test"
+                    left_token = min(value.expression_token for value in left)
+                    right_token = min(value.expression_token for value in right)
+                    predicate = (
+                        _PublicationPrivateArenaPredicate(
+                            kind=predicate_kind,
+                            left_token=left_token,
+                            right_token=right_token,
+                            truth=True,
+                        ),
+                        left,
+                        right,
+                    )
+                elif decoded.group(CS_GRP_CALL):
+                    target = self.direct_call_targets_by_source.get(address)
+                    if target is None or len(stack) < 2:
+                        return None
+                    argument0 = stack[-1]
+                    argument1 = stack[-2]
+                    block = one_kind(argument0, "block")
+                    page = one_kind(argument0, "page")
+                    request = one_kind(argument1, "request-size")
+                    block1 = one_kind(argument1, "block")
+                    if block is not None and request is not None:
+                        if not any(
+                            isinstance(fact, _PublicationPrivateArenaPredicate)
+                            and fact.kind == "minimum-remainder"
+                            and fact.truth
+                            for fact in facts
+                        ):
+                            return None
+                        calls = calls + (("split", address, target),)
+                        facts = facts | {("split-called",)}
+                    elif page is not None and block1 is not None:
+                        if ("sentinel-write",) not in facts:
+                            return None
+                        calls = calls + (("unlink", address, target),)
+                        facts = facts | {("unlink-called",)}
+                    else:
+                        return None
+                    output = list(registers)
+                    for family in ("eax", "ecx", "edx"):
+                        output[_REGISTER_FAMILIES.index(family)] = empty_values
+                    registers = tuple(output)
+                elif decoded.group(CS_GRP_JUMP):
+                    pass
+                elif mnemonic == "nop":
+                    pass
+                else:
+                    return None
+
+                state = (
+                    registers,
+                    stack,
+                    predicate,
+                    facts,
+                    spans,
+                    calls,
+                    instruction_addresses,
+                )
+                successors = self._summary_successors(
+                    address,
+                    selector_entry,
+                    selector_following,
+                )
+                if len(successors) > 2:
+                    return None
+                direct = self._direct_target(decoded)
+                for successor in successors:
+                    outgoing = state
+                    if len(successors) == 2:
+                        taken = successor == direct
+                        if predicate is None:
+                            if successor <= address:
+                                return None
+                        else:
+                            row, left, right = predicate
+                            truth = None
+                            if row.kind in {"equal", "nullable"}:
+                                if mnemonic in {"je", "jz"}:
+                                    truth = taken
+                                elif mnemonic in {"jne", "jnz"}:
+                                    truth = not taken
+                            elif row.kind in {"unsigned-fit", "minimum-remainder"}:
+                                if mnemonic in {"jae", "jnb"}:
+                                    truth = taken
+                                elif mnemonic in {"jb", "jnae"}:
+                                    truth = not taken
+                            outgoing_facts = facts
+                            outgoing_registers = registers
+                            if truth is not None:
+                                proved = replace(row, truth=truth)
+                                outgoing_facts = facts | {proved}
+                                if row.kind == "nullable":
+                                    wanted = "zero" if truth else "block"
+                                    narrowed = frozenset(
+                                        value for value in left if value.kind == wanted
+                                    )
+                                    if not narrowed:
+                                        continue
+                                    outgoing = list(outgoing_registers)
+                                    for index, values in enumerate(outgoing):
+                                        if values == left:
+                                            outgoing[index] = narrowed
+                                    outgoing_registers = tuple(outgoing)
+                                    if not truth:
+                                        outgoing_facts = outgoing_facts | {("walk-start",)}
+                            if successor <= address:
+                                if not (
+                                    ("recurrence",) in outgoing_facts
+                                    and truth is False
+                                    and row.kind in {"equal", "unsigned-fit"}
+                                    and successor < address
+                                ):
+                                    return None
+                            outgoing = (
+                                outgoing_registers,
+                                stack,
+                                None,
+                                outgoing_facts,
+                                spans,
+                                calls,
+                                instruction_addresses,
+                            )
+                    elif successors and successors[0] <= address:
+                        return None
+                    selector_pending.append((successor, outgoing))
+        except ValueError:
+            return None
+
+        if not selector_returns or len(selector_minimums) != 1:
+            return None
+        minimum_split_remainder = next(iter(selector_minimums))
+        selector_spans: set[_PublicationPrivateArenaSpan] = set()
+        split_targets = set()
+        unlink_targets = set()
+        successful_returns = 0
+        for registers, facts, spans, calls, _addresses in selector_returns:
+            selector_spans.update(spans)
+            eax = registers[_REGISTER_FAMILIES.index("eax")]
+            zero_return = one_kind(eax, "zero") is not None
+            block_return = one_kind(eax, "block") is not None
+            split_calls = tuple(row for row in calls if row[0] == "split")
+            unlink_calls = tuple(row for row in calls if row[0] == "unlink")
+            split_targets.update(row[2] for row in split_calls)
+            unlink_targets.update(row[2] for row in unlink_calls)
+            minimum_facts = tuple(
+                fact
+                for fact in facts
+                if isinstance(fact, _PublicationPrivateArenaPredicate)
+                and fact.kind == "minimum-remainder"
+            )
+            if block_return:
+                successful_returns += 1
+                if (
+                    ("sentinel-write",) not in facts
+                    or ("unlink-called",) not in facts
+                    or len(unlink_calls) != 1
+                    or len(minimum_facts) != 1
+                    or (
+                        minimum_facts[0].truth
+                        and len(split_calls) != 1
+                    )
+                    or (
+                        not minimum_facts[0].truth
+                        and split_calls
+                    )
+                ):
+                    return None
+            elif zero_return:
+                if unlink_calls or split_calls:
+                    return None
+                if ("walk-start",) in facts and ("largest-write",) not in facts:
+                    return None
+            else:
+                return None
+        if (
+            not successful_returns
+            or len(split_targets) != 1
+            or len(unlink_targets) != 1
+            or split_targets == unlink_targets
+        ):
+            return None
+        splitter_entry = next(iter(split_targets))
+        unlink_entry = next(iter(unlink_targets))
+        splitter_returns = trace_acyclic_function(splitter_entry, 2)
+        unlink_returns = trace_acyclic_function(unlink_entry, 2)
+        if splitter_returns is None or unlink_returns is None:
+            return None
+
+        constant_zero = expression("constant", 0)
+        constant_one = expression("constant", 1)
+        block_argument = expression("argument", 0)
+        request_argument = expression("argument", 1)
+        tagged_header = expression("load", block_argument)
+        size_value = expression(
+            "and",
+            tagged_header,
+            expression("constant", clear_mask(layout.size_flag_mask)),
+        )
+        split_block = add_expression(block_argument, request_argument)
+        remainder_value = expression(
+            "subtract",
+            size_value,
+            request_argument,
+        )
+        if split_block is None:
+            return None
+        page_flags_address = add_expression(
+            block_argument,
+            displacement=layout.block_page_flags_offset,
+        )
+        block_next_address = add_expression(
+            block_argument,
+            displacement=layout.block_next_offset,
+        )
+        if page_flags_address is None or block_next_address is None:
+            return None
+        page_flags_value = expression("load", page_flags_address)
+
+        def one_bit(value: int) -> bool:
+            return bool(value and not value & (value - 1))
+
+        first_call_arguments = tuple(
+            row[5][0][2]
+            for row in splitter_returns
+            if len(row[5]) == 2
+        )
+        if len(first_call_arguments) != len(splitter_returns):
+            return None
+        page_masks = {
+            clear_mask(arguments[2][2][1])
+            for arguments in first_call_arguments
+            if (
+                isinstance(arguments[2], tuple)
+                and len(arguments[2]) == 3
+                and arguments[2][0] == "and"
+                and arguments[2][1] == page_flags_value
+                and isinstance(arguments[2][2], tuple)
+                and arguments[2][2][0] == "constant"
+            )
+        }
+        previous_masks = {
+            arguments[3][2][1]
+            for arguments in first_call_arguments
+            if (
+                isinstance(arguments[3], tuple)
+                and len(arguments[3]) == 3
+                and arguments[3][0] == "and"
+                and arguments[3][1] == tagged_header
+                and isinstance(arguments[3][2], tuple)
+                and arguments[3][2][0] == "constant"
+            )
+        }
+        if len(page_masks) != 1 or len(previous_masks) != 1:
+            return None
+        page_pointer_flag = next(iter(page_masks))
+        previous_allocated_flag = next(iter(previous_masks))
+        allocation_masks = {
+            row[2][1]
+            for row in expression_rows
+            if (
+                len(row) == 3
+                and row[0] == "and"
+                and row[1] == tagged_header
+                and isinstance(row[2], tuple)
+                and row[2][0] == "constant"
+                and one_bit(row[2][1])
+                and row[2][1] != previous_allocated_flag
+            )
+        }
+        if len(allocation_masks) != 1:
+            return None
+        allocated_flag = next(iter(allocation_masks))
+        if not (
+            all(
+                one_bit(value)
+                and value & layout.size_flag_mask == value
+                for value in (
+                    page_pointer_flag,
+                    allocated_flag,
+                    previous_allocated_flag,
+                )
+            )
+            and len(
+                {
+                    page_pointer_flag,
+                    allocated_flag,
+                    previous_allocated_flag,
+                }
+            )
+            == 3
+            and page_pointer_flag
+            | allocated_flag
+            | previous_allocated_flag
+            == layout.size_flag_mask
+        ):
+            return None
+        page_value_expression = expression(
+            "and",
+            page_flags_value,
+            expression("constant", clear_mask(page_pointer_flag)),
+        )
+        previous_value = expression(
+            "and",
+            tagged_header,
+            expression("constant", previous_allocated_flag),
+        )
+        allocated_value = expression(
+            "and",
+            tagged_header,
+            expression("constant", allocated_flag),
+        )
+
+        def contains_expression(value: Any, expected: tuple[Any, ...]) -> bool:
+            if value == expected:
+                return True
+            return bool(
+                isinstance(value, tuple)
+                and any(
+                    contains_expression(component, expected)
+                    for component in value
+                )
+            )
+
+        initializer_targets = set()
+        initializer_call_addresses = set()
+        saw_free_split = False
+        saw_allocated_split = False
+        expected_split_writes = {
+            (
+                add_expression(
+                    split_block,
+                    displacement=layout.block_prev_offset,
+                ),
+                block_argument,
+            ),
+            (
+                add_expression(
+                    split_block,
+                    displacement=layout.block_next_offset,
+                ),
+                expression("load", block_next_address),
+            ),
+            (block_next_address, split_block),
+            (
+                add_expression(
+                    expression("load", block_next_address),
+                    displacement=layout.block_prev_offset,
+                ),
+                split_block,
+            ),
+        }
+        if any(address is None for address, _value in expected_split_writes):
+            return None
+        for row in splitter_returns:
+            conditions, calls, writes = row[4], row[5], row[6]
+            if len(calls) != 2:
+                return None
+            first_call, second_call = calls
+            initializer_targets.update((first_call[1], second_call[1]))
+            initializer_call_addresses.update(
+                (first_call[0], second_call[0])
+            )
+            first_arguments = first_call[2]
+            second_arguments = second_call[2]
+            if not (
+                first_call[1] == second_call[1]
+                and first_call[0] < second_call[0]
+                and first_arguments[:4]
+                == (
+                    block_argument,
+                    request_argument,
+                    page_value_expression,
+                    previous_value,
+                )
+                and second_arguments[:3]
+                == (
+                    split_block,
+                    remainder_value,
+                    page_value_expression,
+                )
+                and first_arguments[4] == second_arguments[3]
+                and second_arguments[3] == second_arguments[4]
+            ):
+                return None
+            copied_allocation = first_arguments[4]
+            allocation_lineage = copied_allocation == allocated_value or any(
+                contains_expression(condition, allocated_value)
+                for condition in conditions
+            )
+            if not allocation_lineage:
+                return None
+            if copied_allocation == constant_zero:
+                free_split = True
+            elif copied_allocation == constant_one:
+                free_split = False
+            else:
+                equal_zero = tuple(
+                    condition
+                    for condition in conditions
+                    if (
+                        condition[1] == "equal"
+                        and contains_expression(condition[0], allocated_value)
+                        and contains_expression(condition[0], constant_zero)
+                    )
+                )
+                if len(equal_zero) != 1:
+                    return None
+                free_split = bool(equal_zero[0][2])
+            semantic_writes = {
+                (write[2], write[3]) for write in writes
+            }
+            if free_split:
+                saw_free_split = True
+                if semantic_writes != expected_split_writes:
+                    return None
+            else:
+                saw_allocated_split = True
+                if semantic_writes:
+                    return None
+        if (
+            len(initializer_targets) != 1
+            or len(initializer_call_addresses) != 2
+            or not saw_free_split
+            or not saw_allocated_split
+        ):
+            return None
+        block_initializer_entry = next(iter(initializer_targets))
+
+        page_argument = expression("argument", 0)
+        unlink_block_argument = expression("argument", 1)
+        unlink_tagged_header = expression("load", unlink_block_argument)
+        unlink_size = expression(
+            "and",
+            unlink_tagged_header,
+            expression("constant", clear_mask(layout.size_flag_mask)),
+        )
+        successor_address = add_expression(
+            unlink_block_argument,
+            unlink_size,
+        )
+        tagged_extent_address = add_expression(
+            page_argument,
+            displacement=layout.page_extent_offset,
+        )
+        if successor_address is None or tagged_extent_address is None:
+            return None
+        unlink_extent = expression(
+            "and",
+            expression("load", tagged_extent_address),
+            expression("constant", clear_mask(layout.size_flag_mask)),
+        )
+        sentinel_address = add_expression(
+            add_expression(page_argument, unlink_extent),
+            displacement=layout.end_sentinel_displacement,
+        )
+        unlink_prev_address = add_expression(
+            unlink_block_argument,
+            displacement=layout.block_prev_offset,
+        )
+        unlink_next_address = add_expression(
+            unlink_block_argument,
+            displacement=layout.block_next_offset,
+        )
+        largest_address = add_expression(
+            page_argument,
+            displacement=layout.page_largest_free_offset,
+        )
+        if any(
+            value is None
+            for value in (
+                sentinel_address,
+                unlink_prev_address,
+                unlink_next_address,
+                largest_address,
+            )
+        ):
+            return None
+        allocate_write = (
+            unlink_block_argument,
+            expression(
+                "or",
+                unlink_tagged_header,
+                expression("constant", allocated_flag),
+            ),
+        )
+        successor_write = (
+            successor_address,
+            expression(
+                "or",
+                expression("load", successor_address),
+                expression("constant", previous_allocated_flag),
+            ),
+        )
+        sentinel_next_write = (
+            sentinel_address,
+            expression("load", unlink_next_address),
+        )
+        singleton_writes = {
+            sentinel_next_write,
+            (sentinel_address, constant_zero),
+            (largest_address, constant_zero),
+        }
+        reciprocal_writes = {
+            (
+                add_expression(
+                    expression("load", unlink_next_address),
+                    displacement=layout.block_prev_offset,
+                ),
+                expression("load", unlink_prev_address),
+            ),
+            (
+                add_expression(
+                    expression("load", unlink_prev_address),
+                    displacement=layout.block_next_offset,
+                ),
+                expression("load", unlink_next_address),
+            ),
+        }
+        sentinel_compares = {
+            address
+            for address, semantic_address in acyclic_reads_by_function[
+                unlink_entry
+            ]
+            if (
+                semantic_address == sentinel_address
+                and self._owned_decoded(address).mnemonic == "cmp"
+            )
+        }
+        if len(sentinel_compares) != 2:
+            return None
+        saw_singleton = False
+        saw_reciprocal = False
+        for row in unlink_returns:
+            if row[5]:
+                return None
+            semantic_writes = {(write[2], write[3]) for write in row[6]}
+            if not {allocate_write, successor_write} <= semantic_writes:
+                return None
+            remainder = semantic_writes - {allocate_write, successor_write}
+            if remainder == singleton_writes:
+                saw_singleton = True
+            elif remainder in {
+                frozenset(reciprocal_writes),
+                frozenset({sentinel_next_write, *reciprocal_writes}),
+            }:
+                saw_reciprocal = True
+            else:
+                return None
+        if not saw_singleton or not saw_reciprocal:
+            return None
+
+        helper_spans: set[_PublicationPrivateArenaSpan] = set()
+
+        def helper_operand_index(address: int) -> int | None:
+            decoded = self._owned_decoded(address)
+            dynamic = []
+            for index, operand in enumerate(decoded.operands):
+                if operand.type != X86_OP_MEM:
+                    continue
+                if self._stack_argument_index_at(
+                    address,
+                    operand,
+                    self._registrar_function_entry(address),
+                ) is not None:
+                    continue
+                if (
+                    operand.mem.base != X86_REG_INVALID
+                    and self._register_family(operand.mem.base) == "esp"
+                ):
+                    continue
+                dynamic.append(index)
+            return dynamic[0] if len(dynamic) == 1 else None
+
+        def note_helper_span(
+            function_entry: int,
+            address: int,
+            operand_index: int,
+            region: str,
+            field: str,
+        ) -> bool:
+            decoded = self._owned_decoded(address)
+            if operand_index >= len(decoded.operands):
+                return False
+            operand = decoded.operands[operand_index]
+            access = operand_access(
+                operand,
+                operand_index,
+                decoded.mnemonic,
+            )
+            if (
+                operand.type != X86_OP_MEM
+                or operand.size != 4
+                or access is None
+            ):
+                return False
+            helper_spans.add(
+                _PublicationPrivateArenaSpan(
+                    function_entry=function_entry,
+                    instruction_address=address,
+                    operand_index=operand_index,
+                    access=access,
+                    region=region,
+                    field=field,
+                    displacement=operand.mem.disp,
+                    width=operand.size,
+                )
+            )
+            return True
+
+        split_address_fields = {
+            block_argument: ("block", "block-header"),
+            page_flags_address: ("block", "block-page-flags"),
+            block_next_address: ("block", "block-next"),
+            add_expression(
+                split_block,
+                displacement=layout.block_prev_offset,
+            ): ("block", "block-prev"),
+            add_expression(
+                split_block,
+                displacement=layout.block_next_offset,
+            ): ("block", "block-next"),
+            add_expression(
+                expression("load", block_next_address),
+                displacement=layout.block_prev_offset,
+            ): ("block", "block-prev"),
+        }
+        unlink_address_fields = {
+            unlink_block_argument: ("block", "block-header"),
+            successor_address: ("successor", "successor-header"),
+            tagged_extent_address: ("page", "extent"),
+            sentinel_address: ("page-end", "sentinel"),
+            unlink_prev_address: ("block", "block-prev"),
+            unlink_next_address: ("block", "block-next"),
+            largest_address: ("page", "largest-free"),
+            add_expression(
+                expression("load", unlink_next_address),
+                displacement=layout.block_prev_offset,
+            ): ("block", "block-prev"),
+            add_expression(
+                expression("load", unlink_prev_address),
+                displacement=layout.block_next_offset,
+            ): ("block", "block-next"),
+        }
+        for function_entry, returns, address_fields in (
+            (splitter_entry, splitter_returns, split_address_fields),
+            (unlink_entry, unlink_returns, unlink_address_fields),
+        ):
+            semantic_operands = set(acyclic_reads_by_function[function_entry])
+            semantic_operands.update(
+                (write[0], write[2])
+                for row in returns
+                for write in row[6]
+            )
+            for address, semantic_address in semantic_operands:
+                field = address_fields.get(semantic_address)
+                operand_index = helper_operand_index(address)
+                if (
+                    field is None
+                    or operand_index is None
+                    or not note_helper_span(
+                        function_entry,
+                        address,
+                        operand_index,
+                        *field,
+                    )
+                ):
+                    return None
+
+        all_spans = tuple(
+            sorted(
+                {*selector_spans, *helper_spans},
+                key=lambda span: (
+                    span.function_entry,
+                    span.instruction_address,
+                    span.operand_index,
+                ),
+            )
+        )
+        span_keys = tuple(
+            (
+                span.function_entry,
+                span.instruction_address,
+                span.operand_index,
+            )
+            for span in all_spans
+        )
+        if (
+            not all_spans
+            or len(span_keys) != len(set(span_keys))
+            or {span.function_entry for span in all_spans}
+            != {selector_entry, splitter_entry, unlink_entry}
+        ):
+            return None
+        allocated_state = _PublicationPrivateArenaBlockState(
+            "allocated",
+            "unlisted",
+        )
+        listed_state = _PublicationPrivateArenaBlockState("free", "listed")
+        transitions = tuple(
+            _PublicationPrivateArenaStateTransition(
+                function_entry=selector_entry,
+                role="select",
+                context=invocation.context,
+                subject="selected-block",
+                before=listed_state,
+                after=allocated_state,
+                restoration_role="select",
+                restoration_entry=selector_entry,
+            )
+            for invocation in ring.selector_invocations
+        )
+        instruction_addresses = tuple(
+            sorted(
+                {
+                    *self._function_instruction_addresses(selector_entry),
+                    *self._function_instruction_addresses(splitter_entry),
+                    *self._function_instruction_addresses(unlink_entry),
+                }
+            )
+        )
+        updated_layout = replace(
+            layout,
+            minimum_split_remainder=minimum_split_remainder,
+        )
+        role = _PublicationPrivateBlockArenaRole(
+            selector_entry=selector_entry,
+            selector_calls=ring.selector_page_calls,
+            deallocator_root=None,
+            deallocator_function_entries=(),
+            deallocator_call_edges=(),
+            mutation_context_entries=(),
+            mutation_call_edges=(),
+            block_initializer_entries=(),
+            arena_free_entries=(),
+            splitter_entries=(),
+            unlink_entries=(),
+            insert_entries=(),
+            coalescer_entries=(),
+            resize_entries=(),
+            block_payload_offset=layout.block_prev_offset,
+            block_page_pointer_flag=page_pointer_flag,
+            block_allocated_flag=allocated_flag,
+            block_previous_allocated_flag=previous_allocated_flag,
+        )
+        transfer = _PublicationPrivateArenaTransfer(
+            function_entry=selector_entry,
+            role="select",
+            invocations=ring.selector_invocations,
+            state_transitions=transitions,
+            instruction_addresses=instruction_addresses,
+            span_keys=span_keys,
+            function_sha256=self._producer_function_fingerprint(
+                selector_entry
+            ),
+        )
+        for function_entry in (
+            selector_entry,
+            splitter_entry,
+            unlink_entry,
+            block_initializer_entry,
+        ):
+            self._note_producer_dependency(function_entry)
+        return updated_layout, role, transfer, all_spans
 
 
     def _publication_private_heap_effect_closure_replay(

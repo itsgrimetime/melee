@@ -5380,6 +5380,151 @@ def private_page_arena_image(
     )
 
 
+_PRIVATE_BLOCK_SELECTOR_HOSTILES = (
+    "extent-clobber",
+    "changed-size-mask",
+    "foreign-block-link",
+    "mapped-global-header",
+    "missing-fit-guard",
+    "missing-minimum-guard",
+    "wrong-largest-free",
+    "unknown-loop-branch",
+    "unsupported-join",
+    "state-cap-exhaustion",
+    "sentinel-off-by-one",
+    "successor-sentinel-confusion",
+    "block-size-wrap",
+    "remainder-wrap",
+    "selector-split-wrong-block",
+    "split-first-call-conditional",
+    "split-second-call-conditional",
+    "split-first-allocation-copy",
+    "split-second-allocation-copy",
+    "split-missing-relink",
+    "split-allocated-listed",
+    "missing-unlink",
+    "unlink-missing-bit2",
+    "unlink-missing-successor-bit",
+    "unlink-wrong-d",
+    "unlink-missing-singleton",
+    "unlink-missing-reciprocal",
+    "unlink-missing-largest-free",
+    "extra-memory-operand",
+)
+
+
+def private_block_selector_image(
+    mutation: str | None = None,
+) -> PrivatePageArenaFixture:
+    """Apply one exact Task 4 selector/split/unlink mutation."""
+    assert mutation in {None, "benign-unknown-join", *_PRIVATE_BLOCK_SELECTOR_HOSTILES}
+    if mutation == "missing-minimum-guard":
+        return private_page_arena_image(mutation="split-missing-guard")
+    if mutation == "unlink-missing-reciprocal":
+        return private_page_arena_image(mutation="unlink-partial")
+    if mutation == "unlink-missing-largest-free":
+        return private_page_arena_image(
+            mutation="unlink-missing-empty-largest"
+        )
+
+    fixture = private_page_arena_image()
+    raw = bytearray(fixture.arena.image.data)
+
+    def patch(address: int, expected: str, replacement: str) -> None:
+        expected_bytes = bytes.fromhex(expected)
+        replacement_bytes = bytes.fromhex(replacement)
+        assert len(expected_bytes) == len(replacement_bytes)
+        section = next(
+            row
+            for row in fixture.arena.image.sections
+            if row.va <= address < row.va + row.raw_size
+        )
+        offset = section.raw_offset + address - section.va
+        assert raw[offset : offset + len(expected_bytes)] == expected_bytes
+        raw[offset : offset + len(replacement_bytes)] = replacement_bytes
+
+    selector = fixture.selector
+    splitter = fixture.splitter
+    unlinker = fixture.unlinker
+    if mutation == "extent-clobber":
+        patch(selector + 0x36, "89 4b 08", "89 4b 0c")
+    elif mutation == "changed-size-mask":
+        patch(selector + 0x0F, "83 e0 f8", "83 e0 f0")
+    elif mutation == "foreign-block-link":
+        patch(selector + 0x2F, "8b 76 0c", "8b 76 10")
+    elif mutation == "mapped-global-header":
+        data_section = next(
+            section
+            for section in fixture.arena.image.sections
+            if section.name == ".data"
+        )
+        patch(
+            selector + 0x20,
+            "8b 06 83 e0 f8",
+            "a1 "
+            + (data_section.va + 0x380).to_bytes(4, "little").hex(),
+        )
+    elif mutation == "missing-fit-guard":
+        patch(selector + 0x2D, "73 11", "eb 11")
+    elif mutation == "wrong-largest-free":
+        patch(selector + 0x36, "89 4b 08", "89 53 08")
+    elif mutation == "unknown-loop-branch":
+        patch(selector + 0x32, "39 ee", "85 c0")
+    elif mutation == "unsupported-join":
+        patch(selector + 0x29, "89 c1", "89 d1")
+    elif mutation == "state-cap-exhaustion":
+        patch(selector + 0x34, "75 ea", "75 fe")
+    elif mutation == "sentinel-off-by-one":
+        patch(selector + 0x12, "8d 7c 03 fc", "8d 7c 03 f8")
+    elif mutation == "successor-sentinel-confusion":
+        patch(selector + 0x60, "8b 4e 0c", "8b 0f 90")
+    elif mutation == "block-size-wrap":
+        patch(selector + 0x22, "83 e0 f8", "83 c0 f8")
+    elif mutation == "remainder-wrap":
+        patch(splitter + 0x1B, "8d 3c 33", "8d 3c 73")
+    elif mutation == "selector-split-wrong-block":
+        patch(selector + 0x4D, "56", "53")
+    elif mutation == "split-first-call-conditional":
+        patch(splitter + 0x2E, "e8 4d 03 00 00", "74 03 90 90 90")
+    elif mutation == "split-second-call-conditional":
+        patch(splitter + 0x3C, "e8 3f 03 00 00", "74 03 90 90 90")
+    elif mutation == "split-first-allocation-copy":
+        patch(splitter + 0x27, "52", "51")
+    elif mutation == "split-second-allocation-copy":
+        patch(splitter + 0x37, "56", "50")
+    elif mutation == "split-missing-relink":
+        patch(splitter + 0x51, "89 7b 0c", "90 90 90")
+    elif mutation == "split-allocated-listed":
+        patch(splitter + 0x46, "75 0f", "90 90")
+    elif mutation == "missing-unlink":
+        patch(selector + 0x67, "e8 14 01 00 00", "90 90 90 90 90")
+    elif mutation == "unlink-missing-bit2":
+        patch(unlinker + 0x0B, "81 0b 02 00 00 00", "90 90 90 90 90 90")
+    elif mutation == "unlink-missing-successor-bit":
+        patch(unlinker + 0x18, "83 08 04", "90 90 90")
+    elif mutation == "unlink-wrong-d":
+        patch(unlinker + 0x21, "8d 44 01 fc", "8d 44 01 f8")
+    elif mutation == "unlink-missing-singleton":
+        patch(unlinker + 0x2E, "39 18", "90 90")
+    elif mutation == "extra-memory-operand":
+        patch(selector + 0x39, "31 c0", "8b 03")
+    elif mutation == "benign-unknown-join":
+        patch(
+            selector + 0x6E,
+            "89 f0 5d 5f 5e 5b c3 90 90 90 90 90 90",
+            "85 c0 74 02 90 90 89 f0 5d 5f 5e 5b c3",
+        )
+    elif mutation is not None:
+        raise AssertionError(f"unhandled selector mutation: {mutation}")
+
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
 def private_page_ring_absolute_reference_image(
     mutation: str,
 ) -> PrivatePageArenaFixture:
@@ -6758,6 +6903,31 @@ def private_page_arena_contract(fixture):
     effects = recovery._publication_private_heap_effect_closure(extent)
     assert effects is not None
     return recovery, contract, extent, effects
+
+
+def private_page_arena_ring(fixture):
+    """Reach Task 4 with exact current Task 1-3 evidence."""
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    assert recovery._publication_private_heap_effect_closure_is_current(
+        effects
+    )
+    assert len(effects.symbolic_writes) == 13
+    assert len(effects.terminal_symbolic_memory) == 9
+    layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert layout is not None
+    assert layout.page_link_offsets is None
+    ring_evidence = recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        layout,
+    )
+    assert ring_evidence is not None
+    assert ring_evidence.layout.minimum_split_remainder is None
+    return recovery, contract, extent, effects, ring_evidence
 
 
 def private_page_ring_task3_evidence(fixture):
@@ -16981,6 +17151,251 @@ def test_private_page_ring_rejects_one_fact_hostiles(mutation):
         )
         is None
     )
+
+
+def assert_private_block_selector_result(fixture, inputs, result):
+    """Require the complete Task 4 selector-only durable boundary."""
+    recovery, _, _, _, ring_evidence = inputs
+    assert result is not None
+    layout, role, select_transfer, spans = result
+    ring = ring_evidence.role
+    assert layout.minimum_split_remainder == 0x50
+    assert layout == replace(
+        ring_evidence.layout,
+        minimum_split_remainder=0x50,
+    )
+    assert role.selector_entry == fixture.selector
+    assert set(role.selector_calls) == set(fixture.selector_calls)
+    assert role.deallocator_root is None
+    assert role.deallocator_function_entries == ()
+    assert role.deallocator_call_edges == ()
+    assert role.mutation_context_entries == ()
+    assert role.mutation_call_edges == ()
+    assert role.block_initializer_entries == ()
+    assert role.arena_free_entries == ()
+    assert role.splitter_entries == ()
+    assert role.unlink_entries == ()
+    assert role.insert_entries == ()
+    assert role.coalescer_entries == ()
+    assert role.resize_entries == ()
+    assert role.block_payload_offset == layout.block_prev_offset
+    assert role.block_page_pointer_flag == 1
+    assert role.block_allocated_flag == 2
+    assert role.block_previous_allocated_flag == 4
+
+    assert select_transfer.function_entry == fixture.selector
+    assert select_transfer.role == "select"
+    assert select_transfer.invocations == ring.selector_invocations
+    assert all(
+        invocation.block_state.allocation == "none"
+        and invocation.block_state.membership == "none"
+        for invocation in select_transfer.invocations
+    )
+    assert {row.context for row in select_transfer.state_transitions} == {
+        row.context for row in ring.selector_invocations
+    }
+    assert all(
+        transition.function_entry == fixture.selector
+        and transition.role == "select"
+        and transition.subject == "selected-block"
+        and transition.before.allocation == "free"
+        and transition.before.membership == "listed"
+        and transition.after.allocation == "allocated"
+        and transition.after.membership == "unlisted"
+        and transition.restoration_role == "select"
+        and transition.restoration_entry == fixture.selector
+        for transition in select_transfer.state_transitions
+    )
+    assert len(select_transfer.state_transitions) == len(
+        select_transfer.invocations
+    )
+    assert spans
+    assert len(spans) == len(set(spans))
+    span_keys = {
+        (span.function_entry, span.instruction_address, span.operand_index)
+        for span in spans
+    }
+    assert select_transfer.span_keys == tuple(sorted(span_keys))
+    assert all(len(key) == 3 for key in select_transfer.span_keys)
+    assert {span.function_entry for span in spans} == {
+        fixture.selector,
+        fixture.splitter,
+        fixture.unlinker,
+    }
+    assert {span.field for span in spans} >= {
+        "extent",
+        "largest-free",
+        "sentinel",
+        "block-header",
+        "block-next",
+        "successor-header",
+    }
+    for span in spans:
+        decoded = recovery._owned_decoded(span.instruction_address)
+        operand = decoded.operands[span.operand_index]
+        assert operand.type == capstone.x86.X86_OP_MEM
+        assert operand.size == span.width
+        assert operand.mem.disp == span.displacement
+    assert set(select_transfer.instruction_addresses) >= {
+        span.instruction_address for span in spans
+    }
+    assert select_transfer.function_sha256 == (
+        recovery._producer_function_fingerprint(fixture.selector)
+    )
+
+    provider_only = tuple(
+        row
+        for row in select_transfer.invocations
+        if row.page_origins == ("provider",)
+    )
+    existing_ring = tuple(
+        row
+        for row in select_transfer.invocations
+        if "ring" in row.page_origins
+    )
+    joined = tuple(
+        row
+        for row in select_transfer.invocations
+        if row.page_origins == ("provider", "ring")
+    )
+    assert provider_only
+    assert existing_ring
+    assert joined
+    assert ring.selector_request_calls == ring.selector_page_calls
+    assert len(select_transfer.invocations) == len(ring.selector_page_calls)
+
+
+def test_private_block_selector_walks_only_same_page_blocks():
+    fixture = private_block_selector_image()
+    inputs = private_page_arena_ring(fixture)
+    recovery, contract, extent, effects, ring_evidence = inputs
+
+    result = recovery._publication_private_block_selector_role(
+        contract,
+        extent,
+        effects,
+        ring_evidence,
+    )
+
+    assert_private_block_selector_result(fixture, inputs, result)
+
+
+def test_private_block_selector_accepts_benign_unknown_join():
+    fixture = private_block_selector_image("benign-unknown-join")
+    inputs = private_page_arena_ring(fixture)
+    recovery, contract, extent, effects, ring_evidence = inputs
+
+    result = recovery._publication_private_block_selector_role(
+        contract,
+        extent,
+        effects,
+        ring_evidence,
+    )
+
+    assert_private_block_selector_result(fixture, inputs, result)
+
+
+@pytest.mark.parametrize("mutation", _PRIVATE_BLOCK_SELECTOR_HOSTILES)
+def test_private_block_selector_rejects_one_fact_hostiles(mutation):
+    fixture = private_block_selector_image(mutation)
+    recovery, contract, extent, effects, ring_evidence = (
+        private_page_arena_ring(fixture)
+    )
+
+    assert recovery._publication_private_block_selector_role(
+        contract,
+        extent,
+        effects,
+        ring_evidence,
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "partial-invocations",
+        "non-none-invocation",
+        "context-without-transition",
+        "extra-select-transfer",
+        "extra-span-key",
+    ),
+)
+def test_private_block_selector_rejects_stale_task3_evidence(mutation):
+    fixture = private_page_arena_image()
+    recovery, contract, extent, effects, ring_evidence = (
+        private_page_arena_ring(fixture)
+    )
+    invocations = ring_evidence.role.selector_invocations
+    assert len(invocations) == 2
+    if mutation == "partial-invocations":
+        ring_evidence = replace(
+            ring_evidence,
+            role=replace(
+                ring_evidence.role,
+                selector_invocations=invocations[:1],
+            ),
+        )
+    elif mutation == "non-none-invocation":
+        ring_evidence = replace(
+            ring_evidence,
+            role=replace(
+                ring_evidence.role,
+                selector_invocations=(
+                    replace(
+                        invocations[0],
+                        block_state=replace(
+                            invocations[0].block_state,
+                            allocation="free",
+                            membership="listed",
+                        ),
+                    ),
+                    invocations[1],
+                ),
+            ),
+        )
+    elif mutation == "context-without-transition":
+        ring_evidence = replace(
+            ring_evidence,
+            role=replace(
+                ring_evidence.role,
+                selector_invocations=(
+                    invocations[0],
+                    replace(invocations[1], context="selector-ring"),
+                ),
+            ),
+        )
+    elif mutation == "extra-select-transfer":
+        ring_evidence = replace(
+            ring_evidence,
+            transfers=(
+                *ring_evidence.transfers,
+                replace(
+                    ring_evidence.transfers[0],
+                    role="select",
+                    invocations=invocations,
+                ),
+            ),
+        )
+    elif mutation == "extra-span-key":
+        ring_evidence = replace(
+            ring_evidence,
+            spans=(
+                *ring_evidence.spans,
+                replace(
+                    ring_evidence.spans[0],
+                    operand_index=ring_evidence.spans[0].operand_index + 10,
+                ),
+            ),
+        )
+    else:
+        raise AssertionError(mutation)
+
+    assert recovery._publication_private_block_selector_role(
+        contract,
+        extent,
+        effects,
+        ring_evidence,
+    ) is None
 
 
 def test_private_page_arena_fixed_slots_have_no_stale_executable_tail():
