@@ -20749,12 +20749,79 @@ PRIVATE_ARENA_TASK5_SLICE2_SPLITTER_STACK_NODE_IDS = (
     "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_entry_stack_splitter_hostile[allocated-tail-relinked]",
 )
 
+PRIVATE_ARENA_TASK5_SLICE3_NODE_IDS = (
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_insert_invocations_and_transitions_are_exact",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_coalesce_prev_transition_is_exact",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_accepts_path_local_late_early_return",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_wrong_late_early_return_value",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_coalesce_next_transitions_are_exact",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_role_inventory_spans_and_dependencies_are_exact",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_public_full_result_remains_none",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_narrow_role_is_exact[insert]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_narrow_role_is_exact[coalesce-prev]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_narrow_role_is_exact[coalesce-next]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_insert_body_hostile[insert-keeps-allocated]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_insert_body_hostile[insert-keeps-successor-prev-allocated]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_insert_body_hostile[insert-largest-store-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_insert_body_hostile[insert-coalescer-result-not-forwarded]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_insert_body_hostile[insert-list-before-clear]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_insert_body_hostile[insert-block-prev-wrong-source]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_insert_body_hostile[insert-tail-next-wrong-source]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_insert_body_hostile[insert-head-prev-wrong-source]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_insert_body_hostile[insert-sentinel-head-wrong-source]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_insert_body_hostile[insert-coalescers-reordered]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_insert_body_hostile[insert-largest-from-previous-survivor]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_insert_body_hostile[insert-unbalanced-return]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_prev_hostile[coalesce-prev-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_prev_hostile[previous-free-flag-inverted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_prev_hostile[boundary-tag-wrong-source]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_prev_hostile[false-previous-adjacency]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_prev_hostile[previous-survivor-wrong]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_prev_hostile[previous-detach-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_prev_hostile[previous-detach-prev-wrong-source]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_prev_hostile[previous-detach-next-wrong-source]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_prev_hostile[previous-size-not-merged]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_prev_hostile[previous-size-wrong-source]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_prev_hostile[previous-flags-wrong]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_prev_hostile[previous-footer-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_prev_hostile[previous-footer-wrong-source]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_prev_hostile[previous-successor-flag-target-wrong]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[coalesce-next-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[next-free-flag-inverted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[false-next-adjacency]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[page-end-treated-as-block]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[page-end-branch-enters-detach]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[next-detach-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[next-detach-prev-wrong-source]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[next-detach-next-wrong-source]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[next-head-not-repaired]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[next-head-membership-branch-inverted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[next-head-singleton-branch-inverted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[next-head-replacement-wrong-source]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[next-size-not-merged]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[next-size-wrong-source]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[next-block-flags-wrong]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[next-footer-wrong-source]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[next-successor-flag-wrong]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[next-successor-set-target-wrong]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_coalesce_next_hostile[next-successor-clear-target-wrong]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_context_or_domain_hostile[initializer-insert-context-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_context_or_domain_hostile[arena-free-insert-retargeted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_context_or_domain_hostile[resize-shrink-insert-retargeted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_context_or_domain_hostile[resize-grow-insert-retargeted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_context_or_domain_hostile[external-raw-insert-arm]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_context_or_domain_hostile[partial-coalescer-metadata-write]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_context_or_domain_hostile[indexed-coalescer-metadata]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_context_or_domain_hostile[insert-effect-authority-duplicated]",
+)
+
 PRIVATE_ARENA_TASK5_ALL_NODE_IDS = (
     *PRIVATE_ARENA_TASK5_SLICE2_NODE_IDS,
     *PRIVATE_ARENA_TASK5_SLICE2_CARRIED_PREDICATE_NODE_IDS,
     *PRIVATE_ARENA_TASK5_SLICE2_AFFINE_TEST_NODE_IDS,
     *PRIVATE_ARENA_TASK5_SLICE2_REPEATED_CONDITION_NODE_IDS,
     *PRIVATE_ARENA_TASK5_SLICE2_SPLITTER_STACK_NODE_IDS,
+    *PRIVATE_ARENA_TASK5_SLICE3_NODE_IDS,
 )
 
 
@@ -23350,6 +23417,699 @@ def test_private_arena_task5_slice2_rejects_entry_stack_splitter_hostile(
         current_rows[3]
     )
     assert hostile_result is None
+
+
+_PRIVATE_ARENA_TASK5_SLICE3_INSERT_HOSTILES = (
+    "insert-keeps-allocated",
+    "insert-keeps-successor-prev-allocated",
+    "insert-largest-store-missing",
+    "insert-coalescer-result-not-forwarded",
+    "insert-list-before-clear",
+    "insert-block-prev-wrong-source",
+    "insert-tail-next-wrong-source",
+    "insert-head-prev-wrong-source",
+    "insert-sentinel-head-wrong-source",
+    "insert-coalescers-reordered",
+    "insert-largest-from-previous-survivor",
+    "insert-unbalanced-return",
+)
+
+_PRIVATE_ARENA_TASK5_SLICE3_PREV_HOSTILES = (
+    "coalesce-prev-missing",
+    "previous-free-flag-inverted",
+    "boundary-tag-wrong-source",
+    "false-previous-adjacency",
+    "previous-survivor-wrong",
+    "previous-detach-missing",
+    "previous-detach-prev-wrong-source",
+    "previous-detach-next-wrong-source",
+    "previous-size-not-merged",
+    "previous-size-wrong-source",
+    "previous-flags-wrong",
+    "previous-footer-missing",
+    "previous-footer-wrong-source",
+    "previous-successor-flag-target-wrong",
+)
+
+_PRIVATE_ARENA_TASK5_SLICE3_NEXT_HOSTILES = (
+    "coalesce-next-missing",
+    "next-free-flag-inverted",
+    "false-next-adjacency",
+    "page-end-treated-as-block",
+    "page-end-branch-enters-detach",
+    "next-detach-missing",
+    "next-detach-prev-wrong-source",
+    "next-detach-next-wrong-source",
+    "next-head-not-repaired",
+    "next-head-membership-branch-inverted",
+    "next-head-singleton-branch-inverted",
+    "next-head-replacement-wrong-source",
+    "next-size-not-merged",
+    "next-size-wrong-source",
+    "next-block-flags-wrong",
+    "next-footer-wrong-source",
+    "next-successor-flag-wrong",
+    "next-successor-set-target-wrong",
+    "next-successor-clear-target-wrong",
+)
+
+_PRIVATE_ARENA_TASK5_SLICE3_CONTEXT_HOSTILES = (
+    "initializer-insert-context-missing",
+    "arena-free-insert-retargeted",
+    "resize-shrink-insert-retargeted",
+    "resize-grow-insert-retargeted",
+    "external-raw-insert-arm",
+    "partial-coalescer-metadata-write",
+    "indexed-coalescer-metadata",
+    "insert-effect-authority-duplicated",
+)
+
+
+def private_arena_task5_slice3_image(mutation):
+    """Change one insert/coalescer fact while preserving fixture addresses."""
+    assert mutation in {
+        *_PRIVATE_ARENA_TASK5_SLICE3_INSERT_HOSTILES,
+        *_PRIVATE_ARENA_TASK5_SLICE3_PREV_HOSTILES,
+        *_PRIVATE_ARENA_TASK5_SLICE3_NEXT_HOSTILES,
+        *_PRIVATE_ARENA_TASK5_SLICE3_CONTEXT_HOSTILES,
+    }
+    if mutation in {
+        "insert-keeps-allocated",
+        "insert-keeps-successor-prev-allocated",
+        "coalesce-prev-missing",
+        "coalesce-next-missing",
+    }:
+        return private_page_arena_image(mutation=mutation)
+    if mutation in {
+        "external-raw-insert-arm",
+        "insert-effect-authority-duplicated",
+        "initializer-insert-context-missing",
+    }:
+        return private_page_arena_image()
+
+    fixture = private_page_arena_image()
+    recovery = private_page_arena_recovery(
+        fixture,
+        (audit_anchor(fixture.arena.image, fixture.realloc_driver),),
+    )
+    raw = bytearray(fixture.arena.image.data)
+    text = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.name == ".text"
+    )
+    patched = set()
+
+    def replace_bytes(address, expected, replacement):
+        before = bytes.fromhex(expected)
+        after = bytes.fromhex(replacement)
+        assert len(before) == len(after)
+        offset = text.raw_offset + address - text.va
+        assert raw[offset : offset + len(before)] == before
+        for index, (old, new) in enumerate(zip(before, after)):
+            if old != new:
+                patched.add(address + index)
+        raw[offset : offset + len(after)] = after
+
+    def retarget(call_address, old_target, new_target):
+        before = (old_target - call_address - 5).to_bytes(
+            4, "little", signed=True
+        )
+        after = (new_target - call_address - 5).to_bytes(
+            4, "little", signed=True
+        )
+        replace_bytes(call_address + 1, before.hex(), after.hex())
+
+    insert = fixture.block_inserter
+    previous, following = fixture.coalescers
+    if mutation == "insert-list-before-clear":
+        replace_bytes(insert + 0x0C, "81 26 fd ff ff ff", "89 76 08 90 90 90")
+        replace_bytes(insert + 0x32, "89 46 08", "83 26 fd")
+    elif mutation == "insert-block-prev-wrong-source":
+        replace_bytes(insert + 0x33, "46", "5e")
+    elif mutation == "insert-tail-next-wrong-source":
+        replace_bytes(insert + 0x39, "70", "58")
+    elif mutation == "insert-head-prev-wrong-source":
+        replace_bytes(insert + 0x3C, "71", "59")
+    elif mutation == "insert-sentinel-head-wrong-source":
+        replace_bytes(insert + 0x3F, "32", "12")
+    elif mutation == "insert-coalescers-reordered":
+        retarget(insert + 0x4E, previous, following)
+        retarget(insert + 0x59, following, previous)
+    elif mutation == "insert-largest-from-previous-survivor":
+        replace_bytes(insert + 0x60, "89 c6", "89 c7")
+    elif mutation == "insert-largest-store-missing":
+        replace_bytes(insert + 0x6E, "89 4b 08", "90 90 90")
+    elif mutation == "insert-coalescer-result-not-forwarded":
+        replace_bytes(insert + 0x55, "89 c6", "89 c7")
+    elif mutation == "insert-unbalanced-return":
+        replace_bytes(insert + 0x74, "5b", "53")
+    elif mutation == "previous-free-flag-inverted":
+        replace_bytes(previous + 0x15, "75", "74")
+    elif mutation == "boundary-tag-wrong-source":
+        replace_bytes(previous + 0x18, "73", "70")
+    elif mutation == "false-previous-adjacency":
+        replace_bytes(previous + 0x20, "f7", "c7")
+    elif mutation == "previous-survivor-wrong":
+        replace_bytes(previous + 0x5E, "89 fb", "89 f3")
+    elif mutation == "previous-detach-missing":
+        replace_bytes(previous + 0x27, "89 48 0c", "90 90 90")
+    elif mutation == "previous-detach-prev-wrong-source":
+        replace_bytes(previous + 0x28, "48", "58")
+    elif mutation == "previous-detach-next-wrong-source":
+        replace_bytes(previous + 0x2B, "41", "59")
+    elif mutation == "previous-size-not-merged":
+        replace_bytes(previous + 0x47, "01 d0", "89 d0")
+    elif mutation == "previous-size-wrong-source":
+        replace_bytes(previous + 0x48, "d0", "c8")
+    elif mutation == "previous-flags-wrong":
+        replace_bytes(previous + 0x4D, "07", "03")
+    elif mutation == "previous-footer-missing":
+        replace_bytes(previous + 0x58, "89 42 fc", "90 90 90")
+    elif mutation == "previous-footer-wrong-source":
+        replace_bytes(previous + 0x59, "42", "5a")
+    elif mutation == "previous-successor-flag-target-wrong":
+        replace_bytes(previous + 0x5C, "22", "21")
+    elif mutation == "next-free-flag-inverted":
+        replace_bytes(following + 0x27, "75", "74")
+    elif mutation == "false-next-adjacency":
+        replace_bytes(following + 0x0E, "03", "02")
+    elif mutation == "page-end-treated-as-block":
+        replace_bytes(following + 0x22, "74", "75")
+    elif mutation == "page-end-branch-enters-detach":
+        replace_bytes(following + 0x23, "5c", "05")
+    elif mutation == "next-detach-missing":
+        replace_bytes(following + 0x2F, "89 4e 0c", "90 90 90")
+    elif mutation == "next-detach-prev-wrong-source":
+        replace_bytes(following + 0x30, "4e", "5e")
+    elif mutation == "next-detach-next-wrong-source":
+        replace_bytes(following + 0x33, "71", "59")
+    elif mutation == "next-head-not-repaired":
+        replace_bytes(
+            following + 0x4B,
+            "c7 02 00 00 00 00",
+            "90 90 90 90 90 90",
+        )
+    elif mutation == "next-head-membership-branch-inverted":
+        replace_bytes(following + 0x45, "75", "74")
+    elif mutation == "next-head-singleton-branch-inverted":
+        replace_bytes(following + 0x49, "75", "74")
+    elif mutation == "next-head-replacement-wrong-source":
+        replace_bytes(following + 0x54, "0a", "1a")
+    elif mutation == "next-size-not-merged":
+        replace_bytes(following + 0x64, "01 ca", "89 ca")
+    elif mutation == "next-size-wrong-source":
+        replace_bytes(following + 0x65, "ca", "c2")
+    elif mutation == "next-block-flags-wrong":
+        replace_bytes(following + 0x5B, "07", "03")
+    elif mutation == "next-footer-wrong-source":
+        replace_bytes(following + 0x71, "51", "59")
+    elif mutation == "next-successor-flag-wrong":
+        replace_bytes(following + 0x7A, "04", "02")
+    elif mutation == "next-successor-set-target-wrong":
+        replace_bytes(following + 0x79, "09", "0a")
+    elif mutation == "next-successor-clear-target-wrong":
+        replace_bytes(following + 0x7E, "21", "22")
+    elif mutation in {
+        "arena-free-insert-retargeted",
+        "resize-shrink-insert-retargeted",
+        "resize-grow-insert-retargeted",
+    }:
+        owner = {
+            "arena-free-insert-retargeted": fixture.arena_free,
+            "resize-shrink-insert-retargeted": fixture.reallocator,
+            "resize-grow-insert-retargeted": fixture.reallocator,
+        }[mutation]
+        calls = tuple(
+            row
+            for row in recovery._function_direct_calls(owner)
+            if row.target == insert
+        )
+        index = 1 if mutation == "resize-grow-insert-retargeted" else 0
+        assert len(calls) == (2 if owner == fixture.reallocator else 1)
+        retarget(calls[index].address, insert, fixture.block_initializer)
+    elif mutation == "partial-coalescer-metadata-write":
+        replace_bytes(
+            following + 0x4B,
+            "c7 02 00 00 00 00",
+            "66 c7 02 00 00 90",
+        )
+    else:
+        assert mutation == "indexed-coalescer-metadata"
+        replace_bytes(previous + 0x27, "89 48 0c", "89 0c 08")
+
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    hostile = replace(fixture, arena=replace(fixture.arena, image=image))
+    assert private_page_image_changed_addresses(fixture, hostile) == frozenset(
+        patched
+    )
+    assert patched
+    return hostile
+
+
+def private_arena_task5_slice3_late_early_return_image(*, wrong_value=False):
+    """Place the no-merge return after the merge return in address order."""
+    fixture = private_page_arena_image()
+    raw = bytearray(fixture.arena.image.data)
+    text = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.name == ".text"
+    )
+    previous = fixture.coalescers[0]
+
+    def replace_bytes(address, expected, replacement):
+        before = bytes.fromhex(expected)
+        after = bytes.fromhex(replacement)
+        assert len(before) == len(after)
+        offset = text.raw_offset + address - text.va
+        assert raw[offset : offset + len(before)] == before
+        raw[offset : offset + len(after)] = after
+
+    # The merge arm retains its original predecessor return at +0x60.  Both
+    # no-merge branches now use the later block, which reloads the current
+    # block from its entry argument before restoring the three saved registers.
+    replace_bytes(previous + 0x11, "4e", "54")
+    replace_bytes(previous + 0x16, "49", "4f")
+    replace_bytes(
+        previous + 0x66,
+        "90 90 90 90 90 90 90 90",
+        "8b 44 24 10 5f 5e 5b c3"
+        if wrong_value
+        else "8b 44 24 14 5f 5e 5b c3",
+    )
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    result = replace(fixture, arena=replace(fixture.arena, image=image))
+    assert private_page_image_changed_addresses(fixture, result) == frozenset(
+        {
+            previous + 0x11,
+            previous + 0x16,
+            *range(previous + 0x66, previous + 0x6E),
+        }
+    )
+    return result
+
+
+def private_arena_task5_slice3_claim(fixture, rows, role):
+    """Build a literal contextual claim from the decoded fixture topology."""
+    recovery = rows[0]
+    free_unlisted = x86_cfg_module._PublicationPrivateArenaBlockState(
+        "free", "unlisted"
+    )
+    free_listed = x86_cfg_module._PublicationPrivateArenaBlockState(
+        "free", "listed"
+    )
+    allocated_unlisted = x86_cfg_module._PublicationPrivateArenaBlockState(
+        "allocated", "unlisted"
+    )
+    insert_calls = {
+        owner: tuple(
+            row.address
+            for row in recovery._function_direct_calls(owner)
+            if row.target == fixture.block_inserter
+        )
+        for owner in (
+            fixture.page_initializer,
+            fixture.arena_free,
+            fixture.reallocator,
+        )
+    }
+    assert len(insert_calls[fixture.page_initializer]) == 1
+    assert len(insert_calls[fixture.arena_free]) == 1
+    assert len(insert_calls[fixture.reallocator]) == 2
+    contexts = (
+        (
+            fixture.page_initializer,
+            insert_calls[fixture.page_initializer][0],
+            "initializer-base",
+            free_unlisted,
+        ),
+        (
+            fixture.arena_free,
+            insert_calls[fixture.arena_free][0],
+            "deallocator",
+            allocated_unlisted,
+        ),
+        (
+            fixture.reallocator,
+            insert_calls[fixture.reallocator][0],
+            "resize-shrink",
+            allocated_unlisted,
+        ),
+        (
+            fixture.reallocator,
+            insert_calls[fixture.reallocator][1],
+            "resize-grow",
+            allocated_unlisted,
+        ),
+    )
+    if role == "insert":
+        entry = fixture.block_inserter
+        invocation_rows = contexts
+    else:
+        index = 0 if role == "coalesce-prev" else 1
+        entry = fixture.coalescers[index]
+        insert_call = recovery._function_direct_calls(fixture.block_inserter)[
+            index
+        ].address
+        invocation_rows = tuple(
+            (fixture.block_inserter, insert_call, context, free_listed)
+            for _owner, _call, context, _state in contexts
+        )
+        if role == "coalesce-next":
+            resize_call = next(
+                row.address
+                for row in recovery._function_direct_calls(fixture.reallocator)
+                if row.target == entry
+            )
+            invocation_rows = (
+                *invocation_rows,
+                (
+                    fixture.reallocator,
+                    resize_call,
+                    "resize-grow",
+                    allocated_unlisted,
+                ),
+            )
+    invocations = tuple(
+        x86_cfg_module._PublicationPrivateArenaInvocation(
+            caller_entry=caller,
+            call_address=call_address,
+            callee_entry=entry,
+            role=role,
+            context=context,
+            page_origins=(),
+            block_state=state,
+        )
+        for caller, call_address, context, state in invocation_rows
+    )
+    return entry, invocations
+
+
+def private_arena_task5_slice3_narrow(rows, claim, role):
+    recovery, contract, extent, effects, ring, layout, *_ = rows
+    entry, invocations = claim
+    return recovery._publication_private_arena_transfer(
+        role=role,
+        function_entry=entry,
+        invocations=invocations,
+        contract=contract,
+        extent=extent,
+        effects=effects,
+        layout=layout,
+        ring_evidence=ring,
+    )
+
+
+def private_arena_task5_slice3_base(fixture):
+    rows, assembly, base = private_arena_task5_slice2_base_result(fixture)
+    assert len(rows) == 9 and all(row is not None for row in rows)
+    assert rows[0]._publication_private_heap_effect_closure_is_current(rows[3])
+    assert base is not None
+    return rows, assembly, base
+
+
+def test_private_arena_task5_slice3_insert_invocations_and_transitions_are_exact():
+    fixture = private_page_arena_image()
+    rows, _assembly, base = private_arena_task5_slice3_base(fixture)
+    transfer = next(row for row in base.transfers if row.role == "insert")
+    assert (transfer.function_entry, transfer.invocations) == (
+        fixture.block_inserter,
+        private_arena_task5_slice3_claim(fixture, rows, "insert")[1],
+    )
+    assert tuple(
+        (
+            row.context,
+            row.subject,
+            row.before.allocation,
+            row.before.membership,
+            row.after.allocation,
+            row.after.membership,
+            row.restoration_role,
+            row.restoration_entry,
+        )
+        for row in transfer.state_transitions
+    ) == (
+        ("initializer-base", "initial-block", "free", "unlisted", "free", "listed", "initializer-base", fixture.page_initializer),
+        ("deallocator", "payload-block", "allocated", "unlisted", "free", "unlisted", "deallocator", fixture.arena_free),
+        ("deallocator", "payload-block", "free", "unlisted", "free", "listed", "deallocator", fixture.arena_free),
+        ("resize-shrink", "remainder-block", "allocated", "unlisted", "free", "unlisted", "resize", fixture.reallocator),
+        ("resize-shrink", "remainder-block", "free", "unlisted", "free", "listed", "resize", fixture.reallocator),
+        ("resize-grow", "remainder-block", "allocated", "unlisted", "free", "unlisted", "resize", fixture.reallocator),
+        ("resize-grow", "remainder-block", "free", "unlisted", "free", "listed", "resize", fixture.reallocator),
+    )
+
+
+def test_private_arena_task5_slice3_coalesce_prev_transition_is_exact():
+    fixture = private_page_arena_image()
+    rows, _assembly, base = private_arena_task5_slice3_base(fixture)
+    transfer = next(row for row in base.transfers if row.role == "coalesce-prev")
+    assert transfer.invocations == private_arena_task5_slice3_claim(
+        fixture, rows, "coalesce-prev"
+    )[1]
+    assert all(
+        row.before.allocation == row.after.allocation == "free"
+        and row.before.membership == row.after.membership == "listed"
+        and row.subject == "predecessor-block"
+        for row in transfer.state_transitions
+    )
+
+
+def test_private_arena_task5_slice3_accepts_path_local_late_early_return():
+    fixture = private_arena_task5_slice3_late_early_return_image()
+    rows = private_arena_task5_slice2_carried_task1_to4(fixture)
+    assert len(rows) == 9 and all(row is not None for row in rows)
+    claim = private_arena_task5_slice3_claim(
+        fixture,
+        rows,
+        "coalesce-prev",
+    )
+    assert private_arena_task5_slice3_narrow(
+        rows,
+        claim,
+        "coalesce-prev",
+    ) is not None
+
+
+def test_private_arena_task5_slice3_rejects_wrong_late_early_return_value():
+    control = private_arena_task5_slice3_late_early_return_image()
+    control_rows = private_arena_task5_slice2_carried_task1_to4(control)
+    assert len(control_rows) == 9 and all(row is not None for row in control_rows)
+    claim = private_arena_task5_slice3_claim(
+        control,
+        control_rows,
+        "coalesce-prev",
+    )
+    hostile = private_arena_task5_slice3_late_early_return_image(
+        wrong_value=True,
+    )
+    hostile_rows = private_arena_task5_slice2_carried_task1_to4(hostile)
+    assert len(hostile_rows) == 9 and all(row is not None for row in hostile_rows)
+    assert private_arena_task5_slice3_narrow(
+        control_rows,
+        claim,
+        "coalesce-prev",
+    ) is not None
+    assert private_arena_task5_slice3_narrow(
+        hostile_rows,
+        claim,
+        "coalesce-prev",
+    ) is None
+
+
+def test_private_arena_task5_slice3_coalesce_next_transitions_are_exact():
+    fixture = private_page_arena_image()
+    rows, _assembly, base = private_arena_task5_slice3_base(fixture)
+    transfer = next(row for row in base.transfers if row.role == "coalesce-next")
+    assert transfer.invocations == private_arena_task5_slice3_claim(
+        fixture, rows, "coalesce-next"
+    )[1]
+    assert len(transfer.state_transitions) == 5
+    assert transfer.state_transitions[-1].context == "resize-grow"
+    assert transfer.state_transitions[-1].before == transfer.state_transitions[-1].after
+    assert transfer.state_transitions[-1].after.allocation == "allocated"
+    assert transfer.state_transitions[-1].after.membership == "unlisted"
+
+
+def test_private_arena_task5_slice3_role_inventory_spans_and_dependencies_are_exact():
+    fixture = private_page_arena_image()
+    _rows, _assembly, base = private_arena_task5_slice3_base(fixture)
+    assert base.role.insert_entries == (fixture.block_inserter,)
+    assert base.role.coalescer_entries == tuple(sorted(fixture.coalescers))
+    assert {row.role for row in base.transfers} == {
+        "block-initialize",
+        "split",
+        "unlink",
+        "insert",
+        "coalesce-prev",
+        "coalesce-next",
+    }
+    span_by_key = {
+        (row.function_entry, row.instruction_address, row.operand_index): row
+        for row in base.spans
+    }
+    referenced = set()
+    for transfer in base.transfers:
+        assert transfer.function_sha256
+        assert transfer.removal_call_discharges == ()
+        assert transfer.span_keys
+        assert set(transfer.span_keys) <= set(span_by_key)
+        referenced.update(transfer.span_keys)
+    assert referenced == set(span_by_key)
+    assert {("function", entry) for entry in (fixture.block_inserter, *fixture.coalescers)} <= base.dependencies
+
+
+def test_private_arena_task5_slice3_public_full_result_remains_none():
+    fixture = private_page_arena_image()
+    rows, _assembly, base = private_arena_task5_slice3_base(fixture)
+    assert len(base.transfers) == 6
+    recovery, contract, extent, effects, ring, layout, selector_role, select_transfer, selector_spans = rows
+    assert recovery._publication_private_block_arena_role(
+        contract,
+        extent,
+        effects,
+        layout,
+        ring,
+        selector_role,
+        select_transfer,
+        selector_spans,
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "role",
+    (
+        pytest.param("insert", id="insert"),
+        pytest.param("coalesce-prev", id="coalesce-prev"),
+        pytest.param("coalesce-next", id="coalesce-next"),
+    ),
+)
+def test_private_arena_task5_slice3_narrow_role_is_exact(role):
+    fixture = private_page_arena_image()
+    rows = private_arena_task5_slice2_carried_task1_to4(fixture)
+    claim = private_arena_task5_slice3_claim(fixture, rows, role)
+    result = private_arena_task5_slice3_narrow(rows, claim, role)
+    assert result is not None
+    transfer, spans = result
+    assert transfer.role == role
+    assert transfer.span_keys == tuple(
+        (row.function_entry, row.instruction_address, row.operand_index)
+        for row in spans
+    )
+
+
+def private_arena_task5_slice3_assert_hostile_rejects(
+    mutation,
+    role,
+):
+    control = private_page_arena_image()
+    control_rows = private_arena_task5_slice2_carried_task1_to4(control)
+    claim = private_arena_task5_slice3_claim(control, control_rows, role)
+    hostile = private_arena_task5_slice3_image(mutation)
+    hostile_rows = private_arena_task5_slice2_carried_task1_to4(hostile)
+    assert len(hostile_rows) == 9 and all(row is not None for row in hostile_rows)
+    assert hostile_rows[0]._publication_private_heap_effect_closure_is_current(
+        hostile_rows[3]
+    )
+    assert private_arena_task5_slice3_narrow(control_rows, claim, role) is not None
+    assert private_arena_task5_slice3_narrow(hostile_rows, claim, role) is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    _PRIVATE_ARENA_TASK5_SLICE3_INSERT_HOSTILES,
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice3_rejects_insert_body_hostile(mutation):
+    private_arena_task5_slice3_assert_hostile_rejects(mutation, "insert")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    _PRIVATE_ARENA_TASK5_SLICE3_PREV_HOSTILES,
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice3_rejects_coalesce_prev_hostile(mutation):
+    private_arena_task5_slice3_assert_hostile_rejects(
+        mutation, "coalesce-prev"
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    _PRIVATE_ARENA_TASK5_SLICE3_NEXT_HOSTILES,
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice3_rejects_coalesce_next_hostile(mutation):
+    private_arena_task5_slice3_assert_hostile_rejects(
+        mutation, "coalesce-next"
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    _PRIVATE_ARENA_TASK5_SLICE3_CONTEXT_HOSTILES,
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice3_rejects_context_or_domain_hostile(
+    mutation,
+):
+    control = private_page_arena_image()
+    control_rows = private_arena_task5_slice2_carried_task1_to4(control)
+    claim = private_arena_task5_slice3_claim(control, control_rows, "insert")
+    hostile = private_arena_task5_slice3_image(mutation)
+    hostile_rows = private_arena_task5_slice2_carried_task1_to4(hostile)
+    assert len(hostile_rows) == 9 and all(row is not None for row in hostile_rows)
+    assert hostile_rows[0]._publication_private_heap_effect_closure_is_current(
+        hostile_rows[3]
+    )
+    hostile_claim = claim
+    if mutation == "initializer-insert-context-missing":
+        hostile_claim = (claim[0], claim[1][1:])
+    elif mutation == "external-raw-insert-arm":
+        branch = hostile.block_inserter + 0x2D
+        successors = tuple(hostile_rows[0].non_call_successors[branch])
+        hostile_rows[0].non_call_successors[branch] = tuple(
+            sorted({*successors, hostile.block_inserter - 2})
+        )
+    elif mutation == "insert-effect-authority-duplicated":
+        effects = hostile_rows[3]
+        later_call = next(
+            row.address
+            for row in hostile_rows[0]._function_direct_calls(
+                hostile.arena_free
+            )
+            if row.target == hostile.block_inserter
+        )
+        hostile_rows = (
+            *hostile_rows[:3],
+            replace(
+                effects,
+                call_edges=tuple(
+                    sorted(
+                        {
+                            *effects.call_edges,
+                            (later_call, hostile.block_inserter),
+                        }
+                    )
+                ),
+            ),
+            *hostile_rows[4:],
+        )
+    assert private_arena_task5_slice3_narrow(
+        control_rows, claim, "insert"
+    ) is not None
+    assert private_arena_task5_slice3_narrow(
+        hostile_rows, hostile_claim, "insert"
+    ) is None
 
 
 def test_private_page_arena_selector_documents_anchor_fingerprint_drift():
