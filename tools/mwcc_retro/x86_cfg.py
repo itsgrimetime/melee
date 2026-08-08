@@ -14,7 +14,7 @@ from bisect import bisect_left, bisect_right
 from collections import OrderedDict, defaultdict, deque
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, Literal
+from typing import TYPE_CHECKING, Any, Iterable, Literal, cast
 
 import capstone
 from capstone import (
@@ -2242,14 +2242,24 @@ class _Task5ProofAssembly:
     ring_evidence: _PublicationPrivatePageRingEvidence
     budget: _Task5ProofBudget
     expression_tokens: dict[tuple[object, ...], int]
-    decoded_contexts: dict[tuple[int, str], object]
-    role_queue: deque[tuple[int, str]]
+    expressions_by_token: dict[int, tuple[object, ...]]
+    decoded_contexts: dict[tuple[int, str], tuple[int, ...]]
+    decoded_instruction_keys: set[tuple[int, str, int]]
+    role_queue: deque[tuple[str, int]]
+    queued_roles: set[tuple[str, int]]
     incoming_domains: dict[int, tuple[int, ...]]
     spans_by_key: dict[
         tuple[int, int, int], _PublicationPrivateArenaSpan
     ]
     dependencies: set[tuple[str, int]]
     resize_worklist: deque[int]
+    queued_resize_entries: set[int]
+    semantic_pending: deque[tuple[int, _Task5SemanticState]]
+    semantic_seen: set[tuple[int, _Task5SemanticState]]
+    semantic_events: set[tuple[object, ...]]
+    topology: _Task5BaseTopology | None
+    split_contexts: _Task5SplitContextProof | None
+    role_results: dict[str, _Task5RoleProof]
     selector_role: _PublicationPrivateBlockArenaRole | None
     select_transfer: _PublicationPrivateArenaTransfer | None
     selector_spans: tuple[_PublicationPrivateArenaSpan, ...]
@@ -2257,6 +2267,104 @@ class _Task5ProofAssembly:
         _PublicationPrivateArenaTransfer,
         tuple[_PublicationPrivateArenaSpan, ...],
     ] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _Task5RoleProof:
+    transfer: _PublicationPrivateArenaTransfer
+    spans: tuple[_PublicationPrivateArenaSpan, ...]
+    call_edges: tuple[_PublicationPrivateArenaCallEdge, ...]
+    dependencies: frozenset[tuple[str, int]]
+
+
+@dataclass(frozen=True, slots=True)
+class _Task5SemanticState:
+    registers: tuple[
+        frozenset[_PublicationPrivateArenaAbstractValue], ...
+    ]
+    owned_stack: tuple[
+        frozenset[_PublicationPrivateArenaAbstractValue], ...
+    ]
+    memory: tuple[
+        tuple[int, frozenset[_PublicationPrivateArenaAbstractValue]], ...
+    ]
+    predicates: frozenset[_PublicationPrivateArenaPredicate]
+    context: Literal[
+        "initializer-base", "selector-split", "resize-split"
+    ]
+    subject: Literal[
+        "initial-block", "selected-block", "split-block", "remainder-block"
+    ]
+    restoration_role: Literal["none", "initializer-base", "select", "resize"]
+    restoration_entry: int | None
+    block_states: tuple[tuple[int, _PublicationPrivateArenaBlockState], ...]
+    spans: frozenset[_PublicationPrivateArenaSpan]
+    calls: tuple[tuple[int, int], ...]
+    instruction_addresses: frozenset[int]
+
+
+@dataclass(frozen=True, slots=True)
+class _Task5BaseTopology:
+    selector_entry: int
+    splitter_entry: int
+    unlink_entry: int
+    block_initializer_entry: int
+    page_initializer_entry: int
+    reallocator_entry: int
+    driver_entries: tuple[int, ...]
+    selector_split_call: int
+    selector_unlink_call: int
+    split_initializer_calls: tuple[int, int]
+    initializer_call: int
+    resize_calls: tuple[int, int]
+    driver_calls: tuple[int, ...]
+    minimum_split_remainder: int
+
+
+@dataclass(frozen=True, slots=True)
+class _Task5SplitContextProof:
+    topology: _Task5BaseTopology
+    block_invocations: tuple[_PublicationPrivateArenaInvocation, ...]
+    block_transitions: tuple[_PublicationPrivateArenaStateTransition, ...]
+    split_proof: _Task5RoleProof
+    resize_call_proofs: tuple[_Task5ResizeCallProof, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _Task5ResizeCallProof:
+    call_address: int
+    block_token: int
+    raw_request_token: int
+    normalized_request_token: int
+    old_size_token: int
+    remainder_token: int
+    split_block_token: int
+    fit_predicate: _PublicationPrivateArenaPredicate
+    minimum_predicate: _PublicationPrivateArenaPredicate
+    instruction_addresses: frozenset[int]
+
+
+@dataclass(frozen=True, slots=True)
+class _Task5SplitterSemanticState:
+    registers: tuple[int | None, ...]
+    stack_depth: int
+    memory: tuple[tuple[int, int | None], ...]
+    predicates: frozenset[_PublicationPrivateArenaPredicate]
+    calls: tuple[tuple[int, tuple[int, ...]], ...]
+    writes: tuple[tuple[int, int], ...]
+    instruction_addresses: frozenset[int]
+
+
+@dataclass(frozen=True, slots=True)
+class _Task5UnlinkSemanticState:
+    scenario: Literal["singleton", "head", "non-head"]
+    registers: tuple[int | None, ...]
+    stack_depth: int
+    stack_memory: tuple[tuple[int, int | None], ...]
+    heap_memory: tuple[tuple[int, int], ...]
+    predicates: frozenset[_PublicationPrivateArenaPredicate]
+    writes: tuple[tuple[int, int], ...]
+    instruction_addresses: frozenset[int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -2328,6 +2436,8 @@ class _PublicationPrivateArenaAbstractValue:
         "remainder",
         "boundary-tag-size",
         "successor-header",
+        "block-page-flags",
+        "page-largest-free",
         "condition",
     ]
     extent_token_sha256: str
@@ -2347,6 +2457,9 @@ class _PublicationPrivateArenaPredicate:
         "nullable",
         "adjacent",
         "flag-test",
+        "test-zero",
+        "test-value",
+        "value-zero",
     ]
     left_token: int
     right_token: int
@@ -29476,17 +29589,399 @@ class _DirectCfgRecovery:
             ring_evidence=ring_evidence,
             budget=_Task5ProofBudget(),
             expression_tokens={},
+            expressions_by_token={},
             decoded_contexts={},
+            decoded_instruction_keys=set(),
             role_queue=deque(),
+            queued_roles=set(),
             incoming_domains={},
             spans_by_key={},
             dependencies=set(),
             resize_worklist=deque(),
+            queued_resize_entries=set(),
+            semantic_pending=deque(),
+            semantic_seen=set(),
+            semantic_events=set(),
+            topology=None,
+            split_contexts=None,
+            role_results={},
             selector_role=selector_role,
             select_transfer=select_transfer,
             selector_spans=selector_spans,
             narrow_result=None,
         )
+
+    def _task5_expression(
+        self,
+        assembly: _Task5ProofAssembly,
+        phase: str,
+        kind: str,
+        *parts: object,
+    ) -> int:
+        row = (kind, *parts)
+        existing = assembly.expression_tokens.get(row)
+        if existing is not None:
+            return existing
+        assembly.budget.tick(phase, "expression")
+        token = len(assembly.expression_tokens) + 1
+        assembly.expression_tokens[row] = token
+        assembly.expressions_by_token[token] = row
+        return token
+
+    def _task5_affine_form(
+        self,
+        assembly: _Task5ProofAssembly,
+        token: int,
+    ) -> tuple[int, int] | None:
+        row = assembly.expressions_by_token.get(token)
+        if row is None:
+            return None
+        if row[0] == "affine-u32":
+            if (
+                len(row) != 3
+                or type(row[1]) is not int
+                or type(row[2]) is not int
+                or not -0x8000_0000 <= row[2] <= 0x7FFF_FFFF
+                or assembly.expressions_by_token.get(row[1], (None,))[0]
+                == "affine-u32"
+            ):
+                return None
+            return row[1], row[2]
+        if row[0] in {"argument", "load", "and", "max"}:
+            return token, 0
+        return None
+
+    def _task5_add_signed_constant(
+        self,
+        assembly: _Task5ProofAssembly,
+        phase: str,
+        token: int,
+        addend: int,
+    ) -> int | None:
+        if type(addend) is not int:
+            return None
+        affine = self._task5_affine_form(assembly, token)
+        if affine is None:
+            return None
+        base_token, displacement = affine
+        new_displacement = displacement + addend
+        if not -0x8000_0000 <= new_displacement <= 0x7FFF_FFFF:
+            return None
+        if new_displacement == 0:
+            return base_token
+        return self._task5_expression(
+            assembly,
+            phase,
+            "affine-u32",
+            base_token,
+            new_displacement,
+        )
+
+    def _task5_memory_value_kind(
+        self,
+        assembly: _Task5ProofAssembly,
+        token: int,
+        *,
+        block_token: int,
+        layout: _PublicationPrivatePageLayout,
+    ) -> Literal[
+        "tagged-block-header",
+        "block-page-flags",
+        "page-largest-free",
+    ] | None:
+        row = assembly.expressions_by_token.get(token)
+        if (
+            row is None
+            or len(row) != 4
+            or row[0] != "load"
+            or type(row[1]) is not int
+            or type(row[2]) is not int
+            or row[3] != 4
+        ):
+            return None
+        base_token, displacement = row[1], row[2]
+        block_form = self._task5_affine_form(assembly, block_token)
+        base_form = self._task5_affine_form(assembly, base_token)
+        if (
+            block_form is not None
+            and base_form is not None
+            and block_form[0] == base_form[0]
+        ):
+            block_displacement = (
+                base_form[1] + displacement - block_form[1]
+            )
+            if block_displacement == layout.block_header_offset:
+                return "tagged-block-header"
+            if block_displacement == layout.block_page_flags_offset:
+                return "block-page-flags"
+        if (
+            displacement == layout.page_largest_free_offset
+            and self._task5_memory_value_kind(
+                assembly,
+                base_token,
+                block_token=block_token,
+                layout=layout,
+            )
+            == "block-page-flags"
+        ):
+            return "page-largest-free"
+        return None
+
+    def _task5_record_event(
+        self,
+        assembly: _Task5ProofAssembly,
+        phase: str,
+        event: tuple[object, ...],
+    ) -> bool:
+        if event in assembly.semantic_events:
+            return False
+        assembly.budget.tick(phase, "event")
+        assembly.semantic_events.add(event)
+        return True
+
+    def _task5_enqueue_state(
+        self,
+        assembly: _Task5ProofAssembly,
+        phase: str,
+        address: int,
+        state: _Task5SemanticState,
+    ) -> bool:
+        key = (address, state)
+        if key in assembly.semantic_seen:
+            return False
+        assembly.budget.tick(phase, "state")
+        assembly.semantic_seen.add(key)
+        assembly.semantic_pending.append(key)
+        return True
+
+    def _task5_cache_instruction(
+        self,
+        assembly: _Task5ProofAssembly,
+        phase: str,
+        function_entry: int,
+        context: str,
+        address: int,
+    ) -> bool:
+        key = (function_entry, context, address)
+        if key in assembly.decoded_instruction_keys:
+            return False
+        assembly.budget.tick(phase, "instruction")
+        assembly.decoded_instruction_keys.add(key)
+        context_key = (function_entry, context)
+        prior = assembly.decoded_contexts.get(context_key, ())
+        assembly.decoded_contexts[context_key] = (*prior, address)
+        return True
+
+    def _task5_plain_return(
+        self,
+        decoded: capstone.CsInsn,
+        owned_depth: int,
+    ) -> bool:
+        return bool(
+            owned_depth == 0
+            and decoded.mnemonic == "ret"
+            and not decoded.operands
+            and decoded.size == 1
+        )
+
+    def _task5_stack_transfer(
+        self,
+        decoded: capstone.CsInsn,
+        owned_depth: int,
+    ) -> int | None:
+        if decoded.mnemonic not in {"push", "pop"}:
+            return owned_depth
+        if (
+            bytes(decoded.bytes[:1]) == b"\x67"
+            or len(decoded.operands) != 1
+            or decoded.operands[0].size != 4
+        ):
+            return None
+        if decoded.mnemonic == "push":
+            return owned_depth + 4
+        operand = decoded.operands[0]
+        if (
+            owned_depth < 4
+            or (
+                operand.type == X86_OP_REG
+                and self._register_family(operand.reg) == "esp"
+            )
+        ):
+            return None
+        return owned_depth - 4
+
+    def _task5_stack_adjustment(
+        self,
+        decoded: capstone.CsInsn,
+        owned_depth: int,
+    ) -> int | None:
+        transferred = self._task5_stack_transfer(decoded, owned_depth)
+        if transferred is None or decoded.mnemonic in {"push", "pop"}:
+            return transferred
+        if decoded.mnemonic not in {"add", "sub"}:
+            return owned_depth
+        if (
+            bytes(decoded.bytes[:1]) == b"\x67"
+            or len(decoded.operands) != 2
+            or decoded.operands[0].type != X86_OP_REG
+            or decoded.operands[0].size != 4
+            or self._register_family(decoded.operands[0].reg) != "esp"
+            or decoded.operands[1].type != X86_OP_IMM
+        ):
+            return owned_depth
+        amount = decoded.operands[1].imm & 0xFFFF_FFFF
+        if amount > 0x1000 or amount % 4:
+            return None
+        if decoded.mnemonic == "sub":
+            return owned_depth + amount
+        if amount > owned_depth:
+            return None
+        return owned_depth - amount
+
+    def _task5_complete_successors(
+        self,
+        assembly: _Task5ProofAssembly,
+        function_entry: int,
+        address: int,
+    ) -> tuple[int, ...] | None:
+        del assembly
+        decoded = self._owned_decoded(address)
+        groups = self._owned_decoded_groups(decoded)
+        if CS_GRP_RET in groups or CS_GRP_IRET in groups:
+            return ()
+        next_address = decoded.address + decoded.size
+        if CS_GRP_JUMP in groups:
+            if (
+                not decoded.operands
+                or decoded.operands[0].type != X86_OP_IMM
+            ):
+                return None
+            target = decoded.operands[0].imm & 0xFFFF_FFFF
+            raw = tuple(sorted(self.non_call_successors.get(address, ())))
+            expected = (
+                (target,)
+                if decoded.mnemonic == "jmp"
+                else tuple(sorted((target, next_address)))
+            )
+            if raw != expected:
+                return None
+            successors = expected
+        else:
+            successors = (next_address,)
+        if any(
+            successor not in self.instructions
+            or self._registrar_function_entry(successor) != function_entry
+            for successor in successors
+        ):
+            return None
+        return successors
+
+    def _task5_stack_memory_is_owned(
+        self,
+        decoded: capstone.CsInsn,
+        owned_depth: int,
+    ) -> bool:
+        for operand_index, operand in enumerate(decoded.operands):
+            if (
+                operand.type != X86_OP_MEM
+                or operand.mem.base == X86_REG_INVALID
+                or self._register_family(operand.mem.base) != "esp"
+            ):
+                continue
+            if (
+                bytes(decoded.bytes[:1]) == b"\x67"
+                or operand.size != 4
+                or operand.mem.index != X86_REG_INVALID
+            ):
+                return False
+            displacement = operand.mem.disp
+            if 0 <= displacement <= owned_depth - 4:
+                continue
+            access = operand.access
+            writes = bool(access & CS_AC_WRITE) or (
+                access == 0
+                and operand_index == 0
+                and decoded.mnemonic in {"mov", "or", "and", "add", "sub"}
+            )
+            if displacement < owned_depth + 4 or writes:
+                return False
+        return True
+
+    def _task5_validate_stack_paths(
+        self,
+        assembly: _Task5ProofAssembly,
+        function_entry: int,
+        context: Literal[
+            "initializer-base", "selector-split", "resize-split"
+        ],
+        subject: Literal[
+            "initial-block", "selected-block", "split-block", "remainder-block"
+        ],
+        restoration_role: Literal[
+            "none", "initializer-base", "select", "resize"
+        ],
+        restoration_entry: int | None,
+    ) -> bool:
+        empty = frozenset()
+
+        def semantic_state(depth: int) -> _Task5SemanticState:
+            return _Task5SemanticState(
+                registers=(),
+                owned_stack=tuple(empty for _ in range(depth // 4)),
+                memory=(),
+                predicates=frozenset(),
+                context=context,
+                subject=subject,
+                restoration_role=restoration_role,
+                restoration_entry=restoration_entry,
+                block_states=(),
+                spans=frozenset(),
+                calls=(),
+                instruction_addresses=frozenset(),
+            )
+
+        if not self._task5_enqueue_state(
+            assembly,
+            "base-roles",
+            function_entry,
+            semantic_state(0),
+        ):
+            return False
+        while assembly.semantic_pending:
+            address, state = assembly.semantic_pending.popleft()
+            depth = len(state.owned_stack) * 4
+            self._task5_cache_instruction(
+                assembly,
+                "base-roles",
+                function_entry,
+                context,
+                address,
+            )
+            decoded = self._owned_decoded(address)
+            if not self._task5_stack_memory_is_owned(decoded, depth):
+                return False
+            next_depth = self._task5_stack_adjustment(decoded, depth)
+            if next_depth is None:
+                return False
+            if decoded.group(CS_GRP_RET):
+                if not self._task5_plain_return(decoded, next_depth):
+                    return False
+                continue
+            successors = self._task5_complete_successors(
+                assembly,
+                function_entry,
+                address,
+            )
+            if not successors:
+                return False
+            for successor in successors:
+                self._task5_enqueue_state(
+                    assembly,
+                    "base-roles",
+                    successor,
+                    semantic_state(next_depth),
+                )
+        return True
 
     def _publication_private_arena_full_assembly(
         self,
@@ -29750,11 +30245,79 @@ class _DirectCfgRecovery:
             "minimum": minimum,
         }
 
+    def _task5_discover_base_topology(
+        self,
+        assembly: _Task5ProofAssembly,
+    ) -> _Task5BaseTopology | None:
+        if assembly.topology is not None:
+            return assembly.topology
+        rows = self._task5_base_topology(assembly)
+        if rows is None:
+            return None
+        ranked = (
+            ("block-initialize", rows["block-initialize"]),
+            ("split", rows["splitter"]),
+            ("unlink", rows["unlink"]),
+        )
+        for item in ranked:
+            if item in assembly.queued_roles:
+                continue
+            assembly.budget.tick("base-roles", "fixed-point")
+            assembly.queued_roles.add(item)
+            assembly.role_queue.append(item)
+        reallocator = rows["reallocator"]
+        if reallocator not in assembly.queued_resize_entries:
+            assembly.budget.tick("base-roles", "fixed-point")
+            assembly.queued_resize_entries.add(reallocator)
+            assembly.resize_worklist.append(reallocator)
+        for entry in (
+            rows["block-initialize"],
+            rows["splitter"],
+            rows["unlink"],
+            reallocator,
+        ):
+            decoded = tuple(
+                sorted(self.direct_call_sources_by_target.get(entry, ()))
+            )
+            raw = tuple(sorted(self._raw_direct_call_sites(entry)))
+            if (
+                not self._least_reachable_incoming_call_domain_is_closed(entry)
+                or not set(decoded) <= set(raw)
+                or any(
+                    self._registrar_function_entry(address) is None
+                    or self.direct_call_targets_by_source.get(address) != entry
+                    for address in decoded
+                )
+            ):
+                return None
+            assembly.budget.tick("base-roles", "fixed-point")
+            assembly.incoming_domains[entry] = decoded
+        topology = _Task5BaseTopology(
+            selector_entry=rows["selector"],
+            splitter_entry=rows["splitter"],
+            unlink_entry=rows["unlink"],
+            block_initializer_entry=rows["block-initialize"],
+            page_initializer_entry=rows["page-initializer"],
+            reallocator_entry=reallocator,
+            driver_entries=rows["drivers"],
+            selector_split_call=rows["selector-split-call"].address,
+            selector_unlink_call=rows["selector-unlink-call"].address,
+            split_initializer_calls=tuple(
+                row.address for row in rows["split-initializer-calls"]
+            ),
+            initializer_call=rows["initializer-call"],
+            resize_calls=tuple(row.address for row in rows["resize-calls"]),
+            driver_calls=tuple(row.address for row in rows["driver-calls"]),
+            minimum_split_remainder=rows["minimum"],
+        )
+        assembly.topology = topology
+        return topology
+
     def _task5_role_spans(
         self,
         function_entry: int,
         role: str,
-        budget: _Task5ProofBudget,
+        assembly: _Task5ProofAssembly,
     ) -> tuple[_PublicationPrivateArenaSpan, ...] | None:
         spans = []
         for address in self._function_instruction_addresses(function_entry):
@@ -29767,13 +30330,24 @@ class _DirectCfgRecovery:
                     and self._register_family(operand.mem.base) == "esp"
                 ):
                     continue
-                budget.tick("base-roles", "expression")
                 base = (
                     None
                     if operand.mem.base == X86_REG_INVALID
                     else self._register_family(operand.mem.base)
                 )
                 displacement = operand.mem.disp
+                self._task5_expression(
+                    assembly,
+                    "base-roles",
+                    "memory-operand",
+                    role,
+                    function_entry,
+                    address,
+                    operand_index,
+                    base,
+                    displacement,
+                    operand.size,
+                )
                 if role == "block-initialize":
                     if base == "ebx" and displacement == 0:
                         region, field_name = "block", "block-header"
@@ -29921,10 +30495,6 @@ class _DirectCfgRecovery:
                 tuple(row.mnemonic for row in arguments) != ("push", "push")
                 or len(argument_families) != 2
                 or argument_families[0] == argument_families[1]
-                or (
-                    synthetic_driver_lineage
-                    and argument_families != ("esi", "ebx")
-                )
                 or not balanced_cleanup
             ):
                 return False
@@ -29944,60 +30514,11 @@ class _DirectCfgRecovery:
                 )
             ):
                 return False
-        splitter_addresses = self._function_instruction_addresses(
-            topology["splitter"]
-        )
-        first_initializer_call = topology["split-initializer-calls"][0].address
-        first_index = splitter_addresses.index(first_initializer_call)
-        allocation_copy = self._owned_decoded(splitter_addresses[first_index - 1])
         flags = tuple(
             bit
             for shift in range(32)
             if assembly.base_layout.size_flag_mask & (bit := 1 << shift)
         )
-        simple_allocation_copy = (
-            allocation_copy.mnemonic == "mov"
-            and len(allocation_copy.operands) == 2
-            and all(
-                row.type == X86_OP_REG for row in allocation_copy.operands
-            )
-            and tuple(
-                self._register_family(row.reg)
-                for row in allocation_copy.operands
-            )
-            == ("esi", "edx")
-        )
-        branched_allocation_copy = bool(
-            len(flags) == 3
-            and any(
-                decoded.mnemonic == "and"
-                and any(
-                    operand.type == X86_OP_IMM
-                    and operand.imm & 0xFFFF_FFFF == flags[1]
-                    for operand in decoded.operands
-                )
-                for decoded in (
-                    self._owned_decoded(address)
-                    for address in splitter_addresses[:first_index]
-                )
-            )
-            and any(
-                self._owned_decoded(address).group(CS_GRP_JUMP)
-                for address in splitter_addresses[:first_index]
-            )
-        )
-        if (
-            not (simple_allocation_copy or branched_allocation_copy)
-            or any(
-                self._owned_decoded(address).group(CS_GRP_JUMP)
-                for address in splitter_addresses[
-                    first_index : splitter_addresses.index(
-                        topology["split-initializer-calls"][1].address
-                    )
-                ]
-            )
-        ):
-            return False
         initializer_immediates = {
             operand.imm & 0xFFFF_FFFF
             for address in self._function_instruction_addresses(
@@ -30022,17 +30543,2514 @@ class _DirectCfgRecovery:
         topology["flags"] = flags
         return True
 
+    @staticmethod
+    def _task5_unsigned_branch_truths(
+        mnemonic: str,
+    ) -> tuple[Literal["lt", "le", "ge", "gt"], bool] | None:
+        return {
+            "jb": ("lt", True),
+            "jae": ("ge", True),
+            "jbe": ("le", True),
+            "ja": ("gt", True),
+        }.get(mnemonic)
+
+    def _task5_derive_normalized_fit(
+        self,
+        assembly: _Task5ProofAssembly,
+        state: _Task5SemanticState,
+        *,
+        raw_request_token: int,
+        capacity_token: int,
+        old_size_token: int,
+        normalized_request_token: int,
+        minimum: int,
+    ) -> _PublicationPrivateArenaPredicate | None:
+        expressions = assembly.expressions_by_token
+        layout = assembly.base_layout
+        payload_offset = layout.block_prev_offset
+        minimum_token = assembly.expression_tokens.get(("constant", minimum))
+        old_size = expressions.get(old_size_token)
+        normalized = expressions.get(normalized_request_token)
+        if (
+            minimum_token is None
+            or self._task5_affine_form(assembly, capacity_token)
+            != (old_size_token, -payload_offset)
+            or old_size is None
+            or old_size[0] != "and"
+            or old_size[2]
+            != (~layout.size_flag_mask) & 0xFFFF_FFFF
+            or normalized is None
+            or normalized[0] != "max"
+            or normalized[2] != minimum_token
+        ):
+            return None
+        aligned_token = normalized[1]
+        aligned = expressions.get(aligned_token)
+        if (
+            aligned is None
+            or aligned[0] != "and"
+            or aligned[2]
+            != (~(layout.block_alignment - 1)) & 0xFFFF_FFFF
+        ):
+            return None
+        if self._task5_affine_form(assembly, aligned[1]) != (
+            raw_request_token,
+            payload_offset + layout.block_alignment - 1,
+        ):
+            return None
+        carried = _PublicationPrivateArenaPredicate(
+            "unsigned-fit",
+            capacity_token,
+            raw_request_token,
+            True,
+        )
+        invariant = _PublicationPrivateArenaPredicate(
+            "minimum-remainder",
+            old_size_token,
+            minimum_token,
+            True,
+        )
+        if carried not in state.predicates or invariant not in state.predicates:
+            return None
+        return _PublicationPrivateArenaPredicate(
+            "unsigned-fit",
+            old_size_token,
+            normalized_request_token,
+            True,
+        )
+
+    def _task5_trace_resize_split_paths(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: _Task5BaseTopology,
+    ) -> tuple[_Task5ResizeCallProof, ...] | None:
+        phase = "base-roles"
+        layout = assembly.base_layout
+        payload_offset = layout.block_prev_offset
+        entry = topology.reallocator_entry
+        mask = (~layout.size_flag_mask) & 0xFFFF_FFFF
+        align_mask = (~(layout.block_alignment - 1)) & 0xFFFF_FFFF
+        payload = self._task5_expression(
+            assembly, phase, "argument", entry, 0
+        )
+        raw_request = self._task5_expression(
+            assembly, phase, "argument", entry, 1
+        )
+        block = self._task5_add_signed_constant(
+            assembly, phase, payload, -payload_offset
+        )
+        if block is None:
+            return None
+        header = self._task5_expression(
+            assembly, phase, "load", block, layout.block_header_offset, 4
+        )
+        old_size = self._task5_expression(
+            assembly, phase, "and", header, mask
+        )
+        capacity = self._task5_add_signed_constant(
+            assembly, phase, old_size, -payload_offset
+        )
+        if capacity is None:
+            return None
+        minimum_token = self._task5_expression(
+            assembly, phase, "constant", topology.minimum_split_remainder
+        )
+        flag_bits = tuple(
+            bit
+            for shift in range(32)
+            if layout.size_flag_mask & (bit := 1 << shift)
+        )
+        if len(flag_bits) != 3:
+            return None
+        page_pointer_flag = flag_bits[0]
+
+        def value(kind: str, token: int, *, same_page: bool = False):
+            return frozenset(
+                {
+                    _PublicationPrivateArenaAbstractValue(
+                        kind,
+                        assembly.extent.extent_token_sha256,
+                        same_page,
+                        "allocated" if kind == "block" else "none",
+                        "unlisted" if kind == "block" else "none",
+                        token,
+                    )
+                }
+            )
+
+        def one(values: frozenset[_PublicationPrivateArenaAbstractValue]):
+            return next(iter(values)).expression_token if len(values) == 1 else None
+
+        def kind_for(token: int) -> str:
+            row = assembly.expressions_by_token.get(token, ())
+            if row and row[0] == "load":
+                return self._task5_memory_value_kind(
+                    assembly,
+                    token,
+                    block_token=block,
+                    layout=layout,
+                ) or "condition"
+            if row and row[0] == "affine-u32":
+                if token == block:
+                    return "block"
+                if token == capacity:
+                    return "block-size"
+                return "request-size"
+            return {
+                "argument": "request-size",
+                "and": "block-size",
+                "sub-u32": "block-size",
+                "sub-u32-no-wrap": "remainder",
+                "add-u32-no-wrap": "block",
+                "add-u32": "block" if token == block else "request-size",
+                "max": "request-size",
+                "constant": "request-size",
+            }.get(row[0] if row else "", "condition")
+
+        def token_value(token: int):
+            return value(
+                kind_for(token),
+                token,
+                same_page=token in {block},
+            )
+
+        def register_index(operand: object) -> int | None:
+            if (
+                getattr(operand, "type", None) != X86_OP_REG
+                or getattr(operand, "size", None) != 4
+            ):
+                return None
+            family = self._register_family(operand.reg)
+            return (
+                _REGISTER_FAMILIES.index(family)
+                if family in _REGISTER_FAMILIES and family != "esp"
+                else None
+            )
+
+        def with_register(state: _Task5SemanticState, index: int, values):
+            registers = list(state.registers)
+            registers[index] = values
+            live_tokens = {
+                row.expression_token
+                for register_values in registers
+                for row in register_values
+            }
+            departed_conditions = {
+                row.expression_token
+                for row in state.registers[index]
+                if row.kind == "condition"
+                and row.expression_token not in live_tokens
+            }
+            predicates = frozenset(
+                row
+                for row in state.predicates
+                if not (
+                    row.kind == "value-zero"
+                    and row.left_token in departed_conditions
+                )
+            )
+            return replace(
+                state,
+                registers=tuple(registers),
+                predicates=predicates,
+            )
+
+        def clear_pending(state: _Task5SemanticState):
+            return replace(
+                state,
+                predicates=frozenset(
+                    row
+                    for row in state.predicates
+                    if row.kind
+                    not in {
+                        "equal",
+                        "not-equal",
+                        "test-zero",
+                        "test-value",
+                    }
+                ),
+            )
+
+        def pending(state: _Task5SemanticState):
+            rows = [row for row in state.predicates if row.kind == "equal"]
+            return rows[0] if len(rows) == 1 else None
+
+        def pending_test(state: _Task5SemanticState):
+            rows = [
+                row for row in state.predicates if row.kind == "test-zero"
+            ]
+            return rows[0] if len(rows) == 1 else None
+
+        def pending_test_value(state: _Task5SemanticState):
+            rows = [
+                row for row in state.predicates if row.kind == "test-value"
+            ]
+            return rows[0] if len(rows) == 1 else None
+
+        initial = _Task5SemanticState(
+            registers=tuple(frozenset() for _ in _REGISTER_FAMILIES),
+            owned_stack=(),
+            memory=((4, token_value(payload)), (8, token_value(raw_request))),
+            predicates=frozenset(
+                {
+                    _PublicationPrivateArenaPredicate(
+                        "minimum-remainder",
+                        old_size,
+                        minimum_token,
+                        True,
+                    )
+                }
+            ),
+            context="resize-split",
+            subject="split-block",
+            restoration_role="resize",
+            restoration_entry=entry,
+            block_states=(),
+            spans=frozenset(),
+            calls=(),
+            instruction_addresses=frozenset(),
+        )
+        assembly.semantic_pending.clear()
+        assembly.semantic_seen.clear()
+        self._task5_enqueue_state(assembly, phase, entry, initial)
+        call_states: dict[int, list[_Task5ResizeCallProof]] = {
+            address: [] for address in topology.resize_calls
+        }
+        rejected_call = False
+
+        while assembly.semantic_pending:
+            address, state = assembly.semantic_pending.popleft()
+            if self._registrar_function_entry(address) != entry:
+                return None
+            decoded = self._owned_decoded(address)
+            self._task5_cache_instruction(
+                assembly, phase, entry, "resize-split-semantics", address
+            )
+            successors = self._task5_complete_successors(assembly, entry, address)
+            if successors is None:
+                return None
+            state = replace(
+                state,
+                instruction_addresses=state.instruction_addresses | {address},
+            )
+            mnemonic = decoded.mnemonic
+            operands = decoded.operands
+            next_states: list[tuple[int, _Task5SemanticState]] = []
+
+            if decoded.group(CS_GRP_JUMP):
+                if mnemonic == "jmp":
+                    next_states = [(successors[0], state)]
+                elif len(successors) == 2:
+                    comparison = pending(state)
+                    tested = pending_test(state)
+                    tested_value = pending_test_value(state)
+                    base_state = clear_pending(state)
+                    branch_successors = successors
+                    if tested is not None and mnemonic in {"je", "jne"}:
+                        target = decoded.operands[0].imm & 0xFFFF_FFFF
+                        fallthrough = decoded.address + decoded.size
+                        if target not in successors or fallthrough not in successors:
+                            return None
+                        condition_true = (
+                            tested.truth
+                            if mnemonic == "je"
+                            else not tested.truth
+                        )
+                        next_states = [
+                            (
+                                target if condition_true else fallthrough,
+                                base_state,
+                            )
+                        ]
+                        branch_successors = ()
+                    for successor in branch_successors:
+                        taken = successor != decoded.address + decoded.size
+                        branch_state = base_state
+                        if (
+                            tested_value is not None
+                            and mnemonic in {"je", "jne"}
+                        ):
+                            zero_truth = (
+                                taken if mnemonic == "je" else not taken
+                            )
+                            branch_state = replace(
+                                branch_state,
+                                predicates=branch_state.predicates
+                                | {
+                                    _PublicationPrivateArenaPredicate(
+                                        "value-zero",
+                                        tested_value.left_token,
+                                        tested_value.right_token,
+                                        zero_truth,
+                                    )
+                                },
+                            )
+                        relation = self._task5_unsigned_branch_truths(mnemonic)
+                        if comparison is not None and relation is not None:
+                            left = comparison.left_token
+                            right = comparison.right_token
+                            name, taken_truth = relation
+                            truth = taken_truth if taken else not taken_truth
+                            fact = None
+                            if (left, right) == (raw_request, capacity):
+                                if (name == "le" and truth) or (
+                                    name == "gt" and not truth
+                                ):
+                                    fact = _PublicationPrivateArenaPredicate(
+                                        "unsigned-fit", capacity, raw_request, True
+                                    )
+                            elif (left, right) == (capacity, raw_request):
+                                if (name == "ge" and truth) or (
+                                    name == "lt" and not truth
+                                ):
+                                    fact = _PublicationPrivateArenaPredicate(
+                                        "unsigned-fit", capacity, raw_request, True
+                                    )
+                            elif left == old_size:
+                                right_row = assembly.expressions_by_token.get(
+                                    right, ()
+                                )
+                                if (
+                                    right_row
+                                    and right_row[0] == "max"
+                                    and (
+                                        (name == "lt" and not truth)
+                                        or (name == "ge" and truth)
+                                    )
+                                ):
+                                    fact = _PublicationPrivateArenaPredicate(
+                                        "unsigned-fit", old_size, right, True
+                                    )
+                            left_row = assembly.expressions_by_token.get(left, ())
+                            if (
+                                right == minimum_token
+                                and left_row
+                                and left_row[0] == "sub-u32-no-wrap"
+                                and ((name == "lt" and not truth) or (name == "ge" and truth))
+                            ):
+                                fact = _PublicationPrivateArenaPredicate(
+                                    "minimum-remainder", left, right, True
+                                )
+                            if fact is not None:
+                                branch_state = replace(
+                                    branch_state,
+                                    predicates=branch_state.predicates | {fact},
+                                )
+                            if (
+                                right == minimum_token
+                                and left_row
+                                and left_row[0] == "and"
+                                and left_row[2] == align_mask
+                                and self._task5_affine_form(
+                                    assembly,
+                                    left_row[1],
+                                )
+                                == (
+                                    raw_request,
+                                    payload_offset
+                                    + layout.block_alignment
+                                    - 1,
+                                )
+                            ):
+                                normalized = self._task5_expression(
+                                    assembly, phase, "max", left, minimum_token
+                                )
+                                if (name == "ge" and truth) or (
+                                    name == "lt" and not truth
+                                ):
+                                    registers = tuple(
+                                        token_value(normalized)
+                                        if one(values) == left
+                                        else values
+                                        for values in branch_state.registers
+                                    )
+                                    branch_state = replace(branch_state, registers=registers)
+                                else:
+                                    branch_state = replace(
+                                        branch_state,
+                                        predicates=branch_state.predicates
+                                        | {
+                                            _PublicationPrivateArenaPredicate(
+                                                "minimum-remainder",
+                                                left,
+                                                minimum_token,
+                                                False,
+                                            )
+                                        },
+                                    )
+                        next_states.append((successor, branch_state))
+                else:
+                    return None
+            elif mnemonic == "ret":
+                if state.owned_stack:
+                    return None
+            elif decoded.group(CS_GRP_CALL):
+                target = self.direct_call_targets_by_source.get(address)
+                if target is None:
+                    return None
+                if target == topology.splitter_entry:
+                    proof = None
+                    if address in call_states and len(state.owned_stack) >= 2:
+                        request_token = one(state.owned_stack[-2])
+                        block_token = one(state.owned_stack[-1])
+                        normalized_row = assembly.expressions_by_token.get(
+                            request_token or -1, ()
+                        )
+                        block_row = assembly.expressions_by_token.get(
+                            block_token or -1, ()
+                        )
+                        if request_token is not None and block_token == block and normalized_row and normalized_row[0] == "max" and block_row:
+                            fit = _PublicationPrivateArenaPredicate(
+                                "unsigned-fit", old_size, request_token, True
+                            )
+                            if fit not in state.predicates:
+                                fit = self._task5_derive_normalized_fit(
+                                    assembly,
+                                    state,
+                                    raw_request_token=raw_request,
+                                    capacity_token=capacity,
+                                    old_size_token=old_size,
+                                    normalized_request_token=request_token,
+                                    minimum=topology.minimum_split_remainder,
+                                )
+                            remainder_token = next(
+                                (
+                                    row.left_token
+                                    for row in state.predicates
+                                    if row.kind == "minimum-remainder"
+                                    and row.truth
+                                    and assembly.expressions_by_token.get(
+                                        row.left_token, ()
+                                    )[:1]
+                                    == ("sub-u32-no-wrap",)
+                                    and assembly.expressions_by_token[
+                                        row.left_token
+                                    ][1:]
+                                    == (old_size, request_token)
+                                ),
+                                None,
+                            )
+                            minimum_fact = (
+                                _PublicationPrivateArenaPredicate(
+                                    "minimum-remainder",
+                                    remainder_token,
+                                    minimum_token,
+                                    True,
+                                )
+                                if remainder_token is not None
+                                else None
+                            )
+                            if fit is not None and minimum_fact in state.predicates:
+                                split_block = self._task5_expression(
+                                    assembly,
+                                    phase,
+                                    "add-u32-no-wrap",
+                                    block,
+                                    request_token,
+                                )
+                                proof = _Task5ResizeCallProof(
+                                    address,
+                                    block,
+                                    raw_request,
+                                    request_token,
+                                    old_size,
+                                    remainder_token,
+                                    split_block,
+                                    fit,
+                                    minimum_fact,
+                                    state.instruction_addresses,
+                                )
+                    if proof is None:
+                        rejected_call = True
+                    else:
+                        call_states[address].append(proof)
+                state = clear_pending(state)
+                for family in ("eax", "ecx", "edx"):
+                    state = with_register(
+                        state,
+                        _REGISTER_FAMILIES.index(family),
+                        frozenset(),
+                    )
+                if target != topology.splitter_entry:
+                    returned_block = next(
+                        (
+                            values
+                            for values in reversed(state.owned_stack)
+                            if one(values) == block
+                        ),
+                        None,
+                    )
+                    if returned_block is not None:
+                        state = with_register(
+                            state,
+                            _REGISTER_FAMILIES.index("eax"),
+                            returned_block,
+                        )
+                state = replace(
+                    state,
+                    calls=(*state.calls, (address, target)),
+                )
+                next_states = [(successors[0], state)]
+            else:
+                state = clear_pending(state) if mnemonic not in {"cmp"} else state
+                if (
+                    mnemonic in {"mov", "lea", "add", "sub", "and", "xor", "pop"}
+                    and operands
+                    and operands[0].type == X86_OP_REG
+                    and operands[0].size != 4
+                ):
+                    partial_family = self._register_family(operands[0].reg)
+                    if (
+                        partial_family in _REGISTER_FAMILIES
+                        and partial_family != "esp"
+                    ):
+                        state = with_register(
+                            state,
+                            _REGISTER_FAMILIES.index(partial_family),
+                            frozenset(),
+                        )
+                if mnemonic == "push" and len(operands) == 1:
+                    source = register_index(operands[0])
+                    pushed = (
+                        state.registers[source]
+                        if source is not None
+                        else frozenset()
+                    )
+                    state = replace(state, owned_stack=(*state.owned_stack, pushed))
+                elif mnemonic == "pop" and len(operands) == 1:
+                    destination = register_index(operands[0])
+                    if not state.owned_stack:
+                        return None
+                    popped = state.owned_stack[-1]
+                    state = replace(state, owned_stack=state.owned_stack[:-1])
+                    if destination is not None:
+                        state = with_register(state, destination, popped)
+                elif mnemonic == "mov" and len(operands) == 2:
+                    destination = register_index(operands[0])
+                    if destination is not None:
+                        source = register_index(operands[1])
+                        assigned = frozenset()
+                        if source is not None:
+                            assigned = state.registers[source]
+                        elif operands[1].type == X86_OP_IMM:
+                            immediate = operands[1].imm & 0xFFFF_FFFF
+                            constant = self._task5_expression(
+                                assembly, phase, "constant", immediate
+                            )
+                            assigned = token_value(constant)
+                            false_normalizations = [
+                                fact
+                                for fact in state.predicates
+                                if fact.kind == "minimum-remainder"
+                                and not fact.truth
+                                and fact.right_token == constant
+                            ]
+                            if len(false_normalizations) == 1:
+                                normalized = self._task5_expression(
+                                    assembly,
+                                    phase,
+                                    "max",
+                                    false_normalizations[0].left_token,
+                                    constant,
+                                )
+                                assigned = token_value(normalized)
+                                state = replace(
+                                    state,
+                                    predicates=state.predicates
+                                    - {false_normalizations[0]},
+                                )
+                        elif operands[1].type == X86_OP_MEM:
+                            memory = operands[1].mem
+                            base_family = self._register_family(memory.base)
+                            if base_family == "esp" and memory.index == X86_REG_INVALID:
+                                entry_offset = memory.disp - 4 * len(state.owned_stack)
+                                assigned = dict(state.memory).get(entry_offset, frozenset())
+                            elif memory.index == X86_REG_INVALID and base_family in _REGISTER_FAMILIES:
+                                base_index = _REGISTER_FAMILIES.index(base_family)
+                                base_token = one(state.registers[base_index])
+                                if base_token == block and memory.disp == layout.block_header_offset:
+                                    assigned = token_value(header)
+                                elif base_token is not None:
+                                    loaded = self._task5_expression(
+                                        assembly,
+                                        phase,
+                                        "load",
+                                        base_token,
+                                        memory.disp,
+                                        4,
+                                    )
+                                    assigned = token_value(loaded)
+                        state = with_register(state, destination, assigned)
+                elif mnemonic == "test" and len(operands) == 2:
+                    left_index = register_index(operands[0])
+                    right_index = register_index(operands[1])
+                    if left_index is not None and left_index == right_index:
+                        tested_values = state.registers[left_index]
+                        tested_token = one(tested_values)
+                        tested_row = assembly.expressions_by_token.get(
+                            tested_token or -1,
+                            (),
+                        )
+                        zero = self._task5_expression(
+                            assembly,
+                            phase,
+                            "constant",
+                            0,
+                        )
+                        if (
+                            tested_token is not None
+                            and len(tested_row) == 2
+                            and tested_row[0] == "constant"
+                            and type(tested_row[1]) is int
+                        ):
+                            state = replace(
+                                state,
+                                predicates=state.predicates
+                                | {
+                                    _PublicationPrivateArenaPredicate(
+                                        "test-zero",
+                                        tested_token,
+                                        zero,
+                                        tested_row[1] == 0,
+                                    )
+                                },
+                            )
+                        elif (
+                            tested_token is not None
+                            and len(tested_values) == 1
+                            and next(iter(tested_values)).kind == "condition"
+                        ):
+                            known = tuple(
+                                row
+                                for row in state.predicates
+                                if row.kind == "value-zero"
+                                and row.left_token == tested_token
+                                and row.right_token == zero
+                            )
+                            if len(known) > 1:
+                                return None
+                            row = (
+                                _PublicationPrivateArenaPredicate(
+                                    "test-zero",
+                                    tested_token,
+                                    zero,
+                                    known[0].truth,
+                                )
+                                if known
+                                else _PublicationPrivateArenaPredicate(
+                                    "test-value",
+                                    tested_token,
+                                    zero,
+                                    True,
+                                )
+                            )
+                            state = replace(
+                                state,
+                                predicates=state.predicates | {row},
+                            )
+                elif mnemonic == "lea" and len(operands) == 2:
+                    destination = register_index(operands[0])
+                    memory = operands[1].mem if operands[1].type == X86_OP_MEM else None
+                    if destination is not None and memory is not None:
+                        terms = []
+                        for reg in (memory.base, memory.index):
+                            family = self._register_family(reg)
+                            if family in _REGISTER_FAMILIES and family != "esp":
+                                terms.append(one(state.registers[_REGISTER_FAMILIES.index(family)]))
+                        terms = [row for row in terms if row is not None]
+                        result = None
+                        if (
+                            len(terms) == 1
+                            and (
+                                memory.index == X86_REG_INVALID
+                                or memory.scale == 1
+                            )
+                        ):
+                            result = self._task5_add_signed_constant(
+                                assembly,
+                                phase,
+                                terms[0],
+                                memory.disp,
+                            )
+                        elif len(terms) == 2 and memory.disp == 0:
+                            result = self._task5_expression(
+                                assembly, phase, "add-u32", terms[0], terms[1]
+                            )
+                        state = with_register(
+                            state,
+                            destination,
+                            token_value(result) if result is not None else frozenset(),
+                        )
+                elif mnemonic in {"add", "sub"} and len(operands) == 2:
+                    if (
+                        operands[0].type == X86_OP_REG
+                        and self._register_family(operands[0].reg) == "esp"
+                        and operands[1].type == X86_OP_IMM
+                    ):
+                        count = (operands[1].imm & 0xFFFF_FFFF) // 4
+                        if mnemonic == "sub":
+                            state = replace(
+                                state,
+                                owned_stack=state.owned_stack
+                                + tuple(frozenset() for _ in range(count)),
+                            )
+                        elif count <= len(state.owned_stack):
+                            state = replace(
+                                state,
+                                owned_stack=state.owned_stack[:-count]
+                                if count
+                                else state.owned_stack,
+                            )
+                        else:
+                            return None
+                        destination = None
+                    else:
+                        destination = register_index(operands[0])
+                    if destination is not None:
+                        left = one(state.registers[destination])
+                        right_index = register_index(operands[1])
+                        right = (
+                            one(state.registers[right_index])
+                            if right_index is not None
+                            else None
+                        )
+                        immediate = (
+                            operands[1].imm & 0xFFFF_FFFF
+                            if operands[1].type == X86_OP_IMM
+                            else None
+                        )
+                        result = None
+                        if immediate is not None and left is not None:
+                            signed = immediate if immediate < 0x80000000 else immediate - 0x100000000
+                            addend = signed if mnemonic == "add" else -signed
+                            result = self._task5_add_signed_constant(
+                                assembly,
+                                phase,
+                                left,
+                                addend,
+                            )
+                        elif mnemonic == "sub" and right is not None and left == old_size:
+                            fit = _PublicationPrivateArenaPredicate(
+                                "unsigned-fit", old_size, right, True
+                            )
+                            if fit not in state.predicates:
+                                fit = self._task5_derive_normalized_fit(
+                                    assembly,
+                                    state,
+                                    raw_request_token=raw_request,
+                                    capacity_token=capacity,
+                                    old_size_token=old_size,
+                                    normalized_request_token=right,
+                                    minimum=topology.minimum_split_remainder,
+                                )
+                                if fit is not None:
+                                    state = replace(
+                                        state,
+                                        predicates=state.predicates | {fit},
+                                    )
+                            if fit is not None:
+                                result = self._task5_expression(
+                                    assembly,
+                                    phase,
+                                    "sub-u32-no-wrap",
+                                    old_size,
+                                    right,
+                                )
+                        state = with_register(
+                            state,
+                            destination,
+                            token_value(result) if result is not None else frozenset(),
+                        )
+                elif mnemonic == "and" and len(operands) == 2:
+                    destination = register_index(operands[0])
+                    if destination is not None and operands[1].type == X86_OP_IMM:
+                        source = one(state.registers[destination])
+                        immediate = operands[1].imm & 0xFFFF_FFFF
+                        result = None
+                        assigned = frozenset()
+                        if source == header and immediate == mask:
+                            result = old_size
+                        else:
+                            if (
+                                immediate == align_mask
+                                and source is not None
+                                and self._task5_affine_form(
+                                    assembly,
+                                    source,
+                                )
+                                == (
+                                    raw_request,
+                                    payload_offset
+                                    + layout.block_alignment
+                                    - 1,
+                                )
+                            ):
+                                result = self._task5_expression(
+                                    assembly, phase, "and", source, align_mask
+                                )
+                            elif (
+                                source is not None
+                                and immediate == page_pointer_flag
+                                and self._task5_memory_value_kind(
+                                    assembly,
+                                    source,
+                                    block_token=block,
+                                    layout=layout,
+                                )
+                                == "block-page-flags"
+                            ):
+                                result = self._task5_expression(
+                                    assembly,
+                                    phase,
+                                    "and",
+                                    source,
+                                    page_pointer_flag,
+                                )
+                                assigned = value("condition", result)
+                        if result is not None and not assigned:
+                            assigned = token_value(result)
+                        state = with_register(
+                            state,
+                            destination,
+                            assigned,
+                        )
+                elif mnemonic == "cmp" and len(operands) == 2:
+                    left_index = register_index(operands[0])
+                    right_index = register_index(operands[1])
+                    left = one(state.registers[left_index]) if left_index is not None else None
+                    if right_index is not None:
+                        right = one(state.registers[right_index])
+                    elif operands[1].type == X86_OP_IMM:
+                        right = self._task5_expression(
+                            assembly,
+                            phase,
+                            "constant",
+                            operands[1].imm & 0xFFFF_FFFF,
+                        )
+                    else:
+                        right = None
+                    state = clear_pending(state)
+                    if left is not None and right is not None:
+                        state = replace(
+                            state,
+                            predicates=state.predicates
+                            | {
+                                _PublicationPrivateArenaPredicate(
+                                    "equal", left, right, True
+                                )
+                            },
+                        )
+                elif mnemonic == "xor" and len(operands) == 2:
+                    destination = register_index(operands[0])
+                    source = register_index(operands[1])
+                    if destination is not None:
+                        if destination == source:
+                            zero = self._task5_expression(assembly, phase, "constant", 0)
+                            state = with_register(state, destination, token_value(zero))
+                        else:
+                            state = with_register(state, destination, frozenset())
+                if successors:
+                    next_states = [(successors[0], state)]
+
+            for successor, successor_state in next_states:
+                self._task5_enqueue_state(
+                    assembly, phase, successor, successor_state
+                )
+
+        if rejected_call:
+            return None
+        proofs = []
+        for address in topology.resize_calls:
+            rows = call_states[address]
+            if not rows:
+                return None
+            canonical = rows[0]
+            if any(
+                (
+                    row.block_token,
+                    row.raw_request_token,
+                    row.normalized_request_token,
+                    row.old_size_token,
+                    row.remainder_token,
+                    row.split_block_token,
+                    row.fit_predicate,
+                    row.minimum_predicate,
+                )
+                != (
+                    canonical.block_token,
+                    canonical.raw_request_token,
+                    canonical.normalized_request_token,
+                    canonical.old_size_token,
+                    canonical.remainder_token,
+                    canonical.split_block_token,
+                    canonical.fit_predicate,
+                    canonical.minimum_predicate,
+                )
+                for row in rows[1:]
+            ):
+                return None
+            proofs.append(
+                replace(
+                    canonical,
+                    instruction_addresses=frozenset().union(
+                        *(row.instruction_addresses for row in rows)
+                    ),
+                )
+            )
+        return tuple(proofs)
+
+    def _task5_splitter_body_is_exact(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: _Task5BaseTopology,
+    ) -> bool:
+        """Prove splitter arguments and list effects from bounded path state."""
+        phase = "base-roles"
+        layout = assembly.base_layout
+        entry = topology.splitter_entry
+        flags = tuple(
+            bit
+            for shift in range(32)
+            if layout.size_flag_mask & (bit := 1 << shift)
+        )
+        if len(flags) != 3:
+            return False
+        page_pointer_flag, allocated_flag, previous_allocated_flag = flags
+        clear_mask = (~layout.size_flag_mask) & 0xFFFF_FFFF
+
+        def expression(kind: str, *parts: object) -> int:
+            return self._task5_expression(assembly, phase, kind, *parts)
+
+        def constant(value: int) -> int:
+            return expression("constant", value & 0xFFFF_FFFF)
+
+        zero = constant(0)
+        one = constant(1)
+        block = expression("argument", entry, 0)
+        request = expression("argument", entry, 1)
+
+        def address_offset(base: int, displacement: int) -> int:
+            return (
+                base
+                if displacement == 0
+                else expression("address-offset", base, displacement)
+            )
+
+        def load_at(base: int, displacement: int) -> int:
+            return expression(
+                "load-address",
+                address_offset(base, displacement),
+                4,
+            )
+
+        header = load_at(block, layout.block_header_offset)
+        old_size = expression("and", header, clear_mask)
+        page_tagged = load_at(block, layout.block_page_flags_offset)
+        page = expression(
+            "and",
+            page_tagged,
+            (~page_pointer_flag) & 0xFFFF_FFFF,
+        )
+        allocated = expression("and", header, allocated_flag)
+        previous_allocated = expression(
+            "and",
+            header,
+            previous_allocated_flag,
+        )
+
+        def add_tokens(left: int, right: int) -> int:
+            left_row = assembly.expressions_by_token.get(left, ())
+            right_row = assembly.expressions_by_token.get(right, ())
+            if (
+                len(left_row) == 2
+                and left_row[0] == "constant"
+                and len(right_row) == 2
+                and right_row[0] == "constant"
+            ):
+                return constant(left_row[1] + right_row[1])
+            if left == zero:
+                return right
+            if right == zero:
+                return left
+            first, second = sorted((left, right))
+            return expression("add-u32", first, second)
+
+        def subtract_tokens(left: int, right: int) -> int:
+            left_row = assembly.expressions_by_token.get(left, ())
+            right_row = assembly.expressions_by_token.get(right, ())
+            if (
+                len(left_row) == 2
+                and left_row[0] == "constant"
+                and len(right_row) == 2
+                and right_row[0] == "constant"
+            ):
+                return constant(left_row[1] - right_row[1])
+            if right == zero:
+                return left
+            return expression("sub-u32", left, right)
+
+        split_block = add_tokens(block, request)
+        remainder = subtract_tokens(old_size, request)
+        old_next = load_at(block, layout.block_next_offset)
+        expected_free_writes = {
+            address_offset(split_block, layout.block_prev_offset): block,
+            address_offset(split_block, layout.block_next_offset): old_next,
+            address_offset(block, layout.block_next_offset): split_block,
+            address_offset(old_next, layout.block_prev_offset): split_block,
+        }
+
+        def register_index(operand: object) -> int | None:
+            if (
+                getattr(operand, "type", None) != X86_OP_REG
+                or getattr(operand, "size", None) != 4
+            ):
+                return None
+            family = self._register_family(operand.reg)
+            return (
+                _REGISTER_FAMILIES.index(family)
+                if family in _REGISTER_FAMILIES and family != "esp"
+                else None
+            )
+
+        def with_register(
+            state: _Task5SplitterSemanticState,
+            index: int,
+            token: int | None,
+        ) -> _Task5SplitterSemanticState:
+            registers = list(state.registers)
+            registers[index] = token
+            return replace(state, registers=tuple(registers))
+
+        def memory_map(
+            state: _Task5SplitterSemanticState,
+        ) -> dict[int, int | None]:
+            return dict(state.memory)
+
+        def with_memory(
+            state: _Task5SplitterSemanticState,
+            offset: int,
+            token: int | None,
+        ) -> _Task5SplitterSemanticState:
+            values = memory_map(state)
+            values[offset] = token
+            return replace(state, memory=tuple(sorted(values.items())))
+
+        def stack_offset(
+            state: _Task5SplitterSemanticState,
+            operand: object,
+        ) -> int | None:
+            if (
+                getattr(operand, "type", None) != X86_OP_MEM
+                or getattr(operand, "size", None) != 4
+                or operand.mem.segment != X86_REG_INVALID
+                or operand.mem.index != X86_REG_INVALID
+                or self._register_family(operand.mem.base) != "esp"
+            ):
+                return None
+            return operand.mem.disp - 4 * state.stack_depth
+
+        def effective_address(
+            state: _Task5SplitterSemanticState,
+            operand: object,
+        ) -> int | None:
+            if (
+                getattr(operand, "type", None) != X86_OP_MEM
+                or getattr(operand, "size", None) != 4
+                or operand.mem.segment != X86_REG_INVALID
+            ):
+                return None
+            stack = stack_offset(state, operand)
+            if stack is not None:
+                return None
+            parts = []
+            for register, scale in (
+                (operand.mem.base, 1),
+                (operand.mem.index, operand.mem.scale),
+            ):
+                if register == X86_REG_INVALID:
+                    continue
+                family = self._register_family(register)
+                if family not in _REGISTER_FAMILIES or family == "esp":
+                    return None
+                token = state.registers[_REGISTER_FAMILIES.index(family)]
+                if token is None:
+                    return None
+                parts.append(
+                    token
+                    if scale == 1
+                    else expression("scale-u32", token, scale)
+                )
+            if not parts:
+                return None
+            address = parts[0]
+            for part in parts[1:]:
+                address = add_tokens(address, part)
+            return address_offset(address, operand.mem.disp)
+
+        def read_operand(
+            state: _Task5SplitterSemanticState,
+            operand: object,
+        ) -> int | None:
+            index = register_index(operand)
+            if index is not None:
+                return state.registers[index]
+            if getattr(operand, "type", None) == X86_OP_IMM:
+                return constant(operand.imm)
+            if getattr(operand, "type", None) != X86_OP_MEM:
+                return None
+            logical = stack_offset(state, operand)
+            if logical is not None:
+                values = memory_map(state)
+                return (
+                    values[logical]
+                    if logical in values
+                    else expression("stack-value", entry, logical, 4)
+                )
+            address = effective_address(state, operand)
+            if address is None:
+                return None
+            for written_address, written_value in reversed(state.writes):
+                if written_address == address:
+                    return written_value
+            return expression("load-address", address, 4)
+
+        def write_operand(
+            state: _Task5SplitterSemanticState,
+            operand: object,
+            token: int | None,
+        ) -> _Task5SplitterSemanticState | None:
+            index = register_index(operand)
+            if index is not None:
+                return with_register(state, index, token)
+            if getattr(operand, "type", None) != X86_OP_MEM:
+                return None
+            logical = stack_offset(state, operand)
+            if logical is not None:
+                return with_memory(state, logical, token)
+            address = effective_address(state, operand)
+            if address is None or token is None:
+                return None
+            return replace(state, writes=(*state.writes, (address, token)))
+
+        def clear_pending(
+            state: _Task5SplitterSemanticState,
+        ) -> _Task5SplitterSemanticState:
+            return replace(
+                state,
+                predicates=frozenset(
+                    row
+                    for row in state.predicates
+                    if row.kind
+                    not in {"equal", "test-zero", "test-value"}
+                ),
+            )
+
+        def set_test_flags(
+            state: _Task5SplitterSemanticState,
+            token: int,
+        ) -> _Task5SplitterSemanticState:
+            state = clear_pending(state)
+            row = assembly.expressions_by_token.get(token, ())
+            if len(row) == 2 and row[0] == "constant":
+                predicate = _PublicationPrivateArenaPredicate(
+                    "test-zero",
+                    token,
+                    zero,
+                    row[1] == 0,
+                )
+            else:
+                known = tuple(
+                    fact
+                    for fact in state.predicates
+                    if fact.kind == "value-zero"
+                    and fact.left_token == token
+                    and fact.right_token == zero
+                )
+                predicate = _PublicationPrivateArenaPredicate(
+                    "test-zero" if len(known) == 1 else "test-value",
+                    token,
+                    zero,
+                    known[0].truth if len(known) == 1 else True,
+                )
+            return replace(state, predicates=state.predicates | {predicate})
+
+        def constant_value(token: int) -> int | None:
+            row = assembly.expressions_by_token.get(token, ())
+            return (
+                row[1] & 0xFFFF_FFFF
+                if len(row) == 2
+                and row[0] == "constant"
+                and type(row[1]) is int
+                else None
+            )
+
+        def allocation_argument_is_valid(
+            state: _Task5SplitterSemanticState,
+            token: int,
+        ) -> bool:
+            if token == allocated:
+                return True
+            value = constant_value(token)
+            truths = {
+                row.truth
+                for row in state.predicates
+                if row.kind == "value-zero"
+                and row.left_token == allocated
+                and row.right_token == zero
+            }
+            return (
+                value in {0, 1}
+                and len(truths) == 1
+                and value == (0 if next(iter(truths)) else 1)
+            )
+
+        initial = _Task5SplitterSemanticState(
+            registers=tuple(None for _ in _REGISTER_FAMILIES),
+            stack_depth=0,
+            memory=((4, block), (8, request)),
+            predicates=frozenset(),
+            calls=(),
+            writes=(),
+            instruction_addresses=frozenset(),
+        )
+        assembly.semantic_pending.clear()
+        assembly.semantic_seen.clear()
+        self._task5_enqueue_state(assembly, phase, entry, initial)
+        returns: list[_Task5SplitterSemanticState] = []
+
+        while assembly.semantic_pending:
+            address, state = assembly.semantic_pending.popleft()
+            if not isinstance(state, _Task5SplitterSemanticState):
+                return False
+            if self._registrar_function_entry(address) != entry:
+                return False
+            decoded = self._owned_decoded(address)
+            self._task5_cache_instruction(
+                assembly,
+                phase,
+                entry,
+                "splitter-semantics",
+                address,
+            )
+            successors = self._task5_complete_successors(
+                assembly,
+                entry,
+                address,
+            )
+            if successors is None:
+                return False
+            state = replace(
+                state,
+                instruction_addresses=state.instruction_addresses | {address},
+            )
+            mnemonic = decoded.mnemonic
+            operands = decoded.operands
+            next_states: list[tuple[int, _Task5SplitterSemanticState]] = []
+
+            if decoded.group(CS_GRP_RET):
+                if mnemonic != "ret" or operands or state.stack_depth != 0:
+                    return False
+                returns.append(clear_pending(state))
+                continue
+
+            if decoded.group(CS_GRP_JUMP):
+                if mnemonic == "jmp":
+                    if len(successors) != 1:
+                        return False
+                    next_states = [(successors[0], state)]
+                elif len(successors) == 2:
+                    if mnemonic not in {"je", "jne"}:
+                        return False
+                    target = decoded.operands[0].imm & 0xFFFF_FFFF
+                    fallthrough = decoded.address + decoded.size
+                    if target not in successors or fallthrough not in successors:
+                        return False
+                    tested = next(
+                        (
+                            row
+                            for row in state.predicates
+                            if row.kind == "test-zero"
+                        ),
+                        None,
+                    )
+                    tested_value = next(
+                        (
+                            row
+                            for row in state.predicates
+                            if row.kind == "test-value"
+                        ),
+                        None,
+                    )
+                    comparison = next(
+                        (
+                            row
+                            for row in state.predicates
+                            if row.kind == "equal"
+                        ),
+                        None,
+                    )
+                    base_state = clear_pending(state)
+                    equality: bool | None = None
+                    compared_allocated = False
+                    if comparison is not None:
+                        left = comparison.left_token
+                        right = comparison.right_token
+                        if left == right:
+                            equality = True
+                        else:
+                            left_value = constant_value(left)
+                            right_value = constant_value(right)
+                            if left_value is not None and right_value is not None:
+                                equality = left_value == right_value
+                            elif {left, right} == {allocated, zero}:
+                                compared_allocated = True
+                                known = tuple(
+                                    row.truth
+                                    for row in state.predicates
+                                    if row.kind == "value-zero"
+                                    and row.left_token == allocated
+                                    and row.right_token == zero
+                                )
+                                if len(known) == 1:
+                                    equality = known[0]
+                    branch_truth = None
+                    if mnemonic in {"je", "jne"}:
+                        if tested is not None:
+                            branch_truth = (
+                                tested.truth
+                                if mnemonic == "je"
+                                else not tested.truth
+                            )
+                        elif equality is not None:
+                            branch_truth = (
+                                equality if mnemonic == "je" else not equality
+                            )
+                    if branch_truth is not None:
+                        next_states = [
+                            (
+                                target if branch_truth else fallthrough,
+                                base_state,
+                            )
+                        ]
+                    else:
+                        for successor in successors:
+                            taken = successor == target
+                            branch_state = base_state
+                            refinement = None
+                            if tested_value is not None and mnemonic in {"je", "jne"}:
+                                refinement = (
+                                    tested_value.left_token,
+                                    taken if mnemonic == "je" else not taken,
+                                )
+                            elif compared_allocated and mnemonic in {"je", "jne"}:
+                                refinement = (
+                                    allocated,
+                                    taken if mnemonic == "je" else not taken,
+                                )
+                            if refinement is not None:
+                                branch_state = replace(
+                                    branch_state,
+                                    predicates=branch_state.predicates
+                                    | {
+                                        _PublicationPrivateArenaPredicate(
+                                            "value-zero",
+                                            refinement[0],
+                                            zero,
+                                            refinement[1],
+                                        )
+                                    },
+                                )
+                            next_states.append((successor, branch_state))
+                else:
+                    return False
+            elif decoded.group(CS_GRP_CALL):
+                if len(successors) != 1:
+                    return False
+                target = self.direct_call_targets_by_source.get(address)
+                call_index = len(state.calls)
+                if (
+                    target != topology.block_initializer_entry
+                    or call_index >= 2
+                    or address != topology.split_initializer_calls[call_index]
+                ):
+                    return False
+                stack = memory_map(state)
+                current_sp = -4 * state.stack_depth
+                arguments = tuple(
+                    stack.get(current_sp + 4 * index) for index in range(5)
+                )
+                if any(token is None for token in arguments):
+                    return False
+                call_arguments = tuple(
+                    cast(int, token) for token in arguments
+                )
+                if call_index == 0:
+                    valid = (
+                        call_arguments[:4]
+                        == (block, request, page, previous_allocated)
+                        and allocation_argument_is_valid(
+                            state,
+                            call_arguments[4],
+                        )
+                    )
+                    canonical_arguments = (
+                        block,
+                        request,
+                        page,
+                        previous_allocated,
+                        allocated,
+                    )
+                else:
+                    valid = (
+                        call_arguments[:3]
+                        == (split_block, remainder, page)
+                        and call_arguments[3] == call_arguments[4]
+                        and allocation_argument_is_valid(
+                            state,
+                            call_arguments[3],
+                        )
+                    )
+                    canonical_arguments = (
+                        split_block,
+                        remainder,
+                        page,
+                        allocated,
+                        allocated,
+                    )
+                if not valid:
+                    return False
+                state = clear_pending(state)
+                for family in ("eax", "ecx", "edx"):
+                    state = with_register(
+                        state,
+                        _REGISTER_FAMILIES.index(family),
+                        None,
+                    )
+                state = replace(
+                    state,
+                    calls=(*state.calls, (address, canonical_arguments)),
+                )
+                next_states = [(successors[0], state)]
+            else:
+                if mnemonic == "nop":
+                    pass
+                elif mnemonic == "push" and len(operands) == 1:
+                    token = read_operand(state, operands[0])
+                    state = replace(state, stack_depth=state.stack_depth + 1)
+                    state = with_memory(
+                        state,
+                        -4 * state.stack_depth,
+                        token,
+                    )
+                elif mnemonic == "pop" and len(operands) == 1:
+                    destination = register_index(operands[0])
+                    if destination is None or state.stack_depth <= 0:
+                        return False
+                    token = memory_map(state).get(-4 * state.stack_depth)
+                    state = with_register(state, destination, token)
+                    state = replace(state, stack_depth=state.stack_depth - 1)
+                elif mnemonic == "mov" and len(operands) == 2:
+                    if operands[0].size != 4 or operands[1].size != 4:
+                        return False
+                    state = write_operand(
+                        state,
+                        operands[0],
+                        read_operand(state, operands[1]),
+                    )
+                    if state is None:
+                        return False
+                elif mnemonic == "lea" and len(operands) == 2:
+                    destination = register_index(operands[0])
+                    if destination is None or operands[1].type != X86_OP_MEM:
+                        return False
+                    token = effective_address(state, operands[1])
+                    state = with_register(state, destination, token)
+                elif mnemonic in {"add", "sub"} and len(operands) == 2:
+                    if (
+                        operands[0].type == X86_OP_REG
+                        and self._register_family(operands[0].reg) == "esp"
+                        and operands[0].size == 4
+                        and operands[1].type == X86_OP_IMM
+                    ):
+                        amount = operands[1].imm & 0xFFFF_FFFF
+                        if amount % 4:
+                            return False
+                        slots = amount // 4
+                        depth = (
+                            state.stack_depth + slots
+                            if mnemonic == "sub"
+                            else state.stack_depth - slots
+                        )
+                        if depth < 0 or depth > 64:
+                            return False
+                        state = replace(state, stack_depth=depth)
+                    else:
+                        destination = register_index(operands[0])
+                        left = read_operand(state, operands[0])
+                        right = read_operand(state, operands[1])
+                        if destination is None or left is None or right is None:
+                            return False
+                        token = (
+                            add_tokens(left, right)
+                            if mnemonic == "add"
+                            else subtract_tokens(left, right)
+                        )
+                        state = with_register(state, destination, token)
+                        state = set_test_flags(state, token)
+                elif mnemonic == "and" and len(operands) == 2:
+                    source = read_operand(state, operands[0])
+                    if source is None or operands[1].type != X86_OP_IMM:
+                        return False
+                    immediate = operands[1].imm & 0xFFFF_FFFF
+                    source_value = constant_value(source)
+                    token = (
+                        constant(source_value & immediate)
+                        if source_value is not None
+                        else expression("and", source, immediate)
+                    )
+                    state = write_operand(state, operands[0], token)
+                    if state is None:
+                        return False
+                    state = set_test_flags(state, token)
+                elif mnemonic == "xor" and len(operands) == 2:
+                    destination = register_index(operands[0])
+                    source_register = register_index(operands[1])
+                    if destination is None:
+                        return False
+                    if source_register == destination:
+                        token = zero
+                    else:
+                        left = read_operand(state, operands[0])
+                        right = read_operand(state, operands[1])
+                        if left is None or right is None:
+                            return False
+                        token = (
+                            zero
+                            if left == right
+                            else expression("xor", left, right)
+                        )
+                    state = with_register(state, destination, token)
+                    state = set_test_flags(state, token)
+                elif mnemonic == "inc" and len(operands) == 1:
+                    destination = register_index(operands[0])
+                    left = read_operand(state, operands[0])
+                    if destination is None or left is None:
+                        return False
+                    token = add_tokens(left, one)
+                    state = with_register(state, destination, token)
+                    state = set_test_flags(state, token)
+                elif mnemonic == "cmp" and len(operands) == 2:
+                    left = read_operand(state, operands[0])
+                    right = read_operand(state, operands[1])
+                    if left is None or right is None:
+                        return False
+                    state = clear_pending(state)
+                    state = replace(
+                        state,
+                        predicates=state.predicates
+                        | {
+                            _PublicationPrivateArenaPredicate(
+                                "equal",
+                                left,
+                                right,
+                                True,
+                            )
+                        },
+                    )
+                elif mnemonic == "test" and len(operands) == 2:
+                    left = read_operand(state, operands[0])
+                    right = read_operand(state, operands[1])
+                    if left is None or left != right:
+                        return False
+                    state = set_test_flags(state, left)
+                else:
+                    return False
+                if successors:
+                    if len(successors) != 1:
+                        return False
+                    next_states = [(successors[0], state)]
+
+            for successor, successor_state in next_states:
+                self._task5_enqueue_state(
+                    assembly,
+                    phase,
+                    successor,
+                    successor_state,
+                )
+
+        expected_calls = (
+            (
+                topology.split_initializer_calls[0],
+                (block, request, page, previous_allocated, allocated),
+            ),
+            (
+                topology.split_initializer_calls[1],
+                (split_block, remainder, page, allocated, allocated),
+            ),
+        )
+        saw_allocation_truths = set()
+        if not returns:
+            return False
+        for state in returns:
+            if state.calls != expected_calls:
+                return False
+            truths = {
+                row.truth
+                for row in state.predicates
+                if row.kind == "value-zero"
+                and row.left_token == allocated
+                and row.right_token == zero
+            }
+            if len(truths) != 1:
+                return False
+            allocation_is_zero = next(iter(truths))
+            saw_allocation_truths.add(allocation_is_zero)
+            writes = dict(state.writes)
+            if len(writes) != len(state.writes):
+                return False
+            if allocation_is_zero:
+                if writes != expected_free_writes:
+                    return False
+            elif writes:
+                return False
+        return saw_allocation_truths == {False, True}
+
+    def _task5_trace_split_contexts(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: _Task5BaseTopology,
+    ) -> _Task5SplitContextProof | None:
+        if assembly.split_contexts is not None:
+            return assembly.split_contexts
+        rows = self._task5_base_topology(assembly)
+        if (
+            rows is None
+            or not self._task5_base_structure_is_valid(assembly, rows)
+            or not self._task5_validate_stack_paths(
+                assembly,
+                topology.reallocator_entry,
+                "resize-split",
+                "split-block",
+                "resize",
+                topology.reallocator_entry,
+            )
+            or not self._task5_validate_stack_paths(
+                assembly,
+                topology.splitter_entry,
+                "selector-split",
+                "split-block",
+                "select",
+                topology.selector_entry,
+            )
+        ):
+            return None
+        resize_call_proofs = self._task5_trace_resize_split_paths(
+            assembly,
+            topology,
+        )
+        if resize_call_proofs is None or not self._task5_splitter_body_is_exact(
+            assembly,
+            topology,
+        ):
+            return None
+
+        for proof in resize_call_proofs:
+            if not self._task5_record_event(
+                assembly,
+                "base-roles",
+                (
+                    "split",
+                    "resize-split",
+                    topology.reallocator_entry,
+                    proof.call_address,
+                    topology.splitter_entry,
+                    "split-block",
+                    proof.old_size_token,
+                ),
+            ):
+                return None
+
+        splitter = [
+            self._owned_decoded(address)
+            for address in self._function_instruction_addresses(
+                topology.splitter_entry
+            )
+        ]
+        calls = tuple(
+            row.address for row in splitter if row.group(CS_GRP_CALL)
+        )
+        if calls != topology.split_initializer_calls:
+            return None
+        first = next(i for i, row in enumerate(splitter) if row.address == calls[0])
+        second = next(i for i, row in enumerate(splitter) if row.address == calls[1])
+        if any(row.group(CS_GRP_JUMP) for row in splitter[first:second]):
+            return None
+
+        none = _PublicationPrivateArenaBlockState("none", "none")
+        free_listed = _PublicationPrivateArenaBlockState("free", "listed")
+        free_unlisted = _PublicationPrivateArenaBlockState("free", "unlisted")
+        allocated_unlisted = _PublicationPrivateArenaBlockState(
+            "allocated", "unlisted"
+        )
+        initial_call = topology.initializer_call
+        split_calls = topology.split_initializer_calls
+        block_invocations = (
+            _PublicationPrivateArenaInvocation(topology.page_initializer_entry, initial_call, topology.block_initializer_entry, "block-initialize", "initializer-base", (), none),
+            _PublicationPrivateArenaInvocation(topology.splitter_entry, split_calls[0], topology.block_initializer_entry, "block-initialize", "selector-split", (), free_listed),
+            _PublicationPrivateArenaInvocation(topology.splitter_entry, split_calls[1], topology.block_initializer_entry, "block-initialize", "selector-split", (), none),
+            _PublicationPrivateArenaInvocation(topology.splitter_entry, split_calls[0], topology.block_initializer_entry, "block-initialize", "resize-split", (), allocated_unlisted),
+            _PublicationPrivateArenaInvocation(topology.splitter_entry, split_calls[1], topology.block_initializer_entry, "block-initialize", "resize-split", (), none),
+        )
+        block_transitions = (
+            _PublicationPrivateArenaStateTransition(topology.block_initializer_entry, "block-initialize", "initializer-base", "initial-block", none, free_unlisted, "initializer-base", topology.page_initializer_entry),
+            _PublicationPrivateArenaStateTransition(topology.block_initializer_entry, "block-initialize", "selector-split", "split-block", free_listed, free_listed, "select", topology.selector_entry),
+            _PublicationPrivateArenaStateTransition(topology.block_initializer_entry, "block-initialize", "selector-split", "remainder-block", none, free_unlisted, "select", topology.selector_entry),
+            _PublicationPrivateArenaStateTransition(topology.block_initializer_entry, "block-initialize", "resize-split", "split-block", allocated_unlisted, allocated_unlisted, "none", None),
+            _PublicationPrivateArenaStateTransition(topology.block_initializer_entry, "block-initialize", "resize-split", "remainder-block", none, allocated_unlisted, "resize", topology.reallocator_entry),
+        )
+        split_invocations = (
+            _PublicationPrivateArenaInvocation(topology.selector_entry, topology.selector_split_call, topology.splitter_entry, "split", "selector-split", (), free_listed),
+            *(
+                _PublicationPrivateArenaInvocation(topology.reallocator_entry, address, topology.splitter_entry, "split", "resize-split", (), allocated_unlisted)
+                for address in (
+                    row.call_address for row in resize_call_proofs
+                )
+            ),
+        )
+        split_transitions = (
+            _PublicationPrivateArenaStateTransition(topology.splitter_entry, "split", "selector-split", "split-block", free_listed, free_listed, "none", None),
+            _PublicationPrivateArenaStateTransition(topology.splitter_entry, "split", "selector-split", "remainder-block", free_unlisted, free_listed, "select", topology.selector_entry),
+            _PublicationPrivateArenaStateTransition(topology.splitter_entry, "split", "resize-split", "split-block", allocated_unlisted, allocated_unlisted, "none", None),
+            _PublicationPrivateArenaStateTransition(topology.splitter_entry, "split", "resize-split", "remainder-block", allocated_unlisted, allocated_unlisted, "resize", topology.reallocator_entry),
+        )
+        for row in split_invocations:
+            self._task5_record_event(
+                assembly,
+                "base-roles",
+                ("invocation", row.role, row.context, row.caller_entry, row.call_address),
+            )
+        spans = self._task5_role_spans(
+            topology.splitter_entry,
+            "split",
+            assembly,
+        )
+        if spans is None:
+            return None
+        dependencies = self._task5_role_dependencies(assembly, topology)
+        transfer = _PublicationPrivateArenaTransfer(
+            function_entry=topology.splitter_entry,
+            role="split",
+            invocations=split_invocations,
+            state_transitions=split_transitions,
+            removal_call_discharges=(),
+            instruction_addresses=self._function_instruction_addresses(
+                topology.splitter_entry
+            ),
+            span_keys=tuple(
+                (row.function_entry, row.instruction_address, row.operand_index)
+                for row in spans
+            ),
+            function_sha256=self._producer_function_fingerprint(
+                topology.splitter_entry
+            ),
+        )
+        edges = (
+            _PublicationPrivateArenaCallEdge(topology.selector_entry, topology.selector_split_call, topology.splitter_entry, "mutation-role", True),
+            *(
+                _PublicationPrivateArenaCallEdge(topology.reallocator_entry, address, topology.splitter_entry, "resize-context", True)
+                for address in topology.resize_calls
+            ),
+        )
+        split_proof = _Task5RoleProof(
+            transfer,
+            spans,
+            tuple(edges),
+            dependencies,
+        )
+        result = _Task5SplitContextProof(
+            topology,
+            block_invocations,
+            block_transitions,
+            split_proof,
+            resize_call_proofs,
+        )
+        assembly.split_contexts = result
+        return result
+
+    def _task5_role_dependencies(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: _Task5BaseTopology,
+    ) -> frozenset[tuple[str, int]]:
+        return frozenset(
+            ("function", entry)
+            for entry in {
+                *assembly.contract.dependency_functions,
+                *assembly.effects.function_entries,
+                topology.selector_entry,
+                topology.splitter_entry,
+                topology.unlink_entry,
+                topology.block_initializer_entry,
+                topology.reallocator_entry,
+                *topology.driver_entries,
+            }
+        )
+
+    def _task5_prove_split(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: _Task5BaseTopology,
+    ) -> _Task5RoleProof | None:
+        contexts = self._task5_trace_split_contexts(assembly, topology)
+        return None if contexts is None else contexts.split_proof
+
+    def _task5_prove_block_initialize(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: _Task5BaseTopology,
+    ) -> _Task5RoleProof | None:
+        contexts = self._task5_trace_split_contexts(assembly, topology)
+        if contexts is None or not self._task5_validate_stack_paths(
+            assembly,
+            topology.block_initializer_entry,
+            "initializer-base",
+            "initial-block",
+            "initializer-base",
+            topology.page_initializer_entry,
+        ):
+            return None
+        spans = self._task5_role_spans(
+            topology.block_initializer_entry,
+            "block-initialize",
+            assembly,
+        )
+        if spans is None:
+            return None
+        for row in contexts.block_invocations:
+            self._task5_record_event(
+                assembly,
+                "base-roles",
+                ("invocation", row.role, row.context, row.caller_entry, row.call_address),
+            )
+        transfer = _PublicationPrivateArenaTransfer(
+            function_entry=topology.block_initializer_entry,
+            role="block-initialize",
+            invocations=contexts.block_invocations,
+            state_transitions=contexts.block_transitions,
+            removal_call_discharges=(),
+            instruction_addresses=self._function_instruction_addresses(
+                topology.block_initializer_entry
+            ),
+            span_keys=tuple(
+                (row.function_entry, row.instruction_address, row.operand_index)
+                for row in spans
+            ),
+            function_sha256=self._producer_function_fingerprint(
+                topology.block_initializer_entry
+            ),
+        )
+        edges = (
+            _PublicationPrivateArenaCallEdge(topology.page_initializer_entry, topology.initializer_call, topology.block_initializer_entry, "mutation-role", True),
+            *(
+                _PublicationPrivateArenaCallEdge(topology.splitter_entry, address, topology.block_initializer_entry, "mutation-role", True)
+                for address in topology.split_initializer_calls
+            ),
+        )
+        return _Task5RoleProof(
+            transfer,
+            spans,
+            tuple(edges),
+            self._task5_role_dependencies(assembly, topology),
+        )
+
+    def _task5_unlink_body_semantics_are_exact(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: _Task5BaseTopology,
+    ) -> bool:
+        """Prove unlink state transitions for singleton/head/non-head inputs."""
+        phase = "base-roles"
+        layout = assembly.base_layout
+        entry = topology.unlink_entry
+        flags = tuple(
+            bit
+            for shift in range(32)
+            if layout.size_flag_mask & (bit := 1 << shift)
+        )
+        if len(flags) != 3:
+            return False
+        _page_pointer_flag, allocated_flag, previous_allocated_flag = flags
+        clear_mask = (~layout.size_flag_mask) & 0xFFFF_FFFF
+
+        def expression(kind: str, *parts: object) -> int:
+            return self._task5_expression(assembly, phase, kind, *parts)
+
+        def constant(value: int) -> int:
+            return expression("constant", value & 0xFFFF_FFFF)
+
+        zero = constant(0)
+        page = expression("argument", entry, 0)
+        block = expression("argument", entry, 1)
+
+        def add_tokens(left: int, right: int) -> int:
+            if left == zero:
+                return right
+            if right == zero:
+                return left
+            first, second = sorted((left, right))
+            return expression("add-u32", first, second)
+
+        def address_offset(base: int, displacement: int) -> int:
+            return (
+                base
+                if displacement == 0
+                else expression("address-offset", base, displacement)
+            )
+
+        block_header_address = address_offset(
+            block,
+            layout.block_header_offset,
+        )
+        block_prev_address = address_offset(block, layout.block_prev_offset)
+        block_next_address = address_offset(block, layout.block_next_offset)
+        page_extent_address = address_offset(page, layout.page_extent_offset)
+        page_largest_address = address_offset(
+            page,
+            layout.page_largest_free_offset,
+        )
+        tagged_header = expression("unlink-tagged-header", block)
+        size = expression("and", tagged_header, clear_mask)
+        successor = add_tokens(block, size)
+        successor_header_address = address_offset(
+            successor,
+            layout.block_header_offset,
+        )
+        successor_tagged_header = expression(
+            "unlink-successor-tagged-header",
+            successor,
+        )
+        tagged_extent = expression("unlink-tagged-extent", page)
+        extent = expression("and", tagged_extent, clear_mask)
+        sentinel = address_offset(
+            add_tokens(page, extent),
+            layout.end_sentinel_displacement,
+        )
+        largest = expression("unlink-largest", page)
+        allocated_header = expression(
+            "or",
+            tagged_header,
+            allocated_flag,
+        )
+        successor_allocated_header = expression(
+            "or",
+            successor_tagged_header,
+            previous_allocated_flag,
+        )
+
+        def register_index(operand: object) -> int | None:
+            if (
+                getattr(operand, "type", None) != X86_OP_REG
+                or getattr(operand, "size", None) != 4
+            ):
+                return None
+            family = self._register_family(operand.reg)
+            return (
+                _REGISTER_FAMILIES.index(family)
+                if family in _REGISTER_FAMILIES and family != "esp"
+                else None
+            )
+
+        def with_register(
+            state: _Task5UnlinkSemanticState,
+            index: int,
+            token: int | None,
+        ) -> _Task5UnlinkSemanticState:
+            registers = list(state.registers)
+            registers[index] = token
+            return replace(state, registers=tuple(registers))
+
+        def with_stack(
+            state: _Task5UnlinkSemanticState,
+            offset: int,
+            token: int | None,
+        ) -> _Task5UnlinkSemanticState:
+            memory = dict(state.stack_memory)
+            memory[offset] = token
+            return replace(state, stack_memory=tuple(sorted(memory.items())))
+
+        def with_heap(
+            state: _Task5UnlinkSemanticState,
+            address: int,
+            token: int,
+        ) -> _Task5UnlinkSemanticState:
+            memory = dict(state.heap_memory)
+            memory[address] = token
+            return replace(
+                state,
+                heap_memory=tuple(sorted(memory.items())),
+                writes=(*state.writes, (address, token)),
+            )
+
+        def stack_offset(
+            state: _Task5UnlinkSemanticState,
+            operand: object,
+        ) -> int | None:
+            if (
+                getattr(operand, "type", None) != X86_OP_MEM
+                or getattr(operand, "size", None) != 4
+                or operand.mem.segment != X86_REG_INVALID
+                or operand.mem.index != X86_REG_INVALID
+                or self._register_family(operand.mem.base) != "esp"
+            ):
+                return None
+            return operand.mem.disp - 4 * state.stack_depth
+
+        def effective_address(
+            state: _Task5UnlinkSemanticState,
+            operand: object,
+        ) -> int | None:
+            if (
+                getattr(operand, "type", None) != X86_OP_MEM
+                or getattr(operand, "size", None) != 4
+                or operand.mem.segment != X86_REG_INVALID
+            ):
+                return None
+            if stack_offset(state, operand) is not None:
+                return None
+            parts = []
+            for register, scale in (
+                (operand.mem.base, 1),
+                (operand.mem.index, operand.mem.scale),
+            ):
+                if register == X86_REG_INVALID:
+                    continue
+                family = self._register_family(register)
+                if family not in _REGISTER_FAMILIES or family == "esp":
+                    return None
+                token = state.registers[_REGISTER_FAMILIES.index(family)]
+                if token is None:
+                    return None
+                parts.append(
+                    token
+                    if scale == 1
+                    else expression("scale-u32", token, scale)
+                )
+            if not parts:
+                return None
+            address = parts[0]
+            for part in parts[1:]:
+                address = add_tokens(address, part)
+            displacement = operand.mem.disp & 0xFFFF_FFFF
+            if displacement & 0x8000_0000:
+                displacement -= 0x1_0000_0000
+            return address_offset(address, displacement)
+
+        def read_operand(
+            state: _Task5UnlinkSemanticState,
+            operand: object,
+        ) -> int | None:
+            index = register_index(operand)
+            if index is not None:
+                return state.registers[index]
+            if getattr(operand, "type", None) == X86_OP_IMM:
+                return constant(operand.imm)
+            if getattr(operand, "type", None) != X86_OP_MEM:
+                return None
+            logical = stack_offset(state, operand)
+            if logical is not None:
+                return dict(state.stack_memory).get(logical)
+            address = effective_address(state, operand)
+            return (
+                None
+                if address is None
+                else dict(state.heap_memory).get(address)
+            )
+
+        def write_operand(
+            state: _Task5UnlinkSemanticState,
+            operand: object,
+            token: int | None,
+        ) -> _Task5UnlinkSemanticState | None:
+            index = register_index(operand)
+            if index is not None:
+                return with_register(state, index, token)
+            if getattr(operand, "type", None) != X86_OP_MEM:
+                return None
+            logical = stack_offset(state, operand)
+            if logical is not None:
+                return with_stack(state, logical, token)
+            address = effective_address(state, operand)
+            if address is None or token is None:
+                return None
+            return with_heap(state, address, token)
+
+        def clear_pending(
+            state: _Task5UnlinkSemanticState,
+        ) -> _Task5UnlinkSemanticState:
+            return replace(
+                state,
+                predicates=frozenset(
+                    row for row in state.predicates if row.kind != "equal"
+                ),
+            )
+
+        assembly.semantic_pending.clear()
+        assembly.semantic_seen.clear()
+        scenarios = {}
+        for scenario in ("singleton", "head", "non-head"):
+            prev = (
+                block
+                if scenario == "singleton"
+                else expression("unlink-prev", scenario)
+            )
+            next_block = (
+                block
+                if scenario == "singleton"
+                else expression("unlink-next", scenario)
+            )
+            head = (
+                block
+                if scenario in {"singleton", "head"}
+                else expression("unlink-head", scenario)
+            )
+            heap = {
+                block_header_address: tagged_header,
+                block_prev_address: prev,
+                block_next_address: next_block,
+                successor_header_address: successor_tagged_header,
+                page_extent_address: tagged_extent,
+                page_largest_address: largest,
+                sentinel: head,
+                address_offset(next_block, layout.block_prev_offset): block,
+                address_offset(prev, layout.block_next_offset): block,
+            }
+            state = _Task5UnlinkSemanticState(
+                scenario=cast(
+                    Literal["singleton", "head", "non-head"],
+                    scenario,
+                ),
+                registers=tuple(None for _ in _REGISTER_FAMILIES),
+                stack_depth=0,
+                stack_memory=((4, page), (8, block)),
+                heap_memory=tuple(sorted(heap.items())),
+                predicates=frozenset(),
+                writes=(),
+                instruction_addresses=frozenset(),
+            )
+            scenarios[scenario] = (prev, next_block, head)
+            self._task5_enqueue_state(assembly, phase, entry, state)
+
+        returns: list[_Task5UnlinkSemanticState] = []
+        while assembly.semantic_pending:
+            address, state = assembly.semantic_pending.popleft()
+            if not isinstance(state, _Task5UnlinkSemanticState):
+                return False
+            if self._registrar_function_entry(address) != entry:
+                return False
+            decoded = self._owned_decoded(address)
+            self._task5_cache_instruction(
+                assembly,
+                phase,
+                entry,
+                "unlink-semantics",
+                address,
+            )
+            successors = self._task5_complete_successors(
+                assembly,
+                entry,
+                address,
+            )
+            if successors is None:
+                return False
+            state = replace(
+                state,
+                instruction_addresses=state.instruction_addresses | {address},
+            )
+            mnemonic = decoded.mnemonic
+            operands = decoded.operands
+            next_states: list[tuple[int, _Task5UnlinkSemanticState]] = []
+
+            if decoded.group(CS_GRP_RET):
+                if mnemonic != "ret" or operands or state.stack_depth != 0:
+                    return False
+                returns.append(clear_pending(state))
+                continue
+            if decoded.group(CS_GRP_CALL):
+                return False
+            if decoded.group(CS_GRP_JUMP):
+                if mnemonic == "jmp":
+                    if len(successors) != 1:
+                        return False
+                    next_states = [(successors[0], state)]
+                elif mnemonic in {"je", "jne"} and len(successors) == 2:
+                    comparison = next(
+                        (
+                            row
+                            for row in state.predicates
+                            if row.kind == "equal"
+                        ),
+                        None,
+                    )
+                    if comparison is None:
+                        return False
+                    equality = comparison.left_token == comparison.right_token
+                    branch_truth = equality if mnemonic == "je" else not equality
+                    target = decoded.operands[0].imm & 0xFFFF_FFFF
+                    fallthrough = decoded.address + decoded.size
+                    if target not in successors or fallthrough not in successors:
+                        return False
+                    next_states = [
+                        (
+                            target if branch_truth else fallthrough,
+                            clear_pending(state),
+                        )
+                    ]
+                else:
+                    return False
+            else:
+                if mnemonic == "push" and len(operands) == 1:
+                    token = read_operand(state, operands[0])
+                    state = replace(state, stack_depth=state.stack_depth + 1)
+                    state = with_stack(
+                        state,
+                        -4 * state.stack_depth,
+                        token,
+                    )
+                elif mnemonic == "pop" and len(operands) == 1:
+                    destination = register_index(operands[0])
+                    if destination is None or state.stack_depth <= 0:
+                        return False
+                    token = dict(state.stack_memory).get(-4 * state.stack_depth)
+                    state = with_register(state, destination, token)
+                    state = replace(state, stack_depth=state.stack_depth - 1)
+                elif mnemonic == "mov" and len(operands) == 2:
+                    if operands[0].size != 4 or operands[1].size != 4:
+                        return False
+                    state = write_operand(
+                        state,
+                        operands[0],
+                        read_operand(state, operands[1]),
+                    )
+                    if state is None:
+                        return False
+                elif mnemonic == "lea" and len(operands) == 2:
+                    destination = register_index(operands[0])
+                    token = effective_address(state, operands[1])
+                    if destination is None or token is None:
+                        return False
+                    state = with_register(state, destination, token)
+                elif mnemonic == "add" and len(operands) == 2:
+                    destination = register_index(operands[0])
+                    left = read_operand(state, operands[0])
+                    right = read_operand(state, operands[1])
+                    if destination is None or left is None or right is None:
+                        return False
+                    right_value = assembly.expressions_by_token.get(right, ())
+                    if len(right_value) == 2 and right_value[0] == "constant":
+                        signed = right_value[1]
+                        if signed & 0x8000_0000:
+                            signed -= 0x1_0000_0000
+                        token = address_offset(left, signed)
+                    else:
+                        token = add_tokens(left, right)
+                    state = with_register(state, destination, token)
+                elif mnemonic in {"and", "or"} and len(operands) == 2:
+                    source = read_operand(state, operands[0])
+                    if source is None or operands[1].type != X86_OP_IMM:
+                        return False
+                    token = expression(
+                        mnemonic,
+                        source,
+                        operands[1].imm & 0xFFFF_FFFF,
+                    )
+                    state = write_operand(state, operands[0], token)
+                    if state is None:
+                        return False
+                elif mnemonic == "cmp" and len(operands) == 2:
+                    left = read_operand(state, operands[0])
+                    right = read_operand(state, operands[1])
+                    if left is None or right is None:
+                        return False
+                    state = clear_pending(state)
+                    state = replace(
+                        state,
+                        predicates=state.predicates
+                        | {
+                            _PublicationPrivateArenaPredicate(
+                                "equal",
+                                left,
+                                right,
+                                True,
+                            )
+                        },
+                    )
+                else:
+                    return False
+                if successors:
+                    if len(successors) != 1:
+                        return False
+                    next_states = [(successors[0], state)]
+
+            for successor_address, successor_state in next_states:
+                self._task5_enqueue_state(
+                    assembly,
+                    phase,
+                    successor_address,
+                    successor_state,
+                )
+
+        if len(returns) != 3:
+            return False
+        for state in returns:
+            prev, next_block, head = scenarios[state.scenario]
+            if state.scenario == "singleton":
+                expected_writes = (
+                    (block_header_address, allocated_header),
+                    (successor_header_address, successor_allocated_header),
+                    (sentinel, block),
+                    (sentinel, zero),
+                    (page_largest_address, zero),
+                )
+                expected_head = zero
+                expected_largest = zero
+            else:
+                prefix = (
+                    (block_header_address, allocated_header),
+                    (successor_header_address, successor_allocated_header),
+                )
+                head_write = (
+                    ((sentinel, next_block),)
+                    if state.scenario == "head"
+                    else ()
+                )
+                expected_writes = (
+                    *prefix,
+                    *head_write,
+                    (address_offset(next_block, layout.block_prev_offset), prev),
+                    (address_offset(prev, layout.block_next_offset), next_block),
+                )
+                expected_head = next_block if state.scenario == "head" else head
+                expected_largest = largest
+            memory = dict(state.heap_memory)
+            if (
+                state.writes != expected_writes
+                or memory.get(block_header_address) != allocated_header
+                or memory.get(successor_header_address)
+                != successor_allocated_header
+                or memory.get(sentinel) != expected_head
+                or memory.get(page_largest_address) != expected_largest
+            ):
+                return False
+        return {state.scenario for state in returns} == {
+            "singleton",
+            "head",
+            "non-head",
+        }
+
+    def _task5_prove_unlink(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: _Task5BaseTopology,
+    ) -> _Task5RoleProof | None:
+        if (
+            not self._task5_validate_stack_paths(
+                assembly,
+                topology.unlink_entry,
+                "selector-split",
+                "selected-block",
+                "select",
+                topology.selector_entry,
+            )
+            or not self._task5_unlink_body_semantics_are_exact(
+                assembly,
+                topology,
+            )
+        ):
+            return None
+        free_listed = _PublicationPrivateArenaBlockState("free", "listed")
+        allocated_listed = _PublicationPrivateArenaBlockState(
+            "allocated", "listed"
+        )
+        allocated_unlisted = _PublicationPrivateArenaBlockState(
+            "allocated", "unlisted"
+        )
+        invocation = _PublicationPrivateArenaInvocation(
+            topology.selector_entry,
+            topology.selector_unlink_call,
+            topology.unlink_entry,
+            "unlink",
+            "selector-split",
+            (),
+            free_listed,
+        )
+        transitions = (
+            _PublicationPrivateArenaStateTransition(topology.unlink_entry, "unlink", "selector-split", "selected-block", free_listed, allocated_listed, "select", topology.selector_entry),
+            _PublicationPrivateArenaStateTransition(topology.unlink_entry, "unlink", "selector-split", "selected-block", allocated_listed, allocated_unlisted, "select", topology.selector_entry),
+        )
+        if not self._task5_record_event(
+            assembly,
+            "base-roles",
+            ("unlink", "allocated-listed", topology.unlink_entry),
+        ) or not self._task5_record_event(
+            assembly,
+            "base-roles",
+            ("unlink", "allocated-unlisted", topology.unlink_entry),
+        ):
+            return None
+        spans = self._task5_role_spans(
+            topology.unlink_entry,
+            "unlink",
+            assembly,
+        )
+        if spans is None:
+            return None
+        transfer = _PublicationPrivateArenaTransfer(
+            function_entry=topology.unlink_entry,
+            role="unlink",
+            invocations=(invocation,),
+            state_transitions=transitions,
+            removal_call_discharges=(),
+            instruction_addresses=self._function_instruction_addresses(
+                topology.unlink_entry
+            ),
+            span_keys=tuple(
+                (row.function_entry, row.instruction_address, row.operand_index)
+                for row in spans
+            ),
+            function_sha256=self._producer_function_fingerprint(
+                topology.unlink_entry
+            ),
+        )
+        return _Task5RoleProof(
+            transfer,
+            spans,
+            (
+                _PublicationPrivateArenaCallEdge(
+                    topology.selector_entry,
+                    topology.selector_unlink_call,
+                    topology.unlink_entry,
+                    "mutation-role",
+                    True,
+                ),
+            ),
+            self._task5_role_dependencies(assembly, topology),
+        )
+
     def _task5_deallocator_closure(
         self,
         root: int,
         budget: _Task5ProofBudget,
     ) -> tuple[tuple[int, ...], tuple[_PublicationPrivateArenaCallEdge, ...]]:
-        pending = deque([root])
+        pending: deque[int] = deque()
+        queued: set[int] = set()
         entries = set()
         edges = set()
+        budget.tick("base-roles", "fixed-point")
+        queued.add(root)
+        pending.append(root)
         while pending:
-            budget.tick("base-roles", "fixed-point")
             entry = pending.popleft()
+            queued.remove(entry)
             if entry in entries:
                 continue
             entries.add(entry)
@@ -30048,7 +33066,9 @@ class _DirectCfgRecovery:
                         raw_reconciled=True,
                     )
                 )
-                if call.target not in entries:
+                if call.target not in entries and call.target not in queued:
+                    budget.tick("base-roles", "fixed-point")
+                    queued.add(call.target)
                     pending.append(call.target)
         return tuple(sorted(entries)), tuple(
             sorted(
@@ -30066,204 +33086,116 @@ class _DirectCfgRecovery:
         self,
         assembly: _Task5ProofAssembly,
     ) -> _Task5BaseRoleProof | None:
-        topology = self._task5_base_topology(assembly)
-        if topology is None or not self._task5_base_structure_is_valid(
-            assembly,
-            topology,
-        ):
+        topology = self._task5_discover_base_topology(assembly)
+        if topology is None:
             return None
-        budget = assembly.budget
-        none = _PublicationPrivateArenaBlockState("none", "none")
-        free_listed = _PublicationPrivateArenaBlockState("free", "listed")
-        free_unlisted = _PublicationPrivateArenaBlockState("free", "unlisted")
-        allocated_unlisted = _PublicationPrivateArenaBlockState(
-            "allocated", "unlisted"
+        provers = (
+            ("block-initialize", self._task5_prove_block_initialize),
+            ("split", self._task5_prove_split),
+            ("unlink", self._task5_prove_unlink),
         )
-        allocated_listed = _PublicationPrivateArenaBlockState(
-            "allocated", "listed"
-        )
-        initial_call = topology["initializer-call"]
-        split_calls = topology["split-initializer-calls"]
-        resize_calls = topology["resize-calls"]
-        invocation_rows = (
-            (topology["page-initializer"], initial_call, "initializer-base", none),
-            (topology["splitter"], split_calls[0].address, "selector-split", free_listed),
-            (topology["splitter"], split_calls[1].address, "selector-split", none),
-            (topology["splitter"], split_calls[0].address, "resize-split", allocated_unlisted),
-            (topology["splitter"], split_calls[1].address, "resize-split", none),
-        )
-        block_invocations = tuple(
-            _PublicationPrivateArenaInvocation(
-                caller_entry=caller,
-                call_address=call,
-                callee_entry=topology["block-initialize"],
-                role="block-initialize",
-                context=context,
-                page_origins=(),
-                block_state=state,
-            )
-            for caller, call, context, state in invocation_rows
-        )
-        block_transitions = (
-            _PublicationPrivateArenaStateTransition(topology["block-initialize"], "block-initialize", "initializer-base", "initial-block", none, free_unlisted, "initializer-base", topology["page-initializer"]),
-            _PublicationPrivateArenaStateTransition(topology["block-initialize"], "block-initialize", "selector-split", "split-block", free_listed, free_listed, "select", topology["selector"]),
-            _PublicationPrivateArenaStateTransition(topology["block-initialize"], "block-initialize", "selector-split", "remainder-block", none, free_unlisted, "select", topology["selector"]),
-            _PublicationPrivateArenaStateTransition(topology["block-initialize"], "block-initialize", "resize-split", "split-block", allocated_unlisted, allocated_unlisted, "none", None),
-            _PublicationPrivateArenaStateTransition(topology["block-initialize"], "block-initialize", "resize-split", "remainder-block", none, allocated_unlisted, "resize", topology["reallocator"]),
-        )
-        split_invocations = (
-            _PublicationPrivateArenaInvocation(topology["selector"], topology["selector-split-call"].address, topology["splitter"], "split", "selector-split", (), free_listed),
-            *(
-                _PublicationPrivateArenaInvocation(topology["reallocator"], row.address, topology["splitter"], "split", "resize-split", (), allocated_unlisted)
-                for row in resize_calls
-            ),
-        )
-        split_transitions = (
-            _PublicationPrivateArenaStateTransition(topology["splitter"], "split", "selector-split", "split-block", free_listed, free_listed, "none", None),
-            _PublicationPrivateArenaStateTransition(topology["splitter"], "split", "selector-split", "remainder-block", free_unlisted, free_listed, "select", topology["selector"]),
-            _PublicationPrivateArenaStateTransition(topology["splitter"], "split", "resize-split", "split-block", allocated_unlisted, allocated_unlisted, "none", None),
-            _PublicationPrivateArenaStateTransition(topology["splitter"], "split", "resize-split", "remainder-block", allocated_unlisted, allocated_unlisted, "resize", topology["reallocator"]),
-        )
-        unlink_invocations = (
-            _PublicationPrivateArenaInvocation(topology["selector"], topology["selector-unlink-call"].address, topology["unlink"], "unlink", "selector-split", (), free_listed),
-        )
-        unlink_transitions = (
-            _PublicationPrivateArenaStateTransition(topology["unlink"], "unlink", "selector-split", "selected-block", free_listed, allocated_listed, "select", topology["selector"]),
-            _PublicationPrivateArenaStateTransition(topology["unlink"], "unlink", "selector-split", "selected-block", allocated_listed, allocated_unlisted, "select", topology["selector"]),
-        )
-        if any(
-            not self._publication_private_arena_state_is_valid(state)
-            for transfer_rows in (
-                block_invocations,
-                split_invocations,
-                unlink_invocations,
-            )
-            for row in transfer_rows
-            for state in (row.block_state,)
-        ):
-            return None
-        role_rows = (
-            ("block-initialize", topology["block-initialize"], block_invocations, block_transitions),
-            ("split", topology["splitter"], split_invocations, split_transitions),
-            ("unlink", topology["unlink"], unlink_invocations, unlink_transitions),
-        )
-        transfers = []
-        all_spans = []
-        for role_name, entry, invocations, transitions in role_rows:
-            for _ in transitions:
-                budget.tick("base-roles", "state")
-            for _ in invocations:
-                budget.tick("base-roles", "event")
-            spans = self._task5_role_spans(entry, role_name, budget)
-            if spans is None:
+        proofs: list[_Task5RoleProof] = []
+        for role_name, prover in provers:
+            proof = prover(assembly, topology)
+            if proof is None or proof.transfer.role != role_name:
                 return None
-            all_spans.extend(spans)
-            transfers.append(
-                _PublicationPrivateArenaTransfer(
-                    function_entry=entry,
-                    role=role_name,
-                    invocations=invocations,
-                    state_transitions=transitions,
-                    removal_call_discharges=(),
-                    instruction_addresses=self._function_instruction_addresses(entry),
-                    span_keys=tuple(
-                        (row.function_entry, row.instruction_address, row.operand_index)
-                        for row in spans
-                    ),
-                    function_sha256=self._producer_function_fingerprint(entry),
+            assembly.role_results[role_name] = proof
+            proofs.append(proof)
+        spans_by_key: dict[
+            tuple[int, int, int], _PublicationPrivateArenaSpan
+        ] = {}
+        for proof in proofs:
+            for span in proof.spans:
+                key = (
+                    span.function_entry,
+                    span.instruction_address,
+                    span.operand_index,
                 )
-            )
-        spans = tuple(
-            sorted(
-                set(all_spans),
-                key=lambda row: (
-                    row.function_entry,
-                    row.instruction_address,
-                    row.operand_index,
-                ),
-            )
-        )
+                existing = spans_by_key.get(key)
+                if existing is not None and existing != span:
+                    return None
+                spans_by_key[key] = span
         root = assembly.contract.deallocator_root
         if root is None:
             return None
         deallocator_entries, deallocator_edges = self._task5_deallocator_closure(
             root,
-            budget,
+            assembly.budget,
         )
         excluded = {
-            topology["page-initializer"], topology["selector"],
-            topology["splitter"], topology["reallocator"],
-            *topology["drivers"],
+            topology.page_initializer_entry,
+            topology.selector_entry,
+            topology.splitter_entry,
+            topology.reallocator_entry,
+            *topology.driver_entries,
         }
         if excluded & set(deallocator_entries):
             return None
-        mutation_edges = {
-            _PublicationPrivateArenaCallEdge(topology["page-initializer"], initial_call, topology["block-initialize"], "mutation-role", True),
-            _PublicationPrivateArenaCallEdge(topology["selector"], topology["selector-split-call"].address, topology["splitter"], "mutation-role", True),
-            _PublicationPrivateArenaCallEdge(topology["selector"], topology["selector-unlink-call"].address, topology["unlink"], "mutation-role", True),
-            *(
-                _PublicationPrivateArenaCallEdge(topology["splitter"], row.address, topology["block-initialize"], "mutation-role", True)
-                for row in split_calls
-            ),
-            *(
-                _PublicationPrivateArenaCallEdge(topology["reallocator"], row.address, topology["splitter"], "resize-context", True)
-                for row in resize_calls
-            ),
-        }
-        for driver_call in topology["driver-calls"]:
-            mutation_edges.add(
-                _PublicationPrivateArenaCallEdge(
-                    self._registrar_function_entry(driver_call.address),
-                    driver_call.address,
-                    topology["reallocator"],
-                    "resize-context",
-                    True,
-                )
-            )
         dependencies = frozenset(
-            ("function", entry)
-            for entry in {
-                *assembly.contract.dependency_functions,
-                *assembly.effects.function_entries,
-                *deallocator_entries,
-                topology["selector"], topology["splitter"], topology["unlink"],
-                topology["block-initialize"], topology["reallocator"],
-                *topology["drivers"],
+            {
+                *(row for proof in proofs for row in proof.dependencies),
+                *(("function", entry) for entry in deallocator_entries),
             }
         )
+        mutation_edges = {
+            row for proof in proofs for row in proof.call_edges
+        }
+        mutation_edges.update(
+            _PublicationPrivateArenaCallEdge(
+                self._registrar_function_entry(address),
+                address,
+                topology.reallocator_entry,
+                "resize-context",
+                True,
+            )
+            for address in topology.driver_calls
+        )
+        flags = tuple(
+            bit
+            for shift in range(32)
+            if assembly.base_layout.size_flag_mask & (bit := 1 << shift)
+        )
+        if len(flags) != 3:
+            return None
         role = _PublicationPrivateBlockArenaRole(
-            selector_entry=topology["selector"],
+            selector_entry=topology.selector_entry,
             selector_calls=assembly.ring_evidence.role.selector_page_calls,
             deallocator_root=root,
             deallocator_function_entries=deallocator_entries,
             deallocator_call_edges=deallocator_edges,
-            mutation_context_entries=(topology["reallocator"],),
-            mutation_call_edges=tuple(sorted(mutation_edges, key=lambda row: (row.caller_entry, row.call_address, row.target_entry, row.edge_kind))),
-            block_initializer_entries=(topology["block-initialize"],),
+            mutation_context_entries=(topology.reallocator_entry,),
+            mutation_call_edges=tuple(
+                sorted(
+                    mutation_edges,
+                    key=lambda row: (
+                        row.caller_entry,
+                        row.call_address,
+                        row.target_entry,
+                        row.edge_kind,
+                    ),
+                )
+            ),
+            block_initializer_entries=(topology.block_initializer_entry,),
             arena_free_entries=(),
-            splitter_entries=(topology["splitter"],),
-            unlink_entries=(topology["unlink"],),
+            splitter_entries=(topology.splitter_entry,),
+            unlink_entries=(topology.unlink_entry,),
             insert_entries=(),
             coalescer_entries=(),
             resize_entries=(),
             block_payload_offset=assembly.base_layout.block_prev_offset,
-            block_page_pointer_flag=topology["flags"][0],
-            block_allocated_flag=topology["flags"][1],
-            block_previous_allocated_flag=topology["flags"][2],
+            block_page_pointer_flag=flags[0],
+            block_allocated_flag=flags[1],
+            block_previous_allocated_flag=flags[2],
         )
+        spans = tuple(spans_by_key[key] for key in sorted(spans_by_key))
+        assembly.spans_by_key.update(spans_by_key)
         assembly.dependencies.update(dependencies)
-        assembly.spans_by_key.update(
-            {
-                (row.function_entry, row.instruction_address, row.operand_index): row
-                for row in spans
-            }
-        )
         for kind, entry in dependencies:
             if kind == "function":
                 self._note_producer_dependency(entry)
         return _Task5BaseRoleProof(
             role=role,
-            transfers=tuple(transfers),
+            transfers=tuple(proof.transfer for proof in proofs),
             spans=spans,
             dependencies=dependencies,
         )
@@ -30274,11 +33206,12 @@ class _DirectCfgRecovery:
     ) -> _Task5BaseRoleProof | None:
         if not isinstance(assembly, _Task5ProofAssembly):
             return None
+        local_dependencies: set[tuple[str, int]] = set()
+        self.producer_dependency_collectors.append(local_dependencies)
         try:
             result = self._task5_build_base_proof(assembly)
             if result is not None:
                 self._task5_last_budget_counts = dict(assembly.budget.counts)
-            return result
         except _Task5ProofLimit as exc:
             self._task5_last_limit_exhaustion = (
                 exc.phase,
@@ -30287,6 +33220,13 @@ class _DirectCfgRecovery:
                 exc.configured,
             )
             return None
+        finally:
+            popped = self.producer_dependency_collectors.pop()
+            assert popped is local_dependencies
+        if result is None:
+            return None
+        self._propagate_producer_dependencies(local_dependencies)
+        return result
 
     def _publication_private_arena_narrow_assembly(
         self,
@@ -30323,26 +33263,28 @@ class _DirectCfgRecovery:
             selector_spans=(),
         )
         try:
-            base = self._task5_build_base_proof(assembly)
+            topology = self._task5_discover_base_topology(assembly)
+            if topology is None:
+                return None
+            role_provers = {
+                "block-initialize": self._task5_prove_block_initialize,
+                "split": self._task5_prove_split,
+                "unlink": self._task5_prove_unlink,
+            }
+            proof = role_provers[role](assembly, topology)
         except _Task5ProofLimit as exc:
             self._task5_last_limit_exhaustion = (
                 exc.phase, exc.counter, exc.observed, exc.configured
             )
             return None
-        if base is None:
+        if proof is None or proof.transfer.role != role:
             return None
         derived_layout = replace(
             ring_evidence.layout,
-            minimum_split_remainder=self._task5_base_topology(assembly)["minimum"],
+            minimum_split_remainder=topology.minimum_split_remainder,
         )
-        transfer = next(row for row in base.transfers if row.role == role)
-        keys = frozenset(transfer.span_keys)
-        spans = tuple(
-            row
-            for row in base.spans
-            if (row.function_entry, row.instruction_address, row.operand_index)
-            in keys
-        )
+        transfer = proof.transfer
+        spans = proof.spans
         if (
             layout != derived_layout
             or function_entry != transfer.function_entry
@@ -30356,7 +33298,18 @@ class _DirectCfgRecovery:
         ):
             return None
         assembly.layout = derived_layout
+        assembly.role_results[role] = proof
+        assembly.spans_by_key.update(
+            {
+                (row.function_entry, row.instruction_address, row.operand_index): row
+                for row in spans
+            }
+        )
+        assembly.dependencies.update(proof.dependencies)
         assembly.narrow_result = (transfer, spans)
+        for kind, entry in proof.dependencies:
+            if kind == "function":
+                self._note_producer_dependency(entry)
         self._task5_last_budget_counts = dict(assembly.budget.counts)
         return assembly
 

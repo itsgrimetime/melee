@@ -4114,6 +4114,67 @@ class PrivatePageArenaFixture:
     realloc_driver: int
 
 
+@dataclass(frozen=True, slots=True)
+class PrivateArenaTask5CarriedPredicateSeams:
+    """Addresses of test-only carried-predicate mutation seams."""
+
+    carried_guard_cmp: int
+    carried_guard_branch: int
+    correlation_jump: int
+    carried_normalize_mask: int
+    carried_split_call: int
+    local_split_call: int
+
+
+@dataclass(frozen=True, slots=True)
+class PrivateArenaTask5AffineTestSeams:
+    """Addresses of test-only affine and TEST mutation seams."""
+
+    zero_xor: int
+    zero_test: int
+    zero_test_branch: int
+    decoy_page_flags_load: int
+    decoy_largest_free_load: int
+    capacity_negative_addend: int
+    carried_guard_cmp: int
+    carried_guard_branch: int
+    staged_payload_addend: int
+    staged_normalization_addend: int
+    local_split_call: int
+    carried_split_call: int
+
+
+@dataclass(frozen=True, slots=True)
+class PrivateArenaTask5RepeatedConditionSeams:
+    """Addresses of test-only repeated masked-condition seams."""
+
+    condition_mask: int
+    first_test: int
+    first_branch: int
+    selector_test: int
+    selector_branch: int
+    page_flags_load: int
+    page_largest_free_load: int
+    condition_clobber: int
+    repeated_test: int
+    repeated_branch: int
+    local_split_call: int
+    carried_split_call: int
+
+
+@dataclass(frozen=True, slots=True)
+class PrivateArenaTask5SplitterStackSeams:
+    """Addresses of test-only entry-stack splitter relations."""
+
+    block_copy: int
+    request_add: int
+    remainder_sub: int
+    allocation_mask: int
+    first_initializer_call: int
+    second_initializer_call: int
+    allocated_tail_branch: int
+
+
 _RETAIL_PRIVATE_PAGE_INITIALIZER_NORMALIZED_WRITES = (
     (
         ("initializer", 0),
@@ -20571,6 +20632,132 @@ def test_private_arena_task5_schema_current_task3_task4_transfers_have_empty_dis
     assert select_transfer.removal_call_discharges == ()
 
 
+PRIVATE_ARENA_TASK5_SLICE2_NODE_IDS = (
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_schema_exposes_exact_removal_call_discharge_row",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_schema_requires_discharge_field_in_exact_order",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_schema_current_task3_task4_transfers_have_empty_discharges",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_base_transfer_is_proved[block-initialize]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_base_transfer_is_proved[split]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_base_transfer_is_proved[unlink]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_block_initialize_has_five_contexts",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_block_initialize_transitions_are_exact",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_split_invocations_and_transitions_are_exact",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_unlink_transient_and_detachment_are_exact",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_separates_initializer_and_deallocator_roots",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_uses_one_assembly_and_one_task4_revalidation",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_base_evidence_has_exact_edges_spans_and_dependencies",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_does_not_publish_partial_full_result",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_claim_is_not_authority[empty-invocations]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_claim_is_not_authority[partial-invocations]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_claim_is_not_authority[duplicate-invocation]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_claim_is_not_authority[reordered-invocations]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_claim_is_not_authority[foreign-function-entry]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_claim_is_not_authority[fabricated-call-address]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_claim_is_not_authority[minimum-split-remainder-drift]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_inherited_handoff_drift[layout-ring-drift]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_inherited_handoff_drift[select-transfer-drift]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_inherited_handoff_drift[selector-span-drift]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_inherited_handoff_drift[ring-transfer-drift]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_inherited_handoff_drift[initializer-effects-stale]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_block_initialize_hostile[resize-first-call-skipped]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_block_initialize_hostile[resize-second-call-skipped]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_block_initialize_hostile[resize-calls-reordered]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_block_initialize_hostile[resize-b2-collapsed-to-b]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_block_initialize_hostile[resize-allocation-bit-zeroed]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_block_initialize_hostile[resize-initializer-indirect]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_block_initialize_hostile[extra-initializer-caller]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_split_hostile[shrink-fit-branch-inverted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_split_hostile[shrink-minimum-branch-inverted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_split_hostile[grow-fit-branch-inverted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_split_hostile[grow-minimum-branch-inverted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_split_hostile[resize-split-wrong-block]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_split_hostile[resize-split-wrong-request]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_split_hostile[shrink-fit-wrong-operand]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_split_hostile[grow-fit-wrong-operand]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_rejects_unlink_body_hostile[unlink-allocation-bit-wrong-mask]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_rejects_unlink_body_hostile[unlink-unbalanced-push-return]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_rejects_unlink_body_hostile[unlink-successor-prev-bit-wrong-mask]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_rejects_unlink_body_hostile[unlink-head-repair-retains-selected]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_rejects_unlink_body_hostile[unlink-reciprocal-prev-retains-selected]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_rejects_unlink_body_hostile[unlink-largest-free-nonzero]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_rejects_unlink_body_hostile[unlink-body-size-origin-from-page]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_unlink_handoff_hostile[transition-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_unlink_handoff_hostile[before-state-drift]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_unlink_handoff_hostile[transient-state-drift]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_unlink_handoff_hostile[after-state-drift]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_unlink_handoff_hostile[restoration-owner-drift]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_unlink_handoff_hostile[bit2-span-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_unlink_handoff_hostile[successor-span-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_unlink_handoff_hostile[sentinel-span-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_unlink_handoff_hostile[largest-free-span-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_unlink_handoff_hostile[reciprocal-span-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_domain_or_stack_hostile[unresolved-indirect-resize-edge]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_domain_or_stack_hostile[partial-resize-argument]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_domain_or_stack_hostile[address-size-resize-argument]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_domain_or_stack_hostile[pop-return-slot]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_domain_or_stack_hostile[pop-esp]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_domain_or_stack_hostile[unbalanced-resize-stack]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_domain_or_stack_hostile[ret-imm]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_domain_or_stack_hostile[far-ret]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_mixed_none_state[none-free]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_mixed_none_state[none-listed]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_mixed_none_state[free-none]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_mixed_none_state[allocated-none]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_cap_is_exact_and_fail_closed[state]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_cap_is_exact_and_fail_closed[event]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_cap_is_exact_and_fail_closed[expression]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_cap_is_exact_and_fail_closed[instruction]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_cap_is_exact_and_fail_closed[fixed-point]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_executes_only_selected_role[block-initialize]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_executes_only_selected_role[split]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_narrow_executes_only_selected_role[unlink]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_second_query_is_fresh_and_deterministic",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_caller_order_is_canonical",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_semantic_key_preserves_context_subject_and_restoration",
+)
+
+PRIVATE_ARENA_TASK5_SLICE2_CARRIED_PREDICATE_NODE_IDS = (
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_accepts_carried_unsigned_shrink_predicate",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_carried_unsigned_shrink_hostile[branch-polarity]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_carried_unsigned_shrink_hostile[operand-lineage]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_carried_unsigned_shrink_hostile[normalization]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_carried_unsigned_shrink_hostile[path-correlation]",
+)
+
+PRIVATE_ARENA_TASK5_SLICE2_AFFINE_TEST_NODE_IDS = (
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_accepts_combined_affine_test_retail_paths",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_affine_test_hostile[staged-normalization-addend]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_affine_test_hostile[negative-capacity-offset]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_affine_test_hostile[constant-decoy-reachable]",
+)
+
+PRIVATE_ARENA_TASK5_SLICE2_REPEATED_CONDITION_NODE_IDS = (
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_accepts_repeated_masked_condition",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_repeated_condition_hostile[wrong-mask]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_repeated_condition_hostile[branch-polarity]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_repeated_condition_hostile[different-token]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_repeated_condition_hostile[full-clobber]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_repeated_condition_hostile[partial-clobber]",
+)
+
+PRIVATE_ARENA_TASK5_SLICE2_SPLITTER_STACK_NODE_IDS = (
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_accepts_entry_stack_splitter_relations",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_entry_stack_splitter_hostile[wrong-request]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_entry_stack_splitter_hostile[wrong-b2]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_entry_stack_splitter_hostile[wrong-remainder]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_entry_stack_splitter_hostile[wrong-allocation-mask]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice2_rejects_entry_stack_splitter_hostile[allocated-tail-relinked]",
+)
+
+PRIVATE_ARENA_TASK5_ALL_NODE_IDS = (
+    *PRIVATE_ARENA_TASK5_SLICE2_NODE_IDS,
+    *PRIVATE_ARENA_TASK5_SLICE2_CARRIED_PREDICATE_NODE_IDS,
+    *PRIVATE_ARENA_TASK5_SLICE2_AFFINE_TEST_NODE_IDS,
+    *PRIVATE_ARENA_TASK5_SLICE2_REPEATED_CONDITION_NODE_IDS,
+    *PRIVATE_ARENA_TASK5_SLICE2_SPLITTER_STACK_NODE_IDS,
+)
+
+
 _PRIVATE_ARENA_TASK5_SLICE2_CODE_HOSTILES = (
     "resize-first-call-skipped",
     "resize-second-call-skipped",
@@ -20585,6 +20772,15 @@ _PRIVATE_ARENA_TASK5_SLICE2_CODE_HOSTILES = (
     "grow-minimum-branch-inverted",
     "resize-split-wrong-block",
     "resize-split-wrong-request",
+    "shrink-fit-wrong-operand",
+    "grow-fit-wrong-operand",
+    "unlink-allocation-bit-wrong-mask",
+    "unlink-unbalanced-push-return",
+    "unlink-successor-prev-bit-wrong-mask",
+    "unlink-head-repair-retains-selected",
+    "unlink-reciprocal-prev-retains-selected",
+    "unlink-largest-free-nonzero",
+    "unlink-body-size-origin-from-page",
     "unresolved-indirect-resize-edge",
     "external-raw-resize-arm",
     "partial-resize-argument",
@@ -20663,6 +20859,28 @@ def private_arena_task5_slice2_image(mutation):
         replace_bytes(fixture.reallocator + 0x38, "53", "57")
     elif mutation == "resize-split-wrong-request":
         replace_bytes(fixture.reallocator + 0x37, "56", "57")
+    elif mutation == "shrink-fit-wrong-operand":
+        replace_bytes(fixture.reallocator + 0x2A, "39 f0", "39 f8")
+    elif mutation == "grow-fit-wrong-operand":
+        replace_bytes(fixture.reallocator + 0x5F, "39 f0", "39 f8")
+    elif mutation == "unlink-allocation-bit-wrong-mask":
+        replace_bytes(fixture.unlinker + 0x0D, "02", "01")
+    elif mutation == "unlink-unbalanced-push-return":
+        replace_bytes(fixture.unlinker + 0x53, "5b c3", "50 c3")
+    elif mutation == "unlink-successor-prev-bit-wrong-mask":
+        replace_bytes(fixture.unlinker + 0x1A, "04", "02")
+    elif mutation == "unlink-head-repair-retains-selected":
+        replace_bytes(fixture.unlinker + 0x2C, "89 10", "89 18")
+    elif mutation == "unlink-reciprocal-prev-retains-selected":
+        replace_bytes(fixture.unlinker + 0x47, "89 42 08", "89 5a 08")
+    elif mutation == "unlink-largest-free-nonzero":
+        replace_bytes(
+            fixture.unlinker + 0x3B,
+            "00 00 00 00",
+            "01 00 00 00",
+        )
+    elif mutation == "unlink-body-size-origin-from-page":
+        replace_bytes(fixture.unlinker + 0x05, "8b 13", "8b 11")
     elif mutation == "partial-resize-argument":
         replace_bytes(fixture.reallocator + 0x37, "56 53", "66 56")
     elif mutation == "address-size-resize-argument":
@@ -20687,7 +20905,1253 @@ def private_arena_task5_slice2_image(mutation):
     changed = private_page_image_changed_addresses(fixture, hostile)
     assert changed == frozenset(patched)
     assert changed
+    semantic_decode = {
+        "shrink-fit-wrong-operand": (
+            fixture.reallocator + 0x2A,
+            "cmp",
+            "eax, edi",
+        ),
+        "grow-fit-wrong-operand": (
+            fixture.reallocator + 0x5F,
+            "cmp",
+            "eax, edi",
+        ),
+        "unlink-allocation-bit-wrong-mask": (
+            fixture.unlinker + 0x0B,
+            "or",
+            "dword ptr [ebx], 1",
+        ),
+        "unlink-unbalanced-push-return": (
+            fixture.unlinker + 0x53,
+            "push",
+            "eax",
+        ),
+        "unlink-successor-prev-bit-wrong-mask": (
+            fixture.unlinker + 0x18,
+            "or",
+            "dword ptr [eax], 2",
+        ),
+        "unlink-head-repair-retains-selected": (
+            fixture.unlinker + 0x2C,
+            "mov",
+            "dword ptr [eax], ebx",
+        ),
+        "unlink-reciprocal-prev-retains-selected": (
+            fixture.unlinker + 0x47,
+            "mov",
+            "dword ptr [edx + 8], ebx",
+        ),
+        "unlink-largest-free-nonzero": (
+            fixture.unlinker + 0x38,
+            "mov",
+            "dword ptr [ecx + 8], 1",
+        ),
+        "unlink-body-size-origin-from-page": (
+            fixture.unlinker + 0x05,
+            "mov",
+            "edx, dword ptr [ecx]",
+        ),
+    }
+    if mutation in semantic_decode:
+        address, mnemonic, op_str = semantic_decode[mutation]
+        offset = text.raw_offset + address - text.va
+        decoder = Cs(CS_ARCH_X86, CS_MODE_32)
+        decoded = next(decoder.disasm(image.data[offset : offset + 16], address))
+        assert (decoded.address, decoded.mnemonic, decoded.op_str) == (
+            address,
+            mnemonic,
+            op_str,
+        )
     return hostile
+
+
+def private_arena_task5_slice2_carried_predicate_image(mutation=None):
+    """Build a label-driven resize body with one carried unsigned fit path."""
+    assert mutation in {
+        None,
+        "branch-polarity",
+        "operand-lineage",
+        "normalization",
+        "path-correlation",
+    }
+    fixture = private_page_arena_image()
+    code = bytearray()
+    labels = {}
+    branch_fixups = []
+
+    def emit(value):
+        start = len(code)
+        code.extend(bytes.fromhex(value) if isinstance(value, str) else value)
+        return start
+
+    def mark(name):
+        assert name not in labels
+        labels[name] = len(code)
+
+    def branch8(opcode, target_name):
+        start = emit(bytes((opcode, 0)))
+        branch_fixups.append((start, target_name))
+        return start
+
+    def call32(target):
+        start = emit("e8 00 00 00 00")
+        address = fixture.reallocator + start
+        displacement = (target - address - 5).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        code[start + 1 : start + 5] = displacement
+        return start
+
+    emit("53 56 57 55")
+    emit("8b 5c 24 14")
+    emit("83 eb 08")
+    emit("8b 7c 24 18")
+    emit("8b 03")
+    emit("83 e0 f8")
+    emit("89 c5")
+    emit("83 ed 08")
+    emit("f7 c7 01 00 00 00")
+    branch8(0x74, "local_entry")
+    carried_guard_cmp = emit("39 ef")
+    carried_guard_branch = branch8(0x76, "carried_entry")
+    correlation_jump = branch8(0xEB, "fail")
+
+    mark("local_entry")
+    emit("89 fe")
+    emit("8d 76 0f")
+    emit("83 e6 f8")
+    emit("83 fe 50")
+    branch8(0x73, "local_normalized")
+    emit("be 50 00 00 00")
+    mark("local_normalized")
+    emit("8b 03")
+    emit("83 e0 f8")
+    emit("39 f0")
+    branch8(0x72, "fail")
+    emit("29 f0")
+    emit("83 f8 50")
+    branch8(0x72, "fail")
+    emit("56 53")
+    local_split_call = call32(fixture.splitter)
+    emit("83 c4 08")
+    branch8(0xEB, "success")
+
+    mark("carried_entry")
+    emit("8b 03")
+    emit("83 e0 f8")
+    emit("83 f8 50")
+    branch8(0x72, "fail")
+    emit("89 fe")
+    emit("8d 76 0f")
+    carried_normalize_mask = emit("83 e6 f8")
+    emit("83 fe 50")
+    branch8(0x73, "carried_normalized")
+    emit("be 50 00 00 00")
+    mark("carried_normalized")
+    emit("29 f0")
+    emit("83 f8 50")
+    branch8(0x72, "fail")
+    emit("56 53")
+    carried_split_call = call32(fixture.splitter)
+    emit("83 c4 08")
+
+    mark("success")
+    emit("8d 43 08")
+    emit("5d 5f 5e 5b c3")
+    mark("fail")
+    emit("31 c0")
+    emit("5d 5f 5e 5b c3")
+
+    for start, target_name in branch_fixups:
+        displacement = labels[target_name] - (start + 2)
+        assert -0x80 <= displacement <= 0x7F
+        code[start + 1] = displacement & 0xFF
+    assert len(code) <= 0x100
+    code.extend(b"\x90" * (0x100 - len(code)))
+
+    seams = PrivateArenaTask5CarriedPredicateSeams(
+        carried_guard_cmp=fixture.reallocator + carried_guard_cmp,
+        carried_guard_branch=fixture.reallocator + carried_guard_branch,
+        correlation_jump=fixture.reallocator + correlation_jump,
+        carried_normalize_mask=fixture.reallocator + carried_normalize_mask,
+        carried_split_call=fixture.reallocator + carried_split_call,
+        local_split_call=fixture.reallocator + local_split_call,
+    )
+    text = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.name == ".text"
+    )
+    raw = bytearray(fixture.arena.image.data)
+    start = text.raw_offset + fixture.reallocator - text.va
+    raw[start : start + 0x100] = code
+    control_data = bytes(raw)
+    patched = set()
+
+    def replace_one(address, expected, replacement):
+        assert len(expected) == len(replacement)
+        offset = text.raw_offset + address - text.va
+        assert raw[offset : offset + len(expected)] == expected
+        for index, (before, after) in enumerate(zip(expected, replacement)):
+            if before != after:
+                patched.add(address + index)
+        raw[offset : offset + len(replacement)] = replacement
+
+    if mutation == "branch-polarity":
+        replace_one(seams.carried_guard_branch, b"\x76", b"\x77")
+    elif mutation == "operand-lineage":
+        replace_one(seams.carried_guard_cmp, b"\x39\xef", b"\x39\xcf")
+    elif mutation == "normalization":
+        replace_one(
+            seams.carried_normalize_mask,
+            b"\x83\xe6\xf8",
+            b"\x83\xe6\xf0",
+        )
+    elif mutation == "path-correlation":
+        offset = text.raw_offset + seams.correlation_jump - text.va
+        assert raw[offset] == 0xEB
+        replacement = labels["carried_entry"] - (
+            seams.correlation_jump - fixture.reallocator + 2
+        )
+        replace_one(
+            seams.correlation_jump + 1,
+            bytes((raw[offset + 1],)),
+            bytes((replacement & 0xFF,)),
+        )
+
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    result = replace(fixture, arena=replace(fixture.arena, image=image))
+    if mutation is not None:
+        control_image = replace(
+            fixture.arena.image,
+            data=control_data,
+            sha256=hashlib.sha256(control_data).hexdigest(),
+        )
+        control = replace(
+            fixture,
+            arena=replace(fixture.arena, image=control_image),
+        )
+        assert private_page_image_changed_addresses(control, result) == patched
+        assert patched
+        address = {
+            "branch-polarity": seams.carried_guard_branch,
+            "operand-lineage": seams.carried_guard_cmp,
+            "normalization": seams.carried_normalize_mask,
+            "path-correlation": seams.correlation_jump,
+        }[mutation]
+        offset = text.raw_offset + address - text.va
+        decoded = next(
+            Cs(CS_ARCH_X86, CS_MODE_32).disasm(
+                image.data[offset : offset + 16],
+                address,
+            )
+        )
+        expected = {
+            "branch-polarity": ("ja", hex(fixture.reallocator + labels["carried_entry"])),
+            "operand-lineage": ("cmp", "edi, ecx"),
+            "normalization": ("and", "esi, 0xfffffff0"),
+            "path-correlation": ("jmp", hex(fixture.reallocator + labels["carried_entry"])),
+        }[mutation]
+        assert (decoded.mnemonic, decoded.op_str) == expected
+    return result, seams
+
+
+def private_arena_task5_slice2_affine_test_image(mutation=None):
+    """Build both retail affine spellings behind an exact-zero TEST."""
+    assert mutation in {
+        None,
+        "staged-normalization-addend",
+        "negative-capacity-offset",
+        "constant-decoy-reachable",
+    }
+    fixture = private_page_arena_image()
+    code = bytearray()
+    labels = {}
+    branch_fixups = []
+
+    def emit(value):
+        start = len(code)
+        code.extend(bytes.fromhex(value) if isinstance(value, str) else value)
+        return start
+
+    def mark(name):
+        assert name not in labels
+        labels[name] = len(code)
+
+    def branch8(opcode, target_name):
+        start = emit(bytes((opcode, 0)))
+        branch_fixups.append((start, target_name))
+        return start
+
+    def call32(target):
+        start = emit("e8 00 00 00 00")
+        address = fixture.reallocator + start
+        code[start + 1 : start + 5] = (target - address - 5).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return start
+
+    emit("53 56 57 55")
+    emit("8b 74 24 14")
+    emit("83 ee 08")
+    emit("8b 5c 24 18")
+    emit("8b 06")
+    emit("83 e0 f8")
+    zero_xor = emit("31 d2")
+    zero_test = emit("85 d2")
+    zero_test_branch = branch8(0x74, "capacity_path")
+
+    mark("decoy_path")
+    decoy_page_flags_load = emit("8b 4e 04")
+    decoy_largest_free_load = emit("8b 69 08")
+    branch8(0xEB, "capacity_guard")
+
+    mark("capacity_path")
+    emit("89 c5")
+    capacity_negative_addend = emit("83 c5 f8")
+
+    mark("capacity_guard")
+    carried_guard_cmp = emit("39 eb")
+    carried_guard_branch = branch8(0x76, "carried_entry")
+
+    mark("local_entry")
+    emit("89 df")
+    staged_payload_addend = emit("83 c7 08")
+    staged_normalization_addend = emit("83 c7 07")
+    emit("83 e7 f8")
+    emit("83 ff 50")
+    branch8(0x73, "local_normalized")
+    emit("bf 50 00 00 00")
+    mark("local_normalized")
+    emit("8b 06")
+    emit("83 e0 f8")
+    emit("39 f8")
+    branch8(0x72, "fail")
+    emit("29 f8")
+    emit("83 f8 50")
+    branch8(0x72, "fail")
+    emit("57 56")
+    local_split_call = call32(fixture.splitter)
+    emit("83 c4 08")
+    branch8(0xEB, "success")
+
+    mark("carried_entry")
+    emit("89 df")
+    emit("83 c7 0f")
+    emit("83 e7 f8")
+    emit("83 ff 50")
+    branch8(0x73, "carried_normalized")
+    emit("bf 50 00 00 00")
+    mark("carried_normalized")
+    emit("8b 06")
+    emit("83 e0 f8")
+    emit("83 f8 50")
+    branch8(0x72, "fail")
+    emit("29 f8")
+    emit("83 f8 50")
+    branch8(0x72, "fail")
+    emit("57 56")
+    carried_split_call = call32(fixture.splitter)
+    emit("83 c4 08")
+
+    mark("success")
+    emit("8d 46 08")
+    emit("5d 5f 5e 5b c3")
+    mark("fail")
+    emit("31 c0")
+    emit("5d 5f 5e 5b c3")
+
+    for start, target_name in branch_fixups:
+        displacement = labels[target_name] - (start + 2)
+        assert -0x80 <= displacement <= 0x7F
+        code[start + 1] = displacement & 0xFF
+    assert len(code) <= 0x100
+    code.extend(b"\x90" * (0x100 - len(code)))
+
+    seams = PrivateArenaTask5AffineTestSeams(
+        zero_xor=fixture.reallocator + zero_xor,
+        zero_test=fixture.reallocator + zero_test,
+        zero_test_branch=fixture.reallocator + zero_test_branch,
+        decoy_page_flags_load=fixture.reallocator + decoy_page_flags_load,
+        decoy_largest_free_load=fixture.reallocator + decoy_largest_free_load,
+        capacity_negative_addend=fixture.reallocator
+        + capacity_negative_addend,
+        carried_guard_cmp=fixture.reallocator + carried_guard_cmp,
+        carried_guard_branch=fixture.reallocator + carried_guard_branch,
+        staged_payload_addend=fixture.reallocator + staged_payload_addend,
+        staged_normalization_addend=fixture.reallocator
+        + staged_normalization_addend,
+        local_split_call=fixture.reallocator + local_split_call,
+        carried_split_call=fixture.reallocator + carried_split_call,
+    )
+    text = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.name == ".text"
+    )
+    raw = bytearray(fixture.arena.image.data)
+    start = text.raw_offset + fixture.reallocator - text.va
+    raw[start : start + 0x100] = code
+    control_data = bytes(raw)
+
+    mutation_rows = {
+        "staged-normalization-addend": (
+            seams.staged_normalization_addend + 2,
+            b"\x07",
+            b"\x06",
+        ),
+        "negative-capacity-offset": (
+            seams.capacity_negative_addend + 2,
+            b"\xf8",
+            b"\xf7",
+        ),
+        "constant-decoy-reachable": (
+            seams.zero_test_branch,
+            b"\x74",
+            b"\x75",
+        ),
+    }
+    if mutation is not None:
+        address, expected, replacement = mutation_rows[mutation]
+        offset = text.raw_offset + address - text.va
+        assert raw[offset : offset + 1] == expected
+        raw[offset : offset + 1] = replacement
+
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    result = replace(fixture, arena=replace(fixture.arena, image=image))
+
+    def decode_at(address, *, source=image.data):
+        offset = text.raw_offset + address - text.va
+        decoder = Cs(CS_ARCH_X86, CS_MODE_32)
+        decoder.detail = True
+        return next(decoder.disasm(source[offset : offset + 16], address))
+
+    control_decoder = Cs(CS_ARCH_X86, CS_MODE_32)
+    control_decoder.detail = True
+    decoded_control = tuple(
+        control_decoder.disasm(
+            control_data[start : start + 0x100],
+            fixture.reallocator,
+        )
+    )
+    assert {
+        row.address
+        for row in decoded_control
+        if row.group(capstone.CS_GRP_CALL)
+        and row.operands[0].type == capstone.x86.X86_OP_IMM
+        and row.operands[0].imm == fixture.splitter
+    } == {seams.local_split_call, seams.carried_split_call}
+
+    control_by_address = {row.address: row for row in decoded_control}
+    assert tuple(
+        (
+            control_by_address[address].mnemonic,
+            control_by_address[address].operands[1].imm & 0xFFFF_FFFF,
+        )
+        for address in (
+            seams.staged_payload_addend,
+            seams.staged_normalization_addend,
+        )
+    ) == (("add", 8), ("add", 7))
+    staged_mask = control_by_address[
+        seams.staged_normalization_addend
+        + control_by_address[seams.staged_normalization_addend].size
+    ]
+    assert staged_mask.mnemonic == "and"
+    assert staged_mask.reg_name(staged_mask.operands[0].reg) == "edi"
+    assert staged_mask.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFF8
+    assert (
+        control_by_address[seams.capacity_negative_addend].mnemonic,
+        control_by_address[
+            seams.capacity_negative_addend
+        ].operands[1].imm
+        & 0xFFFF_FFFF,
+    ) == ("add", 0xFFFF_FFF8)
+    assert tuple(
+        control_by_address[address].mnemonic
+        for address in (
+            seams.zero_xor,
+            seams.zero_test,
+            seams.zero_test_branch,
+            seams.decoy_page_flags_load,
+            seams.decoy_largest_free_load,
+        )
+    ) == ("xor", "test", "je", "mov", "mov")
+    assert (
+        control_by_address[seams.zero_test_branch].operands[0].imm
+        == fixture.reallocator + labels["capacity_path"]
+    )
+    assert tuple(
+        (
+            control_by_address[address].reg_name(
+                control_by_address[address].operands[0].reg
+            ),
+            control_by_address[address].reg_name(
+                control_by_address[address].operands[1].reg
+            ),
+        )
+        for address in (seams.zero_xor, seams.zero_test)
+    ) == (("edx", "edx"), ("edx", "edx"))
+    page_flags = control_by_address[seams.decoy_page_flags_load].operands[1]
+    largest_free = control_by_address[
+        seams.decoy_largest_free_load
+    ].operands[1]
+    assert (
+        control_by_address[seams.decoy_page_flags_load].reg_name(
+            page_flags.mem.base
+        ),
+        page_flags.mem.disp,
+    ) == ("esi", 4)
+    assert (
+        control_by_address[seams.decoy_largest_free_load].reg_name(
+            largest_free.mem.base
+        ),
+        largest_free.mem.disp,
+    ) == ("ecx", 8)
+
+    if mutation is not None:
+        control_image = replace(
+            fixture.arena.image,
+            data=control_data,
+            sha256=hashlib.sha256(control_data).hexdigest(),
+        )
+        control = replace(
+            fixture,
+            arena=replace(fixture.arena, image=control_image),
+        )
+        assert private_page_image_changed_addresses(control, result) == {
+            mutation_rows[mutation][0]
+        }
+        assert image.data != control_image.data
+        assert image.sha256 != control_image.sha256
+        owner = {
+            "staged-normalization-addend": seams.staged_normalization_addend,
+            "negative-capacity-offset": seams.capacity_negative_addend,
+            "constant-decoy-reachable": seams.zero_test_branch,
+        }[mutation]
+        decoded = decode_at(owner)
+        if mutation == "staged-normalization-addend":
+            assert decoded.address == owner
+            assert decoded.mnemonic == "add"
+            assert decoded.reg_name(decoded.operands[0].reg) == "edi"
+            assert decoded.operands[1].imm == 6
+        elif mutation == "negative-capacity-offset":
+            assert decoded.address == owner
+            assert decoded.mnemonic == "add"
+            assert decoded.reg_name(decoded.operands[0].reg) == "ebp"
+            assert decoded.operands[1].imm & 0xFFFF_FFFF == 0xFFFF_FFF7
+        else:
+            assert decoded.address == owner
+            assert decoded.mnemonic == "jne"
+            assert (
+                decoded.operands[0].imm
+                == fixture.reallocator + labels["capacity_path"]
+            )
+    return result, seams
+
+
+def private_arena_task5_slice2_repeated_condition_image(mutation=None):
+    """Build joined page/capacity paths guarded by one repeated condition."""
+    assert mutation in {
+        None,
+        "wrong-mask",
+        "branch-polarity",
+        "different-token",
+        "full-clobber",
+        "partial-clobber",
+    }
+    fixture = private_page_arena_image()
+    code = bytearray()
+    labels = {}
+    branch_fixups = []
+
+    def emit(value):
+        start = len(code)
+        code.extend(bytes.fromhex(value) if isinstance(value, str) else value)
+        return start
+
+    def mark(name):
+        assert name not in labels
+        labels[name] = len(code)
+
+    def branch8(opcode, target_name):
+        start = emit(bytes((opcode, 0)))
+        branch_fixups.append((start, target_name))
+        return start
+
+    def call32(target):
+        start = emit("e8 00 00 00 00")
+        address = fixture.reallocator + start
+        code[start + 1 : start + 5] = (target - address - 5).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return start
+
+    emit("53 56 57 55")
+    emit("8b 74 24 14")
+    emit("83 ee 08")
+    emit("8b 5c 24 18")
+    emit("8b 06")
+    emit("83 e0 f8")
+    page_flags_load = emit("8b 7e 04")
+    condition_mask = emit("83 e7 01")
+    emit("31 d2")
+    first_test = emit("85 ff")
+    first_branch = branch8(0x75, "selector_test")
+    emit("ba 01 00 00 00")
+
+    mark("selector_test")
+    selector_test = emit("85 d2")
+    selector_branch = branch8(0x74, "capacity_path")
+
+    mark("page_path")
+    emit("8b 4e 04")
+    page_largest_free_load = emit("8b 69 08")
+    branch8(0xEB, "condition_join")
+
+    mark("capacity_path")
+    emit("89 c5")
+    emit("83 c5 f8")
+
+    mark("condition_join")
+    condition_clobber = emit("89 ff 90")
+    repeated_test = emit("85 ff")
+    repeated_branch = branch8(0x74, "fail")
+    emit("39 eb")
+    branch8(0x76, "carried_entry")
+
+    mark("local_entry")
+    emit("89 df")
+    emit("83 c7 08")
+    emit("83 c7 07")
+    emit("83 e7 f8")
+    emit("83 ff 50")
+    branch8(0x73, "local_normalized")
+    emit("bf 50 00 00 00")
+    mark("local_normalized")
+    emit("8b 06")
+    emit("83 e0 f8")
+    emit("39 f8")
+    branch8(0x72, "fail")
+    emit("29 f8")
+    emit("83 f8 50")
+    branch8(0x72, "fail")
+    emit("57 56")
+    local_split_call = call32(fixture.splitter)
+    emit("83 c4 08")
+    branch8(0xEB, "success")
+
+    mark("carried_entry")
+    emit("89 df")
+    emit("83 c7 0f")
+    emit("83 e7 f8")
+    emit("83 ff 50")
+    branch8(0x73, "carried_normalized")
+    emit("bf 50 00 00 00")
+    mark("carried_normalized")
+    emit("8b 06")
+    emit("83 e0 f8")
+    emit("83 f8 50")
+    branch8(0x72, "fail")
+    emit("29 f8")
+    emit("83 f8 50")
+    branch8(0x72, "fail")
+    emit("57 56")
+    carried_split_call = call32(fixture.splitter)
+    emit("83 c4 08")
+
+    mark("success")
+    emit("8d 46 08")
+    emit("5d 5f 5e 5b c3")
+    mark("fail")
+    emit("31 c0")
+    emit("5d 5f 5e 5b c3")
+
+    for start, target_name in branch_fixups:
+        displacement = labels[target_name] - (start + 2)
+        assert -0x80 <= displacement <= 0x7F
+        code[start + 1] = displacement & 0xFF
+    assert len(code) <= 0x100
+    code.extend(b"\x90" * (0x100 - len(code)))
+
+    seams = PrivateArenaTask5RepeatedConditionSeams(
+        condition_mask=fixture.reallocator + condition_mask,
+        first_test=fixture.reallocator + first_test,
+        first_branch=fixture.reallocator + first_branch,
+        selector_test=fixture.reallocator + selector_test,
+        selector_branch=fixture.reallocator + selector_branch,
+        page_flags_load=fixture.reallocator + page_flags_load,
+        page_largest_free_load=fixture.reallocator + page_largest_free_load,
+        condition_clobber=fixture.reallocator + condition_clobber,
+        repeated_test=fixture.reallocator + repeated_test,
+        repeated_branch=fixture.reallocator + repeated_branch,
+        local_split_call=fixture.reallocator + local_split_call,
+        carried_split_call=fixture.reallocator + carried_split_call,
+    )
+    text = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.name == ".text"
+    )
+    raw = bytearray(fixture.arena.image.data)
+    start = text.raw_offset + fixture.reallocator - text.va
+    raw[start : start + 0x100] = code
+    control_data = bytes(raw)
+    mutation_rows = {
+        "wrong-mask": (
+            seams.condition_mask + 2,
+            b"\x01",
+            b"\x02",
+        ),
+        "branch-polarity": (
+            seams.repeated_branch,
+            b"\x74",
+            b"\x75",
+        ),
+        "different-token": (
+            seams.repeated_test + 1,
+            b"\xff",
+            b"\xd2",
+        ),
+        "full-clobber": (
+            seams.condition_clobber,
+            b"\x89\xff\x90",
+            b"\x31\xff\x90",
+        ),
+        "partial-clobber": (
+            seams.condition_clobber,
+            b"\x89\xff\x90",
+            b"\x66\x31\xff",
+        ),
+    }
+    if mutation is not None:
+        address, expected, replacement = mutation_rows[mutation]
+        offset = text.raw_offset + address - text.va
+        assert raw[offset : offset + len(expected)] == expected
+        raw[offset : offset + len(expected)] = replacement
+
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    result = replace(fixture, arena=replace(fixture.arena, image=image))
+
+    decoder = Cs(CS_ARCH_X86, CS_MODE_32)
+    decoder.detail = True
+    decoded_control = tuple(
+        decoder.disasm(
+            control_data[start : start + 0x100],
+            fixture.reallocator,
+        )
+    )
+    control_by_address = {row.address: row for row in decoded_control}
+    assert {
+        row.address
+        for row in decoded_control
+        if row.group(capstone.CS_GRP_CALL)
+        and row.operands[0].type == capstone.x86.X86_OP_IMM
+        and row.operands[0].imm == fixture.splitter
+    } == {seams.local_split_call, seams.carried_split_call}
+    assert (
+        control_by_address[seams.condition_mask].mnemonic,
+        control_by_address[seams.condition_mask].op_str,
+    ) == ("and", "edi, 1")
+    assert tuple(
+        (control_by_address[address].mnemonic, control_by_address[address].op_str)
+        for address in (seams.first_test, seams.repeated_test)
+    ) == (("test", "edi, edi"), ("test", "edi, edi"))
+    assert tuple(
+        control_by_address[address].mnemonic
+        for address in (seams.first_branch, seams.repeated_branch)
+    ) == ("jne", "je")
+    assert (
+        control_by_address[seams.repeated_branch].operands[0].imm
+        == fixture.reallocator + labels["fail"]
+    )
+    page_flags = control_by_address[seams.page_flags_load].operands[1]
+    largest_free = control_by_address[
+        seams.page_largest_free_load
+    ].operands[1]
+    assert (
+        control_by_address[seams.page_flags_load].reg_name(page_flags.mem.base),
+        page_flags.mem.disp,
+    ) == ("esi", 4)
+    assert (
+        control_by_address[seams.page_largest_free_load].reg_name(
+            largest_free.mem.base
+        ),
+        largest_free.mem.disp,
+    ) == ("ecx", 8)
+
+    if mutation is not None:
+        control_image = replace(
+            fixture.arena.image,
+            data=control_data,
+            sha256=hashlib.sha256(control_data).hexdigest(),
+        )
+        control = replace(fixture, arena=replace(fixture.arena, image=control_image))
+        address, expected, replacement = mutation_rows[mutation]
+        changed = {
+            address + index
+            for index, (before, after) in enumerate(zip(expected, replacement))
+            if before != after
+        }
+        assert private_page_image_changed_addresses(control, result) == changed
+        decoder = Cs(CS_ARCH_X86, CS_MODE_32)
+        decoder.detail = True
+        owner = {
+            "wrong-mask": seams.condition_mask,
+            "branch-polarity": seams.repeated_branch,
+            "different-token": seams.repeated_test,
+            "full-clobber": seams.condition_clobber,
+            "partial-clobber": seams.condition_clobber,
+        }[mutation]
+        offset = text.raw_offset + owner - text.va
+        decoded = next(decoder.disasm(image.data[offset : offset + 16], owner))
+        expected_instruction = {
+            "wrong-mask": ("and", "edi, 2"),
+            "branch-polarity": ("jne", hex(fixture.reallocator + labels["fail"])),
+            "different-token": ("test", "edx, edx"),
+            "full-clobber": ("xor", "edi, edi"),
+            "partial-clobber": ("xor", "di, di"),
+        }[mutation]
+        assert (decoded.mnemonic, decoded.op_str) == expected_instruction
+    return result, seams
+
+
+def private_arena_task5_slice2_entry_stack_splitter_image(mutation=None):
+    """Build a compact splitter that consumes request from its entry slot."""
+    assert mutation in {
+        None,
+        "wrong-request",
+        "wrong-b2",
+        "wrong-remainder",
+        "wrong-allocation-mask",
+        "allocated-tail-relinked",
+    }
+    fixture = private_page_arena_image()
+    code = bytearray()
+    labels = {}
+    branch_fixups = []
+
+    def emit(value):
+        start = len(code)
+        code.extend(bytes.fromhex(value) if isinstance(value, str) else value)
+        return start
+
+    def mark(name):
+        assert name not in labels
+        labels[name] = len(code)
+
+    def branch8(opcode, target_name):
+        start = emit(bytes((opcode, 0)))
+        branch_fixups.append((start, target_name))
+        return start
+
+    def call32(target):
+        start = emit("e8 00 00 00 00")
+        address = fixture.splitter + start
+        code[start + 1 : start + 5] = (target - address - 5).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return start
+
+    emit("53 56 57 55")
+    emit("83 ec 08")
+    emit("8b 5c 24 1c")
+    emit("8b 0b")
+    emit("89 cf")
+    emit("83 e7 f8")
+    block_copy = emit("89 d8")
+    request_add = emit("03 44 24 20")
+    emit("89 04 24")
+    remainder_sub = emit("2b 7c 24 20")
+    emit("89 7c 24 04")
+    emit("8b 6b 04")
+    emit("83 e5 fe")
+    emit("89 ce")
+    allocation_mask = emit("83 e6 02")
+    emit("83 e1 04")
+    emit("56 51 55")
+    emit("ff 74 24 2c")
+    emit("53")
+    first_initializer_call = call32(fixture.block_initializer)
+    emit("83 c4 14")
+    emit("56 56 55")
+    emit("ff 74 24 10")
+    emit("ff 74 24 10")
+    second_initializer_call = call32(fixture.block_initializer)
+    emit("83 c4 14")
+    emit("8b 3c 24")
+    emit("85 f6")
+    allocated_tail_branch = branch8(0x75, "return")
+    emit("8b 53 0c")
+    emit("89 5f 08")
+    emit("89 57 0c")
+    emit("89 7b 0c")
+    emit("89 7a 08")
+    mark("return")
+    emit("89 f8")
+    emit("83 c4 08")
+    emit("5d 5f 5e 5b c3")
+
+    for start, target_name in branch_fixups:
+        displacement = labels[target_name] - (start + 2)
+        assert -0x80 <= displacement <= 0x7F
+        code[start + 1] = displacement & 0xFF
+    assert len(code) <= 0x80
+    code.extend(b"\x90" * (0x80 - len(code)))
+
+    seams = PrivateArenaTask5SplitterStackSeams(
+        block_copy=fixture.splitter + block_copy,
+        request_add=fixture.splitter + request_add,
+        remainder_sub=fixture.splitter + remainder_sub,
+        allocation_mask=fixture.splitter + allocation_mask,
+        first_initializer_call=fixture.splitter + first_initializer_call,
+        second_initializer_call=fixture.splitter + second_initializer_call,
+        allocated_tail_branch=fixture.splitter + allocated_tail_branch,
+    )
+    text = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.name == ".text"
+    )
+    raw = bytearray(fixture.arena.image.data)
+    start = text.raw_offset + fixture.splitter - text.va
+    raw[start : start + 0x80] = code
+    control_data = bytes(raw)
+    mutation_rows = {
+        "wrong-request": (seams.request_add + 3, b"\x20", b"\x1c"),
+        "wrong-b2": (seams.block_copy + 1, b"\xd8", b"\xf8"),
+        "wrong-remainder": (seams.remainder_sub + 3, b"\x20", b"\x1c"),
+        "wrong-allocation-mask": (
+            seams.allocation_mask + 2,
+            b"\x02",
+            b"\x04",
+        ),
+        "allocated-tail-relinked": (
+            seams.allocated_tail_branch,
+            b"\x75",
+            b"\x74",
+        ),
+    }
+    if mutation is not None:
+        address, expected, replacement = mutation_rows[mutation]
+        offset = text.raw_offset + address - text.va
+        assert raw[offset : offset + len(expected)] == expected
+        raw[offset : offset + len(expected)] = replacement
+
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    result = replace(fixture, arena=replace(fixture.arena, image=image))
+    decoder = Cs(CS_ARCH_X86, CS_MODE_32)
+    decoder.detail = True
+    decoded_control = tuple(
+        decoder.disasm(
+            control_data[start : start + 0x80],
+            fixture.splitter,
+        )
+    )
+    by_address = {row.address: row for row in decoded_control}
+    assert {
+        row.address
+        for row in decoded_control
+        if row.group(capstone.CS_GRP_CALL)
+        and row.operands[0].type == capstone.x86.X86_OP_IMM
+        and row.operands[0].imm == fixture.block_initializer
+    } == {seams.first_initializer_call, seams.second_initializer_call}
+    assert (
+        by_address[seams.request_add].mnemonic,
+        by_address[seams.request_add].op_str,
+    ) == ("add", "eax, dword ptr [esp + 0x20]")
+    assert (
+        by_address[seams.remainder_sub].mnemonic,
+        by_address[seams.remainder_sub].op_str,
+    ) == ("sub", "edi, dword ptr [esp + 0x20]")
+    assert (
+        by_address[seams.allocated_tail_branch].mnemonic,
+        by_address[seams.allocated_tail_branch].operands[0].imm,
+    ) == ("jne", fixture.splitter + labels["return"])
+
+    if mutation is not None:
+        control_image = replace(
+            fixture.arena.image,
+            data=control_data,
+            sha256=hashlib.sha256(control_data).hexdigest(),
+        )
+        control = replace(fixture, arena=replace(fixture.arena, image=control_image))
+        address, _expected, _replacement = mutation_rows[mutation]
+        assert private_page_image_changed_addresses(control, result) == {address}
+        owner = {
+            "wrong-request": seams.request_add,
+            "wrong-b2": seams.block_copy,
+            "wrong-remainder": seams.remainder_sub,
+            "wrong-allocation-mask": seams.allocation_mask,
+            "allocated-tail-relinked": seams.allocated_tail_branch,
+        }[mutation]
+        offset = text.raw_offset + owner - text.va
+        hostile_decoder = Cs(CS_ARCH_X86, CS_MODE_32)
+        hostile_decoder.detail = True
+        decoded = next(hostile_decoder.disasm(image.data[offset : offset + 16], owner))
+        expected_instruction = {
+            "wrong-request": ("add", "eax, dword ptr [esp + 0x1c]"),
+            "wrong-b2": ("mov", "eax, edi"),
+            "wrong-remainder": ("sub", "edi, dword ptr [esp + 0x1c]"),
+            "wrong-allocation-mask": ("and", "esi, 4"),
+            "allocated-tail-relinked": (
+                "je",
+                hex(fixture.splitter + labels["return"]),
+            ),
+        }[mutation]
+        assert (decoded.mnemonic, decoded.op_str) == expected_instruction
+    return result, seams
+
+
+def private_arena_task5_slice2_narrow_inputs(fixture):
+    """Derive independently current Task 1-3 evidence without Task 4."""
+    recovery = private_page_arena_recovery(
+        fixture,
+        (audit_anchor(fixture.arena.image, fixture.realloc_driver),),
+    )
+    contract = recovery._private_heap_allocator_contract(
+        fixture.arena.private_allocator,
+        frozenset({fixture.arena.callback_slot}),
+    )
+    assert contract is not None
+    extent = recovery._publication_private_heap_extent_witness(
+        contract,
+        fixture.arena.private_page_helper,
+    )
+    assert extent is not None
+    effects = recovery._publication_private_heap_effect_closure(extent)
+    assert effects is not None
+    assert recovery._publication_private_heap_effect_closure_is_current(effects)
+    pre_layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert pre_layout is not None
+    ring = recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        pre_layout,
+    )
+    assert ring is not None
+    assert recovery._private_heap_allocator_contract(
+        contract.root,
+        contract.protected_slots,
+    ) == contract
+    assert recovery._publication_private_heap_extent_witness(
+        contract,
+        extent.helper_entry,
+    ) == extent
+    assert recovery._publication_private_heap_effect_closure(extent) == effects
+    assert recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        pre_layout,
+    ) == ring
+    return recovery, contract, extent, effects, ring
+
+
+def private_arena_task5_slice2_split_claim(fixture, task4_rows):
+    """Build exact split claims from current decoded topology, not Task 5."""
+    recovery = task4_rows[0]
+    resize_calls = tuple(
+        row.address
+        for row in recovery._function_direct_calls(fixture.reallocator)
+        if row.target == fixture.splitter
+    )
+    assert len(resize_calls) == 2
+    free_listed = x86_cfg_module._PublicationPrivateArenaBlockState(
+        "free",
+        "listed",
+    )
+    allocated_unlisted = x86_cfg_module._PublicationPrivateArenaBlockState(
+        "allocated",
+        "unlisted",
+    )
+    invocations = (
+        x86_cfg_module._PublicationPrivateArenaInvocation(
+            caller_entry=fixture.selector,
+            call_address=next(
+                row.address
+                for row in recovery._function_direct_calls(fixture.selector)
+                if row.target == fixture.splitter
+            ),
+            callee_entry=fixture.splitter,
+            role="split",
+            context="selector-split",
+            page_origins=(),
+            block_state=free_listed,
+        ),
+        *(
+            x86_cfg_module._PublicationPrivateArenaInvocation(
+                caller_entry=fixture.reallocator,
+                call_address=address,
+                callee_entry=fixture.splitter,
+                role="split",
+                context="resize-split",
+                page_origins=(),
+                block_state=allocated_unlisted,
+            )
+            for address in resize_calls
+        ),
+    )
+    return fixture.splitter, invocations, task4_rows[5]
+
+
+def private_arena_task5_slice2_carried_task1_to4(fixture):
+    """Return fresh same-recovery anchored Task 1-4 evidence for this seam."""
+    recovery = private_page_arena_recovery(
+        fixture,
+        (audit_anchor(fixture.arena.image, fixture.realloc_driver),),
+    )
+    contract, extent, effects, _pre_layout, ring, selector = (
+        private_page_arena_task1_to4(recovery, fixture)
+    )
+    assert recovery._publication_private_heap_effect_closure_is_current(
+        effects
+    )
+    updated_layout, role, transfer, spans = selector
+    return (
+        recovery,
+        contract,
+        extent,
+        effects,
+        ring,
+        updated_layout,
+        role,
+        transfer,
+        spans,
+    )
+
+
+def private_arena_task5_slice2_narrow_split_query(
+    fixture,
+    task4_rows,
+    claim,
+    monkeypatch,
+):
+    """Run one public narrow split proof with Task 4 forbidden."""
+    recovery, contract, extent, effects, ring, *_ = task4_rows
+    entry, invocations, layout = claim
+
+    def task4_is_forbidden(*_args, **_kwargs):
+        raise AssertionError("narrow Task 5 called Task 4")
+
+    monkeypatch.setattr(
+        recovery,
+        "_publication_private_block_selector_role",
+        task4_is_forbidden,
+    )
+    return recovery._publication_private_arena_transfer(
+        role="split",
+        function_entry=entry,
+        invocations=invocations,
+        contract=contract,
+        extent=extent,
+        effects=effects,
+        layout=layout,
+        ring_evidence=ring,
+    )
+
+
+def private_arena_task5_slice2_entry_stack_split_query(
+    fixture,
+    monkeypatch,
+    rows=None,
+):
+    """Run narrow split proof from fresh Task 1-3 and decoded call domains."""
+    recovery, contract, extent, effects, ring = (
+        private_arena_task5_slice2_narrow_inputs(fixture)
+        if rows is None
+        else rows
+    )
+    layout = replace(ring.layout, minimum_split_remainder=0x50)
+    free_listed = x86_cfg_module._PublicationPrivateArenaBlockState(
+        "free",
+        "listed",
+    )
+    allocated_unlisted = x86_cfg_module._PublicationPrivateArenaBlockState(
+        "allocated",
+        "unlisted",
+    )
+    selector_call = next(
+        row.address
+        for row in recovery._function_direct_calls(fixture.selector)
+        if row.target == fixture.splitter
+    )
+    resize_calls = tuple(
+        row.address
+        for row in recovery._function_direct_calls(fixture.reallocator)
+        if row.target == fixture.splitter
+    )
+    assert len(resize_calls) == 2
+    invocations = (
+        x86_cfg_module._PublicationPrivateArenaInvocation(
+            fixture.selector,
+            selector_call,
+            fixture.splitter,
+            "split",
+            "selector-split",
+            (),
+            free_listed,
+        ),
+        *(
+            x86_cfg_module._PublicationPrivateArenaInvocation(
+                fixture.reallocator,
+                address,
+                fixture.splitter,
+                "split",
+                "resize-split",
+                (),
+                allocated_unlisted,
+            )
+            for address in resize_calls
+        ),
+    )
+
+    def task4_is_forbidden(*_args, **_kwargs):
+        raise AssertionError("narrow Task 5 called Task 4")
+
+    monkeypatch.setattr(
+        recovery,
+        "_publication_private_block_selector_role",
+        task4_is_forbidden,
+    )
+    result = recovery._publication_private_arena_transfer(
+        role="split",
+        function_entry=fixture.splitter,
+        invocations=invocations,
+        contract=contract,
+        extent=extent,
+        effects=effects,
+        layout=layout,
+        ring_evidence=ring,
+    )
+    return (recovery, contract, extent, effects, ring, layout), result
 
 
 def private_arena_task5_slice2_base_result(fixture, **overrides):
@@ -21025,17 +22489,118 @@ def test_private_arena_task5_slice2_rejects_block_initialize_hostile(mutation):
     "mutation",
     ("shrink-fit-branch-inverted", "shrink-minimum-branch-inverted",
      "grow-fit-branch-inverted", "grow-minimum-branch-inverted",
-     "resize-split-wrong-block", "resize-split-wrong-request"),
+     "resize-split-wrong-block", "resize-split-wrong-request",
+     pytest.param("shrink-fit-wrong-operand", id="shrink-fit-wrong-operand"),
+     pytest.param("grow-fit-wrong-operand", id="grow-fit-wrong-operand")),
     ids=lambda value: value,
 )
-def test_private_arena_task5_slice2_rejects_split_hostile(mutation):
+def test_private_arena_task5_slice2_rejects_split_hostile(mutation, monkeypatch):
     fixture = private_arena_task5_slice2_image(mutation)
+    if mutation in {"shrink-fit-wrong-operand", "grow-fit-wrong-operand"}:
+        hostile_task4 = private_page_arena_selector(fixture)
+        assert len(hostile_task4) == 9
+        assert all(row is not None for row in hostile_task4)
+        control = private_page_arena_image()
+        control_rows, _assembly, control_base = (
+            private_arena_task5_slice2_base_result(control)
+        )
+        assert control_base is not None
+        expected = next(
+            row for row in control_base.transfers if row.role == "split"
+        )
+        recovery, contract, extent, effects, ring = (
+            private_arena_task5_slice2_narrow_inputs(fixture)
+        )
+
+        def task4_is_forbidden(*_args, **_kwargs):
+            raise AssertionError("narrow Task 5 called Task 4")
+
+        monkeypatch.setattr(
+            recovery,
+            "_publication_private_block_selector_role",
+            task4_is_forbidden,
+        )
+        outer = {("function", fixture.page_provider)}
+        recovery.producer_dependency_collectors.append(outer)
+        try:
+            result = recovery._publication_private_arena_transfer(
+                role="split",
+                function_entry=expected.function_entry,
+                invocations=expected.invocations,
+                contract=contract,
+                extent=extent,
+                effects=effects,
+                layout=control_rows[5],
+                ring_evidence=ring,
+            )
+        finally:
+            assert recovery.producer_dependency_collectors.pop() is outer
+        assert result is None
+        assert outer == {("function", fixture.page_provider)}
+        return
     rows = private_page_arena_selector(fixture)
     assembly = rows[0]._publication_private_arena_full_assembly(
         rows[1], rows[2], rows[3], rows[5], rows[4], rows[6], rows[7], rows[8]
     )
     assert assembly is not None
     assert rows[0]._publication_private_arena_base_roles(assembly) is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "unlink-allocation-bit-wrong-mask",
+        "unlink-unbalanced-push-return",
+        "unlink-successor-prev-bit-wrong-mask",
+        "unlink-head-repair-retains-selected",
+        "unlink-reciprocal-prev-retains-selected",
+        "unlink-largest-free-nonzero",
+        "unlink-body-size-origin-from-page",
+    ),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice2_narrow_rejects_unlink_body_hostile(
+    mutation,
+    monkeypatch,
+):
+    control = private_page_arena_image()
+    control_rows, _assembly, control_base = (
+        private_arena_task5_slice2_base_result(control)
+    )
+    assert control_base is not None
+    expected = next(
+        row for row in control_base.transfers if row.role == "unlink"
+    )
+    hostile = private_arena_task5_slice2_image(mutation)
+    recovery, contract, extent, effects, ring = (
+        private_arena_task5_slice2_narrow_inputs(hostile)
+    )
+
+    def task4_is_forbidden(*_args, **_kwargs):
+        raise AssertionError("narrow Task 5 called Task 4")
+
+    monkeypatch.setattr(
+        recovery,
+        "_publication_private_block_selector_role",
+        task4_is_forbidden,
+    )
+    outer = {("function", hostile.page_provider)}
+    recovery.producer_dependency_collectors.append(outer)
+    try:
+        result = recovery._publication_private_arena_transfer(
+            role="unlink",
+            function_entry=expected.function_entry,
+            invocations=expected.invocations,
+            contract=contract,
+            extent=extent,
+            effects=effects,
+            layout=control_rows[5],
+            ring_evidence=ring,
+        )
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is outer
+    assert result is None
+    assert outer == {("function", hostile.page_provider)}
 
 
 @pytest.mark.parametrize(
@@ -21175,18 +22740,616 @@ def test_private_arena_task5_slice2_cap_is_exact_and_fail_closed(counter, monkey
     used = recovery._task5_last_budget_counts[counter]
     constant = f"_TASK5_{counter.replace('-', '_').upper()}_CAP"
     monkeypatch.setattr(x86_cfg_module, constant, used)
-    rows, _assembly, base = private_arena_task5_slice2_base_result(fixture)
+    rows, successful_assembly, base = private_arena_task5_slice2_base_result(
+        fixture
+    )
     assert base is not None
     monkeypatch.setattr(x86_cfg_module, constant, used - 1)
+    rows = private_page_arena_selector(fixture)
+    created = []
+    original = rows[0]._task5_new_assembly
+
+    def capture(*args, **kwargs):
+        result = original(*args, **kwargs)
+        created.append(result)
+        return result
+
+    monkeypatch.setattr(rows[0], "_task5_new_assembly", capture)
+    assembly = rows[0]._publication_private_arena_full_assembly(
+        rows[1], rows[2], rows[3], rows[5], rows[4], rows[6], rows[7], rows[8]
+    )
+    assert assembly is not None
+    assert created == [assembly]
+    outer = {("function", fixture.page_provider)}
+    rows[0].producer_dependency_collectors.append(outer)
+    try:
+        assert rows[0]._publication_private_arena_base_roles(assembly) is None
+    finally:
+        assert rows[0].producer_dependency_collectors.pop() is outer
+    assert rows[0]._task5_last_limit_exhaustion == (
+        "base-roles", counter, used, used - 1
+    )
+    assert assembly.budget.counts[counter] == used
+    assert assembly.narrow_result is None
+    assert all(
+        proof.transfer.role == role
+        for role, proof in assembly.role_results.items()
+    )
+    charged_collections = {
+        "state": lambda value: value.semantic_seen,
+        "event": lambda value: value.semantic_events,
+        "expression": lambda value: value.expression_tokens,
+        "instruction": lambda value: value.decoded_instruction_keys,
+        "fixed-point": lambda value: (
+            value.queued_roles,
+            value.queued_resize_entries,
+        ),
+    }
+    failed_collection = charged_collections[counter](assembly)
+    successful_collection = charged_collections[counter](successful_assembly)
+    if counter == "fixed-point":
+        assert all(
+            len(failed) <= len(successful)
+            for failed, successful in zip(
+                failed_collection,
+                successful_collection,
+            )
+        )
+    else:
+        assert len(failed_collection) <= len(successful_collection)
+    assert outer == {("function", fixture.page_provider)}
+
+
+@pytest.mark.parametrize(
+    "selected_role",
+    (
+        pytest.param("block-initialize", id="block-initialize"),
+        pytest.param("split", id="split"),
+        pytest.param("unlink", id="unlink"),
+    ),
+)
+def test_private_arena_task5_slice2_narrow_executes_only_selected_role(
+    selected_role,
+    monkeypatch,
+):
+    fixture = private_page_arena_image()
+    control_rows, _assembly, control_base = (
+        private_arena_task5_slice2_base_result(fixture)
+    )
+    assert control_base is not None
+    expected = next(
+        row for row in control_base.transfers if row.role == selected_role
+    )
+    recovery, contract, extent, effects, ring = (
+        private_arena_task5_slice2_narrow_inputs(fixture)
+    )
+    counts = Counter(
+        {"block-initialize": 0, "split": 0, "unlink": 0}
+    )
+    for role in counts:
+        name = f"_task5_prove_{role.replace('-', '_')}"
+        original = getattr(recovery, name)
+
+        def wrapper(
+            *args,
+            __original=original,
+            __role=role,
+            **kwargs,
+        ):
+            counts[__role] += 1
+            return __original(*args, **kwargs)
+
+        monkeypatch.setattr(recovery, name, wrapper)
+    result = recovery._publication_private_arena_transfer(
+        role=selected_role,
+        function_entry=expected.function_entry,
+        invocations=expected.invocations,
+        contract=contract,
+        extent=extent,
+        effects=effects,
+        layout=control_rows[5],
+        ring_evidence=ring,
+    )
+    assert result is not None
+    assert result[0] == expected
+    assert counts == {
+        role: int(role == selected_role) for role in counts
+    }
+
+
+def test_private_arena_task5_slice2_second_query_is_fresh_and_deterministic(
+    monkeypatch,
+):
+    fixture = private_page_arena_image()
+    control_rows, _assembly, control_base = (
+        private_arena_task5_slice2_base_result(fixture)
+    )
+    assert control_base is not None
+    expected = next(row for row in control_base.transfers if row.role == "split")
+    recovery, contract, extent, effects, ring = (
+        private_arena_task5_slice2_narrow_inputs(fixture)
+    )
+    assemblies = []
+    original = recovery._task5_new_assembly
+
+    def capture(*args, **kwargs):
+        assembly = original(*args, **kwargs)
+        assemblies.append(assembly)
+        return assembly
+
+    monkeypatch.setattr(recovery, "_task5_new_assembly", capture)
+    results = []
+    counts = []
+    for _ in range(2):
+        results.append(
+            recovery._publication_private_arena_transfer(
+                role="split",
+                function_entry=expected.function_entry,
+                invocations=expected.invocations,
+                contract=contract,
+                extent=extent,
+                effects=effects,
+                layout=control_rows[5],
+                ring_evidence=ring,
+            )
+        )
+        counts.append(dict(recovery._task5_last_budget_counts))
+    assert results[0] == results[1]
+    assert results[0] is not None
+    assert counts[0] == counts[1]
+    assert len(assemblies) == 2
+    left, right = assemblies
+    assert left is not right
+    assert left.budget is not right.budget
+    for field_name in (
+        "expression_tokens",
+        "expressions_by_token",
+        "decoded_contexts",
+        "decoded_instruction_keys",
+        "role_queue",
+        "queued_roles",
+        "incoming_domains",
+        "spans_by_key",
+        "dependencies",
+        "resize_worklist",
+        "queued_resize_entries",
+        "semantic_pending",
+        "semantic_seen",
+        "semantic_events",
+        "role_results",
+    ):
+        assert getattr(left, field_name) is not getattr(right, field_name)
+
+
+def test_private_arena_task5_slice2_caller_order_is_canonical(monkeypatch):
+    fixture = private_page_arena_image()
+    control_rows, _assembly, control_base = (
+        private_arena_task5_slice2_base_result(fixture)
+    )
+    assert control_base is not None
+    expected = next(row for row in control_base.transfers if row.role == "split")
+    recovery, contract, extent, effects, ring = (
+        private_arena_task5_slice2_narrow_inputs(fixture)
+    )
+    assemblies = []
+    original = recovery._task5_new_assembly
+
+    def capture(*args, **kwargs):
+        assembly = original(*args, **kwargs)
+        assemblies.append(assembly)
+        return assembly
+
+    monkeypatch.setattr(recovery, "_task5_new_assembly", capture)
+    for target in (
+        fixture.block_initializer,
+        fixture.splitter,
+        fixture.unlinker,
+        fixture.reallocator,
+    ):
+        sites = recovery.direct_call_sources_by_target[target]
+        recovery.direct_call_sources_by_target[target] = tuple(
+            reversed(sorted(sites))
+        )
+    result = recovery._publication_private_arena_transfer(
+        role="split",
+        function_entry=expected.function_entry,
+        invocations=expected.invocations,
+        contract=contract,
+        extent=extent,
+        effects=effects,
+        layout=control_rows[5],
+        ring_evidence=ring,
+    )
+    assert result is not None
+    assert result[0] == expected
+    assert recovery._task5_last_budget_counts
+    assert len(assemblies) == 1
+    assembly = assemblies[0]
+    assert assembly.topology is not None
+    for target in (
+        fixture.block_initializer,
+        fixture.splitter,
+        fixture.unlinker,
+        fixture.reallocator,
+    ):
+        assert assembly.incoming_domains[target] == tuple(
+            sorted(assembly.incoming_domains[target])
+        )
+
+
+def test_private_arena_task5_slice2_semantic_key_preserves_context_subject_and_restoration():
+    fixture = private_page_arena_image()
     rows = private_page_arena_selector(fixture)
     assembly = rows[0]._publication_private_arena_full_assembly(
         rows[1], rows[2], rows[3], rows[5], rows[4], rows[6], rows[7], rows[8]
     )
     assert assembly is not None
-    assert rows[0]._publication_private_arena_base_roles(assembly) is None
-    assert rows[0]._task5_last_limit_exhaustion == (
-        "base-roles", counter, used, used - 1
+    state = x86_cfg_module._Task5SemanticState(
+        registers=(),
+        owned_stack=(),
+        memory=(),
+        predicates=frozenset(),
+        context="initializer-base",
+        subject="initial-block",
+        restoration_role="none",
+        restoration_entry=None,
+        block_states=(),
+        spans=frozenset(),
+        calls=(),
+        instruction_addresses=frozenset(),
     )
+    variants = (
+        replace(state, context="selector-split"),
+        replace(state, subject="split-block"),
+        replace(
+            state,
+            restoration_role="select",
+            restoration_entry=fixture.selector,
+        ),
+        replace(state, restoration_entry=fixture.selector),
+    )
+    assert rows[0]._task5_enqueue_state(
+        assembly,
+        "semantic-key",
+        fixture.selector,
+        state,
+    )
+    assert not rows[0]._task5_enqueue_state(
+        assembly,
+        "semantic-key",
+        fixture.selector,
+        state,
+    )
+    for variant in variants:
+        assert rows[0]._task5_enqueue_state(
+            assembly,
+            "semantic-key",
+            fixture.selector,
+            variant,
+        )
+    assert assembly.budget.counts["state"] == 5
+    assert len(assembly.semantic_seen) == 5
+
+
+def test_private_arena_task5_slice2_accepts_carried_unsigned_shrink_predicate(
+    monkeypatch,
+):
+    canonical_rows = private_page_arena_selector(private_page_arena_image())
+    assert len(canonical_rows) == 9
+    assert all(row is not None for row in canonical_rows)
+    fixture, seams = private_arena_task5_slice2_carried_predicate_image()
+    rows = private_arena_task5_slice2_carried_task1_to4(fixture)
+    assert len(rows) == 9 and all(row is not None for row in rows)
+    claim = private_arena_task5_slice2_split_claim(fixture, rows)
+    result = private_arena_task5_slice2_narrow_split_query(
+        fixture,
+        rows,
+        claim,
+        monkeypatch,
+    )
+    assert result is not None
+    transfer, spans = result
+    assert transfer.invocations == claim[1]
+    assert seams.carried_split_call in {
+        row.call_address for row in transfer.invocations
+    }
+    assert transfer.span_keys == tuple(
+        (row.function_entry, row.instruction_address, row.operand_index)
+        for row in spans
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "branch-polarity",
+        "operand-lineage",
+        "normalization",
+        "path-correlation",
+    ),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice2_rejects_carried_unsigned_shrink_hostile(
+    mutation,
+    monkeypatch,
+):
+    control, _ = private_arena_task5_slice2_carried_predicate_image()
+    control_rows = private_arena_task5_slice2_carried_task1_to4(control)
+    assert len(control_rows) == 9 and all(
+        row is not None for row in control_rows
+    )
+    control_claim = private_arena_task5_slice2_split_claim(
+        control,
+        control_rows,
+    )
+    assert private_arena_task5_slice2_narrow_split_query(
+        control,
+        control_rows,
+        control_claim,
+        monkeypatch,
+    ) is not None
+
+    hostile, _ = private_arena_task5_slice2_carried_predicate_image(mutation)
+    hostile_rows = private_arena_task5_slice2_carried_task1_to4(hostile)
+    assert len(hostile_rows) == 9
+    assert all(row is not None for row in hostile_rows)
+    hostile_claim = private_arena_task5_slice2_split_claim(
+        hostile,
+        hostile_rows,
+    )
+    outer = {("function", hostile.page_provider)}
+    hostile_rows[0].producer_dependency_collectors.append(outer)
+    try:
+        assert private_arena_task5_slice2_narrow_split_query(
+            hostile,
+            hostile_rows,
+            hostile_claim,
+            monkeypatch,
+        ) is None
+    finally:
+        assert hostile_rows[0].producer_dependency_collectors.pop() is outer
+    assert outer == {("function", hostile.page_provider)}
+
+
+def test_private_arena_task5_slice2_accepts_combined_affine_test_retail_paths(
+    monkeypatch,
+):
+    fixture, seams = private_arena_task5_slice2_affine_test_image()
+    rows = private_arena_task5_slice2_carried_task1_to4(fixture)
+    assert len(rows) == 9 and all(row is not None for row in rows)
+    assert rows[0]._publication_private_heap_effect_closure_is_current(rows[3])
+    claim = private_arena_task5_slice2_split_claim(fixture, rows)
+    claimed_resize_calls = {
+        row.call_address
+        for row in claim[1]
+        if row.caller_entry == fixture.reallocator
+    }
+    assert claimed_resize_calls == {
+        seams.local_split_call,
+        seams.carried_split_call,
+    }
+    result = private_arena_task5_slice2_narrow_split_query(
+        fixture,
+        rows,
+        claim,
+        monkeypatch,
+    )
+    assert result is not None
+    transfer, spans = result
+    assert transfer.invocations == claim[1]
+    assert transfer.span_keys == tuple(
+        (row.function_entry, row.instruction_address, row.operand_index)
+        for row in spans
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "staged-normalization-addend",
+        "negative-capacity-offset",
+        "constant-decoy-reachable",
+    ),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice2_rejects_affine_test_hostile(
+    mutation,
+    monkeypatch,
+):
+    control, _ = private_arena_task5_slice2_affine_test_image()
+    control_rows = private_arena_task5_slice2_carried_task1_to4(control)
+    assert len(control_rows) == 9 and all(
+        row is not None for row in control_rows
+    )
+    control_claim = private_arena_task5_slice2_split_claim(
+        control,
+        control_rows,
+    )
+    assert private_arena_task5_slice2_narrow_split_query(
+        control,
+        control_rows,
+        control_claim,
+        monkeypatch,
+    ) is not None
+
+    hostile, _ = private_arena_task5_slice2_affine_test_image(mutation)
+    hostile_rows = private_arena_task5_slice2_carried_task1_to4(hostile)
+    assert len(hostile_rows) == 9 and all(
+        row is not None for row in hostile_rows
+    )
+    assert hostile_rows[0]._publication_private_heap_effect_closure_is_current(
+        hostile_rows[3]
+    )
+    hostile_claim = private_arena_task5_slice2_split_claim(
+        hostile,
+        hostile_rows,
+    )
+    outer = {("function", hostile.page_provider)}
+    hostile_rows[0].producer_dependency_collectors.append(outer)
+    try:
+        assert private_arena_task5_slice2_narrow_split_query(
+            hostile,
+            hostile_rows,
+            hostile_claim,
+            monkeypatch,
+        ) is None
+    finally:
+        assert hostile_rows[0].producer_dependency_collectors.pop() is outer
+    assert outer == {("function", hostile.page_provider)}
+
+
+def test_private_arena_task5_slice2_accepts_repeated_masked_condition(
+    monkeypatch,
+):
+    fixture, seams = private_arena_task5_slice2_repeated_condition_image()
+    rows = private_arena_task5_slice2_carried_task1_to4(fixture)
+    assert len(rows) == 9 and all(row is not None for row in rows)
+    assert rows[0]._publication_private_heap_effect_closure_is_current(rows[3])
+    claim = private_arena_task5_slice2_split_claim(fixture, rows)
+    assert {
+        row.call_address
+        for row in claim[1]
+        if row.caller_entry == fixture.reallocator
+    } == {seams.local_split_call, seams.carried_split_call}
+    result = private_arena_task5_slice2_narrow_split_query(
+        fixture,
+        rows,
+        claim,
+        monkeypatch,
+    )
+    assert result is not None
+    transfer, spans = result
+    assert transfer.invocations == claim[1]
+    assert transfer.span_keys == tuple(
+        (row.function_entry, row.instruction_address, row.operand_index)
+        for row in spans
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "wrong-mask",
+        "branch-polarity",
+        "different-token",
+        "full-clobber",
+        "partial-clobber",
+    ),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice2_rejects_repeated_condition_hostile(
+    mutation,
+    monkeypatch,
+):
+    control, _ = private_arena_task5_slice2_repeated_condition_image()
+    control_rows = private_arena_task5_slice2_carried_task1_to4(control)
+    assert len(control_rows) == 9 and all(
+        row is not None for row in control_rows
+    )
+    control_claim = private_arena_task5_slice2_split_claim(
+        control,
+        control_rows,
+    )
+    assert private_arena_task5_slice2_narrow_split_query(
+        control,
+        control_rows,
+        control_claim,
+        monkeypatch,
+    ) is not None
+
+    hostile, _ = private_arena_task5_slice2_repeated_condition_image(mutation)
+    hostile_rows = private_arena_task5_slice2_carried_task1_to4(hostile)
+    assert len(hostile_rows) == 9 and all(
+        row is not None for row in hostile_rows
+    )
+    assert hostile_rows[0]._publication_private_heap_effect_closure_is_current(
+        hostile_rows[3]
+    )
+    hostile_claim = private_arena_task5_slice2_split_claim(
+        hostile,
+        hostile_rows,
+    )
+    outer = {("function", hostile.page_provider)}
+    hostile_rows[0].producer_dependency_collectors.append(outer)
+    try:
+        assert private_arena_task5_slice2_narrow_split_query(
+            hostile,
+            hostile_rows,
+            hostile_claim,
+            monkeypatch,
+        ) is None
+    finally:
+        assert hostile_rows[0].producer_dependency_collectors.pop() is outer
+    assert outer == {("function", hostile.page_provider)}
+
+
+def test_private_arena_task5_slice2_accepts_entry_stack_splitter_relations(
+    monkeypatch,
+):
+    fixture, seams = private_arena_task5_slice2_entry_stack_splitter_image()
+    rows, result = private_arena_task5_slice2_entry_stack_split_query(
+        fixture,
+        monkeypatch,
+    )
+    recovery, contract, extent, effects, ring, _layout = rows
+    assert contract is not None and extent is not None and ring is not None
+    assert recovery._publication_private_heap_effect_closure_is_current(effects)
+    assert {
+        row.address
+        for row in recovery._function_direct_calls(fixture.splitter)
+        if row.target == fixture.block_initializer
+    } == {seams.first_initializer_call, seams.second_initializer_call}
+    assert result is not None
+    transfer, spans = result
+    assert transfer.role == "split"
+    assert transfer.span_keys == tuple(
+        (row.function_entry, row.instruction_address, row.operand_index)
+        for row in spans
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "wrong-request",
+        "wrong-b2",
+        "wrong-remainder",
+        "wrong-allocation-mask",
+        "allocated-tail-relinked",
+    ),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice2_rejects_entry_stack_splitter_hostile(
+    mutation,
+    monkeypatch,
+):
+    control, _ = private_arena_task5_slice2_entry_stack_splitter_image()
+    control_rows, control_result = (
+        private_arena_task5_slice2_entry_stack_split_query(
+            control,
+            monkeypatch,
+        )
+    )
+    assert control_rows[0]._publication_private_heap_effect_closure_is_current(
+        control_rows[3]
+    )
+    assert control_result is not None
+
+    hostile, _ = private_arena_task5_slice2_entry_stack_splitter_image(
+        mutation
+    )
+    hostile_rows = private_arena_task5_slice2_narrow_inputs(hostile)
+    current_rows, hostile_result = (
+        private_arena_task5_slice2_entry_stack_split_query(
+            hostile,
+            monkeypatch,
+            hostile_rows,
+        )
+    )
+    assert current_rows[0]._publication_private_heap_effect_closure_is_current(
+        current_rows[3]
+    )
+    assert hostile_result is None
 
 
 def test_private_page_arena_selector_documents_anchor_fingerprint_drift():
