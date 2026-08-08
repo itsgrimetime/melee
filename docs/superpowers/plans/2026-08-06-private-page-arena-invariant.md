@@ -1728,7 +1728,7 @@ pass before the commit.
   `0x435620` publication-certificate result with stages. A later fail-closed
   boundary is diagnostic progress only and does not complete Task 8.
 
-- [ ] **Step 1: Run complete local verification**
+- [x] **Step 1: Run complete local verification**
 
 ```bash
 python -m pytest tools/melee-agent/tests/test_retro_x86_cfg.py -q
@@ -1743,7 +1743,7 @@ git diff --check
 
 Expected: every command exits zero. Record exact pass counts in this plan.
 
-- [ ] **Step 2: Extend only the existing mini-query output**
+- [x] **Step 2: Extend only the existing mini-query output**
 
 Within the current `--private-heap-extent` branch, print the arena invariant,
 selector calls and per-site origin contexts, page-head slot, typed role/call
@@ -1779,7 +1779,7 @@ invariant.initializer_effects)`. `arena_invariant_current` calls
 observes the exact tuple already stored in evidence; it is not a new
 certificate field or artifact.
 
-- [ ] **Step 3: Run the exact retail mini-query**
+- [x] **Step 3: Run the exact retail mini-query**
 
 ```bash
 PYTHONPATH=. python \
@@ -1817,7 +1817,7 @@ values, wall time, and maximum RSS.
 If it fails, stop at the first structural mismatch and add a focused synthetic
 RED test before changing production logic.
 
-- [ ] **Step 4: Commit tracked validation notes and push before the long run**
+- [x] **Step 4: Commit tracked validation notes and push before the long run**
 
 Before committing, add one dated validation entry to this tracked plan with:
 commit and compiler/executable identities; exact commands and pass counts; all
@@ -1840,6 +1840,78 @@ git push origin HEAD
 ```
 
 Do not stage the ignored hydrated helper or operational ledger.
+
+#### Task 8 authoritative validation ledger — 2026-08-08T15:54:57Z
+
+This entry records the immutable local/mini-query gate immediately before the
+first current `0x435620` root attempt. The hydrated helper and retained log are
+ignored supporting diagnostics; this tracked entry is the authority. The root
+remains pending until a later tracked entry records its single positive row.
+
+```text
+arena_validation_date_utc=2026-08-08T15:54:57Z
+arena_branch=codex/issue-1240-retail-pcode-proof
+arena_tested_commit=7be8a79c95c6743443b7d5cc5037b7acf7a3eaa8
+arena_plan_spec_commit=8727589eca496982e8bb4e2700ecf26578a57c9d
+arena_ledger_commit=pending
+arena_compiler_path=/Users/mike/code/melee/.claude/worktrees/codex-issue-1240-retail-pcode-proof/build/compilers/GC/1.2.5n/mwcceppc.exe
+arena_compiler_sha256=ccf4b465cec73b5aae9c5c5543dcf8cda8a62aba246f89e2e0b200d742f2e55c
+arena_x86_cfg_sha256=970e069bfb5df6b329b1d031755f91427d4fb50b73b689cbf6f1421d15329bf5
+arena_hydrated_helper_path=/Users/mike/code/melee/.claude/worktrees/codex-issue-1240-retail-pcode-proof/build/diagnostics/task4-repair-exact/hydrate-cfg-query.py
+arena_hydrated_helper_sha256=1f3dc9012b3e86a6730e050a51835371980d36e8883148bc383a94d3f89fd833
+arena_local_pytest_command=python -m pytest tools/melee-agent/tests/test_retro_x86_cfg.py -q
+arena_local_pytest_status=0
+arena_local_pytest_passed=2369
+arena_local_pytest_seconds=416.85
+arena_local_pytest_peak_rss_bytes=169869312
+arena_py_compile_status=0
+arena_ruff_status=0
+arena_diff_check_status=0
+mini_query_status=0
+mini_query_wall_seconds=108.000000
+mini_query_peak_rss_bytes=2272477184
+mini_query_log=/Users/mike/code/melee/.claude/worktrees/codex-issue-1240-retail-pcode-proof/build/diagnostics/task4-repair-exact/private-page-arena-mini-query.log.lRo3Pz
+mini_query_log_sha256=5012e5ca0b4960244f0f7a4db01962af027fda5f1ec9b5f9f57b6546b474182e
+arena_invariant_current=True
+allocator_fingerprint_count=22
+allocator_fingerprint_sha256=1d3e2c8abea526be3cd364e6f1303613689bb5e63858fb0f50a96c8aad195def
+allocator_fingerprints_equal_extent=True
+initializer_effects_equal=True
+initializer_effects_current=True
+removal_obligation_count=1
+removal_obligation_keys=[["0x404390","0x4043e6","0x404260"]]
+removal_discharge_count=1
+removal_discharge_keys=[["0x404390","0x4043e6","0x404260"]]
+removal_keys_equal=True
+retained_ring_transfer_count=3
+retained_ring_transfer_equality=True
+retained_ring_span_count=17
+retained_ring_span_equality=True
+arena_transfer_count=12
+arena_role_count=12
+arena_call_edge_count=33
+arena_span_count=134
+arena_body_domain_count=196
+arena_function_dependency_count=31
+arena_global_slot_dependency_count=13
+arena_absolute_reference_dependency_count=1
+arena_induction_substituted_entries=["0x403ed0","0x403fd0"]
+arena_page_provider=0x4042a0
+arena_large_allocator=0x4042f0
+arena_page_head_slot=0x57d2a0
+arena_selector=0x403e30
+arena_selector_calls=["0x404339","0x404372"]
+arena_free_entries=["0x404390"]
+arena_resize_entries=["0x4046d0"]
+task7_preflight_schema_version=1
+task7_preflight_key=0x403e30/0x403e35/1
+task7_preflight_current_candidate_count=1
+task7_preflight_stages=["contract","provider-candidates","extent-effect-candidate","effects-currentness","invariant-construction","invariant-currentness","active-body-context","exact-span-lookup","authority-pair","span-consumption","body-fingerprint","body-domains-result"]
+task7_preflight_reject_stage=null
+task7_preflight_reject_reason=none
+task7_preflight_log_row_sha256=ea2ac17a8afb9dc9d484b30e1c5b35e62f6ce6c35e2d98b0ba2c0da6bfabc989
+root_435620_status=pending
+```
 
 - [ ] **Step 5: Run the exact root only after all earlier gates pass**
 
