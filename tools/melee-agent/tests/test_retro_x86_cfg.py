@@ -5542,8 +5542,11 @@ def private_block_selector_order_image(
     assert mutation in {
         "split-order-control",
         "split-relink-before-second-initializer",
+        "split-transient-join-escape",
         "unlink-order-control",
         "unlink-detach-before-bit2",
+        "unlink-head-discriminator-inverted",
+        "unlink-singleton-discriminator-inverted",
         "unlink-restoration-before-repair",
         "unlink-transient-join-escape",
     }
@@ -5583,6 +5586,16 @@ def private_block_selector_order_image(
         )
         assert len(replacement) == 0x28
         overwrite(start, bytes(replacement), 0x28)
+    elif mutation == "split-transient-join-escape":
+        entry = fixture.splitter
+        offset = text.raw_offset + entry - text.va
+        body = bytearray(raw[offset : offset + 0x5E])
+        assert body[-1] == 0xC3
+        assert body[0x46:0x48] == bytes.fromhex("75 0f")
+        body[0x47] += 8
+        diamond = bytes.fromhex("85 ed 74 03 90 eb 01 90")
+        body[0x48:0x48] = diamond
+        overwrite(entry, bytes(body), 0x80)
     else:
         code = bytearray()
         labels: dict[str, int] = {}
@@ -5614,9 +5627,19 @@ def private_block_selector_order_image(
             "8b 41 0c 83 e0 f8 8d 44 01 fc "
             "39 18"
         )
-        branch(0x75, "nonempty")
+        branch(
+            0x74
+            if mutation == "unlink-head-discriminator-inverted"
+            else 0x75,
+            "nonempty",
+        )
         emit("8b 53 0c 89 10 39 18")
-        branch(0x75, "nonempty")
+        branch(
+            0x74
+            if mutation == "unlink-singleton-discriminator-inverted"
+            else 0x75,
+            "nonempty",
+        )
         if mutation == "unlink-restoration-before-repair":
             emit("c7 41 08 00 00 00 00 c7 00 00 00 00 00")
         else:
@@ -17797,6 +17820,130 @@ def private_block_selector_task4_result(fixture):
         ring_evidence,
     )
     return inputs, result
+
+
+@pytest.mark.parametrize(
+    ("mutation", "branch_index"),
+    (
+        pytest.param(
+            "unlink-head-discriminator-inverted",
+            0,
+            id="head-equality",
+        ),
+        pytest.param(
+            "unlink-singleton-discriminator-inverted",
+            1,
+            id="next-equality",
+        ),
+    ),
+)
+def test_private_block_selector_order_correlates_unlink_discriminators(
+    mutation,
+    branch_index,
+):
+    control = private_block_selector_order_image("unlink-order-control")
+    hostile = private_block_selector_order_image(mutation)
+    control_recovery, control_events = private_block_selector_order_events(
+        control,
+        control.unlinker,
+    )
+    hostile_recovery, hostile_events = private_block_selector_order_events(
+        hostile,
+        hostile.unlinker,
+    )
+    control_branches = tuple(
+        address
+        for address in control_recovery._function_instruction_addresses(
+            control.unlinker
+        )
+        if control_recovery._owned_decoded(address).mnemonic == "jne"
+    )
+    hostile_branches = tuple(
+        address
+        for address in hostile_recovery._function_instruction_addresses(
+            hostile.unlinker
+        )
+        if hostile_recovery._owned_decoded(address).mnemonic == "je"
+    )
+    assert len(control_branches) == 2
+    assert hostile_branches == (control_branches[branch_index],)
+    changed = control_branches[branch_index]
+    assert private_page_image_changed_addresses(control, hostile) == {changed}
+    assert (
+        control_recovery._owned_decoded(changed).op_str
+        == hostile_recovery._owned_decoded(changed).op_str
+    )
+    assert control_events == hostile_events
+    control_inputs, control_result = private_block_selector_task4_result(
+        control
+    )
+    assert_private_block_selector_result(
+        control,
+        control_inputs,
+        control_result,
+    )
+
+    assert private_block_selector_task4_result(hostile)[1] is None
+
+
+def test_private_block_selector_order_rejects_split_transient_join_escape():
+    control = private_block_selector_order_image("split-order-control")
+    hostile = private_block_selector_order_image(
+        "split-transient-join-escape"
+    )
+    control_recovery, control_events = private_block_selector_order_events(
+        control,
+        control.splitter,
+    )
+    hostile_recovery, hostile_events = private_block_selector_order_events(
+        hostile,
+        hostile.splitter,
+    )
+    assert control_events == hostile_events
+    assert tuple(
+        call.target
+        for call in control_recovery._function_direct_calls(control.splitter)
+    ) == tuple(
+        call.target
+        for call in hostile_recovery._function_direct_calls(hostile.splitter)
+    )
+    assert control.arena.image.read(control.splitter, 0x47) == (
+        hostile.arena.image.read(hostile.splitter, 0x47)
+    )
+    assert control.arena.image.read(control.splitter + 0x47, 1) == b"\x0f"
+    assert hostile.arena.image.read(hostile.splitter + 0x47, 1) == b"\x17"
+    assert hostile.arena.image.read(hostile.splitter + 0x48, 8) == (
+        bytes.fromhex("85 ed 74 03 90 eb 01 90")
+    )
+    assert control.arena.image.read(control.splitter + 0x48, 0x16) == (
+        hostile.arena.image.read(hostile.splitter + 0x50, 0x16)
+    )
+    diamond = hostile.splitter + 0x4A
+    successors = hostile_recovery._summary_successors(
+        diamond,
+        hostile.splitter,
+        hostile_recovery._following_function_entry(hostile.splitter),
+    )
+    assert len(successors) == 2
+    assert all(
+        hostile_recovery._reachable_within_function(
+            successor,
+            hostile.splitter + 0x50,
+            hostile.splitter,
+            hostile_recovery._following_function_entry(hostile.splitter),
+        )
+        for successor in successors
+    )
+    control_inputs, control_result = private_block_selector_task4_result(
+        control
+    )
+    assert_private_block_selector_result(
+        control,
+        control_inputs,
+        control_result,
+    )
+
+    assert private_block_selector_task4_result(hostile)[1] is None
 
 
 @pytest.mark.parametrize("component", ("selector", "splitter", "unlinker"))

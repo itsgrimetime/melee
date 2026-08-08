@@ -28506,6 +28506,7 @@ class _DirectCfgRecovery:
             )
             if not allocation_lineage:
                 return None
+            allocation_condition = None
             if copied_allocation == constant_zero:
                 free_split = True
             elif copied_allocation == constant_one:
@@ -28522,7 +28523,8 @@ class _DirectCfgRecovery:
                 )
                 if len(equal_zero) != 1:
                     return None
-                free_split = bool(equal_zero[0][2])
+                allocation_condition = equal_zero[0]
+                free_split = bool(allocation_condition[2])
             ordered_writes = tuple((write[2], write[3]) for write in writes)
             semantic_writes = set(ordered_writes)
             if free_split:
@@ -28542,6 +28544,23 @@ class _DirectCfgRecovery:
                     and write_order[split_next_write]
                     < write_order[next_previous_write]
                 ):
+                    return None
+                interval_conditions = tuple(
+                    condition
+                    for condition in conditions
+                    if (
+                        len(condition) == 4
+                        and second_call[0]
+                        < condition[3]
+                        < writes[0][0]
+                    )
+                )
+                expected_conditions = (
+                    ()
+                    if allocation_condition is None
+                    else (allocation_condition,)
+                )
+                if interval_conditions != expected_conditions:
                     return None
             else:
                 saw_allocated_split = True
@@ -28718,6 +28737,53 @@ class _DirectCfgRecovery:
                     ),
                 }:
                     return None
+            head_conditions = tuple(
+                condition
+                for condition in row[4]
+                if (
+                    len(condition) == 4
+                    and condition[1] == "equal"
+                    and contains_expression(
+                        condition[0],
+                        unlink_block_argument,
+                    )
+                    and contains_expression(
+                        condition[0],
+                        expression("load", sentinel_address),
+                    )
+                )
+            )
+            next_conditions = tuple(
+                condition
+                for condition in row[4]
+                if (
+                    len(condition) == 4
+                    and condition[1] == "equal"
+                    and contains_expression(
+                        condition[0],
+                        unlink_block_argument,
+                    )
+                    and contains_expression(
+                        condition[0],
+                        expression("load", unlink_next_address),
+                    )
+                )
+            )
+            replaced_head = sentinel_next_write in ordered_remainder
+            singleton = remainder == singleton_writes
+            if (
+                len(head_conditions) != 1
+                or bool(head_conditions[0][2]) != replaced_head
+                or (
+                    replaced_head
+                    and (
+                        len(next_conditions) != 1
+                        or bool(next_conditions[0][2]) != singleton
+                    )
+                )
+                or (not replaced_head and next_conditions)
+            ):
+                return None
             final_write_address = row[6][-1][0]
             for condition in row[4]:
                 if len(condition) != 4:
