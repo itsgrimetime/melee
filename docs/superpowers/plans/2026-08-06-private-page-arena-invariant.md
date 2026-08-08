@@ -64,6 +64,20 @@ hydrated raw-CFG diagnostic.
   context. It must bind allocated payload recovery, the `free/unlisted`
   transient, insert/coalescing, optional whole-page ring removal/release, and
   restoration before the deallocator boundary returns.
+- Serialize `_PublicationPrivateRemovalCallDischarge` rows only on the unique
+  `arena-free` transfer. Their exact keys equal retained Task 3 obligation
+  keys; all other transfers have an empty tuple. Task 3
+  `ring-remove.invocations` stays empty and no discharge row is direct operand
+  authority.
+- Task 5 unit closure is decoded plus exact provisional-raw closure in the
+  least-reachable graph. Publication success separately requires the existing
+  final data/residue reconciliation. Do not require
+  `publication_final_residue` in a direct Task 5 helper or call provisional
+  closure final.
+- Fresh semantic re-proof is the source of truth and the canonical removal
+  discharge row is durable evidence covered by Task 6 exact equality. Do not
+  add a persistent cache, independent removal certificate, concrete page
+  serialization, or another consumer authorization path.
 - Prove private-free's direct small and arena branches mutually exclusive. A
   small payload reaches small-free only; any later arena-free call is a
   separately certified backing-page retirement, not a second interpretation of
@@ -131,6 +145,7 @@ class PrivatePageArenaFixture:
     block_inserter: int
     coalescers: tuple[int, int]
     arena_free: int
+    realloc_driver: int
     reallocator: int
     reallocator_calls: tuple[int, ...]
 
@@ -790,27 +805,58 @@ Expected: the positive selector and all hostiles pass before the commit.
 ### Task 5: Prove Every Arena Mutation Preserves the Invariant
 
 **Files:**
-- Modify: `tools/mwcc_retro/x86_cfg.py:19350-20850`
-- Modify: `tools/melee-agent/tests/test_retro_x86_cfg.py:11300-12200`
+- Modify: `tools/melee-agent/tests/test_retro_x86_cfg.py`
+  (`PrivatePageArenaFixture`, `private_page_arena_image`, Task 5 prerequisite
+  helpers/tests)
+- Modify: `tools/mwcc_retro/x86_cfg.py` (arena evidence dataclasses and Task 5
+  role proof; locate by symbol, because Task 4 currently ends near
+  `_publication_private_block_selector_role_proof` rather than the stale 19k
+  range)
 
 **Interfaces:**
-- Consumes: Task 4 abstract domain and selector role plus the unchanged Task 3
-  `_PublicationPrivatePageRingEvidence`, including its insert/remove/rotate
-  transfers, exact spans, and unresolved remover-call obligations.
-- Produces: contextual `_PublicationPrivateArenaInvocation`,
-  `_PublicationPrivateArenaStateTransition`, and
-  `_PublicationPrivateArenaTransfer` rows; typed call edges; a complete
-  `_PublicationPrivateBlockArenaRole`, and exact span inventories for the
-  shared block initializer, split, unlink, insert, both coalescers, one
-  first-class arena-free compound transfer, and bounded grow/shrink resize.
-  Nested roles prove safe local postconditions; select, resize, arena-free/
-  deallocator, and initializer-base compound boundaries prove full restoration.
+- Consumes: Task 4's exact `(updated_layout, selector_seeded_role,
+  select_transfer, selector_spans)` plus the unchanged Task 3
+  `_PublicationPrivatePageRingEvidence`, including its nonsemantic obligations,
+  `ring-remove.invocations == ()`, transfers, and exact spans. The prerequisite
+  recovery is anchored at `fixture.realloc_driver`.
+- Produces: `_PublicationPrivateRemovalCallDischarge`; contextual invocation,
+  transition, transfer, typed-edge, block-role, and span rows; and one
+  `arena-free` transfer whose required `removal_call_discharges` tuple is
+  canonical and nonempty. Every other transfer has `()`. Nested roles prove
+  local postconditions; compound owners prove restoration.
 
-- [ ] **Step 1: Write RED positive transfer tests**
+- [ ] **Step 1: Make the fixture and prerequisite harness truthful**
+
+Extend `PrivatePageArenaFixture` with exact call-address fields
+`direct_arena_free_call` and `backing_page_retirement_call`. Rewrite the
+fixture's small-free body so it derives a backing-page arena payload separately
+from its original small payload and calls `fixture.arena_free` at
+`backing_page_retirement_call`; preserve private-free's distinct direct call at
+`direct_arena_free_call`. Add a positive topology test requiring exactly the
+two arena-free callers/lineages, and negatives that pass the original small
+payload directly or collapse the two invocation lineages.
+
+Define `private_page_arena_selector(fixture)` as the sole Task 5 prerequisite
+helper. Its `_DirectCfgRecovery` seed inventory must contain exactly
+`audit_anchor(fixture.arena.image, fixture.realloc_driver)` in addition to the
+existing fixture seeds. It returns, in order, `recovery`, `contract`, `extent`,
+`effects`, `ring_evidence`, Task 4 `updated_layout`,
+`selector_seeded_role`, `select_transfer`, and `selector_spans`.
+
+Add a control that runs the same Task 1-4 derivation with and without only this
+anchor and asserts exact equality of contract, extent, effects, pre-selector
+layout/ring evidence, updated layout, selector role, select transfer, and
+selector spans. Separately assert the anchored recovery owns
+`fixture.realloc_driver`, its exact calls reach the large allocator and
+reallocator, and Task 5 cannot publish a closed no-resize graph from the
+unanchored recovery. Run all Task 1-4 tests before committing this test-only
+slice.
+
+- [ ] **Step 2: Write RED positive transfer tests**
 
 ```python
 @pytest.mark.parametrize(
-    "role",
+    "expected_role",
     (
         "block-initialize",
         "split",
@@ -822,18 +868,20 @@ Expected: the positive selector and all hostiles pass before the commit.
         "resize",
     ),
 )
-def test_private_arena_transfer_proves_contextual_postcondition(role):
+def test_private_arena_transfer_proves_contextual_postcondition(expected_role):
     fixture = private_page_arena_image()
-    recovery, inputs = private_page_arena_selector(fixture)
+    (
+        recovery, contract, extent, effects, ring_evidence, layout,
+        selector_role, select_transfer, selector_spans,
+    ) = private_page_arena_selector(fixture)
 
-    result = recovery._publication_private_arena_transfer(
-        role=role,
-        **inputs,
+    result = recovery._publication_private_block_arena_role(
+        contract, extent, effects, layout, ring_evidence,
+        selector_role, select_transfer, selector_spans,
     )
     assert result is not None
-    transfer, spans = result
-    assert transfer.role == role
-    assert transfer.invocations
+    role, transfers, spans = result
+    transfer = next(row for row in transfers if row.role == expected_role)
     assert transfer.span_keys
     assert all(len(key) == 3 for key in transfer.span_keys)
     assert transfer.function_sha256
@@ -904,13 +952,58 @@ the exact enclosing deallocator restoration role and entry. Also prove
 fixed-point admission of the bounded resize owner without adding it to the
 deallocator closure.
 
+```python
+def removal_key(row):
+    return row.caller_entry, row.call_address, row.remover_entry
+
+
+arena_free_transfer = next(
+    row for row in transfers if row.role == "arena-free"
+)
+obligations = ring_evidence.role.remover_call_obligations
+discharges = arena_free_transfer.removal_call_discharges
+assert tuple(map(removal_key, discharges)) == tuple(
+    map(removal_key, obligations)
+)
+assert tuple(map(removal_key, discharges)) == tuple(
+    sorted(set(map(removal_key, discharges)))
+)
+obligation_by_key = {removal_key(row): row for row in obligations}
+assert all(row.argument_index == 0 for row in discharges)
+assert all(
+    row.argument_relation == "exact-untagged-recovered-page"
+    for row in discharges
+)
+assert all(
+    row.proof_instruction_addresses
+    and row.proof_instruction_addresses
+        == tuple(sorted(set(row.proof_instruction_addresses)))
+    and row.call_address in row.proof_instruction_addresses
+    and row.caller_function_sha256
+        == obligation_by_key[removal_key(row)].caller_function_sha256
+    for row in discharges
+)
+assert all(
+    row.removal_call_discharges == ()
+    for row in transfers
+    if row.role != "arena-free"
+)
+ring_remove = next(row for row in transfers if row.role == "ring-remove")
+assert ring_remove.invocations == ()
+assert ring_remove.removal_call_discharges == ()
+```
+
+Also assert the Task 3 `ring_evidence` object, obligation tuple, retained
+`ring-remove` transfer, and ring span keys are dataclass-equal before and after
+Task 5 assembly.
+
 Together the positive role tests must exercise stable `free/listed` and
 `allocated/unlisted`, bounded `free/unlisted` at its exact nested locations,
 and instruction-local `allocated/listed` only inside unlink. No invocation or
 helper return may expose `allocated/listed`. Add malformed `none` pair tests so
 `none/free`, `allocated/none`, and analogous partial states reject.
 
-- [ ] **Step 2: Add the one-fact hostile matrix**
+- [ ] **Step 3: Add the one-fact hostile matrix**
 
 Add separate mutations for a missing/extra/reordered block-initializer call,
 either split site made conditional or context-exclusive, an allocation argument
@@ -953,8 +1046,17 @@ the retained `ring-remove` transfer or carrying nonmatching ring span keys, a
 missing/duplicate/foreign removal-call obligation, a retained obligation not
 discharged as exact untagged `P`, a nested remover call absent from the retained
 obligations, and every missing body/call/span/fingerprint/dependency fact.
+Add separate serialized-discharge pytest IDs for a missing, duplicated, extra,
+reordered, cross-bound, or wrong-role row; every changed key/argument/relation
+field; tagged, adjusted, foreign, joined, or wrong-lineage page values; empty,
+duplicate, unsorted, incomplete, stale, foreign-owner, or call-omitting proof
+slices; stale caller fingerprint; obligation/discharge mismatch; an undisclosed
+nested remover call; a populated discharge on `ring-remove` or each other
+non-arena role; an exact-looking row on a remover lookalike; and whole-page/
+removal/release ordering mismatch. Each rejects at the narrowest Task 5 entry;
+Task 6 later repeats the row mutations through `dataclasses.replace`.
 
-- [ ] **Step 3: Verify RED**
+- [ ] **Step 4: Verify RED**
 
 ```bash
 python -m pytest tools/melee-agent/tests/test_retro_x86_cfg.py -q \
@@ -964,7 +1066,7 @@ python -m pytest tools/melee-agent/tests/test_retro_x86_cfg.py -q \
 Expected: positives fail because the transfer checker is missing, while every
 hostile retains a distinct pytest ID.
 
-- [ ] **Step 4: Implement the transfer checker and role assembly**
+- [ ] **Step 5: Implement the transfer checker and role assembly**
 
 ```python
 def _publication_private_arena_transfer(
@@ -1024,11 +1126,17 @@ general alternate discovery root.
 Require the Task 4 layout to equal `ring_evidence.layout` except for the exact
 selector-derived fields Task 4 is authorized to populate; any disagreement in
 the inherited page/header/link fields rejects.
-Require its least reachable complete function/call closure, reconcile raw,
-decoded, and provisional-residue edges with
+Require its least reachable complete function/call closure. Reconcile the
+exact decoded domain plus exact equality with the current least-reachable
+`provisional_unowned_raw_callers_by_target` through
 `_least_reachable_incoming_call_domain_is_closed`, and store typed edges in the
-block role. A null deallocator is allowed only when no certified returning path
-or inventoried metadata writer needs free/coalesce semantics.
+block role. This is local provisional closure, not final residue acceptance;
+the enclosing publication/Task 6 currentness path separately runs the existing
+final data/residue reconciliation and rejects every provisional site not
+classified as owned data or unreachable executable residue. A direct Task 5
+helper does not require `publication_final_residue`. A null deallocator is
+allowed only when no certified returning path or inventoried metadata writer
+needs free/coalesce semantics.
 
 Discover the unique shared block initializer by successful structural checking
 of its bounded header/page-flags/boundary writes, then require three exact call
@@ -1074,14 +1182,21 @@ tagged page word, invoke certified insert, bind its bit-2 clear to
 single-usable-block page predicate before certified ring removal and release to
 `none/none`. Every branch and nested edge must restore at the exact
 deallocator root; deallocator closure entries and an insert transfer alone are
-not equivalent evidence. The release branch must consume the exact retained
-`ring-remove` transfer and its triple-keyed spans from `ring_evidence`, not
-merely rediscover a remover-shaped function. It must also prove exact untagged
-ring page `P` at argument zero for every retained
-`remover_call_obligations` key and discharge those keys one-for-one. Task 5 may
-use its now-complete payload overlay, page-pointer flag, typed-field writer
-closure, and compound restoration proof; it may not trust a familiar
-displacement or any opaque Task 3 caller expression.
+not equivalent evidence. The release branch consumes the exact retained
+`ring-remove` transfer and triple-keyed spans. For each retained obligation
+key, the fresh interpreter proves exact
+`Q -> B -> tagged page word -> untagged P -> argument[0]`, constructs the
+canonical `_PublicationPrivateRemovalCallDischarge`, and returns it in the
+unique `arena-free` transfer's required `removal_call_discharges` field.
+Validate argument index/literal, decoded owner/target/domain, whole-page/
+removal/release order, canonical semantic proof slice, current owner
+fingerprint, and exact one-for-one keys. A row is output evidence, not a local
+boolean. Mechanically widen every existing Task 3/4 transfer constructor with
+`removal_call_discharges=()`; do not change Task 3 recognizer behavior,
+populate `ring-remove.invocations`, add a page origin, or replace an
+obligation. Task 5 may use its now-complete payload overlay, page-pointer flag,
+typed-field writer closure, and compound restoration proof; it may not trust a
+familiar displacement or any opaque Task 3 caller expression.
 
 Within private-free, prove the classifying predicate partitions the direct
 small-free and arena-free edges: exactly one is taken for the original payload.
@@ -1099,10 +1214,12 @@ arena-derived memory operand, including every block-initializer, insert, and
 arena-free operand.
 Non-arena paths may perform unrelated read-only metadata work or hand off to an
 already certified allocator/deallocator root, but may not write, consume, or
-synthesize an arena capability. Reconcile every provisional raw site against
-the final executable partition before success.
+synthesize an arena capability. A narrow Task 5 result may retain exact local
+provisional-raw closure; enclosing publication and Task 6 replay reconcile
+every such site against the final executable/data/residue partition before
+success.
 
-- [ ] **Step 5: Run transfer tests and commit**
+- [ ] **Step 6: Run transfer tests and commit**
 
 ```bash
 python -m pytest tools/melee-agent/tests/test_retro_x86_cfg.py -q \
@@ -1118,19 +1235,28 @@ Expected: all selected tests pass before the commit.
 ### Task 6: Assemble Durable Evidence and Replay Every Dependency
 
 **Files:**
-- Modify: `tools/mwcc_retro/x86_cfg.py:1660-1750`
-- Modify: `tools/mwcc_retro/x86_cfg.py:19350-21050`
-- Modify: `tools/melee-agent/tests/test_retro_x86_cfg.py:11500-12350`
+- Modify: `tools/mwcc_retro/x86_cfg.py` (publication evidence dataclasses and
+  arena invariant builder/currentness methods; locate by symbol)
+- Modify: `tools/melee-agent/tests/test_retro_x86_cfg.py` (private-page arena
+  invariant assembly/replay tests; locate by test name)
 
 **Interfaces:**
-- Consumes: layout, immutable Task 3 ring evidence, block role, all ring/block
-  transfers, and all spans from Tasks 2-5.
-- Produces: `_PublicationPrivatePageArenaInvariant`, its builder, and its
-  dependency replay validator. The invariant embeds the exact initializer
-  effect closure as its induction base; `induction_substituted_entries` records
-  the exact effect-executed/later-transfer intersection; there is no ordinary
-  `initialize` transfer, exactly one `select` transfer, and exactly one
-  `arena-free` compound transfer.
+- Consumes: layout, immutable Task 3 ring evidence and obligations, the Task 5
+  block role, all transfers/spans, and the populated
+  `arena-free.removal_call_discharges` tuple.
+- Produces/finalizes the exact immutable interfaces
+  `_PublicationPrivateRemovalCallDischarge`,
+  `_PublicationPrivateArenaDependency`, and
+  `_PublicationPrivatePageArenaInvariant`;
+  `_publication_private_page_arena_invariant(...) ->
+  _PublicationPrivatePageArenaInvariant | None`; and
+  `_publication_private_page_arena_invariant_is_current(invariant) -> bool`.
+  The discharge type is introduced by Task 5 and is listed here because it is
+  part of Task 6's durable aggregate/equality contract. The invariant embeds
+  the exact initializer effect closure as its induction base;
+  `induction_substituted_entries` records the exact effect-executed/later-
+  transfer intersection; there is no ordinary `initialize` transfer, exactly
+  one `select` transfer, and exactly one `arena-free` compound transfer.
 
 - [ ] **Step 1: Write the RED evidence-assembly test**
 
@@ -1200,6 +1326,14 @@ def test_private_page_arena_invariant_serializes_complete_evidence():
         == extent.allocator_dependency_fingerprints
 ```
 
+Also select the unique `arena-free` transfer and assert its nonempty canonical
+`removal_call_discharges` tuple has exact key equality with
+`invariant.page_ring.remover_call_obligations`, argument index zero, the closed
+exact-untagged relation, canonical call-containing proof slices, and matching
+caller fingerprints. Assert every other transfer has an empty tuple and the
+retained `ring-remove` still has `invocations == ()` and an empty discharge
+tuple.
+
 Independently derive the expected effect-executed/non-initializer-transfer
 intersection from the fixture effects and completed transfers, and assert exact
 tuple equality with `invariant.induction_substituted_entries`. The explicit
@@ -1229,6 +1363,11 @@ and a fresh recomputation that differs in any field. Each altered
 certificate must fail
 `_publication_private_page_arena_invariant_is_current` without noting partial
 dependencies.
+Add `dataclasses.replace` hostiles for every discharge key/field, row order,
+duplication, cross-bound placement, wrong-role placement, obligation/discharge
+mismatch, proof slice, owner fingerprint, direct/nested arena-free lineage, and
+whole-page/removal/release ordering fact. A structurally valid supplied row must
+still fail if fresh semantic recomputation differs.
 
 - [ ] **Step 2: Verify RED**
 
@@ -1242,6 +1381,46 @@ Expected: FAIL with the invariant builder/validator missing.
 - [ ] **Step 3: Implement assembly and replay**
 
 ```python
+@dataclass(frozen=True, slots=True)
+class _PublicationPrivateRemovalCallDischarge:
+    """Task 5 semantic proof discharging one retained Task 3 call fact."""
+
+    caller_entry: int
+    call_address: int
+    remover_entry: int
+    argument_index: int
+    argument_relation: Literal["exact-untagged-recovered-page"]
+    caller_function_sha256: str
+    proof_instruction_addresses: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationPrivateArenaDependency:
+    kind: Literal["function", "global-slot", "absolute-reference"]
+    identifier: int
+    fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationPrivatePageArenaInvariant:
+    allocator_root: int
+    factory_entry: int
+    page_provider: int
+    large_allocator: int
+    extent_token_sha256: str
+    initializer_effects: _PublicationPrivateHeapEffectClosure
+    layout: _PublicationPrivatePageLayout
+    page_ring: _PublicationPrivatePageRingRole
+    block_arena: _PublicationPrivateBlockArenaRole
+    induction_substituted_entries: tuple[int, ...]
+    function_entries: tuple[int, ...]
+    call_edges: tuple[_PublicationPrivateArenaCallEdge, ...]
+    spans: tuple[_PublicationPrivateArenaSpan, ...]
+    transfers: tuple[_PublicationPrivateArenaTransfer, ...]
+    dependencies: tuple[_PublicationPrivateArenaDependency, ...]
+    allocator_dependency_fingerprints: tuple[tuple[int, str], ...]
+
+
 def _publication_private_page_arena_invariant(
     self,
     contract: _PrivateHeapAllocatorContract,
@@ -1258,10 +1437,11 @@ def _publication_private_page_arena_invariant_is_current(
     """Replay all function, edge, slot, layout, transfer, and span evidence."""
 ```
 
-Canonicalize contextual invocations, state transitions, typed edges, spans,
-transfer triple keys, function entries, `induction_substituted_entries`, role
-entries, and dependencies; reject duplicates or conflicting exact keys before
-publication. Derive the substitution entries as the exact intersection of
+Canonicalize contextual invocations, state transitions, removal-call
+discharges, typed edges, spans, transfer triple keys, function entries,
+`induction_substituted_entries`, role entries, and dependencies; reject
+duplicates, noncanonical discharge placement/order, or conflicting exact keys
+before publication. Derive the substitution entries as the exact intersection of
 initializer-effect executed helper entries and helpers active in later arena
 transfers, meaning transfers having at least one non-`initializer-base`
 invocation; do not use a helper-name allowlist. Snapshot every function, concrete
@@ -1278,8 +1458,11 @@ induction-base effects.
 
 Require the arena-free transfer's exact owner entry, deallocator invocation,
 payload recovery, ordered state transitions, nested insert/coalescer and
-optional ring-removal/release edges, full span inventory, fingerprint, and
-dependencies.
+optional ring-removal/release edges, full span inventory, fingerprint,
+dependencies, and canonical removal-call discharge rows. Validate closed row
+literals, unique keys, proof slices, owner fingerprints, and exact
+obligation/discharge key equality; every non-arena-free transfer has an empty
+tuple.
 
 Carry immutable ring evidence from Task 3 through selector and mutation
 assembly. Require every retained ring transfer and span to appear unchanged in
@@ -1288,22 +1471,27 @@ span, and every aggregate span to be referenced by its certified transfer. A
 shared key is allowed only when its access, region, and field interpretation is
 identical. The whole-page arena-free branch must reference the retained
 `ring-remove` transfer rather than a fresh remover lookalike.
-Retain the canonical Task 3 remover-call obligations unchanged, require the
-arena-free compound transfer to discharge every obligation key exactly once as
-exact `P`, and reject any extra nested remover call or surviving obligation.
+Retain the canonical Task 3 remover-call obligations unchanged. Freshly prove
+the exact argument-zero untagged recovered-page relation and construct the
+arena-free transfer's canonical rows; reject any extra nested remover call,
+surviving obligation, or obligation/discharge key mismatch.
 
-Replay in fail-closed order: validate immutable shape/order/literals first;
-replay allocator fingerprints and embedded initializer effects; replay
-canonical dependencies plus raw/decoded/provisional-residue and contextual
-incoming call closure; freshly recompute layout, ring, its removal-call
-obligations, selector,
-every induction-substituted helper, block-initializer/insert invocations and
-local postconditions, both split calls and their bit-2/list effects, unlink's
-selector correction, resize insert's clear-before-list correction,
-private-free's mutually exclusive small/arena branch partition, arena-free and
-resize compound restoration obligations, mutation contexts, edges, transfers,
-and spans with no arena memo lookup; then require exact dataclass equality. Only
-after equality may
+Replay in fail-closed order: validate immutable shape/order/literals, discharge
+literals/order/role placement, and exact obligation/discharge key equality
+first without trusting the relation; replay allocator fingerprints and
+embedded initializer effects; replay canonical dependencies, raw/decoded and
+local provisional-call closure, publication-final data/residue reconciliation,
+contextual incoming calls, and discharge owner fingerprints; freshly recompute
+layout, ring and its nonsemantic removal obligations, selector, every
+induction-substituted helper, block-initializer/insert invocations and local
+postconditions, both split calls and their bit-2/list effects, unlink's selector
+correction, resize insert's clear-before-list correction, private-free's
+mutually exclusive direct branches and distinct nested backing-page-retirement
+lineage, arena-free/resize compound restoration, mutation contexts, edges,
+transfers, spans, and the exact semantic remover proof with no arena memo.
+Construct canonical discharge rows from that fresh proof, require exact key
+equality, and then require exact dataclass equality including
+`arena_free_transfer.removal_call_discharges`. Only after equality may
 dependencies be propagated or noted. Reject final assembly unless ring offsets
 are distinct, the split minimum is positive, all flag meanings are distinct
 and proved, there is one
@@ -1329,9 +1517,11 @@ Expected: all selected tests pass before the commit.
 ### Task 7: Consume Arena Spans in Publication Body Domains
 
 **Files:**
-- Modify: `tools/mwcc_retro/x86_cfg.py:1580-1650`
-- Modify: `tools/mwcc_retro/x86_cfg.py:50100-51200`
-- Modify: `tools/melee-agent/tests/test_retro_x86_cfg.py:11400-12450`
+- Modify: `tools/mwcc_retro/x86_cfg.py`
+  (`_PublicationBodyAddressDomainWitness` and
+  `_publication_body_address_domains`; locate by symbol)
+- Modify: `tools/melee-agent/tests/test_retro_x86_cfg.py` (private-page arena
+  body-domain integration tests; locate by test name)
 
 **Interfaces:**
 - Consumes: `_PublicationPrivatePageArenaInvariant`.
@@ -1401,6 +1591,12 @@ both retained-page and page-release outcomes; hostile omissions or reordering
 of its compound transition/edges must reject. Include a positive private-free
 partition test covering the direct small and direct arena arms separately plus
 small-free backing-page retirement, and reject any merged payload lineage.
+Add three finite-candidate controls: provider and initializer/helper absent from
+`returning_bodies` but joined by one exact reconciled provider direct edge must
+succeed; an unrelated returning body that is not a provider direct callee is
+never offered to the extent constructor; and two distinct provider direct
+callees that both yield current extent/effect candidates for the same contract
+must reject as ambiguous.
 
 - [ ] **Step 2: Verify RED**
 
@@ -1423,13 +1619,20 @@ private_page_arena_invariant: (
 ```
 
 Discover candidate arena bases from allocator bridges/contracts independently
-of the returning-body list; initializer and provider functions may be ordinary
-dependency callees. Build arena invariants after initializer-effect contexts,
-at most once per distinct proof input during this one body-domain call. Use a
-local memo key containing allocator root, sorted explicit protected slots,
-contract fingerprint, extent token, and exact initializer effects. The memo is
-only construction deduplication: every supplied durable invariant still uses
-Task 6 replay, and no memo persists across calls.
+of the returning-body list. For each contract, form a finite, sorted,
+duplicate-free helper tuple from `_function_direct_calls(
+contract.page_provider)` plus already certified matching provider/helper edges.
+Reconcile exact ownership and raw/decoded facts, and call
+`_publication_private_heap_extent_witness(contract, helper_entry)` only on that
+finite tuple. Do not scan all functions and do not require the provider or
+helper to be a returning body. Reject ambiguity if multiple distinct callees
+yield current extent/effect candidates for one contract. Build arena invariants
+after initializer-effect contexts, at most once per distinct proof input during
+this body-domain call. Use a local memo key containing allocator root, sorted
+explicit protected slots, contract fingerprint, extent token, and exact
+initializer effects. The memo is only construction deduplication: every
+supplied durable invariant still uses Task 6 replay, and no memo persists
+across calls.
 
 Build an O(1) function-to-context map. Reconcile the returning closure's active
 edges with all contextual invocation rows, including every
@@ -1463,6 +1666,9 @@ input/output domain. Derive and validate substitution generically from the exact
 effect-executed/later-transfer intersection; do not special-case insert or
 block initializer. Do not resolve an actual installed exact-key collision by
 precedence.
+Removal-discharge rows are never consumed as operand authority. Task 7 still
+requires the exact triple-keyed span plus the complete invariant after Task 6
+currentness replay.
 Keep generic private-heap rejection unchanged. At each body exit,
 require exact per-body arena span use:
 
@@ -1489,15 +1695,22 @@ pass before the commit.
 ### Task 8: Run Local, Exact Mini-Query, and Full-Root Gates
 
 **Files:**
-- Modify: `build/diagnostics/task4-repair-exact/hydrate-cfg-query.py` (ignored)
+- Modify: `build/diagnostics/task4-repair-exact/hydrate-cfg-query.py` (ignored
+  formatter only)
 - Modify: `docs/superpowers/plans/2026-08-06-private-page-arena-invariant.md`
-- Modify: `.superpowers/sdd/2026-07-12-retail-pcode-proof/progress.md` (ignored
-  operational ledger, if retained by the parent task)
+  (the authoritative tracked arena-gate ledger)
+- Observe only: `.superpowers/sdd/2026-07-12-retail-pcode-proof/progress.md`
+  and `.superpowers/sdd/2026-08-06-private-page-arena-invariant/progress.md`
+  (ignored operational notes; never sole acceptance evidence)
+- Reference at parent handback: `.superpowers/sdd/progress.md` (tracked root
+  ledger; link to the authoritative arena entry rather than duplicating or
+  weakening it)
 
 **Interfaces:**
 - Consumes: the complete local certificate.
-- Produces: recorded local evidence, exact retail mini-query evidence, and one
-  authoritative full-root result or next fail-closed boundary.
+- Produces: recorded local/mini-query evidence and exactly one positive
+  `0x435620` publication-certificate result with stages. A later fail-closed
+  boundary is diagnostic progress only and does not complete Task 8.
 
 - [ ] **Step 1: Run complete local verification**
 
@@ -1523,7 +1736,32 @@ entries/invocations/state transitions, ordered split call pairs and copied bit-2
 lineage, unlink/insert state corrections, private-free branch partition,
 arena-free/deallocator and resize entries, canonical dependency-kind counts,
 transfer roles, span count, and body-domain count. Do not add a parser option or
-new artifact.
+new artifact. Also print and assert these named facts:
+
+```text
+arena_invariant_current=True
+allocator_fingerprint_count=<N>
+allocator_fingerprint_sha256=<sha256 of canonical tuple>
+allocator_fingerprints_equal_extent=True
+initializer_effects_equal=True
+initializer_effects_current=True
+removal_obligation_count=<N>
+removal_obligation_keys=<canonical keys>
+removal_discharge_count=<N>
+removal_discharge_keys=<canonical keys>
+removal_keys_equal=True
+retained_ring_transfer_count=<N>
+retained_ring_transfer_equality=True
+retained_ring_span_count=<N>
+retained_ring_span_equality=True
+```
+
+`initializer_effects_current` calls
+`_publication_private_heap_effect_closure_is_current(
+invariant.initializer_effects)`. `arena_invariant_current` calls
+`_publication_private_page_arena_invariant_is_current(invariant)`. The digest
+observes the exact tuple already stored in evidence; it is not a new
+certificate field or artifact.
 
 - [ ] **Step 3: Run the exact retail mini-query**
 
@@ -1555,11 +1793,26 @@ in the complete classified deallocator closure with both retained-page and
 exact whole-page-release obligations;
 resize `0x4046d0`; function/global-slot/absolute-reference dependencies;
 complete contextual roles and triple-keyed spans; wall time below two minutes.
+All Step 2 named facts must be present. Obligation and discharge counts are
+nonzero and equal; their canonical keys are identical; the unique arena-free
+transfer carries the tuple and every other transfer is empty. Record exact
+values, wall time, and maximum RSS.
 
 If it fails, stop at the first structural mismatch and add a focused synthetic
 RED test before changing production logic.
 
 - [ ] **Step 4: Commit tracked validation notes and push before the long run**
+
+Before committing, add one dated validation entry to this tracked plan with:
+commit and compiler/executable identities; exact commands and pass counts; all
+Step 2 named outputs and salient role/span/body counts; wall time and RSS; path
+and SHA-256 of the ignored hydrated helper and every retained ignored log; and
+explicit `0x435620` status (pending until Step 5, then amended with its positive
+row/stages).
+
+This tracked plan is the authoritative arena-gate ledger. Ignored progress
+files and logs are supporting operational state only. Absence of a process,
+presence of files, or a partial checkpoint tree never implies completion.
 
 ```bash
 git add \
@@ -1575,20 +1828,117 @@ Do not stage the ignored hydrated helper or operational ledger.
 - [ ] **Step 5: Run the exact root only after all earlier gates pass**
 
 ```bash
-/usr/bin/time -l env PYTHONPATH=. python \
-  build/diagnostics/task4-repair-exact/hydrate-cfg-query.py \
-  --scan-owned-blocks \
-  --task4-publication-certificate \
-  --task4-publication-root 0x435620 \
-  --no-semantic-trace
+ROOT=$(pwd -P)
+ROOT_LOG=$(mktemp \
+  "$ROOT/build/diagnostics/task4-repair-exact/task4-publication-root-435620.log.XXXXXX")
+set -o pipefail
+if ! /usr/bin/time -l env PYTHONPATH=. python \
+    build/diagnostics/task4-repair-exact/hydrate-cfg-query.py \
+    --scan-owned-blocks \
+    --task4-publication-certificate \
+    --task4-publication-root 0x435620 \
+    --no-semantic-trace 2>&1 | tee "$ROOT_LOG"; then
+  exit 1
+fi
+python - "$ROOT_LOG" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+rows = [
+    line for line in Path(sys.argv[1]).read_text().splitlines()
+    if line.startswith("task4-publication-certificate;")
+]
+assert len(rows) == 1, rows
+assert re.fullmatch(
+    r"task4-publication-certificate;root=0x435620;.+;result=True;stages=.*",
+    rows[0],
+), rows[0]
+print(rows[0])
+PY
 ```
 
-Expected: `_publication_body_address_domains` passes `0x403e30`. Treat the
-first later fail-closed stage, if any, as the next bounded Task 4 boundary; do
-not broaden this certificate to suppress an unrelated failure.
+Expected: command status zero, exactly one correctly rooted `result=True` row,
+and recorded stages showing the publication body-domain gate passed. On any
+later fail-closed boundary, add a focused RED, repair/review, rerun local and
+mini-query gates, and rerun this command. Do not check Step 5 or Task 8 complete
+until it passes.
 
 - [ ] **Step 6: Hand back to the parent Task 4 gates**
 
-After the first root passes, the parent plan owns the second publication root,
-clean Task 7 replay, final full-suite validation, promotion, merge, issue
-resolution, and queue refresh.
+1. After positive `0x435620`, run the exact companion `0x435a8c` environment
+   and parser at
+   `docs/superpowers/plans/2026-08-02-return-path-publication-noninterference.md`,
+   lines 2046-2111. Require exactly one
+   `root=0x435a8c;...;result=True;stages=...` row; `0x435620` cannot
+   substitute.
+2. Preserve the companion 29/30 diagnostic and close parent Task 4A using
+   parent plan `2026-07-12-retail-pcode-proof.md`, lines 574-626, plus
+   companion verifier blocks 2209-2473. Require zero unresolved targets and
+   the independent generic `0x4b1f95` fact with no publication provenance.
+3. Run parent Task 4 focused/static gates (parent lines 521-542) and companion
+   Task 8 gates/questions (companion lines 2541-2682).
+4. Before resuming v6, inventory
+   `build/mwcc_retro/gc125n-proof/return-path-publication-v6/.producer-domain-checkpoints.v1`
+   in the authoritative tracked ledger: root path, checkpoint schema, file
+   count, byte size, current code/proof identities, whether `CURRENT` exists,
+   and a deterministic hash of the sorted relative-path/file-SHA256 stream.
+   Also record the ignored hydrated-helper hash and exact command. Never infer
+   acceptance from file/process presence.
+5. Resume that same v6 root only with the exact bounded wrapper at companion
+   lines 2113-2200. Each nonzero refusal must parse positive
+   `0 < completed_this_run <= 2048`, valid counts, and the exact checkpoint
+   directory. Zero/malformed progress stops. Status zero is accepted only
+   after `resolve_lifetime_bundle(Path(OUT))` validates the published bundle.
+6. Freeze proof-affecting code, then generate the initially absent `run1` and
+   `run2` exactly once with the independent wrapper at parent lines 853-971.
+   Resume each root in place only across validated positive-progress checkpoint
+   refusals; never copy v6 or peer state. Require resolver-valid `CURRENT`, all
+   nine canonical files, and byte equality.
+7. Later parent Task 7 Step 8 and Task 10 Step 7 references to “repeat the
+   generator runs” mean **resolver-revalidate and byte-compare the accepted
+   immutable canonical `run1`/`run2` roots**, not invoke the fresh-root wrapper
+   again. The wrapper refuses existing roots. If genuine regeneration is
+   necessary, record abandonment evidence, choose a fresh paired suffix, and
+   perform two additional full independent cycles; never delete/reuse accepted
+   roots silently.
+8. Run fresh parent Tasks 8/9 gates (parent lines 1024-1160), then exactly four
+   qualified live probe pairs and the closed union gate (1164-1376), then
+   promotion and Task 10 verification (1378-1435).
+9. Perform whole-branch Critical/Important review; a proof-affecting change
+   invalidates freeze and repeats accepted-v6, canonical run1/run2, probes, and
+   promotion gates (parent 1459-1462).
+10. Preserve/fingerprint main `.coverage` and
+    `docs/superpowers/order-targets/`, run
+    `git merge-tree --write-tree --messages master
+    codex/issue-1240-retail-pcode-proof`, rehearse in a disposable worktree,
+    merge locally only after clean rehearsal, and verify preservation (parent
+    1463-1483). The exact copy/worktree/resolution/merged-test commands are not
+    currently specified; record them before mutation rather than inventing
+    them here.
+11. Replay `/opt/homebrew/bin/melee-agent` from main/master using a
+    semantically relevant installed check. The exact subcommand/pass predicate
+    is not currently specified and must be recorded before closeout; `--help`
+    is insufficient.
+12. Resolve issue 1240 only with real final values using
+    `DECOMP_AGENT_ID=codex-issue-1240-retail-pcode-proof melee-agent issue
+    resolve 1240 --note "<final commit; proof/manifest digests; static
+    coverage/high-water; four probes>"`, then refresh with
+    `DECOMP_AGENT_ID=codex-issue-1240-retail-pcode-proof melee-agent issue
+    list`. No placeholders.
+
+For item 4, record the deterministic checkpoint digest without inventing a new
+artifact format:
+
+```bash
+CHECKPOINT="$ROOT/build/mwcc_retro/gc125n-proof/return-path-publication-v6/.producer-domain-checkpoints.v1"
+git rev-parse HEAD
+shasum -a 256 tools/mwcc_retro/x86_cfg.py \
+  build/diagnostics/task4-repair-exact/hydrate-cfg-query.py
+test -f "$ROOT/build/mwcc_retro/gc125n-proof/return-path-publication-v6/CURRENT" \
+  && echo CURRENT=present || echo CURRENT=absent
+(cd "$CHECKPOINT" && find . -type f -print0 | LC_ALL=C sort -z | \
+  xargs -0 shasum -a 256 | shasum -a 256)
+(cd "$CHECKPOINT" && find . -type f | wc -l)
+du -sk "$CHECKPOINT"
+```

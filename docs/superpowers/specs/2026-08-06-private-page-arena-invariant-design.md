@@ -213,6 +213,19 @@ class _PublicationPrivateRemovalCallObligation:
 
 
 @dataclass(frozen=True, slots=True)
+class _PublicationPrivateRemovalCallDischarge:
+    """Task 5 semantic proof discharging one retained Task 3 call fact."""
+
+    caller_entry: int
+    call_address: int
+    remover_entry: int
+    argument_index: int
+    argument_relation: Literal["exact-untagged-recovered-page"]
+    caller_function_sha256: str
+    proof_instruction_addresses: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _PublicationPrivatePageRingRole:
     head_slot: int
     provider_entry: int
@@ -293,6 +306,9 @@ class _PublicationPrivateArenaTransfer:
     ]
     invocations: tuple[_PublicationPrivateArenaInvocation, ...]
     state_transitions: tuple[_PublicationPrivateArenaStateTransition, ...]
+    removal_call_discharges: tuple[
+        _PublicationPrivateRemovalCallDischarge, ...
+    ]
     instruction_addresses: tuple[int, ...]
     span_keys: tuple[tuple[int, int, int], ...]
     function_sha256: str
@@ -334,6 +350,22 @@ class _PublicationPrivatePageArenaInvariant:
     dependencies: tuple[_PublicationPrivateArenaDependency, ...]
     allocator_dependency_fingerprints: tuple[tuple[int, str], ...]
 ```
+
+A removal obligation/discharge key is
+`(caller_entry, call_address, remover_entry)`. Removal-discharge rows are
+sorted and unique by that key. Their canonical key tuple equals the retained
+Task 3 obligation-key tuple exactly: no missing, duplicate, foreign,
+reordered, or extra key. Every row has `argument_index == 0`,
+`argument_relation == "exact-untagged-recovered-page"`, a nonempty sorted
+duplicate-free proof slice containing the call, and the current caller
+fingerprint, which also equals the matching obligation's caller fingerprint.
+Only the unique `role="arena-free"` transfer may have a nonempty tuple; it has
+the exact canonical tuple and is nonempty whenever retained obligations exist.
+Every other transfer has `removal_call_discharges == ()`. In particular, the
+retained Task 3 `ring-remove` transfer still has `invocations == ()` and now
+mechanically has `removal_call_discharges == ()`; it gains no page origin and
+makes no exact-`P` semantic claim. The Task 5 row is a checked proof link, not
+a span and not a new authorization path.
 
 Every operand identity is the triple
 `(function_entry, instruction_address, operand_index)`. Call-edge tuples are
@@ -469,20 +501,43 @@ extent witness, and its current initializer effects.
    `B`/`B2` subjects, and distinct allocation/list-membership postconditions.
    Arena free's compound transfer must be rooted in that closed deallocator
    context and bind every nested mutation/release edge before the boundary
-   returns. Its page-release arm must discharge the retained Task 3 removal-call
-   obligations one-for-one by proving exact untagged ring page `P` at argument
-   zero. A wrong, missing, partial, adjusted, foreign, duplicate, or undisclosed
-   call rejects final evidence; an address inventory alone never becomes a
-   semantic invocation.
+   returns. Its page-release arm consumes the exact retained Task 3
+   `ring-remove` transfer and span keys, then freshly proves, parametrically for
+   every classified arena-free invocation,
+   `Q -> B -> tagged page word -> untagged P -> argument[0]`. It serializes one
+   canonical `_PublicationPrivateRemovalCallDischarge` row per retained
+   obligation key on the unique `arena-free` transfer. The argument must be the
+   exact recovered `P` after removing the proved page-pointer flag: no tag,
+   adjustment, displacement, join, provider/ring substitute, wrong arena-free
+   lineage, or merely related page is accepted. The keyed instruction is a
+   decoded direct call owned by `caller_entry`, targets `remover_entry`, belongs
+   to the complete reconciled incoming domain and release arm, occurs after the
+   exact whole-page predicate and before release, and has no undisclosed peer
+   call. Wrong, missing, partial, adjusted, foreign, duplicate, or extra
+   evidence rejects. The Task 3 obligation and `ring-remove` transfer remain
+   unchanged and nonsemantic.
+
+   A call site used by both the direct private-free arena lineage and the nested
+   small-free backing-page-retirement lineage still has one discharge row: the
+   row is a parametric fact about the current arena-free input. The arena-free
+   invocation inventory separately proves the two payload lineages and forbids
+   their collapse. Distinct remover call sites have distinct rows.
 7. Close the complete incoming domain of every discovered mutation role. An
    otherwise external owner may enter the mutation fixed point only if its
    complete relevant paths type-check as one bounded `resize` context. Add it
    to `mutation_context_entries`, fingerprint it, and repeat incoming-role
    closure. Do not add arbitrary incoming callers to the deallocator closure.
-8. Use `_least_reachable_incoming_call_domain_is_closed` for raw callers so
-   owned instruction interiors and finally certified data/residue do not
-   become false calls. Final recovery must still reconcile every provisional
-   raw site against the exact executable partition.
+8. Use `_least_reachable_incoming_call_domain_is_closed` for each Task 5 unit
+   proof. Local success means the exact decoded call domain plus exact equality
+   with `provisional_unowned_raw_callers_by_target` in the current
+   least-reachable graph; an unowned raw `E8` remains provisional and is not
+   promoted to a call. A direct Task 5 helper must not require
+   `publication_final_residue`, and local provisional closure must not be
+   described as final exact residue closure. Overall publication and Task 6
+   replay additionally run the existing final data/residue reconciliation (the
+   `_record_provisional_unowned_raw_caller_diagnostics` stage), where every
+   provisional site must classify exactly as owned data or unreachable
+   executable residue. Any other final classification rejects.
 9. Derive `induction_substituted_entries` from the exact intersection of
    initializer-effect executed helper entries and completed transfer entries
    having at least one non-`initializer-base` invocation.
@@ -657,15 +712,22 @@ partial write, unbounded index, or capability escape rejects the context.
 
 ## Publication-Audit Integration
 
-`_publication_body_address_domains` discovers candidate arena bases from the
-allocator bridges/contracts, independently of the returning-body list. This is
-required because the initializer or provider can be a dependency callee rather
-than a returning body. After initializer-effect contexts are available, it
-builds each distinct arena invariant at most once in that body-domain call.
-The process-local memo key contains the allocator root, the sorted explicit
-protected-slot tuple, the contract fingerprint, the extent token, and the
-exact initializer effect closure. There is no persistent or replay-bypassing
-arena cache.
+`_publication_body_address_domains` discovers candidate arena bases from
+allocator bridges/contracts independently of the returning-body list. For each
+contract, form a finite, sorted, duplicate-free helper-candidate tuple from
+exact reconciled direct callees owned by `contract.page_provider`; include any
+provider/helper edge already certified by the matching extent evidence, and
+require that edge to reconcile with the same provider direct-call domain. Call
+the existing `_publication_private_heap_extent_witness(contract, helper_entry)`
+constructor only for that finite tuple. Do not scan all functions and do not
+require the provider or helper to be a returning body. Reject conflicting or
+multiple current extent/effect candidates for one proof input. After
+initializer-effect contexts are available, build each distinct arena invariant
+at most once in that body-domain call. The process-local memo key is
+`(allocator_root, sorted_explicit_protected_slots, contract_fingerprint,
+extent_token, exact_initializer_effects)`. The memo only deduplicates
+construction within the call; every supplied durable invariant still passes
+Task 6 currentness replay, and no memo persists across calls.
 
 A function-to-context map makes body lookup constant time. Before operand
 authorization, the consumer reconciles the returning closure's call edges
@@ -714,13 +776,17 @@ The invariant is durable evidence, not a process-local inference. Construction
 canonicalizes and rejects duplicates before publication:
 
 - embed the exact current initializer effect closure;
-- retain the exact canonical Task 3 removal-call obligations and require the
-  Task 5 arena-free compound proof to discharge their keys one-for-one;
+- retain the exact canonical Task 3 removal-call obligations; freshly
+  construct the canonical `arena-free.removal_call_discharges` tuple; require
+  exact obligation/discharge key equality, closed argument-zero/exact-untagged
+  relation fields, valid proof slices and owner fingerprints, and empty
+  discharge tuples on every non-`arena-free` transfer;
 - require exactly one `select`, one coherent `arena-free` compound transfer,
   and no ordinary `initialize` transfer;
-- sort contextual invocations, state transitions, typed edges, triple span
-  keys, spans, transfers, `induction_substituted_entries`, and role entries;
-  reject duplicate/conflicting keys;
+- sort contextual invocations, state transitions, removal-call discharges,
+  typed edges, triple span keys, spans, transfers,
+  `induction_substituted_entries`, and role entries; require unique discharge
+  keys and reject duplicate/conflicting keys;
 - snapshot every function, concrete global slot, and exact absolute reference
   as canonical `_PublicationPrivateArenaDependency` rows;
 - copy the allocator dependency fingerprint tuple exactly from the extent
@@ -730,23 +796,26 @@ canonicalizes and rejects duplicates before publication:
 
 Replay has one fail-closed ordering:
 
-1. Validate immutable shape, canonical ordering, unique keys, and closed
-   literals without noting or trusting any row.
+1. Validate immutable shape, canonical ordering, unique keys, closed literals,
+   closed discharge literals, canonical discharge order, allowed-role
+   placement, and exact one-for-one obligation/discharge key equality without
+   noting or trusting any row.
 2. Replay allocator dependency fingerprints and the embedded initializer
    effects with their existing current-evidence validators.
 3. Replay canonical function/global-slot/absolute-reference dependency rows,
-   raw/decoded/provisional-residue call closure, contextual incoming calls, and
-   exact function fingerprints.
-4. Freshly recompute layout, ring, its unresolved removal-call obligations,
-   selector, every induction-substituted helper,
-   both ordered block-initializer calls in every split context, input bit-2
-   lineage, insert clear-before-list postconditions, the private-free
-   small/arena branch partition, arena-free and resize compound restoration
-   obligations, mutation contexts, typed edges, transfers, and spans with no
-   arena memo lookup; require the arena-free release proof to discharge every
-   freshly recomputed removal-call obligation exactly once as exact `P`.
+   raw/decoded and local provisional-call closure, followed by the existing
+   publication-final data/residue reconciliation, contextual incoming calls,
+   exact function fingerprints, and discharge caller owner fingerprints.
+4. Freshly recompute layout, ring and its nonsemantic removal obligations,
+   selector, every induction-substituted helper, every Task 5 transfer,
+   private-free's direct-branch partition and distinct nested backing-page-
+   retirement lineage, arena-free/resize compound restoration, and the exact
+   semantic remover proof with no arena memo. Construct canonical discharge
+   rows from that fresh proof and require exact obligation/discharge key
+   equality.
 5. Require exact dataclass equality between the freshly assembled invariant
-   and the supplied invariant.
+   and supplied invariant, including
+   `arena_free_transfer.removal_call_discharges`.
 6. Only after equality succeeds, propagate/note its dependencies and permit an
    operand-specific consumer to use its span.
 
@@ -765,9 +834,8 @@ certificate rejects:
   extra selector caller, missing rotation, or rotation of a different page;
 - a foreign/partial/indexed page-head writer, broken singleton, missing
   reciprocal page link, stale absolute-reference dependency, or unresolved
-  ring edge; a missing, duplicate, foreign, or prematurely semantic Task 3
-  remover-call obligation; or a Task 5 arena-free proof that does not discharge
-  every obligation exactly once as exact untagged `P`;
+  ring edge; or a missing, duplicate, foreign, or prematurely semantic Task 3
+  remover-call obligation;
 - changed extent/size mask, sentinel or page-end off-by-one, missing
   largest-free initialization/update, or a post-initializer extent clobber;
 - selector recurrence through a foreign page, successor/page-end type
@@ -816,15 +884,28 @@ certificate rejects:
 - stale/missing/duplicate invocation or state transition, typed edge, triple
   span key, function, global-slot, absolute-reference, allocator,
   initializer-effect, layout, or extent-token evidence;
-- a missing, duplicate, foreign, stale, or prematurely semantic Task 3
-  removal-call obligation, or any obligation not discharged exactly once by
-  the Task 5 arena-free page-release proof;
+- a missing, duplicated, extra, reordered, cross-bound, or wrong-role discharge
+  row; a changed caller, call site, remover target, argument index, or relation
+  literal; tagged `P`, `P +/- displacement`, foreign/provider/ring page, wrong
+  arena-free lineage, unknown/joined value, or any value merely derived from
+  `P`; an empty, duplicate, unsorted, incomplete, stale, foreign-owner,
+  call-omitting, or otherwise changed proof slice; stale caller fingerprint;
+  retained obligation without discharge, discharge without retained
+  obligation, or undisclosed nested remover call; nonempty discharges on
+  `ring-remove` or another non-`arena-free` role; a remover lookalike detached
+  from the exact retained transfer/span set; or a valid-looking row whose
+  whole-page predicate or removal-before-release ordering is absent;
 - an ordinary initialize transfer, missing/duplicate `block-initialize`
   transfer, missing/duplicate `arena-free` compound transfer, zero or multiple
   select transfers, a nested transient falsely classified as already stable,
   failure to enforce stability at its compound return, fresh recomputation
   unequal to serialized evidence, an operand used without its exact span, or a
   certified span left unused by its body.
+
+Every code-shape hostile rejects at Task 5's narrowest applicable entry. Every
+serialized-row hostile also rejects Task 6 current-evidence replay after a
+`dataclasses.replace` mutation. Exact row equality never substitutes for fresh
+semantic re-proof.
 
 ## Validation Gates
 
@@ -838,14 +919,31 @@ certificate rejects:
    arena-free retained-page and page-release compound paths, selector, every
    invocation context, resize, Task 6 fresh dependency/compound-transfer replay,
    and Task 7 operand-specific body use and installed-collision rejection.
+   Before Task 5 RED, the fixture has a direct private-free arena call and a
+   distinct small-free-to-arena-free backing-page-retirement call whose
+   argument has a separately derived payload lineage. The Task 5 prerequisite
+   recovery includes `audit_anchor(fixture.arena.image,
+   fixture.realloc_driver)`. An equality control proves that anchored recovery
+   preserves the exact Task 1-4 contract, extent, effects, layout, immutable
+   ring evidence, selector role, select transfer, and selector spans; the
+   anchor additionally makes the resize driver/owner reachable. The unanchored
+   path is not allowed to certify a no-resize Task 5 graph.
 2. Existing publication/private-heap tests, `py_compile`, Ruff, and
    `git diff --check` pass.
 3. Extend only the ignored hydrated diagnostic's existing
-   `--private-heap-extent` output. The exact mini-query identifies selector
-   contexts, page-head slot, rotation, full mutation/resize graph, contextual
-   calls, and certified spans in under two minutes.
-4. Run full root `0x435620` only after local and mini-query gates. The later
-   `0x435a8c` root and clean Task 7 replay remain parent-plan gates.
+   `--private-heap-extent` output. It prints and asserts: current invariant
+   result; allocator-fingerprint count and digest plus exact equality to the
+   extent tuple; initializer-effects equality and currentness; retained
+   obligation count/keys; discharge count/keys and exact key equality; retained
+   ring-transfer/span equality counts; the existing role/context/transition/
+   span/body facts; and wall time under two minutes. These are observations of
+   existing evidence, not a new artifact or selector.
+4. Run full root `0x435620` only after local and mini-query gates. Arena Task 8
+   completes only when exactly one correctly rooted publication-certificate
+   row reports `result=True` and records its stages. A later fail-closed
+   boundary is a focused RED/repair/rerun trigger and may be recorded as
+   progress, but is not completion. The later `0x435a8c` root and clean Task 7
+   replay remain ordered parent-plan gates.
 
 ## Non-Goals
 
