@@ -26797,6 +26797,37 @@ class _DirectCfgRecovery:
                 return None
             return owned_depth - amount
 
+        def task4_stack_memory_location(
+            decoded,
+            operand,
+            *,
+            sp: int,
+            argument_count: int,
+            write: bool,
+        ) -> tuple[Literal["owned-local", "argument"], int] | None:
+            """Classify one exact entry-relative ESP memory operand."""
+            if (
+                operand.type != X86_OP_MEM
+                or operand.size != 4
+                or decoded.addr_size != 4
+                or operand.mem.segment != X86_REG_INVALID
+                or operand.mem.base == X86_REG_INVALID
+                or self._register_family(operand.mem.base) != "esp"
+                or operand.mem.index != X86_REG_INVALID
+                or operand.mem.scale not in {0, 1}
+                or not (-0x1000 <= sp <= 0)
+                or sp % 4
+            ):
+                return None
+            logical = sp + operand.mem.disp
+            if logical % 4:
+                return None
+            if sp <= logical and logical + 4 <= 0:
+                return "owned-local", logical
+            if not write and 4 <= logical <= argument_count * 4:
+                return "argument", logical // 4 - 1
+            return None
+
         def task4_plain_return(decoded, owned_depth: int) -> bool:
             """Accept only an untouched entry slot and plain near RET."""
             return bool(
@@ -26910,15 +26941,22 @@ class _DirectCfgRecovery:
                     and mem.base != X86_REG_INVALID
                     and self._register_family(mem.base) == "esp"
                 ):
-                    logical = sp + mem.disp
-                    stored = stack_dict(stack).get(logical)
-                    if stored is not None:
-                        return stored
-                    if logical >= 4 and logical % 4 == 0:
-                        index = logical // 4 - 1
-                        if index < argument_count:
-                            return expression("argument", index)
-                    return expression("stack-input", logical)
+                    location = task4_stack_memory_location(
+                        decoded,
+                        operand,
+                        sp=sp,
+                        argument_count=argument_count,
+                        write=False,
+                    )
+                    if location is None:
+                        return None
+                    kind, logical = location
+                    if kind == "argument":
+                        return expression("argument", logical)
+                    local_stack = stack_dict(stack)
+                    if logical not in local_stack:
+                        return None
+                    return local_stack[logical]
                 arena_address = memory_address(operand, registers)
                 if arena_address is None or arena_address[0] == "absolute":
                     return None
@@ -26955,6 +26993,39 @@ class _DirectCfgRecovery:
                 memory = memory_dict(memory_rows)
                 mnemonic = decoded.mnemonic
                 operands = decoded.operands
+                for operand_index, operand in enumerate(operands):
+                    if operand.type != X86_OP_MEM:
+                        continue
+                    if operand.size != 4 or decoded.addr_size != 4:
+                        return None
+                    if (
+                        operand.mem.base != X86_REG_INVALID
+                        and self._register_family(operand.mem.base) == "esp"
+                    ):
+                        access = operand_access(
+                            operand,
+                            operand_index,
+                            mnemonic,
+                        )
+                        location = (
+                            None
+                            if access is None
+                            else task4_stack_memory_location(
+                                decoded,
+                                operand,
+                                sp=sp,
+                                argument_count=argument_count,
+                                write=access in {"write", "read-write"},
+                            )
+                        )
+                        if location is None:
+                            return None
+                        if (
+                            access in {"read", "read-write"}
+                            and location[0] == "owned-local"
+                            and location[1] not in stack
+                        ):
+                            return None
                 if not decoded.group(CS_GRP_JUMP) and mnemonic not in {
                     "mov",
                     "lea",
@@ -27009,7 +27080,14 @@ class _DirectCfgRecovery:
                         return None
                     amount = operands[1].imm & 0xFFFF_FFFF
                     if mnemonic == "sub":
-                        sp -= amount
+                        new_sp = sp - amount
+                        for offset in range(new_sp, sp, 4):
+                            stack[offset] = expression(
+                                "stack-local",
+                                address,
+                                offset,
+                            )
+                        sp = new_sp
                     else:
                         for offset in tuple(stack):
                             if sp <= offset < sp + amount:
@@ -27030,7 +27108,16 @@ class _DirectCfgRecovery:
                             and mem.base != X86_REG_INVALID
                             and self._register_family(mem.base) == "esp"
                         ):
-                            stack[sp + mem.disp] = source
+                            location = task4_stack_memory_location(
+                                decoded,
+                                destination,
+                                sp=sp,
+                                argument_count=argument_count,
+                                write=True,
+                            )
+                            if location is None or location[0] != "owned-local":
+                                return None
+                            stack[location[1]] = source
                         else:
                             arena_address = memory_address(destination, registers)
                             if arena_address is None or arena_address[0] == "absolute":
@@ -27114,7 +27201,16 @@ class _DirectCfgRecovery:
                             and mem.base != X86_REG_INVALID
                             and self._register_family(mem.base) == "esp"
                         ):
-                            stack[sp + mem.disp] = value
+                            location = task4_stack_memory_location(
+                                decoded,
+                                destination,
+                                sp=sp,
+                                argument_count=argument_count,
+                                write=True,
+                            )
+                            if location is None or location[0] != "owned-local":
+                                return None
+                            stack[location[1]] = value
                         else:
                             arena_address = memory_address(destination, registers)
                             if arena_address is None or arena_address[0] == "absolute":
@@ -27570,6 +27666,28 @@ class _DirectCfgRecovery:
                 decoded = self._owned_decoded(address)
                 operands = decoded.operands
                 mnemonic = decoded.mnemonic
+                for operand_index, operand in enumerate(operands):
+                    if operand.type != X86_OP_MEM:
+                        continue
+                    if operand.size != 4 or decoded.addr_size != 4:
+                        return None
+                    if (
+                        operand.mem.base != X86_REG_INVALID
+                        and self._register_family(operand.mem.base) == "esp"
+                    ):
+                        access = operand_access(
+                            operand,
+                            operand_index,
+                            mnemonic,
+                        )
+                        if access is None or task4_stack_memory_location(
+                            decoded,
+                            operand,
+                            sp=-len(stack) * 4,
+                            argument_count=2,
+                            write=access in {"write", "read-write"},
+                        ) is None:
+                            return None
                 instruction_addresses = instruction_addresses | {address}
                 pending_maximum = tuple(
                     fact

@@ -5803,7 +5803,7 @@ def private_block_selector_stack_image(
     """Prepend a fixed-width stack probe to one Task 4 interpreter."""
     assert component in {"selector", "splitter", "unlinker"}
     program_bytes = bytes.fromhex(program)
-    assert 0 < len(program_bytes) <= 8
+    assert 0 < len(program_bytes) <= 12
     fixture = private_page_arena_image()
     recovery, _contract, _extent, _effects = private_page_arena_contract(
         fixture
@@ -18163,6 +18163,51 @@ def test_private_block_selector_stack_accepts_balanced_full_width(component):
 
     inputs, result = private_block_selector_task4_result(fixture)
 
+    assert_private_block_selector_result(fixture, inputs, result)
+
+
+@pytest.mark.parametrize("component", ("selector", "splitter", "unlinker"))
+@pytest.mark.parametrize(
+    "program",
+    (
+        pytest.param("89 1c 24", id="return-slot-write"),
+        pytest.param("8b 04 24", id="return-slot-read"),
+        pytest.param("89 5c 24 04", id="caller-slot-write"),
+        pytest.param("8b 44 24 0c", id="beyond-argument-read"),
+        pytest.param("89 5c 24 fc", id="below-owned-depth"),
+        pytest.param("66 89 1c 24", id="partial-width"),
+        pytest.param("67 89 1c 24", id="address-size"),
+        pytest.param("89 1c 04", id="indexed-stack"),
+    ),
+)
+def test_private_block_selector_stack_rejects_unowned_esp_memory(
+    component,
+    program,
+):
+    fixture = private_block_selector_stack_image(component, program)
+    inputs, result = private_block_selector_task4_result(fixture)
+    assert result is None
+
+
+@pytest.mark.parametrize("component", ("splitter", "unlinker"))
+def test_private_block_selector_stack_accepts_owned_local_memory(component):
+    fixture = private_block_selector_stack_image(
+        component,
+        "53 89 1c 24 8b 1c 24 5b",
+    )
+    inputs, result = private_block_selector_task4_result(fixture)
+    assert_private_block_selector_result(fixture, inputs, result)
+
+
+@pytest.mark.parametrize("component", ("splitter", "unlinker"))
+def test_private_block_selector_stack_accepts_owned_local_self_cancel(
+    component,
+):
+    fixture = private_block_selector_stack_image(
+        component,
+        "83 ec 04 8b 04 24 33 04 24 83 c4 04",
+    )
+    inputs, result = private_block_selector_task4_result(fixture)
     assert_private_block_selector_result(fixture, inputs, result)
 
 
