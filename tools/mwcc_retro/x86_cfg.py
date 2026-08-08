@@ -62,6 +62,12 @@ _DECODED_INSTRUCTION_CACHE_LIMIT = 1024
 _CHECKPOINTED_DECODED_INSTRUCTION_CACHE_LIMIT = 524_288
 _CHECKPOINTED_READABLE_GLOBAL_EFFECT_LRU_ENTRIES = 32_768
 _GLOBAL_ALIAS_ARGUMENT_INDEX = -1
+_TASK4_SELECTOR_STATE_EVENT_CAP = 4_096
+_TASK4_SPLITTER_STATE_EVENT_CAP = 8_192
+_TASK4_UNLINK_STATE_EVENT_CAP = 8_192
+_TASK4_SELECTOR_EXPRESSION_CAP = 1_024
+_TASK4_HELPER_EXPRESSION_CAP = 4_096
+_TASK4_POSTPROCESS_EXPRESSION_CAP = 4_096
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -140,6 +146,62 @@ class ProducerCheckpointIncomplete(CfgRecoveryError):
             f"validated={validated_queries};pending={pending_queries};"
             f"checkpoint_dir={checkpoint_dir}"
         )
+
+
+class _Task4ProofLimit(RuntimeError):
+    """Private fail-closed sentinel for the Task 4 relational proof."""
+
+    def __init__(
+        self,
+        phase: str,
+        counter: str,
+        observed: int,
+        configured: int,
+    ) -> None:
+        self.phase = phase
+        self.counter = counter
+        self.observed = observed
+        self.configured = configured
+        super().__init__(
+            f"Task 4 {phase} {counter} cap: "
+            f"configured={configured}, observed={observed}"
+        )
+
+
+class _Task4ProofBudget:
+    """Phase-labelled finite budget spanning all Task 4 construction."""
+
+    def __init__(self) -> None:
+        self.counts: dict[tuple[str, str], int] = defaultdict(int)
+
+    def _tick(
+        self,
+        phase: str,
+        counter: str,
+        limit: int,
+    ) -> None:
+        key = (phase, counter)
+        observed = self.counts[key] + 1
+        self.counts[key] = observed
+        if observed > limit:
+            raise _Task4ProofLimit(phase, counter, observed, limit)
+
+    def state_event(self, phase: str) -> None:
+        limits = {
+            "selector": _TASK4_SELECTOR_STATE_EVENT_CAP,
+            "splitter": _TASK4_SPLITTER_STATE_EVENT_CAP,
+            "unlink": _TASK4_UNLINK_STATE_EVENT_CAP,
+        }
+        self._tick(phase, "state-event", limits[phase])
+
+    def expression(self, phase: str) -> None:
+        if phase == "selector":
+            limit = _TASK4_SELECTOR_EXPRESSION_CAP
+        elif phase in {"splitter", "unlink"}:
+            limit = _TASK4_HELPER_EXPRESSION_CAP
+        else:
+            limit = _TASK4_POSTPROCESS_EXPRESSION_CAP
+        self._tick(phase, "expression", limit)
 
 
 class AnalysisLimitError(CfgRecoveryError):
@@ -26531,6 +26593,39 @@ class _DirectCfgRecovery:
         _PublicationPrivateArenaTransfer,
         tuple[_PublicationPrivateArenaSpan, ...],
     ] | None:
+        """Fail closed around the complete Task 4 proof construction."""
+        budget = _Task4ProofBudget()
+        self._task4_last_limit_exhaustion = None
+        try:
+            return self._publication_private_block_selector_role_proof(
+                contract,
+                extent,
+                effects,
+                ring_evidence,
+                budget,
+            )
+        except _Task4ProofLimit as exc:
+            self._task4_last_limit_exhaustion = (
+                exc.phase,
+                exc.counter,
+                exc.observed,
+                exc.configured,
+            )
+            return None
+
+    def _publication_private_block_selector_role_proof(
+        self,
+        contract: _PrivateHeapAllocatorContract,
+        extent: _PublicationPrivateHeapExtentWitness,
+        effects: _PublicationPrivateHeapEffectClosure,
+        ring_evidence: _PublicationPrivatePageRingEvidence,
+        budget: _Task4ProofBudget,
+    ) -> tuple[
+        _PublicationPrivatePageLayout,
+        _PublicationPrivateBlockArenaRole,
+        _PublicationPrivateArenaTransfer,
+        tuple[_PublicationPrivateArenaSpan, ...],
+    ] | None:
         """Type-check the large selector under the page/block invariant."""
         if not (
             isinstance(contract, _PrivateHeapAllocatorContract)
@@ -26599,12 +26694,13 @@ class _DirectCfgRecovery:
             return None
 
         expression_rows: set[tuple[Any, ...]] = set()
+        expression_phase = "postprocess"
 
         def expression(kind: str, *parts: Any) -> tuple[Any, ...]:
             row = (kind, *parts)
+            if row not in expression_rows:
+                budget.expression(expression_phase)
             expression_rows.add(row)
-            if len(expression_rows) > 1024:
-                raise ValueError("private arena expression cap")
             return row
 
         def add_expression(
@@ -26695,8 +26791,11 @@ class _DirectCfgRecovery:
         def trace_acyclic_function(
             function_entry: int,
             argument_count: int,
+            phase: Literal["splitter", "unlink"],
         ) -> tuple[tuple[Any, ...], ...] | None:
             """Execute a finite helper while preserving exact relations."""
+            nonlocal expression_phase
+            expression_phase = phase
             if function_entry not in self.function_addresses:
                 return None
             following_entry = self._following_function_entry(function_entry)
@@ -26816,8 +26915,7 @@ class _DirectCfgRecovery:
                     continue
                 seen.add(key)
                 iterations += 1
-                if iterations > 2048 or len(seen) > 2048:
-                    return None
+                budget.state_event(phase)
                 (
                     registers,
                     sp,
@@ -26917,6 +27015,7 @@ class _DirectCfgRecovery:
                             if arena_address is None or arena_address[0] == "absolute":
                                 return None
                             memory[arena_address] = source
+                            budget.state_event(phase)
                             writes = writes + (
                                 (
                                     address,
@@ -27000,6 +27099,7 @@ class _DirectCfgRecovery:
                             if arena_address is None or arena_address[0] == "absolute":
                                 return None
                             memory[arena_address] = value
+                            budget.state_event(phase)
                             writes = writes + (
                                 (
                                     address,
@@ -27054,6 +27154,7 @@ class _DirectCfgRecovery:
                     call_arguments = tuple(
                         stack.get(sp + index * 4) for index in range(8)
                     )
+                    budget.state_event(phase)
                     calls = calls + ((address, target, call_arguments),)
                     output = list(registers)
                     for family in ("eax", "ecx", "edx"):
@@ -27124,6 +27225,7 @@ class _DirectCfgRecovery:
                                 taken,
                                 address,
                             )
+                        budget.state_event(phase)
                         outgoing = (
                             *state[:5],
                             conditions + (condition,),
@@ -27168,8 +27270,7 @@ class _DirectCfgRecovery:
         ) -> _PublicationPrivateArenaAbstractValue:
             token = abstract_tokens.get(row)
             if token is None:
-                if len(abstract_tokens) >= 256:
-                    raise ValueError("private arena abstract token cap")
+                budget.expression("selector")
                 token = len(abstract_tokens) + 1
                 abstract_tokens[row] = token
                 abstract_expressions[token] = row
@@ -27271,6 +27372,7 @@ class _DirectCfgRecovery:
             displacement: int,
             width: int,
         ) -> _PublicationPrivateArenaSpan:
+            budget.state_event("selector")
             return _PublicationPrivateArenaSpan(
                 function_entry=selector_entry,
                 instruction_address=address,
@@ -27434,8 +27536,7 @@ class _DirectCfgRecovery:
                     continue
                 selector_seen.add(state_key)
                 selector_iterations += 1
-                if selector_iterations > 1024 or len(selector_seen) > 1024:
-                    return None
+                budget.state_event("selector")
                 (
                     registers,
                     stack,
@@ -27952,6 +28053,7 @@ class _DirectCfgRecovery:
                         predicate_kind = "flag-test"
                     left_token = min(value.expression_token for value in left)
                     right_token = min(value.expression_token for value in right)
+                    budget.state_event("selector")
                     predicate = (
                         _PublicationPrivateArenaPredicate(
                             kind=predicate_kind,
@@ -27981,11 +28083,13 @@ class _DirectCfgRecovery:
                             for fact in facts
                         ):
                             return None
+                        budget.state_event("selector")
                         calls = calls + (("split", address, target),)
                         facts = facts | {("split-called",)}
                     elif page is not None and block1 is not None:
                         if ("sentinel-write",) not in facts:
                             return None
+                        budget.state_event("selector")
                         calls = calls + (("unlink", address, target),)
                         facts = facts | {("unlink-called",)}
                     else:
@@ -28121,9 +28225,10 @@ class _DirectCfgRecovery:
                             )
                     elif successors and successors[0] <= address:
                         return None
+                    budget.state_event("selector")
                     selector_pending.append((successor, outgoing))
-        except ValueError:
-            return None
+        except _Task4ProofLimit:
+            raise
 
         if not selector_returns or len(selector_minimums) != 1:
             return None
@@ -28180,10 +28285,19 @@ class _DirectCfgRecovery:
             return None
         splitter_entry = next(iter(split_targets))
         unlink_entry = next(iter(unlink_targets))
-        splitter_returns = trace_acyclic_function(splitter_entry, 2)
-        unlink_returns = trace_acyclic_function(unlink_entry, 2)
+        splitter_returns = trace_acyclic_function(
+            splitter_entry,
+            2,
+            "splitter",
+        )
+        unlink_returns = trace_acyclic_function(
+            unlink_entry,
+            2,
+            "unlink",
+        )
         if splitter_returns is None or unlink_returns is None:
             return None
+        expression_phase = "postprocess"
 
         constant_zero = expression("constant", 0)
         constant_one = expression("constant", 1)
@@ -28677,18 +28791,19 @@ class _DirectCfgRecovery:
                 or access is None
             ):
                 return False
-            helper_spans.add(
-                _PublicationPrivateArenaSpan(
-                    function_entry=function_entry,
-                    instruction_address=address,
-                    operand_index=operand_index,
-                    access=access,
-                    region=region,
-                    field=field,
-                    displacement=operand.mem.disp,
-                    width=operand.size,
-                )
+            span = _PublicationPrivateArenaSpan(
+                function_entry=function_entry,
+                instruction_address=address,
+                operand_index=operand_index,
+                access=access,
+                region=region,
+                field=field,
+                displacement=operand.mem.disp,
+                width=operand.size,
             )
+            if span not in helper_spans:
+                budget.expression("postprocess")
+            helper_spans.add(span)
             return True
 
         split_address_fields = {
@@ -28837,6 +28952,7 @@ class _DirectCfgRecovery:
                 selector_entry
             ),
         )
+        budget.expression("postprocess")
         for function_entry in (
             selector_entry,
             splitter_entry,

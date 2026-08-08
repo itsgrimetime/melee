@@ -17980,6 +17980,108 @@ def test_private_block_selector_return_form_rejects_nonplain_near_ret(
     assert private_block_selector_task4_result(hostile)[1] is None
 
 
+def assert_private_block_selector_cap_exhaustion(
+    monkeypatch,
+    constant_name,
+    phase,
+    counter,
+):
+    """Exercise one real Task 4 counter at and below its finite need."""
+    fixture = private_page_arena_image()
+    inputs, default_result = private_block_selector_task4_result(fixture)
+    assert_private_block_selector_result(fixture, inputs, default_result)
+    normal_limit = getattr(x86_cfg_module, constant_name, 10_000)
+    monkeypatch.setattr(
+        x86_cfg_module,
+        constant_name,
+        1,
+        raising=False,
+    )
+
+    low_result = inputs[0]._publication_private_block_selector_role(
+        inputs[1],
+        inputs[2],
+        inputs[3],
+        inputs[4],
+    )
+
+    assert low_result is None
+    assert inputs[0]._task4_last_limit_exhaustion == (
+        phase,
+        counter,
+        2,
+        1,
+    )
+    monkeypatch.setattr(
+        x86_cfg_module,
+        constant_name,
+        normal_limit,
+    )
+    restored = inputs[0]._publication_private_block_selector_role(
+        inputs[1],
+        inputs[2],
+        inputs[3],
+        inputs[4],
+    )
+    assert restored == default_result
+
+
+def test_private_block_selector_exhausts_selector_state_cap(monkeypatch):
+    assert_private_block_selector_cap_exhaustion(
+        monkeypatch,
+        "_TASK4_SELECTOR_STATE_EVENT_CAP",
+        "selector",
+        "state-event",
+    )
+
+
+def test_private_block_selector_exhausts_splitter_state_cap(monkeypatch):
+    assert_private_block_selector_cap_exhaustion(
+        monkeypatch,
+        "_TASK4_SPLITTER_STATE_EVENT_CAP",
+        "splitter",
+        "state-event",
+    )
+
+
+def test_private_block_selector_exhausts_unlink_state_cap(monkeypatch):
+    assert_private_block_selector_cap_exhaustion(
+        monkeypatch,
+        "_TASK4_UNLINK_STATE_EVENT_CAP",
+        "unlink",
+        "state-event",
+    )
+
+
+def test_private_block_selector_exhausts_selector_expression_cap(monkeypatch):
+    assert_private_block_selector_cap_exhaustion(
+        monkeypatch,
+        "_TASK4_SELECTOR_EXPRESSION_CAP",
+        "selector",
+        "expression",
+    )
+
+
+def test_private_block_selector_exhausts_helper_expression_cap(monkeypatch):
+    assert_private_block_selector_cap_exhaustion(
+        monkeypatch,
+        "_TASK4_HELPER_EXPRESSION_CAP",
+        "splitter",
+        "expression",
+    )
+
+
+def test_private_block_selector_exhausts_postprocess_expression_cap(
+    monkeypatch,
+):
+    assert_private_block_selector_cap_exhaustion(
+        monkeypatch,
+        "_TASK4_POSTPROCESS_EXPRESSION_CAP",
+        "postprocess",
+        "expression",
+    )
+
+
 def test_private_block_selector_walks_only_same_page_blocks():
     fixture = private_block_selector_image()
     inputs = private_page_arena_ring(fixture)
