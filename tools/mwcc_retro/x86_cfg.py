@@ -27976,11 +27976,18 @@ class _DirectCfgRecovery:
                         left_kinds == {"block-size"}
                         and right_kinds == {"request-size"}
                     ):
+                        if mnemonic != "cmp":
+                            return None
                         predicate_kind = "unsigned-fit"
                     elif (
                         left_kinds == {"remainder"}
                         and right_kinds == {"condition"}
                     ):
+                        if (
+                            mnemonic != "cmp"
+                            or operands[1].type != X86_OP_IMM
+                        ):
+                            return None
                         predicate_kind = "minimum-remainder"
                         immediate = operands[1].imm & 0xFFFF_FFFF
                         if immediate <= 0 or immediate % layout.block_alignment:

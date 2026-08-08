@@ -5535,6 +5535,60 @@ def private_block_selector_image(
     return replace(fixture, arena=replace(fixture.arena, image=image))
 
 
+def private_block_selector_guard_image(
+    relation: str,
+    mnemonic: str,
+) -> PrivatePageArenaFixture:
+    """Keep one selector ordering guard layout exact while changing flags."""
+    assert relation in {"fit", "minimum-remainder"}
+    assert mnemonic in {"cmp", "test"}
+    fixture = private_page_arena_image()
+    raw = bytearray(fixture.arena.image.data)
+    text = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.name == ".text"
+    )
+    selector_offset = text.raw_offset + fixture.selector - text.va
+    if relation == "fit":
+        guard_offset = selector_offset + 0x2B
+        assert raw[guard_offset : guard_offset + 2] == bytes.fromhex("39 d0")
+        if mnemonic == "test":
+            raw[guard_offset : guard_offset + 2] = bytes.fromhex("85 d0")
+    else:
+        recovery, _contract, _extent, _effects = private_page_arena_contract(
+            fixture
+        )
+        body = bytearray(raw[selector_offset : selector_offset + 0x75])
+        assert body[0x44:0x47] == bytes.fromhex("83 ff 50")
+        guard = (
+            bytes.fromhex("83 ff 50 90 90 90")
+            if mnemonic == "cmp"
+            else bytes.fromhex("f7 c7 50 00 00 00")
+        )
+        body[0x44:0x47] = guard
+        for call in recovery._function_direct_calls(fixture.selector):
+            if call.address < fixture.selector + 0x47:
+                continue
+            old_offset = call.address - fixture.selector
+            new_offset = old_offset + 3
+            new_address = fixture.selector + new_offset
+            struct.pack_into(
+                "<i",
+                body,
+                new_offset + 1,
+                call.target - (new_address + 5),
+            )
+        assert len(body) == 0x78
+        raw[selector_offset : selector_offset + 0x80] = body + b"\x90" * 8
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
 def private_block_selector_order_image(
     mutation: str,
 ) -> PrivatePageArenaFixture:
@@ -17658,6 +17712,59 @@ def test_private_block_selector_maximum_update_branch_inverted():
         hostile_inputs[3],
         hostile_inputs[4],
     ) is None
+
+
+@pytest.mark.parametrize("relation", ("fit", "minimum-remainder"))
+def test_private_block_selector_ordering_requires_cmp(relation):
+    control = private_block_selector_guard_image(relation, "cmp")
+    hostile = private_block_selector_guard_image(relation, "test")
+    control_inputs, control_result = private_block_selector_task4_result(
+        control
+    )
+    hostile_inputs, hostile_result = private_block_selector_task4_result(
+        hostile
+    )
+    offset = 0x2B if relation == "fit" else 0x44
+    control_guard = control_inputs[0]._owned_decoded(control.selector + offset)
+    hostile_guard = hostile_inputs[0]._owned_decoded(hostile.selector + offset)
+    assert control_guard.mnemonic == "cmp"
+    assert hostile_guard.mnemonic == "test"
+    assert control_guard.op_str == hostile_guard.op_str
+    if relation == "fit":
+        assert control_guard.size == hostile_guard.size == 2
+        control_region = control_guard.bytes
+        hostile_region = hostile_guard.bytes
+    else:
+        assert control_guard.size == 3
+        assert hostile_guard.size == 6
+        control_region = control.arena.image.read(control.selector + offset, 6)
+        hostile_region = hostile.arena.image.read(hostile.selector + offset, 6)
+        assert control_region == bytes.fromhex("83 ff 50 90 90 90")
+        assert hostile_region == bytes.fromhex("f7 c7 50 00 00 00")
+    assert private_page_image_changed_addresses(control, hostile) == {
+        control.selector + offset + index
+        for index, (left, right) in enumerate(
+            zip(control_region, hostile_region, strict=True)
+        )
+        if left != right
+    }
+    if relation == "minimum-remainder":
+        control_branch = control_inputs[0]._owned_decoded(
+            control.selector + 0x4A
+        )
+        hostile_branch = hostile_inputs[0]._owned_decoded(
+            hostile.selector + 0x4A
+        )
+        assert (control_branch.mnemonic, control_branch.op_str) == (
+            hostile_branch.mnemonic,
+            hostile_branch.op_str,
+        )
+    assert_private_block_selector_result(
+        control,
+        control_inputs,
+        control_result,
+    )
+    assert hostile_result is None
 
 
 @pytest.mark.parametrize(
