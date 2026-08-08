@@ -4107,6 +4107,8 @@ class PrivatePageArenaFixture:
     block_inserter: int
     coalescers: tuple[int, int]
     arena_free: int
+    direct_arena_free_call: int
+    backing_page_retirement_call: int
     reallocator: int
     realloc_driver: int
 
@@ -4668,7 +4670,9 @@ def private_page_arena_image(
         (text_va + 0x700, text_va + 0x750),
         (text_va + 0x7C0, text_va + 0x7E0),
     )
+    inherited_small_free_slot = (private_small_free, private_os_free)
     emission_slots = fixed_slots + (
+        inherited_small_free_slot,
         (text_va + 0x800, text_va + 0x880),
         (text_va + 0x880, text_va + 0x900),
         (text_va + 0x900, text_va + 0x980),
@@ -5307,6 +5311,28 @@ def private_page_arena_image(
     cursor = emit_call(cursor, reallocator)
     emit(cursor, "59 59 5b c3")
 
+    # Small-free's inherited prefix produces a backing page in [EDX].  Its
+    # previously unused tail releases that distinct payload through arena-free.
+    small_free_tail = private_small_free + 0x27
+    assert small_free_tail == 0x00401777
+    assert raw[small_free_tail - text_va : small_free_tail - text_va + 1] == b"\xc3"
+    assert raw[
+        small_free_tail - text_va + 1 : private_os_free - text_va
+    ] == b"\x00" * (private_os_free - small_free_tail - 1)
+    cursor = small_free_tail
+    cursor = emit(cursor, "8b 02 50 90")
+    backing_page_retirement_call = cursor
+    cursor = emit_call(cursor, arena_free)
+    cursor = emit(cursor, "59 c3")
+    assert backing_page_retirement_call == private_small_free + 0x2B
+    assert backing_page_retirement_call == 0x0040177B
+    assert cursor == private_small_free + 0x32
+    assert cursor == 0x00401782
+    assert cursor < private_os_free
+    assert raw[cursor - text_va : private_os_free - text_va] == b"\x00" * (
+        private_os_free - cursor
+    )
+
     # Preserve the null-safe lock/import/free shape while selecting exactly
     # one backend from the recovered unsigned block-size class.
     private_free = base.private_free
@@ -5324,6 +5350,7 @@ def private_page_arena_image(
     cursor = emit(cursor, "eb 00")
     large_free_target = cursor
     cursor = emit(cursor, "53")
+    direct_arena_free_call = cursor
     cursor = emit_call(cursor, arena_free)
     cursor = emit(cursor, "59")
     free_done = cursor
@@ -5375,9 +5402,103 @@ def private_page_arena_image(
         block_inserter=block_inserter,
         coalescers=(coalesce_left, coalesce_right),
         arena_free=arena_free,
+        direct_arena_free_call=direct_arena_free_call,
+        backing_page_retirement_call=backing_page_retirement_call,
         reallocator=reallocator,
         realloc_driver=realloc_driver,
     )
+
+
+def private_page_backing_retirement_image(
+    mutation: str,
+) -> PrivatePageArenaFixture:
+    """Change exactly one synthetic backing-retirement lineage fact."""
+    assert mutation in {
+        "producer-self",
+        "missing-header-load",
+        "original-small-payload",
+        "retarget-non-arena",
+    }
+    fixture = private_page_arena_image()
+    raw = bytearray(fixture.arena.image.data)
+    text = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.name == ".text"
+    )
+
+    def patch(address: int, expected: str, replacement: str) -> None:
+        expected_bytes = bytes.fromhex(expected)
+        replacement_bytes = bytes.fromhex(replacement)
+        assert len(expected_bytes) == len(replacement_bytes)
+        offset = text.raw_offset + address - text.va
+        assert raw[offset : offset + len(expected_bytes)] == expected_bytes
+        raw[offset : offset + len(replacement_bytes)] = replacement_bytes
+
+    if mutation == "producer-self":
+        patch(0x00401652, "89 02", "89 12")
+    elif mutation == "missing-header-load":
+        patch(0x00401777, "8b 02 50 90", "90 90 50 90")
+    elif mutation == "original-small-payload":
+        patch(0x00401777, "8b 02 50 90", "ff 74 24 04")
+    else:
+        call = fixture.backing_page_retirement_call
+        offset = text.raw_offset + call - text.va
+        expected = (fixture.arena_free - call - 5).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        replacement = (fixture.block_initializer - call - 5).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        assert raw[offset + 1 : offset + 5] == expected
+        raw[offset + 1 : offset + 5] = replacement
+
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
+def private_page_backing_retirement_lineage(fixture):
+    """Verify only the exact synthetic backing-retirement seam."""
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+    if recovery._owned_decoded(0x00401652).bytes != bytes.fromhex("89 02"):
+        return None
+    header_subtract = recovery._owned_decoded(0x00401766)
+    if (
+        header_subtract.mnemonic != "sub"
+        or header_subtract.bytes != bytes.fromhex("83 ea 04")
+    ):
+        return None
+    if fixture.arena.image.read(0x00401777, 4) != bytes.fromhex(
+        "8b 02 50 90"
+    ):
+        return None
+    calls = tuple(
+        call
+        for call in recovery._function_direct_calls(
+            fixture.arena.private_free + 0x50
+        )
+        if call.address == fixture.backing_page_retirement_call
+    )
+    if len(calls) != 1 or calls[0].target != fixture.arena_free:
+        return None
+    return (0x00401652, 0x00401777, fixture.backing_page_retirement_call)
 
 
 _PRIVATE_BLOCK_SELECTOR_HOSTILES = (
@@ -7320,6 +7441,209 @@ def private_page_ring_flag_preserving_rotation_image() -> PrivatePageArenaFixtur
         sha256=hashlib.sha256(raw).hexdigest(),
     )
     return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
+def private_page_arena_recovery(fixture, anchors):
+    """Recover one independently owned view of the arena fixture."""
+    recovery = _DirectCfgRecovery(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, tuple(anchors)),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    recovery.recover()
+    return recovery
+
+
+def private_page_arena_task1_to4(recovery, fixture):
+    """Derive and freshly replay exact Task 1-4 evidence in one recovery."""
+    contract = recovery._private_heap_allocator_contract(
+        fixture.arena.private_allocator,
+        frozenset({fixture.arena.callback_slot}),
+    )
+    assert contract is not None
+    extent = recovery._publication_private_heap_extent_witness(
+        contract,
+        fixture.arena.private_page_helper,
+    )
+    assert extent is not None
+    effects = recovery._publication_private_heap_effect_closure(extent)
+    assert effects is not None
+    assert recovery._publication_private_heap_effect_closure_is_current(
+        effects
+    )
+    pre_layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert pre_layout is not None
+    ring = recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        pre_layout,
+    )
+    assert ring is not None
+    selector = recovery._publication_private_block_selector_role(
+        contract,
+        extent,
+        effects,
+        ring,
+    )
+    assert selector is not None
+
+    assert recovery._private_heap_allocator_contract(
+        fixture.arena.private_allocator,
+        frozenset({fixture.arena.callback_slot}),
+    ) == contract
+    assert recovery._publication_private_heap_extent_witness(
+        contract,
+        fixture.arena.private_page_helper,
+    ) == extent
+    assert recovery._publication_private_heap_effect_closure(extent) == effects
+    assert recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    ) == pre_layout
+    assert recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        pre_layout,
+    ) == ring
+    assert recovery._publication_private_block_selector_role(
+        contract,
+        extent,
+        effects,
+        ring,
+    ) == selector
+    return contract, extent, effects, pre_layout, ring, selector
+
+
+def private_page_blank_fingerprints(rows):
+    """Retain exact dependency entries while blanking recovery-bound hashes."""
+    return tuple((entry, "") for entry, _sha256 in rows)
+
+
+def private_page_extent_semantics(extent):
+    return replace(
+        extent,
+        allocator_contract_sha256="",
+        allocator_dependency_fingerprints=private_page_blank_fingerprints(
+            extent.allocator_dependency_fingerprints
+        ),
+    )
+
+
+def private_page_effect_semantics(effects):
+    return replace(
+        effects,
+        extent_witness=private_page_extent_semantics(effects.extent_witness),
+        pruned_branches=tuple(
+            replace(row, function_sha256="") for row in effects.pruned_branches
+        ),
+        bounded_spans=tuple(
+            replace(
+                row,
+                provider_function_sha256="",
+                helper_function_sha256="",
+            )
+            for row in effects.bounded_spans
+        ),
+        function_fingerprints=private_page_blank_fingerprints(
+            effects.function_fingerprints
+        ),
+        allocator_dependency_fingerprints=private_page_blank_fingerprints(
+            effects.allocator_dependency_fingerprints
+        ),
+    )
+
+
+def private_page_ring_semantics(ring):
+    return replace(
+        ring,
+        transfers=tuple(
+            replace(transfer, function_sha256="")
+            for transfer in ring.transfers
+        ),
+    )
+
+
+def private_page_changed_fields(left, right):
+    assert type(left) is type(right)
+    return frozenset(
+        field.name
+        for field in fields(left)
+        if getattr(left, field.name) != getattr(right, field.name)
+    )
+
+
+def private_page_arena_selector(fixture):
+    """Return exact anchored Task 1-4 evidence after strict drift checks."""
+    plain = private_page_arena_recovery(fixture, ())
+    anchored = private_page_arena_recovery(
+        fixture,
+        (audit_anchor(fixture.arena.image, fixture.realloc_driver),),
+    )
+    plain_rows = private_page_arena_task1_to4(plain, fixture)
+    anchored_rows = private_page_arena_task1_to4(anchored, fixture)
+    (
+        plain_contract,
+        plain_extent,
+        plain_effects,
+        plain_pre_layout,
+        plain_ring,
+        plain_selector,
+    ) = plain_rows
+    (
+        contract,
+        extent,
+        effects,
+        pre_layout,
+        ring,
+        selector,
+    ) = anchored_rows
+
+    assert plain_contract == contract
+    assert private_page_changed_fields(plain_extent, extent) == {
+        "allocator_contract_sha256",
+        "allocator_dependency_fingerprints",
+    }
+    assert private_page_changed_fields(plain_effects, effects) == {
+        "extent_witness",
+        "pruned_branches",
+        "bounded_spans",
+        "function_fingerprints",
+        "allocator_dependency_fingerprints",
+    }
+    assert private_page_changed_fields(plain_ring, ring) == {"transfers"}
+    assert private_page_extent_semantics(plain_extent) == (
+        private_page_extent_semantics(extent)
+    )
+    assert private_page_effect_semantics(plain_effects) == (
+        private_page_effect_semantics(effects)
+    )
+    assert plain_pre_layout == pre_layout
+    assert private_page_ring_semantics(plain_ring) == (
+        private_page_ring_semantics(ring)
+    )
+    assert plain_selector == selector
+
+    updated_layout, role, transfer, spans = selector
+    return (
+        anchored,
+        contract,
+        extent,
+        effects,
+        ring,
+        updated_layout,
+        role,
+        transfer,
+        spans,
+    )
 
 
 def private_page_arena_contract(fixture):
@@ -20010,6 +20334,242 @@ def test_private_free_selects_exactly_one_free_backend():
     convergence = small_reachable & large_reachable
     assert convergence
     assert min(convergence) > max(small_call.address, large_call.address)
+
+
+def test_private_page_arena_backing_retirement_fixture_is_exact():
+    fixture = private_page_arena_image()
+    recovery, contract, extent, effects = private_page_arena_contract(fixture)
+    private_small_free = fixture.arena.private_free + 0x50
+    private_bin_init = 0x00401640
+
+    assert fixture.direct_arena_free_call == 0x0040172B
+    assert fixture.backing_page_retirement_call == 0x0040177B
+    assert fixture.arena.image.read(0x00401777, 11) == bytes.fromhex(
+        "8b 02 50 90 e8 80 04 00 00 59 c3"
+    )
+
+    producer = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(
+            private_bin_init
+        )
+    )
+    assert next(row for row in producer if row.address == 0x00401648).op_str == (
+        "edx, [eax + 0xc]"
+    )
+    store = next(row for row in producer if row.address == 0x00401652)
+    assert store.bytes == bytes.fromhex("89 02")
+    assert store.op_str == "dword ptr [edx], eax"
+    assert recovery._owned_decoded(0x00401484).op_str == (
+        "eax, dword ptr [ecx*4 + 0x403040]"
+    )
+    assert recovery._owned_decoded(0x0040149C).op_str == "eax, 4"
+
+    nested = next(
+        call
+        for call in recovery._function_direct_calls(private_small_free)
+        if call.address == fixture.backing_page_retirement_call
+    )
+    assert nested.target == fixture.arena_free
+    assert recovery._owned_decoded(0x00401762).op_str == (
+        "edx, dword ptr [esp + 4]"
+    )
+    header_subtract = recovery._owned_decoded(0x00401766)
+    assert header_subtract.mnemonic == "sub"
+    assert header_subtract.bytes == bytes.fromhex("83 ea 04")
+    assert header_subtract.op_str == "edx, 4"
+    assert recovery._owned_decoded(0x00401777).op_str == (
+        "eax, dword ptr [edx]"
+    )
+    pushed = recovery._pushed_call_argument(nested.address, 0)
+    assert pushed is not None
+    assert pushed[0].address == 0x00401779
+    assert recovery._register_family(pushed[1].reg) == "eax"
+
+    direct = next(
+        call
+        for call in recovery._function_direct_calls(fixture.arena.private_free)
+        if call.address == fixture.direct_arena_free_call
+    )
+    assert direct.target == fixture.arena_free
+    assert tuple(
+        call.target
+        for call in recovery._function_direct_calls(fixture.arena.private_free)
+        if call.target in {private_small_free, fixture.arena_free}
+    ) == (private_small_free, fixture.arena_free)
+    assert contract is not None and extent is not None and effects is not None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "producer-self",
+        "missing-header-load",
+        "original-small-payload",
+        "retarget-non-arena",
+    ),
+)
+def test_private_page_backing_retirement_hostile_is_nonvacuous(mutation):
+    control = private_page_arena_image()
+    hostile = private_page_backing_retirement_image(mutation)
+    changed = private_page_image_changed_addresses(control, hostile)
+    assert changed
+    if mutation == "producer-self":
+        assert changed == {0x00401653}
+    elif mutation == "missing-header-load":
+        assert changed == {0x00401777, 0x00401778}
+    elif mutation == "original-small-payload":
+        assert changed == {
+            address
+            for address, (left, right) in enumerate(
+                zip(
+                    bytes.fromhex("8b 02 50 90"),
+                    bytes.fromhex("ff 74 24 04"),
+                    strict=True,
+                ),
+                start=0x00401777,
+            )
+            if left != right
+        }
+    else:
+        assert changed == {0x0040177C, 0x0040177D}
+
+    assert private_page_backing_retirement_lineage(control) is not None
+    assert private_page_backing_retirement_lineage(hostile) is None
+
+    control_calls = tuple(
+        call.target
+        for call in private_page_arena_contract(control)[0]._function_direct_calls(
+            control.arena.private_free
+        )
+        if call.target
+        in {
+            control.arena.private_free + 0x50,
+            control.arena_free,
+        }
+    )
+    hostile_calls = tuple(
+        call.target
+        for call in private_page_arena_contract(hostile)[0]._function_direct_calls(
+            hostile.arena.private_free
+        )
+        if call.target
+        in {
+            hostile.arena.private_free + 0x50,
+            hostile.arena_free,
+        }
+    )
+    assert control_calls == hostile_calls == (
+        control.arena.private_free + 0x50,
+        control.arena_free,
+    )
+
+    for fixture in (control, hostile):
+        recovery, contract, extent, effects, ring = private_page_arena_ring(
+            fixture
+        )
+        selector = recovery._publication_private_block_selector_role(
+            contract,
+            extent,
+            effects,
+            ring,
+        )
+        assert selector is not None
+
+
+def test_private_page_arena_selector_preserves_current_task1_to4_semantics():
+    fixture = private_page_arena_image()
+    (
+        recovery,
+        contract,
+        extent,
+        effects,
+        ring,
+        layout,
+        role,
+        transfer,
+        spans,
+    ) = private_page_arena_selector(fixture)
+
+    assert recovery._publication_private_heap_effect_closure_is_current(effects)
+    assert layout == replace(
+        ring.layout,
+        minimum_split_remainder=0x50,
+    )
+    assert role.selector_entry == fixture.selector
+    assert transfer.role == "select"
+    assert spans
+    assert tuple(
+        call.target
+        for call in recovery._function_direct_calls(fixture.realloc_driver)
+    ) == (fixture.large_allocator, fixture.reallocator)
+    assert fixture.realloc_driver in recovery.function_addresses
+    assert fixture.reallocator in recovery.function_addresses
+
+
+def test_private_page_arena_selector_documents_anchor_fingerprint_drift():
+    fixture = private_page_arena_image()
+    plain = private_page_arena_recovery(fixture, ())
+    anchored = private_page_arena_recovery(
+        fixture,
+        (audit_anchor(fixture.arena.image, fixture.realloc_driver),),
+    )
+    plain_rows = private_page_arena_task1_to4(plain, fixture)
+    anchored_rows = private_page_arena_task1_to4(anchored, fixture)
+    assert plain_rows[0] == anchored_rows[0]
+    assert plain_rows[1] != anchored_rows[1]
+    assert plain_rows[2] != anchored_rows[2]
+    assert plain_rows[3] == anchored_rows[3]
+    assert plain_rows[4] != anchored_rows[4]
+    assert plain_rows[5] == anchored_rows[5]
+
+
+@pytest.mark.parametrize(
+    "anchors",
+    (
+        (),
+        pytest.param("selector", id="wrong-selector-anchor"),
+    ),
+)
+def test_private_page_arena_selector_requires_resize_driver_anchor(anchors):
+    fixture = private_page_arena_image()
+    actual = (
+        (audit_anchor(fixture.arena.image, fixture.selector),)
+        if anchors == "selector"
+        else ()
+    )
+    recovery = private_page_arena_recovery(fixture, actual)
+    raw = recovery._raw_direct_call_sites(fixture.reallocator)
+    decoded = frozenset(
+        recovery.direct_call_sources_by_target.get(fixture.reallocator, ())
+    )
+    assert len(raw) == 1
+    assert decoded == frozenset()
+    assert not recovery._least_reachable_incoming_call_domain_is_closed(
+        fixture.reallocator
+    )
+    assert fixture.realloc_driver not in recovery.function_addresses
+
+
+def test_private_page_arena_selector_driver_anchor_closes_resize():
+    fixture = private_page_arena_image()
+    recovery, *_rows = private_page_arena_selector(fixture)
+    raw = recovery._raw_direct_call_sites(fixture.reallocator)
+    decoded = frozenset(
+        recovery.direct_call_sources_by_target.get(fixture.reallocator, ())
+    )
+    assert decoded == raw
+    assert len(decoded) == 1
+    assert {
+        recovery._registrar_function_entry(site) for site in decoded
+    } == {fixture.realloc_driver}
+    assert recovery._least_reachable_incoming_call_domain_is_closed(
+        fixture.reallocator
+    )
+    assert not recovery.provisional_unowned_raw_callers_by_target.get(
+        fixture.reallocator,
+        frozenset(),
+    )
 
 
 def test_private_page_arena_raw_and_decoded_role_topology_is_exact():
