@@ -27063,9 +27063,24 @@ class _DirectCfgRecovery:
                             ):
                                 continue
                             opposite = (predicate, "equal", not equal)
-                            if opposite in conditions:
+                            if any(
+                                prior[:3] == opposite
+                                for prior in conditions
+                            ):
                                 continue
-                            condition = (predicate, "equal", equal)
+                            condition = (
+                                predicate,
+                                "equal",
+                                equal,
+                                address,
+                            )
+                        else:
+                            condition = (
+                                predicate,
+                                mnemonic,
+                                taken,
+                                address,
+                            )
                         outgoing = (
                             *state[:5],
                             conditions + (condition,),
@@ -28257,29 +28272,33 @@ class _DirectCfgRecovery:
         initializer_call_addresses = set()
         saw_free_split = False
         saw_allocated_split = False
-        expected_split_writes = {
-            (
-                add_expression(
-                    split_block,
-                    displacement=layout.block_prev_offset,
-                ),
-                block_argument,
-            ),
-            (
-                add_expression(
-                    split_block,
-                    displacement=layout.block_next_offset,
-                ),
-                expression("load", block_next_address),
-            ),
-            (block_next_address, split_block),
-            (
-                add_expression(
-                    expression("load", block_next_address),
-                    displacement=layout.block_prev_offset,
-                ),
+        split_previous_write = (
+            add_expression(
                 split_block,
+                displacement=layout.block_prev_offset,
             ),
+            block_argument,
+        )
+        split_next_write = (
+            add_expression(
+                split_block,
+                displacement=layout.block_next_offset,
+            ),
+            expression("load", block_next_address),
+        )
+        block_next_write = (block_next_address, split_block)
+        next_previous_write = (
+            add_expression(
+                expression("load", block_next_address),
+                displacement=layout.block_prev_offset,
+            ),
+            split_block,
+        )
+        expected_split_writes = {
+            split_previous_write,
+            split_next_write,
+            block_next_write,
+            next_previous_write,
         }
         if any(address is None for address, _value in expected_split_writes):
             return None
@@ -28338,12 +28357,25 @@ class _DirectCfgRecovery:
                 if len(equal_zero) != 1:
                     return None
                 free_split = bool(equal_zero[0][2])
-            semantic_writes = {
-                (write[2], write[3]) for write in writes
-            }
+            ordered_writes = tuple((write[2], write[3]) for write in writes)
+            semantic_writes = set(ordered_writes)
             if free_split:
                 saw_free_split = True
-                if semantic_writes != expected_split_writes:
+                if (
+                    semantic_writes != expected_split_writes
+                    or len(ordered_writes) != len(expected_split_writes)
+                    or second_call[0] >= min(write[0] for write in writes)
+                ):
+                    return None
+                write_order = {
+                    write: index for index, write in enumerate(ordered_writes)
+                }
+                if not (
+                    write_order[split_previous_write]
+                    < write_order[block_next_write]
+                    and write_order[split_next_write]
+                    < write_order[next_previous_write]
+                ):
                     return None
             else:
                 saw_allocated_split = True
@@ -28465,7 +28497,8 @@ class _DirectCfgRecovery:
         for row in unlink_returns:
             if row[5]:
                 return None
-            semantic_writes = {(write[2], write[3]) for write in row[6]}
+            ordered_writes = tuple((write[2], write[3]) for write in row[6])
+            semantic_writes = set(ordered_writes)
             if not {allocate_write, successor_write} <= semantic_writes:
                 return None
             remainder = semantic_writes - {allocate_write, successor_write}
@@ -28478,6 +28511,73 @@ class _DirectCfgRecovery:
                 saw_reciprocal = True
             else:
                 return None
+            sentinel_zero_write = (sentinel_address, constant_zero)
+            largest_zero_write = (largest_address, constant_zero)
+            # The set above identifies the exact compound postcondition; this
+            # ordered check proves its path-local phase transitions.  The
+            # allocated bit publishes allocated/listed, the successor flag
+            # advances the boundary tag, and only the exact detach sequence
+            # may reach allocated/unlisted at the return.
+            if ordered_writes[:2] != (allocate_write, successor_write):
+                return None
+            ordered_remainder = ordered_writes[2:]
+            if remainder == singleton_writes:
+                if ordered_remainder != (
+                    sentinel_next_write,
+                    sentinel_zero_write,
+                    largest_zero_write,
+                ):
+                    return None
+            else:
+                reciprocal_first = (
+                    add_expression(
+                        expression("load", unlink_next_address),
+                        displacement=layout.block_prev_offset,
+                    ),
+                    expression("load", unlink_prev_address),
+                )
+                reciprocal_second = (
+                    add_expression(
+                        expression("load", unlink_prev_address),
+                        displacement=layout.block_next_offset,
+                    ),
+                    expression("load", unlink_next_address),
+                )
+                if ordered_remainder not in {
+                    (reciprocal_first, reciprocal_second),
+                    (
+                        sentinel_next_write,
+                        reciprocal_first,
+                        reciprocal_second,
+                    ),
+                }:
+                    return None
+            final_write_address = row[6][-1][0]
+            for condition in row[4]:
+                if len(condition) != 4:
+                    return None
+                predicate, relation, _truth, branch_address = condition
+                if not (
+                    row[6][0][0] < branch_address < final_write_address
+                ):
+                    continue
+                if not (
+                    predicate is not None
+                    and predicate[0] == "cmp"
+                    and relation == "equal"
+                    and contains_expression(predicate, unlink_block_argument)
+                    and (
+                        contains_expression(
+                            predicate,
+                            expression("load", sentinel_address),
+                        )
+                        or contains_expression(
+                            predicate,
+                            expression("load", unlink_next_address),
+                        )
+                    )
+                ):
+                    return None
         if not saw_singleton or not saw_reciprocal:
             return None
 

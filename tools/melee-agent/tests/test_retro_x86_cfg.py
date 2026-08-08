@@ -5535,6 +5535,158 @@ def private_block_selector_image(
     return replace(fixture, arena=replace(fixture.arena, image=image))
 
 
+def private_block_selector_order_image(
+    mutation: str,
+) -> PrivatePageArenaFixture:
+    """Reorder exact split/unlink events without changing their multiset."""
+    assert mutation in {
+        "split-order-control",
+        "split-relink-before-second-initializer",
+        "unlink-order-control",
+        "unlink-detach-before-bit2",
+        "unlink-restoration-before-repair",
+        "unlink-transient-join-escape",
+    }
+    fixture = private_page_arena_image()
+    if mutation in {"split-order-control", "unlink-order-control"}:
+        return fixture
+    raw = bytearray(fixture.arena.image.data)
+    text = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.name == ".text"
+    )
+
+    def overwrite(address: int, payload: bytes, capacity: int) -> None:
+        assert len(payload) <= capacity
+        offset = text.raw_offset + address - text.va
+        raw[offset : offset + capacity] = payload + b"\x90" * (
+            capacity - len(payload)
+        )
+
+    if mutation == "split-relink-before-second-initializer":
+        start = fixture.splitter + 0x36
+        target = fixture.block_initializer
+        replacement = bytearray.fromhex(
+            "58 85 f6 75 0f "
+            "8b 53 0c 89 5f 08 89 57 0c 89 7b 0c 89 7a 08 "
+            "56 56 55 50 57 e8 00 00 00 00 "
+            "83 c4 14 89 f8 5d 5f 5e 5b c3"
+        )
+        call_offset = replacement.index(b"\xe8\x00\x00\x00\x00")
+        call_address = start + call_offset
+        struct.pack_into(
+            "<i",
+            replacement,
+            call_offset + 1,
+            target - (call_address + 5),
+        )
+        assert len(replacement) == 0x28
+        overwrite(start, bytes(replacement), 0x28)
+    else:
+        code = bytearray()
+        labels: dict[str, int] = {}
+        branches: list[tuple[int, str]] = []
+
+        def emit(hex_bytes: str) -> None:
+            code.extend(bytes.fromhex(hex_bytes))
+
+        def label(name: str) -> None:
+            labels[name] = len(code)
+
+        def branch(opcode: int, target: str) -> None:
+            code.extend((opcode, 0))
+            branches.append((len(code) - 1, target))
+
+        emit("53 8b 5c 24 0c 8b 13 8b 4c 24 08")
+        if mutation != "unlink-detach-before-bit2":
+            emit("81 0b 02 00 00 00")
+        if mutation == "unlink-transient-join-escape":
+            emit("85 d2")
+            branch(0x74, "diamond_arm")
+            emit("90")
+            branch(0xEB, "diamond_join")
+            label("diamond_arm")
+            emit("90")
+            label("diamond_join")
+        emit(
+            "89 d0 83 e0 f8 01 d8 83 08 04 "
+            "8b 41 0c 83 e0 f8 8d 44 01 fc "
+            "39 18"
+        )
+        branch(0x75, "nonempty")
+        emit("8b 53 0c 89 10 39 18")
+        branch(0x75, "nonempty")
+        if mutation == "unlink-restoration-before-repair":
+            emit("c7 41 08 00 00 00 00 c7 00 00 00 00 00")
+        else:
+            emit("c7 00 00 00 00 00 c7 41 08 00 00 00 00")
+        branch(0xEB, "epilogue")
+        label("nonempty")
+        emit(
+            "8b 43 08 8b 53 0c 89 42 08 "
+            "8b 43 0c 8b 4b 08 89 41 0c"
+        )
+        label("epilogue")
+        if mutation == "unlink-detach-before-bit2":
+            emit("81 0b 02 00 00 00")
+        emit("5b c3")
+        for displacement_offset, target in branches:
+            displacement = labels[target] - (displacement_offset + 1)
+            assert -128 <= displacement <= 127
+            code[displacement_offset] = displacement & 0xFF
+        overwrite(fixture.unlinker, bytes(code), 0x80)
+
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
+def private_block_selector_order_events(fixture, function_entry):
+    """Return ordered semantic call/write events for one rebuilt helper."""
+    recovery, _contract, _extent, _effects = private_page_arena_contract(
+        fixture
+    )
+    events = []
+    for address in recovery._function_instruction_addresses(function_entry):
+        decoded = recovery._owned_decoded(address)
+        target = recovery.direct_call_targets_by_source.get(address)
+        if target is not None:
+            events.append(("call", target))
+        for operand_index, operand in enumerate(decoded.operands):
+            if operand.type != capstone.x86.X86_OP_MEM:
+                continue
+            if operand.access & capstone.CS_AC_READ:
+                events.append(
+                    (
+                        "read",
+                        decoded.mnemonic,
+                        operand.mem.disp,
+                        operand.size,
+                        decoded.op_str,
+                    )
+                )
+            if not (
+                operand.access & capstone.CS_AC_WRITE
+                or decoded.mnemonic in {"mov", "or"}
+                and operand_index == 0
+            ):
+                continue
+            events.append(
+                (
+                    "write",
+                    decoded.mnemonic,
+                    operand.mem.disp,
+                    operand.size,
+                    decoded.op_str,
+                )
+            )
+    return recovery, tuple(events)
+
+
 def private_page_ring_absolute_reference_image(
     mutation: str,
 ) -> PrivatePageArenaFixture:
@@ -17352,6 +17504,177 @@ def test_private_block_selector_maximum_update_branch_inverted():
     )
     assert_private_block_selector_result(control, control_inputs, control_result)
 
+    assert hostile_inputs[0]._publication_private_block_selector_role(
+        hostile_inputs[1],
+        hostile_inputs[2],
+        hostile_inputs[3],
+        hostile_inputs[4],
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("control_name", "hostile_name", "component"),
+    (
+        (
+            "split-order-control",
+            "split-relink-before-second-initializer",
+            "splitter",
+        ),
+        (
+            "unlink-order-control",
+            "unlink-detach-before-bit2",
+            "unlinker",
+        ),
+        (
+            "unlink-order-control",
+            "unlink-restoration-before-repair",
+            "unlinker",
+        ),
+        (
+            "unlink-order-control",
+            "unlink-transient-join-escape",
+            "unlinker",
+        ),
+    ),
+)
+def test_private_block_selector_order_rejects_reordered_compound_events(
+    control_name,
+    hostile_name,
+    component,
+):
+    control = private_block_selector_order_image(control_name)
+    hostile = private_block_selector_order_image(hostile_name)
+    control_entry = getattr(control, component)
+    hostile_entry = getattr(hostile, component)
+    control_recovery, control_events = private_block_selector_order_events(
+        control,
+        control_entry,
+    )
+    hostile_recovery, hostile_events = private_block_selector_order_events(
+        hostile,
+        hostile_entry,
+    )
+    assert Counter(control_events) == Counter(hostile_events)
+    assert tuple(
+        call.target
+        for call in control_recovery._function_direct_calls(control_entry)
+    ) == tuple(
+        call.target
+        for call in hostile_recovery._function_direct_calls(hostile_entry)
+    )
+    assert sum(
+        control_recovery._owned_decoded(address).group(capstone.CS_GRP_RET)
+        for address in control_recovery._function_instruction_addresses(
+            control_entry
+        )
+    ) == sum(
+        hostile_recovery._owned_decoded(address).group(capstone.CS_GRP_RET)
+        for address in hostile_recovery._function_instruction_addresses(
+            hostile_entry
+        )
+    ) == 1
+    control_order = tuple(event for event in control_events if event[0] != "read")
+    hostile_order = tuple(event for event in hostile_events if event[0] != "read")
+    if hostile_name == "unlink-transient-join-escape":
+        assert control_order == hostile_order
+    else:
+        assert control_order != hostile_order
+    if component == "splitter":
+        control_calls = tuple(
+            index
+            for index, event in enumerate(control_order)
+            if event[0] == "call"
+        )
+        hostile_calls = tuple(
+            index
+            for index, event in enumerate(hostile_order)
+            if event[0] == "call"
+        )
+        control_writes = tuple(
+            index
+            for index, event in enumerate(control_order)
+            if event[0] == "write"
+        )
+        hostile_writes = tuple(
+            index
+            for index, event in enumerate(hostile_order)
+            if event[0] == "write"
+        )
+        assert max(control_calls) < min(control_writes)
+        assert min(hostile_writes) < max(hostile_calls)
+    elif hostile_name == "unlink-detach-before-bit2":
+        hostile_bit2 = next(
+            index
+            for index, event in enumerate(hostile_order)
+            if event[0] == "write" and event[-1].endswith("[ebx], 2")
+        )
+        assert hostile_bit2 == len(hostile_order) - 1
+    elif hostile_name == "unlink-restoration-before-repair":
+        hostile_largest = next(
+            index
+            for index, event in enumerate(hostile_order)
+            if event[0] == "write" and "[ecx + 8], 0" in event[-1]
+        )
+        hostile_sentinel_zero = next(
+            index
+            for index, event in enumerate(hostile_order)
+            if event[0] == "write" and event[-1].endswith("[eax], 0")
+        )
+        assert hostile_largest < hostile_sentinel_zero
+    else:
+        branch_rows = tuple(
+            address
+            for address in hostile_recovery._function_instruction_addresses(
+                hostile_entry
+            )
+            if len(
+                hostile_recovery._summary_successors(
+                    address,
+                    hostile_entry,
+                    hostile_recovery._following_function_entry(hostile_entry),
+                )
+            )
+            == 2
+        )
+        assert branch_rows
+        diamond = branch_rows[0]
+        successors = hostile_recovery._summary_successors(
+            diamond,
+            hostile_entry,
+            hostile_recovery._following_function_entry(hostile_entry),
+        )
+        assert len(successors) == 2
+        assert all(
+            hostile_recovery._reachable_within_function(
+                successor,
+                    hostile_entry + 0x19,
+                hostile_entry,
+                hostile_recovery._following_function_entry(hostile_entry),
+            )
+            for successor in successors
+        )
+
+    control_inputs = private_page_arena_ring(control)
+    hostile_inputs = private_page_arena_ring(hostile)
+    for inputs in (control_inputs, hostile_inputs):
+        effects = inputs[3]
+        ring_evidence = inputs[4]
+        assert len(effects.symbolic_writes) == 13
+        assert len(effects.terminal_symbolic_memory) == 9
+        assert ring_evidence.layout.page_link_offsets == (0, 4)
+        assert ring_evidence.layout.minimum_split_remainder is None
+        assert all(
+            row.block_state.allocation == "none"
+            and row.block_state.membership == "none"
+            for row in ring_evidence.role.selector_invocations
+        )
+    control_result = control_inputs[0]._publication_private_block_selector_role(
+        control_inputs[1],
+        control_inputs[2],
+        control_inputs[3],
+        control_inputs[4],
+    )
+    assert_private_block_selector_result(control, control_inputs, control_result)
     assert hostile_inputs[0]._publication_private_block_selector_role(
         hostile_inputs[1],
         hostile_inputs[2],
