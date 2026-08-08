@@ -20511,19 +20511,13 @@ def test_private_page_arena_selector_preserves_current_task1_to4_semantics():
 def test_private_arena_task5_schema_exposes_exact_removal_call_discharge_row():
     cls = x86_cfg_module._PublicationPrivateRemovalCallDischarge
     field_names = (
-        "caller_entry",
-        "call_address",
-        "remover_entry",
-        "argument_index",
-        "argument_relation",
-        "caller_function_sha256",
+        "caller_entry", "call_address", "remover_entry", "argument_index",
+        "argument_relation", "caller_function_sha256",
         "proof_instruction_addresses",
     )
     assert tuple(field.name for field in fields(cls)) == field_names
     assert get_type_hints(cls) == {
-        "caller_entry": int,
-        "call_address": int,
-        "remover_entry": int,
+        "caller_entry": int, "call_address": int, "remover_entry": int,
         "argument_index": int,
         "argument_relation": Literal["exact-untagged-recovered-page"],
         "caller_function_sha256": str,
@@ -20531,24 +20525,14 @@ def test_private_arena_task5_schema_exposes_exact_removal_call_discharge_row():
     }
     assert cls.__dataclass_params__.frozen is True
     assert tuple(cls.__slots__) == field_names
-
     row = cls(
-        caller_entry=1,
-        call_address=2,
-        remover_entry=3,
-        argument_index=4,
+        caller_entry=1, call_address=2, remover_entry=3, argument_index=4,
         argument_relation="exact-untagged-recovered-page",
         caller_function_sha256="caller-sha256",
         proof_instruction_addresses=(5, 6),
     )
     assert tuple(getattr(row, name) for name in field_names) == (
-        1,
-        2,
-        3,
-        4,
-        "exact-untagged-recovered-page",
-        "caller-sha256",
-        (5, 6),
+        1, 2, 3, 4, "exact-untagged-recovered-page", "caller-sha256", (5, 6),
     )
     assert not hasattr(row, "__dict__")
 
@@ -20557,20 +20541,11 @@ def test_private_arena_task5_schema_requires_discharge_field_in_exact_order():
     cls = x86_cfg_module._PublicationPrivateArenaTransfer
     transfer_fields = fields(cls)
     assert tuple(field.name for field in transfer_fields) == (
-        "function_entry",
-        "role",
-        "invocations",
-        "state_transitions",
-        "removal_call_discharges",
-        "instruction_addresses",
-        "span_keys",
+        "function_entry", "role", "invocations", "state_transitions",
+        "removal_call_discharges", "instruction_addresses", "span_keys",
         "function_sha256",
     )
-    discharge_field = next(
-        field
-        for field in transfer_fields
-        if field.name == "removal_call_discharges"
-    )
+    discharge_field = transfer_fields[4]
     assert discharge_field.default is MISSING
     assert discharge_field.default_factory is MISSING
     assert get_type_hints(cls)["removal_call_discharges"] == tuple[
@@ -20580,34 +20555,638 @@ def test_private_arena_task5_schema_requires_discharge_field_in_exact_order():
 
 def test_private_arena_task5_schema_current_task3_task4_transfers_have_empty_discharges():
     fixture = private_page_arena_image()
-    (
-        recovery,
-        _contract,
-        _extent,
-        effects,
-        ring,
-        _layout,
-        _role,
-        select_transfer,
-        _spans,
-    ) = private_page_arena_selector(fixture)
-
+    recovery, _, _, effects, ring, _, _, select_transfer, _ = (
+        private_page_arena_selector(fixture)
+    )
     assert recovery._publication_private_heap_effect_closure_is_current(effects)
     assert tuple(row.role for row in ring.transfers) == (
-        "ring-insert",
-        "ring-remove",
-        "ring-rotate",
+        "ring-insert", "ring-remove", "ring-rotate",
     )
     assert select_transfer.role == "select"
     assert tuple(row.removal_call_discharges for row in ring.transfers) == (
-        (),
-        (),
-        (),
+        (), (), (),
     )
-    ring_remove = ring.transfers[1]
-    assert ring_remove.invocations == ()
-    assert ring_remove.removal_call_discharges == ()
+    assert ring.transfers[1].invocations == ()
+    assert ring.transfers[1].removal_call_discharges == ()
     assert select_transfer.removal_call_discharges == ()
+
+
+_PRIVATE_ARENA_TASK5_SLICE2_CODE_HOSTILES = (
+    "resize-first-call-skipped",
+    "resize-second-call-skipped",
+    "resize-calls-reordered",
+    "resize-b2-collapsed-to-b",
+    "resize-allocation-bit-zeroed",
+    "resize-initializer-indirect",
+    "extra-initializer-caller",
+    "shrink-fit-branch-inverted",
+    "shrink-minimum-branch-inverted",
+    "grow-fit-branch-inverted",
+    "grow-minimum-branch-inverted",
+    "resize-split-wrong-block",
+    "resize-split-wrong-request",
+    "unresolved-indirect-resize-edge",
+    "external-raw-resize-arm",
+    "partial-resize-argument",
+    "address-size-resize-argument",
+    "pop-return-slot",
+    "pop-esp",
+    "unbalanced-resize-stack",
+    "ret-imm",
+    "far-ret",
+)
+
+
+def private_arena_task5_slice2_image(mutation):
+    """Change one anchored resize/base-role fact outside Task 1-4."""
+    assert mutation in _PRIVATE_ARENA_TASK5_SLICE2_CODE_HOSTILES
+    fixture = private_page_arena_image()
+    raw = bytearray(fixture.arena.image.data)
+    text = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.name == ".text"
+    )
+    patched = set()
+
+    def replace_bytes(address, expected, replacement):
+        expected = bytes.fromhex(expected)
+        replacement = bytes.fromhex(replacement)
+        assert len(expected) == len(replacement)
+        offset = text.raw_offset + address - text.va
+        assert raw[offset : offset + len(expected)] == expected
+        for index, (before, after) in enumerate(zip(expected, replacement)):
+            if before != after:
+                patched.add(address + index)
+        raw[offset : offset + len(replacement)] = replacement
+
+    def retarget(call_address, old_target, new_target):
+        old = (old_target - call_address - 5).to_bytes(4, "little", signed=True)
+        new = (new_target - call_address - 5).to_bytes(4, "little", signed=True)
+        replace_bytes(call_address + 1, old.hex(), new.hex())
+
+    shrink_call = fixture.reallocator + 0x39
+    grow_call = fixture.reallocator + 0x6C
+    if mutation == "resize-first-call-skipped":
+        retarget(shrink_call, fixture.splitter, fixture.block_initializer)
+    elif mutation == "resize-second-call-skipped":
+        retarget(grow_call, fixture.splitter, fixture.block_initializer)
+    elif mutation == "resize-calls-reordered":
+        retarget(shrink_call, fixture.splitter, fixture.block_initializer)
+        retarget(grow_call, fixture.splitter, fixture.block_initializer)
+    elif mutation == "resize-b2-collapsed-to-b":
+        replace_bytes(fixture.reallocator + 0x37, "56 53", "56 57")
+    elif mutation == "resize-allocation-bit-zeroed":
+        replace_bytes(fixture.realloc_driver + 0x0C, "89 c3", "31 db")
+    elif mutation in {
+        "resize-initializer-indirect",
+        "unresolved-indirect-resize-edge",
+    }:
+        replace_bytes(shrink_call, "e8 c2 fb ff ff", "ff d0 90 90 90")
+    elif mutation == "external-raw-resize-arm":
+        replace_bytes(fixture.reallocator + 0x18, "73 05", "73 e4")
+    elif mutation == "extra-initializer-caller":
+        call = fixture.reallocator + 0x82
+        displacement = (fixture.block_initializer - call - 5).to_bytes(
+            4, "little", signed=True
+        )
+        replace_bytes(call, "31 c0 5d 5f 5e 5b c3", "e8 " + displacement.hex() + " 31 c0")
+    elif mutation == "shrink-fit-branch-inverted":
+        replace_bytes(fixture.reallocator + 0x2C, "72", "73")
+    elif mutation == "shrink-minimum-branch-inverted":
+        replace_bytes(fixture.reallocator + 0x35, "72", "73")
+    elif mutation == "grow-fit-branch-inverted":
+        replace_bytes(fixture.reallocator + 0x61, "72", "73")
+    elif mutation == "grow-minimum-branch-inverted":
+        replace_bytes(fixture.reallocator + 0x68, "72", "73")
+    elif mutation == "resize-split-wrong-block":
+        replace_bytes(fixture.reallocator + 0x38, "53", "57")
+    elif mutation == "resize-split-wrong-request":
+        replace_bytes(fixture.reallocator + 0x37, "56", "57")
+    elif mutation == "partial-resize-argument":
+        replace_bytes(fixture.reallocator + 0x37, "56 53", "66 56")
+    elif mutation == "address-size-resize-argument":
+        replace_bytes(fixture.reallocator + 0x37, "56 53", "67 56")
+    elif mutation == "pop-return-slot":
+        replace_bytes(fixture.reallocator + 0x37, "56 53", "58 53")
+    elif mutation == "pop-esp":
+        replace_bytes(fixture.reallocator + 0x37, "56 53", "5c 53")
+    elif mutation == "unbalanced-resize-stack":
+        replace_bytes(fixture.reallocator + 0x3E, "83 c4 08", "90 90 90")
+    elif mutation == "ret-imm":
+        replace_bytes(fixture.reallocator + 0x90, "c3 90 90", "c2 04 00")
+    else:
+        replace_bytes(fixture.reallocator + 0x90, "c3", "cb")
+
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    hostile = replace(fixture, arena=replace(fixture.arena, image=image))
+    changed = private_page_image_changed_addresses(fixture, hostile)
+    assert changed == frozenset(patched)
+    assert changed
+    return hostile
+
+
+def private_arena_task5_slice2_base_result(fixture, **overrides):
+    rows = private_page_arena_selector(fixture)
+    (
+        recovery,
+        contract,
+        extent,
+        effects,
+        ring,
+        layout,
+        selector_role,
+        select_transfer,
+        selector_spans,
+    ) = rows
+    values = {
+        "contract": contract,
+        "extent": extent,
+        "effects": effects,
+        "layout": layout,
+        "ring_evidence": ring,
+        "selector_role": selector_role,
+        "select_transfer": select_transfer,
+        "selector_spans": selector_spans,
+    }
+    values.update(overrides)
+    assembly = recovery._publication_private_arena_full_assembly(**values)
+    assert assembly is not None
+    return rows, assembly, recovery._publication_private_arena_base_roles(assembly)
+
+
+def private_arena_task5_slice2_narrow_result(fixture, role):
+    rows, _assembly, base = private_arena_task5_slice2_base_result(fixture)
+    assert base is not None
+    expected = next(row for row in base.transfers if row.role == role)
+    recovery, contract, extent, effects, ring, layout, *_ = rows
+    return recovery._publication_private_arena_transfer(
+        role=role,
+        function_entry=expected.function_entry,
+        invocations=expected.invocations,
+        contract=contract,
+        extent=extent,
+        effects=effects,
+        layout=layout,
+        ring_evidence=ring,
+    )
+
+
+@pytest.mark.parametrize(
+    "role",
+    (
+        pytest.param("block-initialize", id="block-initialize"),
+        pytest.param("split", id="split"),
+        pytest.param("unlink", id="unlink"),
+    ),
+)
+def test_private_arena_task5_slice2_base_transfer_is_proved(role):
+    result = private_arena_task5_slice2_narrow_result(
+        private_page_arena_image(), role
+    )
+    assert result is not None
+    transfer, spans = result
+    assert transfer.role == role
+    assert transfer.removal_call_discharges == ()
+    assert transfer.instruction_addresses == tuple(
+        sorted(set(transfer.instruction_addresses))
+    )
+    assert transfer.span_keys
+    assert spans
+    assert transfer.span_keys == tuple(
+        (row.function_entry, row.instruction_address, row.operand_index)
+        for row in spans
+    )
+
+
+def test_private_arena_task5_slice2_block_initialize_has_five_contexts():
+    fixture = private_page_arena_image()
+    _rows, _assembly, base = private_arena_task5_slice2_base_result(fixture)
+    transfer = next(row for row in base.transfers if row.role == "block-initialize")
+    assert len(transfer.invocations) == 5
+    assert tuple(row.context for row in transfer.invocations) == (
+        "initializer-base", "selector-split", "selector-split",
+        "resize-split", "resize-split",
+    )
+    assert {row.call_address for row in transfer.invocations} == set(
+        fixture.block_initializer_calls
+    )
+
+
+def test_private_arena_task5_slice2_block_initialize_transitions_are_exact():
+    fixture = private_page_arena_image()
+    _rows, _assembly, base = private_arena_task5_slice2_base_result(fixture)
+    transfer = next(row for row in base.transfers if row.role == "block-initialize")
+    assert tuple((row.context, row.subject, row.after.allocation, row.after.membership,
+                  row.restoration_role, row.restoration_entry) for row in transfer.state_transitions) == (
+        ("initializer-base", "initial-block", "free", "unlisted", "initializer-base", fixture.page_initializer),
+        ("selector-split", "split-block", "free", "listed", "select", fixture.selector),
+        ("selector-split", "remainder-block", "free", "unlisted", "select", fixture.selector),
+        ("resize-split", "split-block", "allocated", "unlisted", "none", None),
+        ("resize-split", "remainder-block", "allocated", "unlisted", "resize", fixture.reallocator),
+    )
+
+
+def test_private_arena_task5_slice2_split_invocations_and_transitions_are_exact():
+    fixture = private_page_arena_image()
+    _rows, _assembly, base = private_arena_task5_slice2_base_result(fixture)
+    transfer = next(row for row in base.transfers if row.role == "split")
+    assert tuple(row.context for row in transfer.invocations) == (
+        "selector-split", "resize-split", "resize-split"
+    )
+    assert tuple((row.context, row.subject, row.before.allocation,
+                  row.before.membership, row.after.allocation,
+                  row.after.membership, row.restoration_role) for row in transfer.state_transitions) == (
+        ("selector-split", "split-block", "free", "listed", "free", "listed", "none"),
+        ("selector-split", "remainder-block", "free", "unlisted", "free", "listed", "select"),
+        ("resize-split", "split-block", "allocated", "unlisted", "allocated", "unlisted", "none"),
+        ("resize-split", "remainder-block", "allocated", "unlisted", "allocated", "unlisted", "resize"),
+    )
+
+
+def test_private_arena_task5_slice2_unlink_transient_and_detachment_are_exact():
+    fixture = private_page_arena_image()
+    _rows, _assembly, base = private_arena_task5_slice2_base_result(fixture)
+    transfer = next(row for row in base.transfers if row.role == "unlink")
+    assert len(transfer.invocations) == 1
+    assert tuple((row.before.allocation, row.before.membership,
+                  row.after.allocation, row.after.membership) for row in transfer.state_transitions) == (
+        ("free", "listed", "allocated", "listed"),
+        ("allocated", "listed", "allocated", "unlisted"),
+    )
+
+
+def test_private_arena_task5_slice2_separates_initializer_and_deallocator_roots():
+    fixture = private_page_arena_image()
+    rows, _assembly, base = private_arena_task5_slice2_base_result(fixture)
+    role = base.role
+    assert role.deallocator_root == rows[1].deallocator_root
+    assert fixture.page_initializer not in role.deallocator_function_entries
+    assert fixture.selector not in role.deallocator_function_entries
+    assert fixture.reallocator not in role.deallocator_function_entries
+    assert role.mutation_context_entries == (fixture.reallocator,)
+
+
+def test_private_arena_task5_slice2_uses_one_assembly_and_one_task4_revalidation(monkeypatch):
+    fixture = private_page_arena_image()
+    _expected_rows, _expected_assembly, expected_base = (
+        private_arena_task5_slice2_base_result(fixture)
+    )
+    expected_split = next(
+        row for row in expected_base.transfers if row.role == "split"
+    )
+    rows = private_page_arena_selector(fixture)
+    recovery, contract, extent, effects, ring, layout, selector_role, select_transfer, selector_spans = rows
+    names = {
+        "_publication_private_arena_current_inputs": "current-inputs",
+        "_publication_private_arena_full_assembly": "full-assembly",
+        "_publication_private_arena_narrow_assembly": "narrow-assembly",
+        "_publication_private_arena_base_roles": "base-roles",
+        "_publication_private_arena_transfer": "public-transfer",
+        "_publication_private_block_selector_role": "task4-revalidation",
+    }
+    counts = Counter({label: 0 for label in names.values()})
+    for name, label in names.items():
+        original = getattr(recovery, name)
+        def wrapper(*args, __original=original, __label=label, **kwargs):
+            counts[__label] += 1
+            return __original(*args, **kwargs)
+        monkeypatch.setattr(recovery, name, wrapper)
+    assert recovery._publication_private_block_arena_role(
+        contract, extent, effects, layout, ring, selector_role,
+        select_transfer, selector_spans,
+    ) is None
+    assert counts == {
+        "current-inputs": 1, "full-assembly": 1, "narrow-assembly": 0,
+        "task4-revalidation": 1, "base-roles": 1, "public-transfer": 0,
+    }
+    for label in counts:
+        counts[label] = 0
+    narrow_result = recovery._publication_private_arena_transfer(
+        role="split",
+        function_entry=expected_split.function_entry,
+        invocations=expected_split.invocations,
+        contract=contract,
+        extent=extent,
+        effects=effects,
+        layout=layout,
+        ring_evidence=ring,
+    )
+    assert narrow_result is not None
+    assert narrow_result[0] == expected_split
+    assert counts == {
+        "current-inputs": 1, "full-assembly": 0, "narrow-assembly": 1,
+        "task4-revalidation": 0, "base-roles": 0, "public-transfer": 1,
+    }
+
+
+def test_private_arena_task5_slice2_base_evidence_has_exact_edges_spans_and_dependencies():
+    fixture = private_page_arena_image()
+    _rows, _assembly, base = private_arena_task5_slice2_base_result(fixture)
+    keys = tuple((row.function_entry, row.instruction_address, row.operand_index) for row in base.spans)
+    assert keys == tuple(sorted(set(keys)))
+    assert {key for row in base.transfers for key in row.span_keys} == set(keys)
+    assert base.dependencies
+    assert base.role.mutation_call_edges
+    assert all(row.raw_reconciled for row in base.role.mutation_call_edges)
+
+
+def test_private_arena_task5_slice2_does_not_publish_partial_full_result():
+    fixture = private_page_arena_image()
+    rows, _assembly, base = private_arena_task5_slice2_base_result(fixture)
+    assert base is not None
+    recovery, contract, extent, effects, ring, layout, role, transfer, spans = rows
+    outer_dependencies = {("function", fixture.page_provider)}
+    recovery.producer_dependency_collectors.append(outer_dependencies)
+    try:
+        assert recovery._publication_private_block_arena_role(
+            contract, extent, effects, layout, ring, role, transfer, spans
+        ) is None
+    finally:
+        assert (
+            recovery.producer_dependency_collectors.pop()
+            is outer_dependencies
+        )
+    assert outer_dependencies == {("function", fixture.page_provider)}
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "empty-invocations", "partial-invocations", "duplicate-invocation",
+        "reordered-invocations", "foreign-function-entry",
+        "fabricated-call-address", "minimum-split-remainder-drift",
+    ),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice2_narrow_claim_is_not_authority(mutation):
+    fixture = private_page_arena_image()
+    rows, _assembly, base = private_arena_task5_slice2_base_result(fixture)
+    expected = next(row for row in base.transfers if row.role == "split")
+    recovery, contract, extent, effects, ring, layout, *_ = rows
+    invocations = expected.invocations
+    entry = expected.function_entry
+    if mutation == "empty-invocations":
+        invocations = ()
+    elif mutation == "partial-invocations":
+        invocations = invocations[:-1]
+    elif mutation == "duplicate-invocation":
+        invocations = (*invocations, invocations[-1])
+    elif mutation == "reordered-invocations":
+        invocations = tuple(reversed(invocations))
+    elif mutation == "foreign-function-entry":
+        entry = fixture.page_provider
+    elif mutation == "fabricated-call-address":
+        invocations = (
+            replace(
+                invocations[0],
+                call_address=invocations[0].call_address + 1,
+            ),
+            *invocations[1:],
+        )
+    else:
+        layout = replace(
+            layout,
+            minimum_split_remainder=(
+                layout.minimum_split_remainder + layout.block_alignment
+            ),
+        )
+    assert recovery._publication_private_arena_transfer(
+        role="split", function_entry=entry, invocations=invocations,
+        contract=contract, extent=extent, effects=effects, layout=layout,
+        ring_evidence=ring,
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("layout-ring-drift", "select-transfer-drift", "selector-span-drift",
+     "ring-transfer-drift", "initializer-effects-stale"),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice2_rejects_inherited_handoff_drift(mutation):
+    fixture = private_page_arena_image()
+    rows, _assembly, base = private_arena_task5_slice2_base_result(fixture)
+    assert base is not None
+    _, _, _, effects, ring, layout, _, select_transfer, selector_spans = rows
+    overrides = {}
+    if mutation == "layout-ring-drift":
+        overrides["layout"] = replace(
+            layout,
+            page_largest_free_offset=layout.page_largest_free_offset + 4,
+        )
+    elif mutation == "select-transfer-drift":
+        overrides["select_transfer"] = replace(
+            select_transfer,
+            function_sha256="0" * 64,
+        )
+    elif mutation == "selector-span-drift":
+        overrides["selector_spans"] = selector_spans[:-1]
+    elif mutation == "ring-transfer-drift":
+        overrides["ring_evidence"] = replace(
+            ring,
+            transfers=ring.transfers[:-1],
+        )
+    else:
+        changed = ((effects.function_fingerprints[0][0], "0" * 64), *effects.function_fingerprints[1:])
+        overrides["effects"] = replace(effects, function_fingerprints=changed)
+    recovery, contract, extent, effects0, ring0, layout0, role0, transfer0, spans0 = rows
+    values = dict(contract=contract, extent=extent, effects=effects0, layout=layout0,
+                  ring_evidence=ring0, selector_role=role0,
+                  select_transfer=transfer0, selector_spans=spans0)
+    values.update(overrides)
+    assert recovery._publication_private_arena_full_assembly(**values) is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("resize-first-call-skipped", "resize-second-call-skipped",
+     "resize-calls-reordered", "resize-b2-collapsed-to-b",
+     "resize-allocation-bit-zeroed", "resize-initializer-indirect",
+     "extra-initializer-caller"),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice2_rejects_block_initialize_hostile(mutation):
+    fixture = private_arena_task5_slice2_image(mutation)
+    rows = private_page_arena_selector(fixture)
+    assert rows[0]._publication_private_heap_effect_closure_is_current(rows[3])
+    assembly = rows[0]._publication_private_arena_full_assembly(
+        rows[1], rows[2], rows[3], rows[5], rows[4], rows[6], rows[7], rows[8]
+    )
+    assert assembly is not None
+    assert rows[0]._publication_private_arena_base_roles(assembly) is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("shrink-fit-branch-inverted", "shrink-minimum-branch-inverted",
+     "grow-fit-branch-inverted", "grow-minimum-branch-inverted",
+     "resize-split-wrong-block", "resize-split-wrong-request"),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice2_rejects_split_hostile(mutation):
+    fixture = private_arena_task5_slice2_image(mutation)
+    rows = private_page_arena_selector(fixture)
+    assembly = rows[0]._publication_private_arena_full_assembly(
+        rows[1], rows[2], rows[3], rows[5], rows[4], rows[6], rows[7], rows[8]
+    )
+    assert assembly is not None
+    assert rows[0]._publication_private_arena_base_roles(assembly) is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("transition-missing", "before-state-drift", "transient-state-drift",
+     "after-state-drift", "restoration-owner-drift", "bit2-span-missing",
+     "successor-span-missing", "sentinel-span-missing",
+     "largest-free-span-missing", "reciprocal-span-missing"),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice2_rejects_unlink_handoff_hostile(mutation):
+    fixture = private_page_arena_image()
+    rows = private_page_arena_selector(fixture)
+    recovery, contract, extent, effects, ring, layout, role, transfer, spans = rows
+    if mutation.endswith("span-missing"):
+        field = {
+            "bit2-span-missing": "block-header",
+            "successor-span-missing": "successor-header",
+            "sentinel-span-missing": "sentinel",
+            "largest-free-span-missing": "largest-free",
+            "reciprocal-span-missing": "block-prev",
+        }[mutation]
+        index = next(i for i, row in enumerate(spans) if row.field == field)
+        spans = spans[:index] + spans[index + 1 :]
+    else:
+        transitions = transfer.state_transitions
+        if mutation == "transition-missing":
+            transitions = transitions[:-1]
+        elif mutation == "before-state-drift":
+            transitions = (
+                replace(
+                    transitions[0],
+                    before=x86_cfg_module._PublicationPrivateArenaBlockState(
+                        "allocated", "unlisted"
+                    ),
+                ),
+                *transitions[1:],
+            )
+        elif mutation == "transient-state-drift":
+            transitions = (
+                replace(
+                    transitions[0],
+                    after=x86_cfg_module._PublicationPrivateArenaBlockState(
+                        "allocated", "listed"
+                    ),
+                ),
+                *transitions[1:],
+            )
+        elif mutation == "after-state-drift":
+            transitions = (
+                replace(
+                    transitions[0],
+                    after=x86_cfg_module._PublicationPrivateArenaBlockState(
+                        "free", "listed"
+                    ),
+                ),
+                *transitions[1:],
+            )
+        else:
+            transitions = (
+                replace(
+                    transitions[0],
+                    restoration_entry=fixture.page_initializer,
+                ),
+                *transitions[1:],
+            )
+        transfer = replace(transfer, state_transitions=transitions)
+    assert recovery._publication_private_arena_full_assembly(
+        contract, extent, effects, layout, ring, role, transfer, spans
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("unresolved-indirect-resize-edge", "partial-resize-argument",
+     "address-size-resize-argument", "pop-return-slot", "pop-esp",
+     "unbalanced-resize-stack", "ret-imm", "far-ret"),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice2_rejects_domain_or_stack_hostile(mutation):
+    fixture = private_arena_task5_slice2_image(mutation)
+    rows = private_page_arena_selector(fixture)
+    assembly = rows[0]._publication_private_arena_full_assembly(
+        rows[1], rows[2], rows[3], rows[5], rows[4], rows[6], rows[7], rows[8]
+    )
+    assert assembly is not None
+    assert rows[0]._publication_private_arena_base_roles(assembly) is None
+    if mutation == "unresolved-indirect-resize-edge":
+        external = private_arena_task5_slice2_image(
+            "external-raw-resize-arm"
+        )
+        external_rows = private_page_arena_selector(external)
+        external_assembly = (
+            external_rows[0]._publication_private_arena_full_assembly(
+                external_rows[1], external_rows[2], external_rows[3],
+                external_rows[5], external_rows[4], external_rows[6],
+                external_rows[7], external_rows[8],
+            )
+        )
+        assert external_assembly is not None
+        assert (
+            external_rows[0]._publication_private_arena_base_roles(
+                external_assembly
+            )
+            is None
+        )
+
+
+@pytest.mark.parametrize(
+    ("allocation", "membership"),
+    (("none", "free"), ("none", "listed"), ("free", "none"), ("allocated", "none")),
+    ids=("none-free", "none-listed", "free-none", "allocated-none"),
+)
+def test_private_arena_task5_slice2_rejects_mixed_none_state(allocation, membership):
+    fixture = private_page_arena_image()
+    rows, _assembly, base = private_arena_task5_slice2_base_result(fixture)
+    expected = next(row for row in base.transfers if row.role == "split")
+    claims = (replace(expected.invocations[0], block_state=x86_cfg_module._PublicationPrivateArenaBlockState(allocation, membership)), *expected.invocations[1:])
+    recovery, contract, extent, effects, ring, layout, *_ = rows
+    assert recovery._publication_private_arena_transfer(
+        role="split", function_entry=expected.function_entry,
+        invocations=claims, contract=contract, extent=extent, effects=effects,
+        layout=layout, ring_evidence=ring,
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "counter",
+    ("state", "event", "expression", "instruction", "fixed-point"),
+    ids=("state", "event", "expression", "instruction", "fixed-point"),
+)
+def test_private_arena_task5_slice2_cap_is_exact_and_fail_closed(counter, monkeypatch):
+    fixture = private_page_arena_image()
+    rows, _assembly, base = private_arena_task5_slice2_base_result(fixture)
+    assert base is not None
+    recovery = rows[0]
+    used = recovery._task5_last_budget_counts[counter]
+    constant = f"_TASK5_{counter.replace('-', '_').upper()}_CAP"
+    monkeypatch.setattr(x86_cfg_module, constant, used)
+    rows, _assembly, base = private_arena_task5_slice2_base_result(fixture)
+    assert base is not None
+    monkeypatch.setattr(x86_cfg_module, constant, used - 1)
+    rows = private_page_arena_selector(fixture)
+    assembly = rows[0]._publication_private_arena_full_assembly(
+        rows[1], rows[2], rows[3], rows[5], rows[4], rows[6], rows[7], rows[8]
+    )
+    assert assembly is not None
+    assert rows[0]._publication_private_arena_base_roles(assembly) is None
+    assert rows[0]._task5_last_limit_exhaustion == (
+        "base-roles", counter, used, used - 1
+    )
 
 
 def test_private_page_arena_selector_documents_anchor_fingerprint_drift():

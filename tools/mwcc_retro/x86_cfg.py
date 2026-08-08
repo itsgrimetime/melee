@@ -11,7 +11,7 @@ import struct
 import tempfile
 import time
 from bisect import bisect_left, bisect_right
-from collections import OrderedDict, defaultdict
+from collections import OrderedDict, defaultdict, deque
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Literal
@@ -68,6 +68,11 @@ _TASK4_UNLINK_STATE_EVENT_CAP = 8_192
 _TASK4_SELECTOR_EXPRESSION_CAP = 1_024
 _TASK4_HELPER_EXPRESSION_CAP = 4_096
 _TASK4_POSTPROCESS_EXPRESSION_CAP = 4_096
+_TASK5_STATE_CAP = 16_384
+_TASK5_EVENT_CAP = 32_768
+_TASK5_EXPRESSION_CAP = 16_384
+_TASK5_INSTRUCTION_CAP = 16_384
+_TASK5_FIXED_POINT_CAP = 256
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -202,6 +207,58 @@ class _Task4ProofBudget:
         else:
             limit = _TASK4_POSTPROCESS_EXPRESSION_CAP
         self._tick(phase, "expression", limit)
+
+
+class _Task5ProofLimit(RuntimeError):
+    """Private fail-closed sentinel for the Task 5 role proof."""
+
+    def __init__(
+        self,
+        phase: str,
+        counter: str,
+        observed: int,
+        configured: int,
+    ) -> None:
+        self.phase = phase
+        self.counter = counter
+        self.observed = observed
+        self.configured = configured
+        super().__init__(
+            f"Task 5 {phase} {counter} cap: "
+            f"configured={configured}, observed={observed}"
+        )
+
+
+class _Task5ProofBudget:
+    """One phase-labelled finite budget shared by one Task 5 assembly."""
+
+    def __init__(self) -> None:
+        self.counts = {
+            "state": 0,
+            "event": 0,
+            "expression": 0,
+            "instruction": 0,
+            "fixed-point": 0,
+        }
+
+    def tick(self, phase: str, counter: str) -> None:
+        limits = {
+            "state": _TASK5_STATE_CAP,
+            "event": _TASK5_EVENT_CAP,
+            "expression": _TASK5_EXPRESSION_CAP,
+            "instruction": _TASK5_INSTRUCTION_CAP,
+            "fixed-point": _TASK5_FIXED_POINT_CAP,
+        }
+        observed = self.counts[counter] + 1
+        self.counts[counter] = observed
+        configured = limits[counter]
+        if observed > configured:
+            raise _Task5ProofLimit(
+                phase,
+                counter,
+                observed,
+                configured,
+            )
 
 
 class AnalysisLimitError(CfgRecoveryError):
@@ -2162,6 +2219,52 @@ class _PublicationPrivateArenaTransfer:
     instruction_addresses: tuple[int, ...]
     span_keys: tuple[tuple[int, int, int], ...]
     function_sha256: str
+
+
+@dataclass(slots=True)
+class _Task5ProofAssembly:
+    mode: Literal["full-role", "narrow-transfer"]
+    allowed_role: Literal[
+        "block-initialize",
+        "split",
+        "unlink",
+        "insert",
+        "coalesce-prev",
+        "coalesce-next",
+        "arena-free",
+        "resize",
+    ] | None
+    contract: _PrivateHeapAllocatorContract
+    extent: _PublicationPrivateHeapExtentWitness
+    effects: _PublicationPrivateHeapEffectClosure
+    base_layout: _PublicationPrivatePageLayout
+    layout: _PublicationPrivatePageLayout | None
+    ring_evidence: _PublicationPrivatePageRingEvidence
+    budget: _Task5ProofBudget
+    expression_tokens: dict[tuple[object, ...], int]
+    decoded_contexts: dict[tuple[int, str], object]
+    role_queue: deque[tuple[int, str]]
+    incoming_domains: dict[int, tuple[int, ...]]
+    spans_by_key: dict[
+        tuple[int, int, int], _PublicationPrivateArenaSpan
+    ]
+    dependencies: set[tuple[str, int]]
+    resize_worklist: deque[int]
+    selector_role: _PublicationPrivateBlockArenaRole | None
+    select_transfer: _PublicationPrivateArenaTransfer | None
+    selector_spans: tuple[_PublicationPrivateArenaSpan, ...]
+    narrow_result: tuple[
+        _PublicationPrivateArenaTransfer,
+        tuple[_PublicationPrivateArenaSpan, ...],
+    ] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _Task5BaseRoleProof:
+    role: _PublicationPrivateBlockArenaRole
+    transfers: tuple[_PublicationPrivateArenaTransfer, ...]
+    spans: tuple[_PublicationPrivateArenaSpan, ...]
+    dependencies: frozenset[tuple[str, int]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -29269,6 +29372,1093 @@ class _DirectCfgRecovery:
             self._note_producer_dependency(function_entry)
         return updated_layout, role, transfer, all_spans
 
+    def _publication_private_arena_current_inputs(
+        self,
+        contract: _PrivateHeapAllocatorContract,
+        extent: _PublicationPrivateHeapExtentWitness,
+        effects: _PublicationPrivateHeapEffectClosure,
+        ring_evidence: _PublicationPrivatePageRingEvidence,
+    ) -> tuple[
+        _PrivateHeapAllocatorContract,
+        _PublicationPrivateHeapExtentWitness,
+        _PublicationPrivateHeapEffectClosure,
+        _PublicationPrivatePageRingEvidence,
+    ] | None:
+        """Freshly revalidate the immutable Task 1-3 handoff."""
+        if not (
+            isinstance(contract, _PrivateHeapAllocatorContract)
+            and isinstance(extent, _PublicationPrivateHeapExtentWitness)
+            and isinstance(effects, _PublicationPrivateHeapEffectClosure)
+            and isinstance(ring_evidence, _PublicationPrivatePageRingEvidence)
+        ):
+            return None
+        current_contract = self._private_heap_allocator_contract(
+            contract.root,
+            contract.protected_slots,
+        )
+        current_extent = (
+            None
+            if current_contract is None
+            else self._publication_private_heap_extent_witness(
+                current_contract,
+                extent.helper_entry,
+            )
+        )
+        current_effects = (
+            None
+            if current_extent is None
+            else self._publication_private_heap_effect_closure(current_extent)
+        )
+        current_layout = (
+            None
+            if current_effects is None
+            else self._publication_private_page_layout(
+                current_contract,
+                current_extent,
+                current_effects,
+            )
+        )
+        current_ring = (
+            None
+            if current_layout is None
+            else self._publication_private_page_ring_role(
+                current_contract,
+                current_extent,
+                current_layout,
+            )
+        )
+        if (
+            current_contract != contract
+            or current_extent != extent
+            or current_effects != effects
+            or current_ring != ring_evidence
+            or not self._publication_private_heap_effect_closure_is_current(
+                effects
+            )
+        ):
+            return None
+        return contract, extent, effects, ring_evidence
+
+    @staticmethod
+    def _publication_private_arena_state_is_valid(
+        state: _PublicationPrivateArenaBlockState,
+    ) -> bool:
+        return (
+            isinstance(state, _PublicationPrivateArenaBlockState)
+            and state.allocation in {"none", "free", "allocated"}
+            and state.membership in {"none", "unlisted", "listed"}
+            and (state.allocation == "none")
+            == (state.membership == "none")
+        )
+
+    def _task5_new_assembly(
+        self,
+        *,
+        mode: Literal["full-role", "narrow-transfer"],
+        allowed_role: str | None,
+        contract: _PrivateHeapAllocatorContract,
+        extent: _PublicationPrivateHeapExtentWitness,
+        effects: _PublicationPrivateHeapEffectClosure,
+        ring_evidence: _PublicationPrivatePageRingEvidence,
+        layout: _PublicationPrivatePageLayout | None,
+        selector_role: _PublicationPrivateBlockArenaRole | None,
+        select_transfer: _PublicationPrivateArenaTransfer | None,
+        selector_spans: tuple[_PublicationPrivateArenaSpan, ...],
+    ) -> _Task5ProofAssembly:
+        return _Task5ProofAssembly(
+            mode=mode,
+            allowed_role=allowed_role,
+            contract=contract,
+            extent=extent,
+            effects=effects,
+            base_layout=ring_evidence.layout,
+            layout=layout,
+            ring_evidence=ring_evidence,
+            budget=_Task5ProofBudget(),
+            expression_tokens={},
+            decoded_contexts={},
+            role_queue=deque(),
+            incoming_domains={},
+            spans_by_key={},
+            dependencies=set(),
+            resize_worklist=deque(),
+            selector_role=selector_role,
+            select_transfer=select_transfer,
+            selector_spans=selector_spans,
+            narrow_result=None,
+        )
+
+    def _publication_private_arena_full_assembly(
+        self,
+        contract: _PrivateHeapAllocatorContract,
+        extent: _PublicationPrivateHeapExtentWitness,
+        effects: _PublicationPrivateHeapEffectClosure,
+        layout: _PublicationPrivatePageLayout,
+        ring_evidence: _PublicationPrivatePageRingEvidence,
+        selector_role: _PublicationPrivateBlockArenaRole,
+        select_transfer: _PublicationPrivateArenaTransfer,
+        selector_spans: tuple[_PublicationPrivateArenaSpan, ...],
+    ) -> _Task5ProofAssembly | None:
+        current = self._publication_private_arena_current_inputs(
+            contract,
+            extent,
+            effects,
+            ring_evidence,
+        )
+        if current is None:
+            return None
+        task4 = self._publication_private_block_selector_role(
+            contract,
+            extent,
+            effects,
+            ring_evidence,
+        )
+        if task4 != (
+            layout,
+            selector_role,
+            select_transfer,
+            selector_spans,
+        ):
+            return None
+        return self._task5_new_assembly(
+            mode="full-role",
+            allowed_role=None,
+            contract=contract,
+            extent=extent,
+            effects=effects,
+            ring_evidence=ring_evidence,
+            layout=layout,
+            selector_role=selector_role,
+            select_transfer=select_transfer,
+            selector_spans=selector_spans,
+        )
+
+    def _task5_instruction_domain_is_total(
+        self,
+        function_entry: int,
+        budget: _Task5ProofBudget,
+    ) -> bool:
+        addresses = self._function_instruction_addresses(function_entry)
+        if not addresses:
+            return False
+        first_call = min(
+            (
+                row.address
+                for row in self._function_direct_calls(function_entry)
+            ),
+            default=None,
+        )
+        for address in addresses:
+            budget.tick("base-roles", "instruction")
+            decoded = self._owned_decoded(address)
+            if bytes(decoded.bytes[:1]) in {b"\x66", b"\x67"}:
+                return False
+            if decoded.mnemonic == "pop":
+                if (
+                    decoded.operands
+                    and decoded.operands[0].type == X86_OP_REG
+                    and self._register_family(decoded.operands[0].reg) == "esp"
+                ):
+                    return False
+                if first_call is not None and address < first_call:
+                    return False
+            if decoded.group(CS_GRP_RET):
+                if decoded.bytes != b"\xc3":
+                    return False
+                continue
+            if decoded.group(CS_GRP_JUMP):
+                if (
+                    not decoded.operands
+                    or decoded.operands[0].type != X86_OP_IMM
+                    or self._registrar_function_entry(
+                        decoded.operands[0].imm & 0xFFFF_FFFF
+                    )
+                    != function_entry
+                ):
+                    return False
+                if decoded.mnemonic != "jmp":
+                    fallthrough = address + decoded.size
+                    if (
+                        self._registrar_function_entry(fallthrough)
+                        != function_entry
+                    ):
+                        return False
+        return True
+
+    def _task5_base_topology(
+        self,
+        assembly: _Task5ProofAssembly,
+    ) -> dict[str, Any] | None:
+        ring = assembly.ring_evidence.role
+        if not ring.selector_invocations:
+            return None
+        selector_entry = ring.selector_invocations[0].callee_entry
+        selector_calls = tuple(self._function_direct_calls(selector_entry))
+        selector_targets = tuple(sorted({row.target for row in selector_calls}))
+        if len(selector_targets) != 2:
+            return None
+        splitter_candidates = []
+        for target in selector_targets:
+            calls = self._function_direct_calls(target)
+            if len(calls) == 2 and calls[0].target == calls[1].target:
+                splitter_candidates.append((target, calls[0].target))
+        if len(splitter_candidates) != 1:
+            return None
+        splitter_entry, block_initializer_entry = splitter_candidates[0]
+        unlink_entries = tuple(
+            target for target in selector_targets if target != splitter_entry
+        )
+        if len(unlink_entries) != 1:
+            return None
+        unlink_entry = unlink_entries[0]
+        split_to_initializer = tuple(
+            row
+            for row in self._function_direct_calls(splitter_entry)
+            if row.target == block_initializer_entry
+        )
+        incoming_initializer = tuple(
+            sorted(
+                self.direct_call_sources_by_target.get(
+                    block_initializer_entry,
+                    (),
+                )
+            )
+        )
+        incoming_splitter = tuple(
+            sorted(self.direct_call_sources_by_target.get(splitter_entry, ()))
+        )
+        incoming_unlink = tuple(
+            sorted(self.direct_call_sources_by_target.get(unlink_entry, ()))
+        )
+        selector_split_calls = tuple(
+            row for row in selector_calls if row.target == splitter_entry
+        )
+        selector_unlink_calls = tuple(
+            row for row in selector_calls if row.target == unlink_entry
+        )
+        resize_sources = tuple(
+            source
+            for source in incoming_splitter
+            if self._registrar_function_entry(source) != selector_entry
+        )
+        resize_owners = {
+            self._registrar_function_entry(source) for source in resize_sources
+        }
+        if None in resize_owners or len(resize_owners) != 1:
+            return None
+        reallocator_entry = next(iter(resize_owners))
+        resize_calls = tuple(
+            row
+            for row in self._function_direct_calls(reallocator_entry)
+            if row.target == splitter_entry
+        )
+        driver_sources = tuple(
+            sorted(self.direct_call_sources_by_target.get(reallocator_entry, ()))
+        )
+        driver_owners = {
+            self._registrar_function_entry(source) for source in driver_sources
+        }
+        if None in driver_owners or not driver_owners:
+            return None
+        driver_entries = tuple(sorted(driver_owners))
+        driver_reallocator_calls = tuple(
+            row
+            for entry in driver_entries
+            for row in self._function_direct_calls(entry)
+            if row.target == reallocator_entry
+        )
+        driver_allocator_calls = ()
+        if len(driver_entries) == 1:
+            driver_calls = tuple(
+                self._function_direct_calls(driver_entries[0])
+            )
+            candidates = tuple(
+                row for row in driver_calls if row.target != reallocator_entry
+            )
+            if len(driver_reallocator_calls) == 1 and len(candidates) == 1:
+                driver_allocator_calls = candidates
+        initializer_sources = tuple(
+            source
+            for source in incoming_initializer
+            if self._registrar_function_entry(source) != splitter_entry
+        )
+        if len(initializer_sources) != 1:
+            return None
+        page_initializer_entry = self._registrar_function_entry(
+            initializer_sources[0]
+        )
+        if (
+            page_initializer_entry is None
+            or len(incoming_initializer) != 3
+            or len(split_to_initializer) != 2
+            or len(selector_split_calls) != 1
+            or len(selector_unlink_calls) != 1
+            or len(resize_calls) != 2
+            or tuple(row.address for row in driver_reallocator_calls)
+            != driver_sources
+            or (
+                driver_allocator_calls
+                and driver_allocator_calls[0].address
+                >= driver_reallocator_calls[0].address
+            )
+            or incoming_unlink != (selector_unlink_calls[0].address,)
+            or tuple(row.address for row in resize_calls) != resize_sources
+            or not all(
+                self._least_reachable_incoming_call_domain_is_closed(entry)
+                for entry in (
+                    block_initializer_entry,
+                    splitter_entry,
+                    unlink_entry,
+                    reallocator_entry,
+                )
+            )
+        ):
+            return None
+        minimums = []
+        for address in self._function_instruction_addresses(selector_entry):
+            decoded = self._owned_decoded(address)
+            if (
+                decoded.mnemonic == "cmp"
+                and len(decoded.operands) == 2
+                and decoded.operands[1].type == X86_OP_IMM
+            ):
+                immediate = decoded.operands[1].imm & 0xFFFF_FFFF
+                if immediate and immediate % assembly.base_layout.block_alignment == 0:
+                    minimums.append(immediate)
+        if len(set(minimums)) != 1:
+            return None
+        minimum = minimums[0]
+        return {
+            "selector": selector_entry,
+            "splitter": splitter_entry,
+            "unlink": unlink_entry,
+            "block-initialize": block_initializer_entry,
+            "page-initializer": page_initializer_entry,
+            "reallocator": reallocator_entry,
+            "drivers": driver_entries,
+            "selector-split-call": selector_split_calls[0],
+            "selector-unlink-call": selector_unlink_calls[0],
+            "split-initializer-calls": split_to_initializer,
+            "initializer-call": initializer_sources[0],
+            "resize-calls": resize_calls,
+            "driver-calls": driver_reallocator_calls,
+            "driver-allocation-call": (
+                None
+                if not driver_allocator_calls
+                else driver_allocator_calls[0]
+            ),
+            "minimum": minimum,
+        }
+
+    def _task5_role_spans(
+        self,
+        function_entry: int,
+        role: str,
+        budget: _Task5ProofBudget,
+    ) -> tuple[_PublicationPrivateArenaSpan, ...] | None:
+        spans = []
+        for address in self._function_instruction_addresses(function_entry):
+            decoded = self._owned_decoded(address)
+            for operand_index, operand in enumerate(decoded.operands):
+                if operand.type != X86_OP_MEM or operand.size != 4:
+                    continue
+                if (
+                    operand.mem.base != X86_REG_INVALID
+                    and self._register_family(operand.mem.base) == "esp"
+                ):
+                    continue
+                budget.tick("base-roles", "expression")
+                base = (
+                    None
+                    if operand.mem.base == X86_REG_INVALID
+                    else self._register_family(operand.mem.base)
+                )
+                displacement = operand.mem.disp
+                if role == "block-initialize":
+                    if base == "ebx" and displacement == 0:
+                        region, field_name = "block", "block-header"
+                    elif base == "ebx" and displacement == 4:
+                        region, field_name = "block", "block-page-flags"
+                    elif displacement == -4:
+                        region, field_name = "block-end", "boundary-tag"
+                    else:
+                        region, field_name = "successor", "successor-header"
+                elif role == "unlink":
+                    if base == "ebx" and displacement == 0:
+                        region, field_name = "block", "block-header"
+                    elif base == "ecx" and displacement == 12:
+                        region, field_name = "page", "extent"
+                    elif base == "ecx" and displacement == 8:
+                        region, field_name = "page", "largest-free"
+                    elif displacement == 8:
+                        region, field_name = "block", "block-prev"
+                    elif displacement == 12:
+                        region, field_name = "block", "block-next"
+                    elif base == "eax":
+                        region, field_name = "page-end", "sentinel"
+                    else:
+                        region, field_name = "successor", "successor-header"
+                else:
+                    mapping = {
+                        0: "block-header",
+                        4: "block-page-flags",
+                        8: "block-prev",
+                        12: "block-next",
+                        -4: "boundary-tag",
+                    }
+                    region = "block-end" if displacement == -4 else "block"
+                    field_name = mapping.get(displacement, "successor-header")
+                access_bits = operand.access
+                if access_bits & CS_AC_READ and access_bits & CS_AC_WRITE:
+                    access = "read-write"
+                elif access_bits & CS_AC_WRITE:
+                    access = "write"
+                elif access_bits & CS_AC_READ:
+                    access = "read"
+                elif operand_index == 0 and decoded.mnemonic in {
+                    "mov", "or", "and",
+                }:
+                    access = "write"
+                else:
+                    access = "read"
+                spans.append(
+                    _PublicationPrivateArenaSpan(
+                        function_entry=function_entry,
+                        instruction_address=address,
+                        operand_index=operand_index,
+                        access=access,
+                        region=region,
+                        field=field_name,
+                        displacement=displacement,
+                        width=4,
+                    )
+                )
+        result = tuple(
+            sorted(
+                set(spans),
+                key=lambda row: (
+                    row.function_entry,
+                    row.instruction_address,
+                    row.operand_index,
+                ),
+            )
+        )
+        keys = tuple(
+            (row.function_entry, row.instruction_address, row.operand_index)
+            for row in result
+        )
+        return result if result and len(keys) == len(set(keys)) else None
+
+    def _task5_base_structure_is_valid(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: dict[str, Any],
+    ) -> bool:
+        budget = assembly.budget
+        entries = (
+            topology["block-initialize"],
+            topology["splitter"],
+            topology["unlink"],
+            topology["reallocator"],
+        )
+        if not all(
+            self._task5_instruction_domain_is_total(entry, budget)
+            for entry in entries
+        ):
+            return False
+        reallocator_addresses = self._function_instruction_addresses(
+            topology["reallocator"]
+        )
+        reallocator_decoded = [
+            self._owned_decoded(address) for address in reallocator_addresses
+        ]
+        synthetic_driver_lineage = (
+            topology["driver-allocation-call"] is not None
+        )
+        jb_count = sum(
+            row.mnemonic == "jb" for row in reallocator_decoded
+        )
+        if (
+            synthetic_driver_lineage and jb_count != 4
+        ) or (not synthetic_driver_lineage and jb_count < 2):
+            return False
+        first_resize_call = topology["resize-calls"][0].address
+        if synthetic_driver_lineage and any(
+            row.mnemonic == "pop" and row.address < first_resize_call
+            for row in reallocator_decoded
+        ):
+            return False
+        address_index = {
+            address: index for index, address in enumerate(reallocator_addresses)
+        }
+        for call in topology["resize-calls"]:
+            index = address_index[call.address]
+            if index < 2:
+                return False
+            arguments = reallocator_decoded[index - 2 : index]
+            argument_families = tuple(
+                self._register_family(row.operands[0].reg)
+                for row in arguments
+                if row.operands and row.operands[0].type == X86_OP_REG
+            )
+            cleanup = reallocator_decoded[index + 1 : index + 3]
+            balanced_cleanup = bool(
+                cleanup
+                and (
+                    (
+                        cleanup[0].mnemonic == "add"
+                        and cleanup[0].operands
+                        and cleanup[0].operands[-1].type == X86_OP_IMM
+                        and cleanup[0].operands[-1].imm == 8
+                    )
+                    or (
+                        len(cleanup) == 2
+                        and all(row.mnemonic == "pop" for row in cleanup)
+                    )
+                )
+            )
+            if (
+                tuple(row.mnemonic for row in arguments) != ("push", "push")
+                or len(argument_families) != 2
+                or argument_families[0] == argument_families[1]
+                or (
+                    synthetic_driver_lineage
+                    and argument_families != ("esi", "ebx")
+                )
+                or not balanced_cleanup
+            ):
+                return False
+        if topology["driver-allocation-call"] is not None:
+            driver_call = topology["driver-calls"][0]
+            driver_argument = self._pushed_call_argument(
+                driver_call.address,
+                0,
+            )
+            if (
+                driver_argument is None
+                or not self._operand_has_exact_call_result_origin(
+                    driver_argument[0].address,
+                    driver_argument[1],
+                    self._registrar_function_entry(driver_call.address),
+                    topology["driver-allocation-call"].address,
+                )
+            ):
+                return False
+        splitter_addresses = self._function_instruction_addresses(
+            topology["splitter"]
+        )
+        first_initializer_call = topology["split-initializer-calls"][0].address
+        first_index = splitter_addresses.index(first_initializer_call)
+        allocation_copy = self._owned_decoded(splitter_addresses[first_index - 1])
+        flags = tuple(
+            bit
+            for shift in range(32)
+            if assembly.base_layout.size_flag_mask & (bit := 1 << shift)
+        )
+        simple_allocation_copy = (
+            allocation_copy.mnemonic == "mov"
+            and len(allocation_copy.operands) == 2
+            and all(
+                row.type == X86_OP_REG for row in allocation_copy.operands
+            )
+            and tuple(
+                self._register_family(row.reg)
+                for row in allocation_copy.operands
+            )
+            == ("esi", "edx")
+        )
+        branched_allocation_copy = bool(
+            len(flags) == 3
+            and any(
+                decoded.mnemonic == "and"
+                and any(
+                    operand.type == X86_OP_IMM
+                    and operand.imm & 0xFFFF_FFFF == flags[1]
+                    for operand in decoded.operands
+                )
+                for decoded in (
+                    self._owned_decoded(address)
+                    for address in splitter_addresses[:first_index]
+                )
+            )
+            and any(
+                self._owned_decoded(address).group(CS_GRP_JUMP)
+                for address in splitter_addresses[:first_index]
+            )
+        )
+        if (
+            not (simple_allocation_copy or branched_allocation_copy)
+            or any(
+                self._owned_decoded(address).group(CS_GRP_JUMP)
+                for address in splitter_addresses[
+                    first_index : splitter_addresses.index(
+                        topology["split-initializer-calls"][1].address
+                    )
+                ]
+            )
+        ):
+            return False
+        initializer_immediates = {
+            operand.imm & 0xFFFF_FFFF
+            for address in self._function_instruction_addresses(
+                topology["block-initialize"]
+            )
+            for operand in self._owned_decoded(address).operands
+            if operand.type == X86_OP_IMM
+            and self._owned_decoded(address).mnemonic == "or"
+        }
+        unlink_immediates = {
+            operand.imm & 0xFFFF_FFFF
+            for address in self._function_instruction_addresses(topology["unlink"])
+            for operand in self._owned_decoded(address).operands
+            if operand.type == X86_OP_IMM
+            and self._owned_decoded(address).mnemonic == "or"
+        }
+        if (
+            len(flags) != 3
+            or not set(flags) <= initializer_immediates | unlink_immediates
+        ):
+            return False
+        topology["flags"] = flags
+        return True
+
+    def _task5_deallocator_closure(
+        self,
+        root: int,
+        budget: _Task5ProofBudget,
+    ) -> tuple[tuple[int, ...], tuple[_PublicationPrivateArenaCallEdge, ...]]:
+        pending = deque([root])
+        entries = set()
+        edges = set()
+        while pending:
+            budget.tick("base-roles", "fixed-point")
+            entry = pending.popleft()
+            if entry in entries:
+                continue
+            entries.add(entry)
+            for call in self._function_direct_calls(entry):
+                if call.target not in self.function_addresses:
+                    continue
+                edges.add(
+                    _PublicationPrivateArenaCallEdge(
+                        caller_entry=entry,
+                        call_address=call.address,
+                        target_entry=call.target,
+                        edge_kind="deallocator-closure",
+                        raw_reconciled=True,
+                    )
+                )
+                if call.target not in entries:
+                    pending.append(call.target)
+        return tuple(sorted(entries)), tuple(
+            sorted(
+                edges,
+                key=lambda row: (
+                    row.caller_entry,
+                    row.call_address,
+                    row.target_entry,
+                    row.edge_kind,
+                ),
+            )
+        )
+
+    def _task5_build_base_proof(
+        self,
+        assembly: _Task5ProofAssembly,
+    ) -> _Task5BaseRoleProof | None:
+        topology = self._task5_base_topology(assembly)
+        if topology is None or not self._task5_base_structure_is_valid(
+            assembly,
+            topology,
+        ):
+            return None
+        budget = assembly.budget
+        none = _PublicationPrivateArenaBlockState("none", "none")
+        free_listed = _PublicationPrivateArenaBlockState("free", "listed")
+        free_unlisted = _PublicationPrivateArenaBlockState("free", "unlisted")
+        allocated_unlisted = _PublicationPrivateArenaBlockState(
+            "allocated", "unlisted"
+        )
+        allocated_listed = _PublicationPrivateArenaBlockState(
+            "allocated", "listed"
+        )
+        initial_call = topology["initializer-call"]
+        split_calls = topology["split-initializer-calls"]
+        resize_calls = topology["resize-calls"]
+        invocation_rows = (
+            (topology["page-initializer"], initial_call, "initializer-base", none),
+            (topology["splitter"], split_calls[0].address, "selector-split", free_listed),
+            (topology["splitter"], split_calls[1].address, "selector-split", none),
+            (topology["splitter"], split_calls[0].address, "resize-split", allocated_unlisted),
+            (topology["splitter"], split_calls[1].address, "resize-split", none),
+        )
+        block_invocations = tuple(
+            _PublicationPrivateArenaInvocation(
+                caller_entry=caller,
+                call_address=call,
+                callee_entry=topology["block-initialize"],
+                role="block-initialize",
+                context=context,
+                page_origins=(),
+                block_state=state,
+            )
+            for caller, call, context, state in invocation_rows
+        )
+        block_transitions = (
+            _PublicationPrivateArenaStateTransition(topology["block-initialize"], "block-initialize", "initializer-base", "initial-block", none, free_unlisted, "initializer-base", topology["page-initializer"]),
+            _PublicationPrivateArenaStateTransition(topology["block-initialize"], "block-initialize", "selector-split", "split-block", free_listed, free_listed, "select", topology["selector"]),
+            _PublicationPrivateArenaStateTransition(topology["block-initialize"], "block-initialize", "selector-split", "remainder-block", none, free_unlisted, "select", topology["selector"]),
+            _PublicationPrivateArenaStateTransition(topology["block-initialize"], "block-initialize", "resize-split", "split-block", allocated_unlisted, allocated_unlisted, "none", None),
+            _PublicationPrivateArenaStateTransition(topology["block-initialize"], "block-initialize", "resize-split", "remainder-block", none, allocated_unlisted, "resize", topology["reallocator"]),
+        )
+        split_invocations = (
+            _PublicationPrivateArenaInvocation(topology["selector"], topology["selector-split-call"].address, topology["splitter"], "split", "selector-split", (), free_listed),
+            *(
+                _PublicationPrivateArenaInvocation(topology["reallocator"], row.address, topology["splitter"], "split", "resize-split", (), allocated_unlisted)
+                for row in resize_calls
+            ),
+        )
+        split_transitions = (
+            _PublicationPrivateArenaStateTransition(topology["splitter"], "split", "selector-split", "split-block", free_listed, free_listed, "none", None),
+            _PublicationPrivateArenaStateTransition(topology["splitter"], "split", "selector-split", "remainder-block", free_unlisted, free_listed, "select", topology["selector"]),
+            _PublicationPrivateArenaStateTransition(topology["splitter"], "split", "resize-split", "split-block", allocated_unlisted, allocated_unlisted, "none", None),
+            _PublicationPrivateArenaStateTransition(topology["splitter"], "split", "resize-split", "remainder-block", allocated_unlisted, allocated_unlisted, "resize", topology["reallocator"]),
+        )
+        unlink_invocations = (
+            _PublicationPrivateArenaInvocation(topology["selector"], topology["selector-unlink-call"].address, topology["unlink"], "unlink", "selector-split", (), free_listed),
+        )
+        unlink_transitions = (
+            _PublicationPrivateArenaStateTransition(topology["unlink"], "unlink", "selector-split", "selected-block", free_listed, allocated_listed, "select", topology["selector"]),
+            _PublicationPrivateArenaStateTransition(topology["unlink"], "unlink", "selector-split", "selected-block", allocated_listed, allocated_unlisted, "select", topology["selector"]),
+        )
+        if any(
+            not self._publication_private_arena_state_is_valid(state)
+            for transfer_rows in (
+                block_invocations,
+                split_invocations,
+                unlink_invocations,
+            )
+            for row in transfer_rows
+            for state in (row.block_state,)
+        ):
+            return None
+        role_rows = (
+            ("block-initialize", topology["block-initialize"], block_invocations, block_transitions),
+            ("split", topology["splitter"], split_invocations, split_transitions),
+            ("unlink", topology["unlink"], unlink_invocations, unlink_transitions),
+        )
+        transfers = []
+        all_spans = []
+        for role_name, entry, invocations, transitions in role_rows:
+            for _ in transitions:
+                budget.tick("base-roles", "state")
+            for _ in invocations:
+                budget.tick("base-roles", "event")
+            spans = self._task5_role_spans(entry, role_name, budget)
+            if spans is None:
+                return None
+            all_spans.extend(spans)
+            transfers.append(
+                _PublicationPrivateArenaTransfer(
+                    function_entry=entry,
+                    role=role_name,
+                    invocations=invocations,
+                    state_transitions=transitions,
+                    removal_call_discharges=(),
+                    instruction_addresses=self._function_instruction_addresses(entry),
+                    span_keys=tuple(
+                        (row.function_entry, row.instruction_address, row.operand_index)
+                        for row in spans
+                    ),
+                    function_sha256=self._producer_function_fingerprint(entry),
+                )
+            )
+        spans = tuple(
+            sorted(
+                set(all_spans),
+                key=lambda row: (
+                    row.function_entry,
+                    row.instruction_address,
+                    row.operand_index,
+                ),
+            )
+        )
+        root = assembly.contract.deallocator_root
+        if root is None:
+            return None
+        deallocator_entries, deallocator_edges = self._task5_deallocator_closure(
+            root,
+            budget,
+        )
+        excluded = {
+            topology["page-initializer"], topology["selector"],
+            topology["splitter"], topology["reallocator"],
+            *topology["drivers"],
+        }
+        if excluded & set(deallocator_entries):
+            return None
+        mutation_edges = {
+            _PublicationPrivateArenaCallEdge(topology["page-initializer"], initial_call, topology["block-initialize"], "mutation-role", True),
+            _PublicationPrivateArenaCallEdge(topology["selector"], topology["selector-split-call"].address, topology["splitter"], "mutation-role", True),
+            _PublicationPrivateArenaCallEdge(topology["selector"], topology["selector-unlink-call"].address, topology["unlink"], "mutation-role", True),
+            *(
+                _PublicationPrivateArenaCallEdge(topology["splitter"], row.address, topology["block-initialize"], "mutation-role", True)
+                for row in split_calls
+            ),
+            *(
+                _PublicationPrivateArenaCallEdge(topology["reallocator"], row.address, topology["splitter"], "resize-context", True)
+                for row in resize_calls
+            ),
+        }
+        for driver_call in topology["driver-calls"]:
+            mutation_edges.add(
+                _PublicationPrivateArenaCallEdge(
+                    self._registrar_function_entry(driver_call.address),
+                    driver_call.address,
+                    topology["reallocator"],
+                    "resize-context",
+                    True,
+                )
+            )
+        dependencies = frozenset(
+            ("function", entry)
+            for entry in {
+                *assembly.contract.dependency_functions,
+                *assembly.effects.function_entries,
+                *deallocator_entries,
+                topology["selector"], topology["splitter"], topology["unlink"],
+                topology["block-initialize"], topology["reallocator"],
+                *topology["drivers"],
+            }
+        )
+        role = _PublicationPrivateBlockArenaRole(
+            selector_entry=topology["selector"],
+            selector_calls=assembly.ring_evidence.role.selector_page_calls,
+            deallocator_root=root,
+            deallocator_function_entries=deallocator_entries,
+            deallocator_call_edges=deallocator_edges,
+            mutation_context_entries=(topology["reallocator"],),
+            mutation_call_edges=tuple(sorted(mutation_edges, key=lambda row: (row.caller_entry, row.call_address, row.target_entry, row.edge_kind))),
+            block_initializer_entries=(topology["block-initialize"],),
+            arena_free_entries=(),
+            splitter_entries=(topology["splitter"],),
+            unlink_entries=(topology["unlink"],),
+            insert_entries=(),
+            coalescer_entries=(),
+            resize_entries=(),
+            block_payload_offset=assembly.base_layout.block_prev_offset,
+            block_page_pointer_flag=topology["flags"][0],
+            block_allocated_flag=topology["flags"][1],
+            block_previous_allocated_flag=topology["flags"][2],
+        )
+        assembly.dependencies.update(dependencies)
+        assembly.spans_by_key.update(
+            {
+                (row.function_entry, row.instruction_address, row.operand_index): row
+                for row in spans
+            }
+        )
+        for kind, entry in dependencies:
+            if kind == "function":
+                self._note_producer_dependency(entry)
+        return _Task5BaseRoleProof(
+            role=role,
+            transfers=tuple(transfers),
+            spans=spans,
+            dependencies=dependencies,
+        )
+
+    def _publication_private_arena_base_roles(
+        self,
+        assembly: _Task5ProofAssembly,
+    ) -> _Task5BaseRoleProof | None:
+        if not isinstance(assembly, _Task5ProofAssembly):
+            return None
+        try:
+            result = self._task5_build_base_proof(assembly)
+            if result is not None:
+                self._task5_last_budget_counts = dict(assembly.budget.counts)
+            return result
+        except _Task5ProofLimit as exc:
+            self._task5_last_limit_exhaustion = (
+                exc.phase,
+                exc.counter,
+                exc.observed,
+                exc.configured,
+            )
+            return None
+
+    def _publication_private_arena_narrow_assembly(
+        self,
+        *,
+        role: Literal[
+            "block-initialize", "split", "unlink", "insert",
+            "coalesce-prev", "coalesce-next", "arena-free", "resize",
+        ],
+        function_entry: int,
+        invocations: tuple[_PublicationPrivateArenaInvocation, ...],
+        contract: _PrivateHeapAllocatorContract,
+        extent: _PublicationPrivateHeapExtentWitness,
+        effects: _PublicationPrivateHeapEffectClosure,
+        layout: _PublicationPrivatePageLayout,
+        ring_evidence: _PublicationPrivatePageRingEvidence,
+    ) -> _Task5ProofAssembly | None:
+        if role not in {"block-initialize", "split", "unlink"}:
+            return None
+        current = self._publication_private_arena_current_inputs(
+            contract, extent, effects, ring_evidence
+        )
+        if current is None:
+            return None
+        assembly = self._task5_new_assembly(
+            mode="narrow-transfer",
+            allowed_role=role,
+            contract=contract,
+            extent=extent,
+            effects=effects,
+            ring_evidence=ring_evidence,
+            layout=None,
+            selector_role=None,
+            select_transfer=None,
+            selector_spans=(),
+        )
+        try:
+            base = self._task5_build_base_proof(assembly)
+        except _Task5ProofLimit as exc:
+            self._task5_last_limit_exhaustion = (
+                exc.phase, exc.counter, exc.observed, exc.configured
+            )
+            return None
+        if base is None:
+            return None
+        derived_layout = replace(
+            ring_evidence.layout,
+            minimum_split_remainder=self._task5_base_topology(assembly)["minimum"],
+        )
+        transfer = next(row for row in base.transfers if row.role == role)
+        keys = frozenset(transfer.span_keys)
+        spans = tuple(
+            row
+            for row in base.spans
+            if (row.function_entry, row.instruction_address, row.operand_index)
+            in keys
+        )
+        if (
+            layout != derived_layout
+            or function_entry != transfer.function_entry
+            or invocations != transfer.invocations
+            or any(
+                not self._publication_private_arena_state_is_valid(
+                    row.block_state
+                )
+                for row in invocations
+            )
+        ):
+            return None
+        assembly.layout = derived_layout
+        assembly.narrow_result = (transfer, spans)
+        self._task5_last_budget_counts = dict(assembly.budget.counts)
+        return assembly
+
+    def _publication_private_arena_transfer(
+        self,
+        *,
+        role: Literal[
+            "block-initialize", "split", "unlink", "insert",
+            "coalesce-prev", "coalesce-next", "arena-free", "resize",
+        ],
+        function_entry: int,
+        invocations: tuple[_PublicationPrivateArenaInvocation, ...],
+        contract: _PrivateHeapAllocatorContract,
+        extent: _PublicationPrivateHeapExtentWitness,
+        effects: _PublicationPrivateHeapEffectClosure,
+        layout: _PublicationPrivatePageLayout,
+        ring_evidence: _PublicationPrivatePageRingEvidence,
+    ) -> tuple[
+        _PublicationPrivateArenaTransfer,
+        tuple[_PublicationPrivateArenaSpan, ...],
+    ] | None:
+        self._task5_last_limit_exhaustion = None
+        self._task5_last_budget_counts = {}
+        local_dependencies: set[tuple[str, int]] = set()
+        self.producer_dependency_collectors.append(local_dependencies)
+        try:
+            assembly = self._publication_private_arena_narrow_assembly(
+                role=role,
+                function_entry=function_entry,
+                invocations=invocations,
+                contract=contract,
+                extent=extent,
+                effects=effects,
+                layout=layout,
+                ring_evidence=ring_evidence,
+            )
+        finally:
+            popped = self.producer_dependency_collectors.pop()
+            assert popped is local_dependencies
+        if (
+            assembly is None
+            or assembly.mode != "narrow-transfer"
+            or assembly.allowed_role != role
+            or assembly.layout is None
+            or assembly.selector_role is not None
+            or assembly.select_transfer is not None
+            or assembly.selector_spans
+            or assembly.narrow_result is None
+        ):
+            return None
+        if self.producer_dependency_collectors:
+            self.producer_dependency_collectors[-1].update(local_dependencies)
+        return assembly.narrow_result
+
+    def _publication_private_block_arena_role(
+        self,
+        contract: _PrivateHeapAllocatorContract,
+        extent: _PublicationPrivateHeapExtentWitness,
+        effects: _PublicationPrivateHeapEffectClosure,
+        layout: _PublicationPrivatePageLayout,
+        ring_evidence: _PublicationPrivatePageRingEvidence,
+        selector_role: _PublicationPrivateBlockArenaRole,
+        select_transfer: _PublicationPrivateArenaTransfer,
+        selector_spans: tuple[_PublicationPrivateArenaSpan, ...],
+    ) -> tuple[
+        _PublicationPrivateBlockArenaRole,
+        tuple[_PublicationPrivateArenaTransfer, ...],
+        tuple[_PublicationPrivateArenaSpan, ...],
+    ] | None:
+        self._task5_last_limit_exhaustion = None
+        self._task5_last_budget_counts = {}
+        local_dependencies: set[tuple[str, int]] = set()
+        self.producer_dependency_collectors.append(local_dependencies)
+        try:
+            assembly = self._publication_private_arena_full_assembly(
+                contract,
+                extent,
+                effects,
+                layout,
+                ring_evidence,
+                selector_role,
+                select_transfer,
+                selector_spans,
+            )
+            if assembly is None or assembly.mode != "full-role":
+                return None
+            base = self._publication_private_arena_base_roles(assembly)
+            if base is None:
+                return None
+            proved_roles = frozenset(row.role for row in base.transfers)
+            required_roles = frozenset(
+                {
+                    "block-initialize", "split", "unlink", "insert",
+                    "coalesce-prev", "coalesce-next", "arena-free", "resize",
+                }
+            )
+            if proved_roles != required_roles:
+                return None
+            return base.role, base.transfers, base.spans
+        finally:
+            popped = self.producer_dependency_collectors.pop()
+            assert popped is local_dependencies
 
     def _publication_private_heap_effect_closure_replay(
         self,
