@@ -2264,6 +2264,7 @@ class _Task5ProofAssembly:
     select_transfer: _PublicationPrivateArenaTransfer | None
     selector_spans: tuple[_PublicationPrivateArenaSpan, ...]
     arena_free_body_proof: _Task5ArenaFreeBodyProof | None
+    resize_body_proof: _Task5ResizeBodyProof | None
     narrow_result: tuple[
         _PublicationPrivateArenaTransfer,
         tuple[_PublicationPrivateArenaSpan, ...],
@@ -2352,6 +2353,13 @@ class _Task5ResizeCallProof:
     fit_predicate: _PublicationPrivateArenaPredicate
     minimum_predicate: _PublicationPrivateArenaPredicate
     instruction_addresses: frozenset[int]
+
+
+@dataclass(frozen=True, slots=True)
+class _Task5ResizeBodyProof:
+    split_calls: tuple[_Task5ResizeCallProof, ...]
+    return_call_paths: tuple[tuple[tuple[int, int], ...], ...]
+    instruction_addresses: tuple[int, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -29674,6 +29682,7 @@ class _DirectCfgRecovery:
             select_transfer=select_transfer,
             selector_spans=selector_spans,
             arena_free_body_proof=None,
+            resize_body_proof=None,
             narrow_result=None,
         )
 
@@ -30924,11 +30933,16 @@ class _DirectCfgRecovery:
         self,
         assembly: _Task5ProofAssembly,
         topology: _Task5BaseTopology,
-    ) -> tuple[_Task5ResizeCallProof, ...] | None:
+    ) -> _Task5ResizeBodyProof | None:
         phase = "base-roles"
         layout = assembly.base_layout
         payload_offset = layout.block_prev_offset
         entry = topology.reallocator_entry
+        if (
+            not self._task5_mutation_memory_is_canonical(entry)
+            or not self._task5_direct_memory_writes_are_stack_local(entry)
+        ):
+            return None
         mask = (~layout.size_flag_mask) & 0xFFFF_FFFF
         align_mask = (~(layout.block_alignment - 1)) & 0xFFFF_FFFF
         payload = self._task5_expression(
@@ -30964,6 +30978,14 @@ class _DirectCfgRecovery:
         if len(flag_bits) != 3:
             return None
         page_pointer_flag = flag_bits[0]
+        page_clear_mask = (~page_pointer_flag) & 0xFFFF_FFFF
+        callee_saved_families = ("ebx", "esi", "edi", "ebp")
+        initial_register_tokens = {
+            family: self._task5_expression(
+                assembly, phase, "initial-register", entry, family
+            )
+            for family in callee_saved_families
+        }
 
         def value(kind: str, token: int, *, same_page: bool = False):
             return frozenset(
@@ -31089,7 +31111,12 @@ class _DirectCfgRecovery:
             return rows[0] if len(rows) == 1 else None
 
         initial = _Task5SemanticState(
-            registers=tuple(frozenset() for _ in _REGISTER_FAMILIES),
+            registers=tuple(
+                value("initial-register", initial_register_tokens[family])
+                if family in initial_register_tokens
+                else frozenset()
+                for family in _REGISTER_FAMILIES
+            ),
             owned_stack=(),
             memory=((4, token_value(payload)), (8, token_value(raw_request))),
             predicates=frozenset(
@@ -31117,6 +31144,7 @@ class _DirectCfgRecovery:
         call_states: dict[int, list[_Task5ResizeCallProof]] = {
             address: [] for address in topology.resize_calls
         }
+        return_call_paths: list[tuple[tuple[int, int], ...]] = []
         rejected_call = False
 
         while assembly.semantic_pending:
@@ -31283,14 +31311,23 @@ class _DirectCfgRecovery:
                 else:
                     return None
             elif mnemonic == "ret":
-                if state.owned_stack:
+                if state.owned_stack or any(
+                    one(
+                        state.registers[
+                            _REGISTER_FAMILIES.index(family)
+                        ]
+                    )
+                    != token
+                    for family, token in initial_register_tokens.items()
+                ):
                     return None
+                return_call_paths.append(state.calls)
             elif decoded.group(CS_GRP_CALL):
                 target = self.direct_call_targets_by_source.get(address)
                 if target is None:
                     return None
+                proof = None
                 if target == topology.splitter_entry:
-                    proof = None
                     if address in call_states and len(state.owned_stack) >= 2:
                         request_token = one(state.owned_stack[-2])
                         block_token = one(state.owned_stack[-1])
@@ -31365,12 +31402,86 @@ class _DirectCfgRecovery:
                         rejected_call = True
                     else:
                         call_states[address].append(proof)
+                elif target == topology.insert_entry:
+                    preceding = next(
+                        (
+                            row
+                            for row in reversed(state.calls)
+                            if row[1] == topology.splitter_entry
+                        ),
+                        None,
+                    )
+                    matching = (
+                        None
+                        if preceding is None
+                        else next(
+                            (
+                                row
+                                for row in call_states.get(
+                                    preceding[0], ()
+                                )
+                                if row.call_address == preceding[0]
+                            ),
+                            None,
+                        )
+                    )
+                    page_token = (
+                        one(state.owned_stack[-1])
+                        if len(state.owned_stack) >= 2
+                        else None
+                    )
+                    remainder_token = (
+                        one(state.owned_stack[-2])
+                        if len(state.owned_stack) >= 2
+                        else None
+                    )
+                    page_row = assembly.expressions_by_token.get(
+                        page_token or -1, ()
+                    )
+                    if (
+                        matching is None
+                        or remainder_token != matching.split_block_token
+                        or not page_row
+                        or page_row[0] != "and"
+                        or page_row[2] != page_clear_mask
+                        or self._task5_memory_value_kind(
+                            assembly,
+                            page_row[1],
+                            block_token=block,
+                            layout=layout,
+                        )
+                        != "block-page-flags"
+                    ):
+                        rejected_call = True
+                elif target == topology.coalesce_next_entry:
+                    arguments = tuple(
+                        one(values) for values in state.owned_stack[-2:]
+                    )
+                    if (
+                        address != topology.resize_next_coalesce_call
+                        or block not in arguments
+                    ):
+                        rejected_call = True
+                elif target in {
+                    topology.block_initializer_entry,
+                    topology.insert_entry,
+                    topology.coalesce_prev_entry,
+                    topology.coalesce_next_entry,
+                    topology.unlink_entry,
+                }:
+                    rejected_call = True
                 state = clear_pending(state)
                 for family in ("eax", "ecx", "edx"):
                     state = with_register(
                         state,
                         _REGISTER_FAMILIES.index(family),
                         frozenset(),
+                    )
+                if proof is not None:
+                    state = with_register(
+                        state,
+                        _REGISTER_FAMILIES.index("eax"),
+                        token_value(proof.split_block_token),
                     )
                 if target != topology.splitter_entry:
                     returned_block = next(
@@ -31691,6 +31802,29 @@ class _DirectCfgRecovery:
                                 )
                             elif (
                                 source is not None
+                                and immediate == page_clear_mask
+                                and self._task5_memory_value_kind(
+                                    assembly,
+                                    source,
+                                    block_token=block,
+                                    layout=layout,
+                                )
+                                == "block-page-flags"
+                            ):
+                                result = self._task5_expression(
+                                    assembly,
+                                    phase,
+                                    "and",
+                                    source,
+                                    page_clear_mask,
+                                )
+                                assigned = value(
+                                    "page",
+                                    result,
+                                    same_page=True,
+                                )
+                            elif (
+                                source is not None
                                 and immediate == page_pointer_flag
                                 and self._task5_memory_value_kind(
                                     assembly,
@@ -31758,7 +31892,7 @@ class _DirectCfgRecovery:
                     assembly, phase, successor, successor_state
                 )
 
-        if rejected_call:
+        if rejected_call or not return_call_paths:
             return None
         proofs = []
         for address in topology.resize_calls:
@@ -31798,7 +31932,12 @@ class _DirectCfgRecovery:
                     ),
                 )
             )
-        return tuple(proofs)
+        canonical_paths = tuple(sorted(set(return_call_paths)))
+        return _Task5ResizeBodyProof(
+            split_calls=tuple(proofs),
+            return_call_paths=canonical_paths,
+            instruction_addresses=self._function_instruction_addresses(entry),
+        )
 
     def _task5_splitter_body_is_exact(
         self,
@@ -32545,15 +32684,17 @@ class _DirectCfgRecovery:
             )
         ):
             return None
-        resize_call_proofs = self._task5_trace_resize_split_paths(
+        resize_body_proof = self._task5_trace_resize_split_paths(
             assembly,
             topology,
         )
-        if resize_call_proofs is None or not self._task5_splitter_body_is_exact(
+        if resize_body_proof is None or not self._task5_splitter_body_is_exact(
             assembly,
             topology,
         ):
             return None
+        assembly.resize_body_proof = resize_body_proof
+        resize_call_proofs = resize_body_proof.split_calls
 
         for proof in resize_call_proofs:
             if not self._task5_record_event(
@@ -32733,6 +32874,27 @@ class _DirectCfgRecovery:
                     bytes(decoded.bytes[:1]) in {b"\x66", b"\x67"}
                     or operand.size != 4
                     or operand.mem.index != X86_REG_INVALID
+                ):
+                    return False
+        return True
+
+    def _task5_direct_memory_writes_are_stack_local(
+        self,
+        function_entry: int,
+    ) -> bool:
+        """Keep role-local bookkeeping separate from arena mutation calls."""
+        for address in self._function_instruction_addresses(function_entry):
+            decoded = self._owned_decoded(address)
+            for operand_index, operand in enumerate(decoded.operands):
+                if not self._task5_memory_operand_is_written(
+                    decoded,
+                    operand_index,
+                ):
+                    continue
+                if (
+                    self._register_family(operand.mem.base) != "esp"
+                    or operand.mem.index != X86_REG_INVALID
+                    or operand.mem.segment != X86_REG_INVALID
                 ):
                     return False
         return True
@@ -37324,6 +37486,621 @@ class _DirectCfgRecovery:
             return None
         return result
 
+    def _task5_resize_invocations(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: _Task5BaseTopology,
+    ) -> tuple[_PublicationPrivateArenaInvocation, ...] | None:
+        entry = topology.reallocator_entry
+        decoded = tuple(
+            sorted(self.direct_call_sources_by_target.get(entry, ()))
+        )
+        raw = tuple(sorted(self._raw_direct_call_sites(entry)))
+        sites = tuple(
+            (self._registrar_function_entry(address), address)
+            for address in decoded
+        )
+        if (
+            not decoded
+            or decoded != raw
+            or decoded != topology.driver_calls
+            or any(owner is None for owner, _address in sites)
+            or tuple(sorted({cast(int, owner) for owner, _address in sites}))
+            != topology.driver_entries
+            or any(
+                self.direct_call_targets_by_source.get(address) != entry
+                for _owner, address in sites
+            )
+            or not self._least_reachable_incoming_call_domain_is_closed(entry)
+            or self.provisional_unowned_raw_callers_by_target.get(entry, ())
+            or assembly.incoming_domains.get(entry) != decoded
+            or not self._task5_resize_driver_arguments_are_exact(
+                assembly,
+                topology,
+            )
+        ):
+            return None
+        allocated = _PublicationPrivateArenaBlockState(
+            "allocated", "unlisted"
+        )
+        return tuple(
+            _PublicationPrivateArenaInvocation(
+                caller_entry=cast(int, owner),
+                call_address=address,
+                callee_entry=entry,
+                role="resize",
+                context=context,
+                page_origins=(),
+                block_state=allocated,
+            )
+            for owner, address in sites
+            for context in ("resize-shrink", "resize-grow")
+        )
+
+    def _task5_resize_driver_arguments_are_exact(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: _Task5BaseTopology,
+    ) -> bool:
+        for call_address in topology.driver_calls:
+            owner = self._registrar_function_entry(call_address)
+            if owner not in topology.driver_entries:
+                return False
+            arguments = tuple(
+                self._pushed_call_argument(call_address, index)
+                for index in range(3)
+            )
+            if arguments[0] is None or arguments[1] is None or arguments[2] is not None:
+                return False
+            payload, request = cast(
+                tuple[tuple[Instruction, object, int], ...],
+                arguments[:2],
+            )
+            for source, operand, argument_owner in (payload, request):
+                decoded = self._owned_decoded(source.address)
+                if (
+                    argument_owner != owner
+                    or decoded.mnemonic != "push"
+                    or len(decoded.operands) != 1
+                    or getattr(operand, "size", None) != 4
+                    or decoded.addr_size != 4
+                ):
+                    return False
+                if getattr(operand, "type", None) == X86_OP_MEM:
+                    memory = operand.mem
+                    if (
+                        self._register_family(memory.base) == "esp"
+                        and (
+                            memory.index != X86_REG_INVALID
+                            or memory.disp < 8
+                            or memory.disp % 4
+                        )
+                    ):
+                        return False
+            payload_operand = payload[1]
+            request_operand = request[1]
+            if (
+                not self._task5_resize_payload_is_current(
+                    assembly,
+                    payload[0].address,
+                    payload_operand,
+                    cast(int, owner),
+                    call_address,
+                )
+                or
+                payload_operand.type == X86_OP_REG
+                and request_operand.type == X86_OP_REG
+                and self._register_family(payload_operand.reg)
+                == self._register_family(request_operand.reg)
+            ) or (
+                payload_operand.type == X86_OP_MEM
+                and request_operand.type == X86_OP_MEM
+                and (
+                    payload_operand.mem.base,
+                    payload_operand.mem.index,
+                    payload_operand.mem.scale,
+                    payload_operand.mem.disp,
+                )
+                == (
+                    request_operand.mem.base,
+                    request_operand.mem.index,
+                    request_operand.mem.scale,
+                    request_operand.mem.disp,
+                )
+            ):
+                return False
+        return True
+
+    def _task5_resize_payload_is_current(
+        self,
+        assembly: _Task5ProofAssembly,
+        address: int,
+        operand: object,
+        owner: int,
+        call_address: int,
+        active: frozenset[tuple[int, str]] = frozenset(),
+    ) -> bool:
+        if (
+            getattr(operand, "type", None) == X86_OP_MEM
+            and getattr(operand, "size", None) == 4
+        ):
+            argument = self._stack_argument_index_at(address, operand, owner)
+            return bool(
+                argument is not None
+                and self._incoming_stack_argument_value_is_unchanged(
+                    address,
+                    argument,
+                    owner,
+                )
+            )
+        if (
+            getattr(operand, "type", None) != X86_OP_REG
+            or getattr(operand, "size", None) != 4
+        ):
+            return False
+        family = self._register_family(operand.reg)
+        key = (address, family)
+        if family not in _REGISTER_FAMILIES or family == "esp" or key in active:
+            return False
+        if self._register_argument_origin_index(address, operand.reg, owner) is not None:
+            return True
+        allocator_targets = {
+            assembly.contract.root,
+            assembly.contract.large_allocator,
+            assembly.contract.small_allocator,
+        }
+        allocator_calls = tuple(
+            row
+            for row in self._function_direct_calls(owner)
+            if row.address < call_address and row.target in allocator_targets
+        )
+        for row in reversed(allocator_calls):
+            try:
+                if self._operand_has_exact_call_result_origin(
+                    address,
+                    operand,
+                    owner,
+                    row.address,
+                ):
+                    return True
+            except AnalysisLimitError:
+                break
+        definitions = self._register_definitions_across_blocks(
+            address,
+            family,
+            owner,
+        )
+        if not definitions:
+            return False
+        global_slots = {
+            source.mem.disp & 0xFFFF_FFFF
+            for definition_address in definitions
+            for definition in (self._owned_decoded(definition_address),)
+            if definition.mnemonic == "mov"
+            and len(definition.operands) == 2
+            and definition.operands[0].type == X86_OP_REG
+            and definition.operands[0].size == 4
+            and self._register_family(definition.operands[0].reg) == family
+            and (source := definition.operands[1]).type == X86_OP_MEM
+            and source.size == 4
+            and source.mem.segment == X86_REG_INVALID
+            and source.mem.base == X86_REG_INVALID
+            and source.mem.index == X86_REG_INVALID
+        }
+        if (
+            len(global_slots) == 1
+            and len(global_slots) == len(definitions)
+            and self._task5_resize_result_updates_global_slot(
+                owner,
+                call_address,
+                next(iter(global_slots)),
+            )
+        ):
+            return True
+        next_active = active | {key}
+        for definition_address in definitions:
+            definition = self._owned_decoded(definition_address)
+            if (
+                definition.mnemonic != "mov"
+                or len(definition.operands) != 2
+                or definition.operands[0].type != X86_OP_REG
+                or definition.operands[0].size != 4
+                or self._register_family(definition.operands[0].reg) != family
+            ):
+                return False
+            source = definition.operands[1]
+            if not self._task5_resize_payload_is_current(
+                assembly,
+                definition_address,
+                source,
+                owner,
+                call_address,
+                next_active,
+            ):
+                return False
+        return True
+
+    def _task5_resize_result_updates_global_slot(
+        self,
+        owner: int,
+        call_address: int,
+        slot: int,
+    ) -> bool:
+        writes = []
+        for address in self._function_instruction_addresses(owner):
+            if address <= call_address:
+                continue
+            decoded = self._owned_decoded(address)
+            if decoded.mnemonic != "mov" or len(decoded.operands) != 2:
+                continue
+            destination, source = decoded.operands
+            if (
+                destination.type == X86_OP_MEM
+                and destination.size == 4
+                and destination.mem.segment == X86_REG_INVALID
+                and destination.mem.base == X86_REG_INVALID
+                and destination.mem.index == X86_REG_INVALID
+                and destination.mem.disp & 0xFFFF_FFFF == slot
+            ):
+                writes.append((decoded, source))
+        return bool(
+            writes
+            and all(
+                source.type == X86_OP_REG
+                and source.size == 4
+                and self._register_has_exact_call_result_origin(
+                    decoded.address,
+                    self._register_family(source.reg),
+                    owner,
+                    call_address,
+                )
+                for decoded, source in writes
+            )
+        )
+
+    @staticmethod
+    def _task5_resize_transitions(
+        entry: int,
+    ) -> tuple[_PublicationPrivateArenaStateTransition, ...]:
+        allocated = _PublicationPrivateArenaBlockState(
+            "allocated", "unlisted"
+        )
+        listed = _PublicationPrivateArenaBlockState("free", "listed")
+        return tuple(
+            transition
+            for context in ("resize-shrink", "resize-grow")
+            for transition in (
+                _PublicationPrivateArenaStateTransition(
+                    entry,
+                    "resize",
+                    context,
+                    "payload-block",
+                    allocated,
+                    allocated,
+                    "none",
+                    None,
+                ),
+                _PublicationPrivateArenaStateTransition(
+                    entry,
+                    "resize",
+                    context,
+                    "remainder-block",
+                    allocated,
+                    listed,
+                    "none",
+                    None,
+                ),
+            )
+        )
+
+    def _task5_resize_paths_are_exact(
+        self,
+        topology: _Task5BaseTopology,
+        body: _Task5ResizeBodyProof,
+    ) -> bool:
+        if (
+            topology.resize_insert_calls is None
+            or topology.resize_next_coalesce_call is None
+            or len(topology.resize_calls) != 2
+            or len(topology.resize_insert_calls) != 2
+            or tuple(row.call_address for row in body.split_calls)
+            != topology.resize_calls
+            or body.instruction_addresses
+            != self._function_instruction_addresses(
+                topology.reallocator_entry
+            )
+            or body.return_call_paths
+            != tuple(sorted(set(body.return_call_paths)))
+        ):
+            return False
+        grow_coalesce = topology.resize_next_coalesce_call
+        indexed = tuple(
+            (
+                proof,
+                topology.resize_insert_calls[index],
+                grow_coalesce in proof.instruction_addresses,
+            )
+            for index, proof in enumerate(body.split_calls)
+        )
+        grow_rows = tuple(row for row in indexed if row[2])
+        shrink_rows = tuple(row for row in indexed if not row[2])
+        if len(grow_rows) != 1 or len(shrink_rows) != 1:
+            return False
+        grow_split = grow_rows[0][0].call_address
+        grow_insert = grow_rows[0][1]
+        shrink_split = shrink_rows[0][0].call_address
+        shrink_insert = shrink_rows[0][1]
+        mutation_targets = {
+            topology.splitter_entry,
+            topology.insert_entry,
+            topology.coalesce_prev_entry,
+            topology.coalesce_next_entry,
+            topology.unlink_entry,
+            topology.block_initializer_entry,
+            topology.arena_free_candidate_entry,
+        }
+        allowed_sequences = {
+            (),
+            ((shrink_split, topology.splitter_entry),
+             (shrink_insert, topology.insert_entry)),
+            ((grow_coalesce, topology.coalesce_next_entry),),
+            ((grow_coalesce, topology.coalesce_next_entry),
+             (grow_split, topology.splitter_entry),
+             (grow_insert, topology.insert_entry)),
+        }
+        observed: set[tuple[tuple[int, int], ...]] = set()
+        for path in body.return_call_paths:
+            if not path or len(path) != len(set(path)):
+                # A call-free return is valid, but a repeated call occurrence
+                # in one acyclic resize path is not.
+                if path:
+                    return False
+            mutation_path = tuple(
+                row for row in path if row[1] in mutation_targets
+            )
+            if mutation_path not in allowed_sequences:
+                return False
+            observed.add(mutation_path)
+        return {
+            (
+                (shrink_split, topology.splitter_entry),
+                (shrink_insert, topology.insert_entry),
+            ),
+            (
+                (grow_coalesce, topology.coalesce_next_entry),
+                (grow_split, topology.splitter_entry),
+                (grow_insert, topology.insert_entry),
+            ),
+        } <= observed
+
+    def _task5_resize_output_is_valid(
+        self,
+        assembly: _Task5ProofAssembly,
+        transfer: _PublicationPrivateArenaTransfer,
+        spans: tuple[_PublicationPrivateArenaSpan, ...],
+    ) -> bool:
+        topology = assembly.topology
+        body = assembly.resize_body_proof
+        if (
+            topology is None
+            or body is None
+            or transfer.function_entry != topology.reallocator_entry
+            or transfer.role != "resize"
+            or not self._task5_resize_paths_are_exact(topology, body)
+            or not self._task5_resize_calls_are_classified(
+                assembly, topology, body
+            )
+        ):
+            return False
+        invocations = self._task5_resize_invocations(assembly, topology)
+        current_spans = self._task5_role_spans(
+            topology.reallocator_entry,
+            "resize",
+            assembly,
+        )
+        expected_span_keys = tuple(
+            (row.function_entry, row.instruction_address, row.operand_index)
+            for row in spans
+        )
+        return bool(
+            invocations is not None
+            and current_spans is not None
+            and spans == current_spans
+            and spans
+            and expected_span_keys == tuple(sorted(set(expected_span_keys)))
+            and transfer.invocations == invocations
+            and transfer.state_transitions
+            == self._task5_resize_transitions(transfer.function_entry)
+            and transfer.removal_call_discharges == ()
+            and transfer.instruction_addresses == body.instruction_addresses
+            and transfer.span_keys == expected_span_keys
+            and transfer.function_sha256
+            == self._producer_function_fingerprint(transfer.function_entry)
+            and all(
+                self._publication_private_arena_state_is_valid(
+                    row.block_state
+                )
+                for row in transfer.invocations
+            )
+        )
+
+    def _task5_prove_resize(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: _Task5BaseTopology,
+    ) -> _Task5RoleProof | None:
+        contexts = self._task5_trace_split_contexts(assembly, topology)
+        body = assembly.resize_body_proof
+        invocations = self._task5_resize_invocations(assembly, topology)
+        if (
+            contexts is None
+            or body is None
+            or invocations is None
+            or tuple(assembly.resize_worklist) != (topology.reallocator_entry,)
+            or assembly.queued_resize_entries != {topology.reallocator_entry}
+            or not self._task5_resize_paths_are_exact(topology, body)
+            or not self._task5_resize_calls_are_classified(
+                assembly, topology, body
+            )
+        ):
+            return None
+        assembly.resize_worklist.popleft()
+        if assembly.resize_worklist:
+            return None
+        spans = self._task5_role_spans(
+            topology.reallocator_entry,
+            "resize",
+            assembly,
+        )
+        if spans is None:
+            return None
+        transfer = _PublicationPrivateArenaTransfer(
+            function_entry=topology.reallocator_entry,
+            role="resize",
+            invocations=invocations,
+            state_transitions=self._task5_resize_transitions(
+                topology.reallocator_entry
+            ),
+            removal_call_discharges=(),
+            instruction_addresses=body.instruction_addresses,
+            span_keys=tuple(
+                (row.function_entry, row.instruction_address, row.operand_index)
+                for row in spans
+            ),
+            function_sha256=self._producer_function_fingerprint(
+                topology.reallocator_entry
+            ),
+        )
+        edges = {
+            _PublicationPrivateArenaCallEdge(
+                row.caller_entry,
+                row.call_address,
+                row.callee_entry,
+                "resize-context",
+                True,
+            )
+            for row in invocations
+        }
+        mutation_targets = {
+            topology.splitter_entry,
+            topology.insert_entry,
+            topology.coalesce_next_entry,
+        }
+        edges.update(
+            _PublicationPrivateArenaCallEdge(
+                topology.reallocator_entry,
+                call.address,
+                call.target,
+                "resize-context",
+                True,
+            )
+            for call in self._function_direct_calls(topology.reallocator_entry)
+            if call.target in mutation_targets
+        )
+        dependencies = set(self._task5_role_dependencies(assembly, topology))
+        dependencies.update(
+            ("function", call.target)
+            for call in self._function_direct_calls(topology.reallocator_entry)
+            if call.target in self.function_addresses
+        )
+        result = _Task5RoleProof(
+            transfer,
+            spans,
+            tuple(
+                sorted(
+                    edges,
+                    key=lambda row: (
+                        row.caller_entry,
+                        row.call_address,
+                        row.target_entry,
+                        row.edge_kind,
+                    ),
+                )
+            ),
+            frozenset(dependencies),
+        )
+        if not self._task5_resize_output_is_valid(
+            assembly, transfer, spans
+        ):
+            return None
+        return result
+
+    def _task5_resize_calls_are_classified(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: _Task5BaseTopology,
+        body: _Task5ResizeBodyProof,
+    ) -> bool:
+        mutation_targets = {
+            topology.splitter_entry,
+            topology.insert_entry,
+            topology.coalesce_next_entry,
+        }
+        current_targets = {
+            *assembly.contract.dependency_functions,
+            *assembly.effects.function_entries,
+            assembly.contract.root,
+            assembly.contract.deallocator_root,
+            *mutation_targets,
+        }
+        reached = {
+            target
+            for path in body.return_call_paths
+            for _address, target in path
+        }
+        return all(
+            target in current_targets
+            or self._task5_resize_nonarena_copy_helper_is_exact(
+                assembly, target
+            )
+            for target in reached
+        )
+
+    def _task5_resize_nonarena_copy_helper_is_exact(
+        self,
+        assembly: _Task5ProofAssembly,
+        entry: int,
+    ) -> bool:
+        if (
+            entry not in self.function_addresses
+            or not self._task5_instruction_domain_is_total(
+                entry, assembly.budget
+            )
+            or self._function_direct_calls(entry)
+        ):
+            return False
+        saw_copy = False
+        saw_return = False
+        for address in self._function_instruction_addresses(entry):
+            decoded = self._owned_decoded(address)
+            if decoded.group(CS_GRP_CALL) or decoded.group(CS_GRP_IRET):
+                return False
+            successors = self._task5_complete_successors(
+                assembly, entry, address
+            )
+            if successors is None or any(row <= address for row in successors):
+                return False
+            if decoded.group(CS_GRP_RET):
+                if not self._task5_plain_return(decoded, 0):
+                    return False
+                saw_return = True
+            is_copy = decoded.mnemonic.startswith("rep movs")
+            saw_copy = saw_copy or is_copy
+            for operand in decoded.operands:
+                if operand.type != X86_OP_MEM:
+                    continue
+                base = self._register_family(operand.mem.base)
+                if base == "esp":
+                    continue
+                if (
+                    not is_copy
+                    or base not in {"esi", "edi"}
+                    or operand.mem.index != X86_REG_INVALID
+                    or operand.mem.disp != 0
+                ):
+                    return False
+        return saw_copy and saw_return
+
     def _task5_unlink_body_semantics_are_exact(
         self,
         assembly: _Task5ProofAssembly,
@@ -37961,6 +38738,7 @@ class _DirectCfgRecovery:
             ("coalesce-prev", self._task5_prove_coalesce_prev),
             ("coalesce-next", self._task5_prove_coalesce_next),
             ("arena-free", self._task5_prove_arena_free),
+            ("resize", self._task5_prove_resize),
         )
         proofs: list[_Task5RoleProof] = []
         for role_name, prover in provers:
@@ -38056,7 +38834,7 @@ class _DirectCfgRecovery:
                     )
                 )
             ),
-            resize_entries=(),
+            resize_entries=(topology.reallocator_entry,),
             block_payload_offset=assembly.base_layout.block_prev_offset,
             block_page_pointer_flag=flags[0],
             block_allocated_flag=flags[1],
@@ -38126,6 +38904,7 @@ class _DirectCfgRecovery:
             "coalesce-prev",
             "coalesce-next",
             "arena-free",
+            "resize",
         }:
             return None
         current = self._publication_private_arena_current_inputs(
@@ -38150,7 +38929,8 @@ class _DirectCfgRecovery:
                 assembly,
                 include_mutation=role
                 in {
-                    "insert", "coalesce-prev", "coalesce-next", "arena-free"
+                    "insert", "coalesce-prev", "coalesce-next", "arena-free",
+                    "resize",
                 },
             )
             if topology is None:
@@ -38163,6 +38943,7 @@ class _DirectCfgRecovery:
                 "coalesce-prev": self._task5_prove_coalesce_prev,
                 "coalesce-next": self._task5_prove_coalesce_next,
                 "arena-free": self._task5_prove_arena_free,
+                "resize": self._task5_prove_resize,
             }
             proof = role_provers[role](assembly, topology)
         except _Task5ProofLimit as exc:

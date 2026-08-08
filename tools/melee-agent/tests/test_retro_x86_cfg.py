@@ -20871,6 +20871,36 @@ PRIVATE_ARENA_TASK5_SLICE4_NODE_IDS = (
     "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[function-fingerprint]",
 )
 
+PRIVATE_ARENA_TASK5_SLICE5_NODE_IDS = (
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_publishes_exact_eight_role_result",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_resize_invocations_are_exact",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_resize_transitions_close_compound_paths",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_narrow_resize_is_exact",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_driver_argument_hostile[return-slot-request]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_driver_argument_hostile[duplicate-payload-request]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_multicall_foreign_payload",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_final_union_is_fresh_canonical_and_closed",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_serialized_resize_hostile[invocation-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_serialized_resize_hostile[invocation-duplicate]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_serialized_resize_hostile[invocation-reordered]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_serialized_resize_hostile[transition-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_serialized_resize_hostile[transition-reordered]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_serialized_resize_hostile[span-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_serialized_resize_hostile[span-duplicate]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_serialized_resize_hostile[span-meaning]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_serialized_resize_hostile[nonempty-discharge]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_serialized_resize_hostile[instruction-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_serialized_resize_hostile[fingerprint]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_serialized_resize_hostile[body-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_serialized_resize_hostile[body-path-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_serialized_resize_hostile[body-path-duplicate]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_resize_body_hostile[wrong-insert-result]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_resize_body_hostile[wrong-grow-coalesce-block]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_resize_body_hostile[tagged-insert-page]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_resize_body_hostile[callee-saved-wrong]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice5_rejects_resize_body_hostile[direct-arena-write]",
+)
+
 PRIVATE_ARENA_TASK5_ALL_NODE_IDS = (
     *PRIVATE_ARENA_TASK5_SLICE2_NODE_IDS,
     *PRIVATE_ARENA_TASK5_SLICE2_CARRIED_PREDICATE_NODE_IDS,
@@ -20879,6 +20909,7 @@ PRIVATE_ARENA_TASK5_ALL_NODE_IDS = (
     *PRIVATE_ARENA_TASK5_SLICE2_SPLITTER_STACK_NODE_IDS,
     *PRIVATE_ARENA_TASK5_SLICE3_NODE_IDS,
     *PRIVATE_ARENA_TASK5_SLICE4_NODE_IDS,
+    *PRIVATE_ARENA_TASK5_SLICE5_NODE_IDS,
 )
 
 
@@ -22447,7 +22478,7 @@ def test_private_arena_task5_slice2_uses_one_assembly_and_one_task4_revalidation
     assert recovery._publication_private_block_arena_role(
         contract, extent, effects, layout, ring, selector_role,
         select_transfer, selector_spans,
-    ) is None
+    ) is not None
     assert counts == {
         "current-inputs": 1, "full-assembly": 1, "narrow-assembly": 0,
         "task4-revalidation": 1, "base-roles": 1, "public-transfer": 0,
@@ -22483,12 +22514,24 @@ def test_private_arena_task5_slice2_base_evidence_has_exact_edges_spans_and_depe
     assert all(row.raw_reconciled for row in base.role.mutation_call_edges)
 
 
-def test_private_arena_task5_slice2_does_not_publish_partial_full_result():
+def test_private_arena_task5_slice2_does_not_publish_partial_full_result(
+    monkeypatch,
+):
     fixture = private_page_arena_image()
     rows, _assembly, base = private_arena_task5_slice2_base_result(fixture)
     assert base is not None
     recovery, contract, extent, effects, ring, layout, role, transfer, spans = rows
     outer_dependencies = {("function", fixture.page_provider)}
+    partial = replace(
+        base,
+        role=replace(base.role, resize_entries=()),
+        transfers=base.transfers[:-1],
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_publication_private_arena_base_roles",
+        lambda _assembly: partial,
+    )
     recovery.producer_dependency_collectors.append(outer_dependencies)
     try:
         assert recovery._publication_private_block_arena_role(
@@ -24012,6 +24055,7 @@ def test_private_arena_task5_slice3_role_inventory_spans_and_dependencies_are_ex
         "coalesce-prev",
         "coalesce-next",
         "arena-free",
+        "resize",
     }
     span_by_key = {
         (row.function_entry, row.instruction_address, row.operand_index): row
@@ -24031,11 +24075,21 @@ def test_private_arena_task5_slice3_role_inventory_spans_and_dependencies_are_ex
     assert {("function", entry) for entry in (fixture.block_inserter, *fixture.coalescers)} <= base.dependencies
 
 
-def test_private_arena_task5_slice3_public_full_result_remains_none():
+def test_private_arena_task5_slice3_public_full_result_remains_none(monkeypatch):
     fixture = private_page_arena_image()
     rows, _assembly, base = private_arena_task5_slice3_base(fixture)
-    assert len(base.transfers) == 7
+    assert len(base.transfers) == 8
     recovery, contract, extent, effects, ring, layout, selector_role, select_transfer, selector_spans = rows
+    partial = replace(
+        base,
+        role=replace(base.role, resize_entries=()),
+        transfers=base.transfers[:-1],
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_publication_private_arena_base_roles",
+        lambda _assembly: partial,
+    )
     assert recovery._publication_private_block_arena_role(
         contract,
         extent,
@@ -24339,12 +24393,12 @@ def private_arena_task5_slice4_base(fixture):
 def test_private_arena_task5_slice4_seventh_role_is_exact():
     fixture = private_page_arena_image()
     _rows, _assembly, base = private_arena_task5_slice4_base(fixture)
-    assert {row.role for row in base.transfers} == {
+    assert tuple(row.role for row in base.transfers) == (
         "block-initialize", "split", "unlink", "insert", "coalesce-prev",
-        "coalesce-next", "arena-free",
-    }
+        "coalesce-next", "arena-free", "resize",
+    )
     assert base.role.arena_free_entries == (fixture.arena_free,)
-    assert base.role.resize_entries == ()
+    assert base.role.resize_entries == (fixture.reallocator,)
 
 
 def test_private_arena_task5_slice4_invocations_are_exact():
@@ -24436,10 +24490,20 @@ def test_private_arena_task5_slice4_ring_evidence_is_immutable():
     assert rows[4].spans == before.spans
 
 
-def test_private_arena_task5_slice4_public_full_result_remains_none():
+def test_private_arena_task5_slice4_public_full_result_remains_none(monkeypatch):
     fixture = private_page_arena_image()
     rows, _assembly, base = private_arena_task5_slice4_base(fixture)
-    assert len(base.transfers) == 7
+    assert len(base.transfers) == 8
+    partial = replace(
+        base,
+        role=replace(base.role, resize_entries=()),
+        transfers=base.transfers[:-1],
+    )
+    monkeypatch.setattr(
+        rows[0],
+        "_publication_private_arena_base_roles",
+        lambda _assembly: partial,
+    )
     assert rows[0]._publication_private_block_arena_role(
         rows[1], rows[2], rows[3], rows[5], rows[4], rows[6], rows[7], rows[8]
     ) is None
@@ -24623,6 +24687,435 @@ def test_private_arena_task5_slice4_rejects_serialized_output_hostile(
         transfer = replace(transfer, removal_call_discharges=discharges)
     assert not recovery._task5_arena_free_output_is_valid(
         assembly, transfer, spans
+    )
+
+
+def private_arena_task5_slice5_claim(fixture, rows):
+    recovery = rows[0]
+    state = x86_cfg_module._PublicationPrivateArenaBlockState(
+        "allocated", "unlisted"
+    )
+    sites = tuple(
+        sorted(
+            (driver, call.address)
+            for driver in (fixture.realloc_driver,)
+            for call in recovery._function_direct_calls(driver)
+            if call.target == fixture.reallocator
+        )
+    )
+    assert len(sites) == 1
+    return fixture.reallocator, tuple(
+        x86_cfg_module._PublicationPrivateArenaInvocation(
+            caller_entry=caller,
+            call_address=call_address,
+            callee_entry=fixture.reallocator,
+            role="resize",
+            context=context,
+            page_origins=(),
+            block_state=state,
+        )
+        for caller, call_address in sites
+        for context in ("resize-shrink", "resize-grow")
+    )
+
+
+def private_arena_task5_slice5_result(fixture):
+    rows = private_page_arena_selector(fixture)
+    result = rows[0]._publication_private_block_arena_role(
+        rows[1], rows[2], rows[3], rows[5], rows[4], rows[6], rows[7], rows[8]
+    )
+    assert result is not None
+    return rows, result
+
+
+def private_arena_task5_slice5_driver_image(mutation):
+    assert mutation in {"return-slot-request", "duplicate-payload-request"}
+    fixture = private_page_arena_image()
+    raw = bytearray(fixture.arena.image.data)
+    text = next(
+        section for section in fixture.arena.image.sections
+        if section.name == ".text"
+    )
+    address = fixture.realloc_driver + 0x0E
+    offset = text.raw_offset + address - text.va
+    assert raw[offset : offset + 4] == bytes.fromhex("ff742408")
+    replacement = (
+        bytes.fromhex("ff742404")
+        if mutation == "return-slot-request"
+        else bytes.fromhex("53909090")
+    )
+    raw[offset : offset + 4] = replacement
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
+def private_arena_task5_slice5_multicall_driver_image(*, foreign_payload):
+    fixture = private_page_arena_image()
+    raw = bytearray(fixture.arena.image.data)
+    text = next(
+        section for section in fixture.arena.image.sections
+        if section.name == ".text"
+    )
+
+    def replace_bytes(address, expected, replacement):
+        expected = bytes.fromhex(expected)
+        replacement = bytes.fromhex(replacement)
+        assert len(expected) == len(replacement)
+        offset = text.raw_offset + address - text.va
+        assert raw[offset : offset + len(expected)] == expected
+        raw[offset : offset + len(replacement)] = replacement
+
+    tail_call = fixture.realloc_driver + 0x1C
+    displacement = (fixture.large_allocator - tail_call - 5).to_bytes(
+        4, "little", signed=True
+    )
+    replace_bytes(fixture.realloc_driver + 0x1B, "c3", "90")
+    replace_bytes(tail_call, "9090909090", "e8" + displacement.hex())
+    replace_bytes(fixture.realloc_driver + 0x21, "90", "c3")
+    if foreign_payload:
+        replace_bytes(fixture.realloc_driver + 0x12, "53", "57")
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
+def private_arena_task5_slice5_body_image(mutation):
+    assert mutation in {
+        "wrong-insert-result", "wrong-grow-coalesce-block",
+        "tagged-insert-page", "callee-saved-wrong", "direct-arena-write",
+    }
+    if mutation == "tagged-insert-page":
+        return private_page_arena_image(
+            mutation="resize-insert-missing-page-untag"
+        )
+    fixture = private_page_arena_image()
+    raw = bytearray(fixture.arena.image.data)
+    text = next(
+        section for section in fixture.arena.image.sections
+        if section.name == ".text"
+    )
+    replacements = {
+        "wrong-insert-result": (
+            fixture.reallocator + 0x43, bytes.fromhex("55"), bytes.fromhex("53")
+        ),
+        "wrong-grow-coalesce-block": (
+            fixture.reallocator + 0x4F, bytes.fromhex("53"), bytes.fromhex("56")
+        ),
+        "callee-saved-wrong": (
+            fixture.reallocator + 0x8F, bytes.fromhex("5b"), bytes.fromhex("58")
+        ),
+        "direct-arena-write": (
+            fixture.reallocator + 0x82,
+            bytes.fromhex("31c0"),
+            bytes.fromhex("3100"),
+        ),
+    }
+    address, expected, replacement = replacements[mutation]
+    offset = text.raw_offset + address - text.va
+    assert raw[offset : offset + len(expected)] == expected
+    raw[offset : offset + len(expected)] = replacement
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
+def test_private_arena_task5_slice5_publishes_exact_eight_role_result():
+    fixture = private_page_arena_image()
+    rows, (role, transfers, spans) = private_arena_task5_slice5_result(fixture)
+    assert tuple(row.role for row in transfers) == (
+        "block-initialize", "split", "unlink", "insert", "coalesce-prev",
+        "coalesce-next", "arena-free", "resize",
+    )
+    assert role.resize_entries == (fixture.reallocator,)
+    assert fixture.reallocator not in role.deallocator_function_entries
+    assert role.mutation_context_entries == (fixture.reallocator,)
+    assert spans
+    assert rows[4] == private_page_arena_selector(fixture)[4]
+
+
+def test_private_arena_task5_slice5_resize_invocations_are_exact():
+    fixture = private_page_arena_image()
+    rows, (_role, transfers, _spans) = private_arena_task5_slice5_result(fixture)
+    resize = next(row for row in transfers if row.role == "resize")
+    assert (resize.function_entry, resize.invocations) == (
+        fixture.reallocator,
+        private_arena_task5_slice5_claim(fixture, rows)[1],
+    )
+    assert resize.removal_call_discharges == ()
+    assert resize.function_sha256
+
+
+def test_private_arena_task5_slice5_resize_transitions_close_compound_paths():
+    fixture = private_page_arena_image()
+    _rows, (_role, transfers, _spans) = private_arena_task5_slice5_result(fixture)
+    resize = next(row for row in transfers if row.role == "resize")
+    assert tuple(
+        (
+            row.context,
+            row.subject,
+            row.before.allocation,
+            row.before.membership,
+            row.after.allocation,
+            row.after.membership,
+            row.restoration_role,
+            row.restoration_entry,
+        )
+        for row in resize.state_transitions
+    ) == (
+        ("resize-shrink", "payload-block", "allocated", "unlisted", "allocated", "unlisted", "none", None),
+        ("resize-shrink", "remainder-block", "allocated", "unlisted", "free", "listed", "none", None),
+        ("resize-grow", "payload-block", "allocated", "unlisted", "allocated", "unlisted", "none", None),
+        ("resize-grow", "remainder-block", "allocated", "unlisted", "free", "listed", "none", None),
+    )
+
+
+def test_private_arena_task5_slice5_narrow_resize_is_exact(monkeypatch):
+    fixture = private_page_arena_image()
+    rows, (_role, transfers, spans) = private_arena_task5_slice5_result(fixture)
+    expected = next(row for row in transfers if row.role == "resize")
+    keys = frozenset(expected.span_keys)
+    expected_spans = tuple(
+        row
+        for row in spans
+        if (row.function_entry, row.instruction_address, row.operand_index)
+        in keys
+    )
+    entry, invocations = private_arena_task5_slice5_claim(fixture, rows)
+
+    def task4_is_forbidden(*_args, **_kwargs):
+        raise AssertionError("narrow Task 5 called Task 4")
+
+    monkeypatch.setattr(
+        rows[0],
+        "_publication_private_block_selector_role",
+        task4_is_forbidden,
+    )
+    assert rows[0]._publication_private_arena_transfer(
+        role="resize",
+        function_entry=entry,
+        invocations=invocations,
+        contract=rows[1],
+        extent=rows[2],
+        effects=rows[3],
+        layout=rows[5],
+        ring_evidence=rows[4],
+    ) == (expected, expected_spans)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("return-slot-request", "duplicate-payload-request"),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice5_rejects_driver_argument_hostile(mutation):
+    control = private_page_arena_image()
+    assert private_arena_task5_slice5_result(control)[1] is not None
+    fixture = private_arena_task5_slice5_driver_image(mutation)
+    rows = private_page_arena_selector(fixture)
+    assert len(rows) == 9 and all(row is not None for row in rows)
+    assert rows[0]._publication_private_heap_effect_closure_is_current(rows[3])
+    assert (
+        rows[0]._publication_private_block_arena_role(
+            rows[1], rows[2], rows[3], rows[5], rows[4],
+            rows[6], rows[7], rows[8],
+        )
+        is None
+    )
+
+
+def test_private_arena_task5_slice5_rejects_multicall_foreign_payload():
+    control = private_arena_task5_slice5_multicall_driver_image(
+        foreign_payload=False
+    )
+    control_rows, control_result = private_arena_task5_slice5_result(control)
+    assert control_result is not None
+    fixture = private_arena_task5_slice5_multicall_driver_image(
+        foreign_payload=True
+    )
+    assert private_page_image_changed_addresses(control, fixture) == frozenset(
+        {fixture.realloc_driver + 0x12}
+    )
+    rows = private_page_arena_selector(fixture)
+    assert len(rows) == 9 and all(row is not None for row in rows)
+    assert rows[0]._publication_private_heap_effect_closure_is_current(rows[3])
+    assert rows[4].role == control_rows[4].role
+    assert (
+        rows[0]._publication_private_block_arena_role(
+            rows[1], rows[2], rows[3], rows[5], rows[4],
+            rows[6], rows[7], rows[8],
+        )
+        is None
+    )
+
+
+def test_private_arena_task5_slice5_final_union_is_fresh_canonical_and_closed():
+    fixture = private_page_arena_image()
+    rows, first = private_arena_task5_slice5_result(fixture)
+    second_rows, second = private_arena_task5_slice5_result(fixture)
+    assert first == second
+    assert rows[4] == second_rows[4]
+    role, transfers, spans = first
+    assert len(transfers) == len({row.role for row in transfers}) == 8
+    span_keys = tuple(
+        (row.function_entry, row.instruction_address, row.operand_index)
+        for row in spans
+    )
+    assert span_keys == tuple(sorted(set(span_keys)))
+    referenced = tuple(
+        sorted({key for transfer in transfers for key in transfer.span_keys})
+    )
+    assert referenced == span_keys
+    assert tuple(
+        row.role for row in transfers if row.removal_call_discharges
+    ) == ("arena-free",)
+    assert role.resize_entries == (fixture.reallocator,)
+    edges = role.mutation_call_edges
+    assert edges == tuple(
+        sorted(
+            set(edges),
+            key=lambda row: (
+                row.caller_entry,
+                row.call_address,
+                row.target_entry,
+                row.edge_kind,
+            ),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "invocation-missing", "invocation-duplicate", "invocation-reordered",
+        "transition-missing", "transition-reordered", "span-missing",
+        "span-duplicate", "span-meaning", "nonempty-discharge",
+        "instruction-missing", "fingerprint", "body-missing",
+        "body-path-missing", "body-path-duplicate",
+    ),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice5_rejects_serialized_resize_hostile(mutation):
+    fixture = private_page_arena_image()
+    rows = private_page_arena_selector(fixture)
+    recovery = rows[0]
+    assembly = recovery._publication_private_arena_full_assembly(
+        rows[1], rows[2], rows[3], rows[5], rows[4],
+        rows[6], rows[7], rows[8],
+    )
+    assert assembly is not None
+    base = recovery._publication_private_arena_base_roles(assembly)
+    assert base is not None
+    transfer = next(row for row in base.transfers if row.role == "resize")
+    keys = frozenset(transfer.span_keys)
+    spans = tuple(
+        row for row in base.spans
+        if (row.function_entry, row.instruction_address, row.operand_index)
+        in keys
+    )
+    assert recovery._task5_resize_output_is_valid(assembly, transfer, spans)
+    if mutation == "invocation-missing":
+        transfer = replace(transfer, invocations=transfer.invocations[:-1])
+    elif mutation == "invocation-duplicate":
+        transfer = replace(
+            transfer, invocations=(*transfer.invocations, transfer.invocations[-1])
+        )
+    elif mutation == "invocation-reordered":
+        transfer = replace(
+            transfer, invocations=tuple(reversed(transfer.invocations))
+        )
+    elif mutation == "transition-missing":
+        transfer = replace(
+            transfer, state_transitions=transfer.state_transitions[:-1]
+        )
+    elif mutation == "transition-reordered":
+        transfer = replace(
+            transfer,
+            state_transitions=tuple(reversed(transfer.state_transitions)),
+        )
+    elif mutation == "span-missing":
+        spans = spans[:-1]
+    elif mutation == "span-duplicate":
+        spans = (*spans, spans[-1])
+    elif mutation == "span-meaning":
+        spans = (replace(spans[0], field="extent"), *spans[1:])
+    elif mutation == "nonempty-discharge":
+        arena_free = next(
+            row for row in base.transfers if row.role == "arena-free"
+        )
+        transfer = replace(
+            transfer,
+            removal_call_discharges=arena_free.removal_call_discharges,
+        )
+    elif mutation == "instruction-missing":
+        transfer = replace(
+            transfer,
+            instruction_addresses=transfer.instruction_addresses[:-1],
+        )
+    elif mutation == "fingerprint":
+        transfer = replace(transfer, function_sha256="0" * 64)
+    elif mutation == "body-missing":
+        assembly.resize_body_proof = None
+    else:
+        body = assembly.resize_body_proof
+        assert body is not None
+        if mutation == "body-path-missing":
+            grow_call = assembly.topology.resize_next_coalesce_call
+            paths = tuple(
+                path for path in body.return_call_paths
+                if not (
+                    any(address == grow_call for address, _target in path)
+                    and any(
+                        target == assembly.topology.splitter_entry
+                        for _address, target in path
+                    )
+                )
+            )
+            assembly.resize_body_proof = replace(
+                body, return_call_paths=paths
+            )
+        else:
+            assert mutation == "body-path-duplicate"
+            assembly.resize_body_proof = replace(
+                body,
+                return_call_paths=(
+                    *body.return_call_paths,
+                    body.return_call_paths[-1],
+                ),
+            )
+    assert not recovery._task5_resize_output_is_valid(
+        assembly, transfer, spans
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "wrong-insert-result", "wrong-grow-coalesce-block",
+        "tagged-insert-page", "callee-saved-wrong", "direct-arena-write",
+    ),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice5_rejects_resize_body_hostile(mutation):
+    fixture = private_arena_task5_slice5_body_image(mutation)
+    rows = private_page_arena_selector(fixture)
+    assert len(rows) == 9 and all(row is not None for row in rows)
+    assert rows[0]._publication_private_heap_effect_closure_is_current(rows[3])
+    assert (
+        rows[0]._publication_private_block_arena_role(
+            rows[1], rows[2], rows[3], rows[5], rows[4],
+            rows[6], rows[7], rows[8],
+        )
+        is None
     )
 
 
