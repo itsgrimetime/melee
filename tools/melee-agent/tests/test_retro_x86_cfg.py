@@ -5717,7 +5717,7 @@ def private_block_selector_stack_image(
     """Prepend a fixed-width stack probe to one Task 4 interpreter."""
     assert component in {"selector", "splitter", "unlinker"}
     program_bytes = bytes.fromhex(program)
-    assert len(program_bytes) == 4
+    assert 0 < len(program_bytes) <= 8
     fixture = private_page_arena_image()
     recovery, _contract, _extent, _effects = private_page_arena_contract(
         fixture
@@ -17953,6 +17953,139 @@ def test_private_block_selector_stack_accepts_balanced_full_width(component):
     inputs, result = private_block_selector_task4_result(fixture)
 
     assert_private_block_selector_result(fixture, inputs, result)
+
+
+@pytest.mark.parametrize("component", ("selector", "splitter", "unlinker"))
+def test_private_block_selector_stack_accepts_full_width_add_cleanup(
+    component,
+):
+    fixture = private_block_selector_stack_image(component, "53 83 c4 04")
+
+    inputs, result = private_block_selector_task4_result(fixture)
+
+    assert_private_block_selector_result(fixture, inputs, result)
+
+
+@pytest.mark.parametrize("component", ("selector", "splitter", "unlinker"))
+@pytest.mark.parametrize(
+    ("control_program", "hostile_program", "expected_form"),
+    (
+        pytest.param(
+            "53 90 83 c4 04",
+            "53 66 83 c4 04",
+            ("add", 2, 4),
+            id="partial-add",
+        ),
+        pytest.param(
+            "53 90 83 c4 04",
+            "53 67 83 c4 04",
+            ("add", 4, 2),
+            id="address-size-add",
+        ),
+        pytest.param(
+            "53 83 c4 04",
+            "53 83 c4 08",
+            ("add", 4, 4),
+            id="owned-depth-underflow",
+        ),
+    ),
+)
+def test_private_block_selector_stack_rejects_arithmetic_boundary(
+    component,
+    control_program,
+    hostile_program,
+    expected_form,
+):
+    control = private_block_selector_stack_image(component, control_program)
+    hostile = private_block_selector_stack_image(component, hostile_program)
+    entry = getattr(hostile, component)
+    changed_offsets = {
+        index
+        for index, (left, right) in enumerate(
+            zip(
+                bytes.fromhex(control_program),
+                bytes.fromhex(hostile_program),
+                strict=True,
+            )
+        )
+        if left != right
+    }
+    assert private_page_image_changed_addresses(control, hostile) == {
+        entry + offset for offset in changed_offsets
+    }
+    hostile_inputs = private_page_arena_ring(hostile)
+    arithmetic = tuple(
+        hostile_inputs[0]._owned_decoded(address)
+        for address in hostile_inputs[0]._function_instruction_addresses(entry)
+        if entry <= address < entry + len(bytes.fromhex(hostile_program))
+        and hostile_inputs[0]._owned_decoded(address).mnemonic
+        in {"add", "sub"}
+    )
+    assert expected_form in {
+        (decoded.mnemonic, decoded.operands[0].size, decoded.addr_size)
+        for decoded in arithmetic
+    }
+    control_inputs, control_result = private_block_selector_task4_result(
+        control
+    )
+    assert_private_block_selector_result(
+        control,
+        control_inputs,
+        control_result,
+    )
+
+    assert private_block_selector_task4_result(hostile)[1] is None
+
+
+@pytest.mark.parametrize("component", ("splitter", "unlinker"))
+@pytest.mark.parametrize(
+    ("control_program", "hostile_program", "expected_form"),
+    (
+        pytest.param(
+            "90 83 ec 04 83 c4 04",
+            "66 83 ec 04 83 c4 04",
+            ("sub", 2, 4),
+            id="partial-sub",
+        ),
+        pytest.param(
+            "90 83 ec 04 83 c4 04",
+            "67 83 ec 04 83 c4 04",
+            ("sub", 4, 2),
+            id="address-size-sub",
+        ),
+    ),
+)
+def test_private_block_selector_stack_rejects_helper_sub_boundary(
+    component,
+    control_program,
+    hostile_program,
+    expected_form,
+):
+    control = private_block_selector_stack_image(component, control_program)
+    hostile = private_block_selector_stack_image(component, hostile_program)
+    hostile_inputs = private_page_arena_ring(hostile)
+    entry = getattr(hostile, component)
+    arithmetic = tuple(
+        hostile_inputs[0]._owned_decoded(address)
+        for address in hostile_inputs[0]._function_instruction_addresses(entry)
+        if entry <= address < entry + len(bytes.fromhex(hostile_program))
+        and hostile_inputs[0]._owned_decoded(address).mnemonic
+        in {"add", "sub"}
+    )
+    assert expected_form in {
+        (decoded.mnemonic, decoded.operands[0].size, decoded.addr_size)
+        for decoded in arithmetic
+    }
+    control_inputs, control_result = private_block_selector_task4_result(
+        control
+    )
+    assert_private_block_selector_result(
+        control,
+        control_inputs,
+        control_result,
+    )
+
+    assert private_block_selector_task4_result(hostile)[1] is None
 
 
 @pytest.mark.parametrize("component", ("selector", "splitter", "unlinker"))

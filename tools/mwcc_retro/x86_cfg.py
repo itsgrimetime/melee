@@ -26775,6 +26775,28 @@ class _DirectCfgRecovery:
                 return None
             return owned_depth - 4
 
+        def task4_stack_adjustment(decoded, owned_depth: int) -> int | None:
+            """Validate exact full-width local ESP arithmetic."""
+            operands = decoded.operands
+            if (
+                decoded.mnemonic not in {"add", "sub"}
+                or len(operands) != 2
+                or operands[0].type != X86_OP_REG
+                or self._register_family(operands[0].reg) != "esp"
+                or operands[0].size != 4
+                or decoded.addr_size != 4
+                or operands[1].type != X86_OP_IMM
+            ):
+                return None
+            amount = operands[1].imm & 0xFFFF_FFFF
+            if amount > 0x1000 or amount % 4:
+                return None
+            if decoded.mnemonic == "sub":
+                return owned_depth + amount
+            if amount > owned_depth:
+                return None
+            return owned_depth - amount
+
         def task4_plain_return(decoded, owned_depth: int) -> bool:
             """Accept only an untouched entry slot and plain near RET."""
             return bool(
@@ -26982,14 +27004,13 @@ class _DirectCfgRecovery:
                     and self._register_family(operands[0].reg) == "esp"
                     and operands[1].type == X86_OP_IMM
                 ):
-                    amount = operands[1].imm & 0xFFFF_FFFF
-                    if amount > 0x1000 or amount % 4:
+                    new_depth = task4_stack_adjustment(decoded, -sp)
+                    if new_depth is None:
                         return None
+                    amount = operands[1].imm & 0xFFFF_FFFF
                     if mnemonic == "sub":
                         sp -= amount
                     else:
-                        if amount > -sp:
-                            return None
                         for offset in tuple(stack):
                             if sp <= offset < sp + amount:
                                 stack.pop(offset, None)
@@ -27619,9 +27640,13 @@ class _DirectCfgRecovery:
                     and self._register_family(operands[0].reg) == "esp"
                     and operands[1].type == X86_OP_IMM
                 ):
-                    amount = operands[1].imm & 0xFFFF_FFFF
-                    if amount % 4 or amount // 4 > len(stack):
+                    new_depth = task4_stack_adjustment(
+                        decoded,
+                        len(stack) * 4,
+                    )
+                    if new_depth is None:
                         return None
+                    amount = operands[1].imm & 0xFFFF_FFFF
                     stack = stack[: len(stack) - amount // 4]
                 elif mnemonic == "mov" and len(operands) == 2:
                     destination, source_operand = operands
