@@ -920,14 +920,25 @@ semantic re-proof.
    invocation context, resize, Task 6 fresh dependency/compound-transfer replay,
    and Task 7 operand-specific body use and installed-collision rejection.
    Before Task 5 RED, the fixture has a direct private-free arena call and a
-   distinct small-free-to-arena-free backing-page-retirement call whose
-   argument has a separately derived payload lineage. The Task 5 prerequisite
-   recovery includes `audit_anchor(fixture.arena.image,
-   fixture.realloc_driver)`. An equality control proves that anchored recovery
-   preserves the exact Task 1-4 contract, extent, effects, layout, immutable
-   ring evidence, selector role, select transfer, and selector spans; the
-   anchor additionally makes the resize driver/owner reachable. The unanchored
-   path is not allowed to certify a no-resize Task 5 graph.
+   distinct small-free-to-arena-free backing-page-retirement call whose argument
+   has a separately derived payload lineage. The sole Task 5 prerequisite helper
+   returns exact evidence from a recovery containing
+   `audit_anchor(fixture.arena.image, fixture.realloc_driver)`. A separate
+   unanchored recovery is a non-vacuity and semantic-stability control only. Each
+   recovery must freshly reconstruct and exactly validate/current-check its own
+   Task 1-4 contract, extent, effects, layout, immutable ring evidence, and
+   selector result. Cross-recovery comparison requires exact contract,
+   pre-selector-layout, and complete-selector-result equality. The only permitted
+   top-level differences are extent
+   `{allocator_contract_sha256, allocator_dependency_fingerprints}`, effects
+   `{extent_witness, pruned_branches, bounded_spans, function_fingerprints,
+   allocator_dependency_fingerprints}`, and ring evidence `{transfers}`; strict
+   test-only projections blank only the corresponding fingerprint values while
+   preserving their entry inventories and every semantic row, and those
+   projections must be exactly equal. The projections are not durable evidence,
+   production inputs, currentness shortcuts, or authorization. The anchor must
+   additionally make the resize driver/owner reachable, and the unanchored path
+   cannot certify a no-resize Task 5 graph.
 2. Existing publication/private-heap tests, `py_compile`, Ruff, and
    `git diff --check` pass.
 3. Extend only the ignored hydrated diagnostic's existing

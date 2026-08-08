@@ -843,14 +843,30 @@ existing fixture seeds. It returns, in order, `recovery`, `contract`, `extent`,
 `effects`, `ring_evidence`, Task 4 `updated_layout`,
 `selector_seeded_role`, `select_transfer`, and `selector_spans`.
 
-Add a control that runs the same Task 1-4 derivation with and without only this
-anchor and asserts exact equality of contract, extent, effects, pre-selector
-layout/ring evidence, updated layout, selector role, select transfer, and
-selector spans. Separately assert the anchored recovery owns
-`fixture.realloc_driver`, its exact calls reach the large allocator and
-reallocator, and Task 5 cannot publish a closed no-resize graph from the
-unanchored recovery. Run all Task 1-4 tests before committing this test-only
-slice.
+Add a control that independently runs the same Task 1-4 derivation in an
+unanchored recovery and in a recovery whose only added seed is
+`audit_anchor(fixture.arena.image, fixture.realloc_driver)`. Within each
+recovery, freshly reconstruct every Task 1-4 object and require exact
+same-recovery equality/currentness; the anchored objects are the sole nine
+values returned to Task 5. Across recoveries, require exact equality of the
+contract, pre-selector layout, and complete selector result. For extent,
+effects, and immutable ring evidence, require both (a) exact top-level
+changed-field sets limited respectively to
+`{allocator_contract_sha256, allocator_dependency_fingerprints}`,
+`{extent_witness, pruned_branches, bounded_spans, function_fingerprints,
+allocator_dependency_fingerprints}`, and `{transfers}`, and (b) exact equality
+after a test-only semantic projection blanks only the corresponding
+recovery-bound fingerprint values while preserving every dependency entry,
+function/instruction/call inventory, predicate, write, terminal-memory row,
+layout, role, invocation, transition, span, and transfer fact. A new differing
+field, changed dependency-entry inventory, or projected semantic mismatch
+fails. The projection is comparison-only and is never returned, serialized,
+trusted by production, or accepted by a currentness validator.
+
+Separately assert the anchored recovery owns `fixture.realloc_driver`, its
+exact calls reach the large allocator and reallocator, and Task 5 cannot
+publish a closed no-resize graph from the unanchored recovery. Run all Task
+1-4 tests before committing this test-only slice.
 
 - [ ] **Step 2: Write RED positive transfer tests**
 
