@@ -27156,6 +27156,36 @@ class _DirectCfgRecovery:
             rows = tuple(value for value in values if value.kind == kind)
             return rows[0] if len(rows) == 1 and len(values) == 1 else None
 
+        def raw_block_size_origin(value):
+            if value.kind != "block-size":
+                return None
+            row = abstract_expressions[value.expression_token]
+            if not (len(row) == 2 and row[0] == "block-size"):
+                return None
+            tagged = abstract_expressions.get(row[1])
+            if not (
+                tagged is not None
+                and len(tagged) == 2
+                and tagged[0] == "tagged-header"
+            ):
+                return None
+            return tagged[1]
+
+        def is_accumulated_maximum(value) -> bool:
+            if value.kind != "block-size":
+                return False
+            row = abstract_expressions[value.expression_token]
+            return bool(row and row[0] == "current-maximum")
+
+        def maximum_value(prior, current=None):
+            return abstract_value(
+                "block-size",
+                ("current-maximum",),
+                same_page=True,
+                allocation="free",
+                membership="listed",
+            )
+
         def set_abstract_register(registers, operand, values):
             if operand.type != X86_OP_REG:
                 return None
@@ -27361,6 +27391,15 @@ class _DirectCfgRecovery:
                 operands = decoded.operands
                 mnemonic = decoded.mnemonic
                 instruction_addresses = instruction_addresses | {address}
+                pending_maximum = tuple(
+                    fact
+                    for fact in facts
+                    if isinstance(fact, tuple)
+                    and fact
+                    and fact[0] == "maximum-update-pending"
+                )
+                if pending_maximum and mnemonic != "mov":
+                    return None
                 if not decoded.group(CS_GRP_JUMP) and mnemonic not in {
                     "mov",
                     "lea",
@@ -27430,6 +27469,61 @@ class _DirectCfgRecovery:
                     spans = spans | frozenset(new_spans)
                     facts = facts | frozenset(new_facts)
                     if destination.type == X86_OP_REG:
+                        source_size = one_kind(values, "block-size")
+                        destination_before = get_abstract_register(
+                            registers,
+                            destination.reg,
+                        )
+                        matching_pending = tuple(
+                            fact
+                            for fact in pending_maximum
+                            if (
+                                source_size is not None
+                                and fact[1]
+                                == source_size.expression_token
+                                and any(
+                                    value.expression_token == fact[2]
+                                    for value in destination_before
+                                )
+                            )
+                        )
+                        contradictory_update = any(
+                            isinstance(fact, tuple)
+                            and len(fact) == 4
+                            and fact[0] == "maximum-arm"
+                            and fact[3] is False
+                            and source_size is not None
+                            and fact[1] == source_size.expression_token
+                            and any(
+                                value.expression_token == fact[2]
+                                for value in destination_before
+                            )
+                            for fact in facts
+                        )
+                        if pending_maximum:
+                            if len(matching_pending) != 1:
+                                return None
+                            prior = next(
+                                value
+                                for value in destination_before
+                                if value.expression_token
+                                == matching_pending[0][2]
+                            )
+                            values = frozenset(
+                                {maximum_value(prior, source_size)}
+                            )
+                            facts = frozenset(
+                                fact
+                                for fact in facts
+                                if fact not in pending_maximum
+                            ) | {
+                                (
+                                    "maximum-current",
+                                    next(iter(values)).expression_token,
+                                )
+                            }
+                        elif contradictory_update:
+                            return None
                         registers = set_abstract_register(
                             registers,
                             destination,
@@ -27453,8 +27547,18 @@ class _DirectCfgRecovery:
                         if (
                             base.kind == "page"
                             and memory.disp == layout.page_largest_free_offset
-                            and values
-                            and all(value.kind in {"zero", "block-size"} for value in values)
+                            and (
+                                (
+                                    one_kind(values, "zero") is not None
+                                    and ("walk-start",) not in facts
+                                )
+                                or (
+                                    len(values) == 1
+                                    and is_accumulated_maximum(
+                                        next(iter(values))
+                                    )
+                                )
+                            )
                         ):
                             spans = spans | {
                                 arena_span(
@@ -27674,6 +27778,7 @@ class _DirectCfgRecovery:
                         )
                     left_kinds = {value.kind for value in left}
                     right_kinds = {value.kind for value in right}
+                    maximum_relation = None
                     if (
                         left_kinds == {"block-size"}
                         and right_kinds == {"request-size"}
@@ -27696,9 +27801,86 @@ class _DirectCfgRecovery:
                         and left_kinds <= {"zero", "block"}
                     ):
                         predicate_kind = "nullable"
-                    elif left_kinds <= {"zero", "block-size"} and right_kinds <= {"zero", "block-size"}:
+                    elif (
+                        len(left) == 1
+                        and len(right) == 1
+                        and left_kinds <= {"zero", "block-size"}
+                        and right_kinds <= {"zero", "block-size"}
+                    ):
                         predicate_kind = "flag-test"
-                        facts = facts | {("max-compared",)}
+                        left_value = next(iter(left))
+                        right_value = next(iter(right))
+                        left_origin = raw_block_size_origin(left_value)
+                        right_origin = raw_block_size_origin(right_value)
+                        current = None
+                        prior = None
+                        current_on_left = False
+                        if (
+                            left_origin is not None
+                            and right_value.kind == "zero"
+                        ):
+                            current = left_value
+                            prior = right_value
+                            current_on_left = True
+                        elif (
+                            right_origin is not None
+                            and left_value.kind == "zero"
+                        ):
+                            current = right_value
+                            prior = left_value
+                        elif (
+                            left_origin is not None
+                            and (
+                                is_accumulated_maximum(right_value)
+                                or (
+                                    left_origin
+                                    == current_block_value.expression_token
+                                    and right_origin
+                                    == first_block_value.expression_token
+                                )
+                            )
+                        ):
+                            current = left_value
+                            prior = right_value
+                            current_on_left = True
+                        elif (
+                            right_origin is not None
+                            and (
+                                is_accumulated_maximum(left_value)
+                                or (
+                                    right_origin
+                                    == current_block_value.expression_token
+                                    and left_origin
+                                    == first_block_value.expression_token
+                                )
+                            )
+                        ):
+                            current = right_value
+                            prior = left_value
+                        if current is None or prior is None:
+                            return None
+                        if (
+                            prior.kind == "block-size"
+                            and not is_accumulated_maximum(prior)
+                        ):
+                            accumulated = maximum_value(prior)
+                            registers = tuple(
+                                frozenset(
+                                    accumulated if value == prior else value
+                                    for value in values
+                                )
+                                for values in registers
+                            )
+                            if prior in left:
+                                left = frozenset({accumulated})
+                            if prior in right:
+                                right = frozenset({accumulated})
+                            prior = accumulated
+                        maximum_relation = (
+                            current.expression_token,
+                            prior.expression_token,
+                            current_on_left,
+                        )
                     else:
                         predicate_kind = "flag-test"
                     left_token = min(value.expression_token for value in left)
@@ -27712,6 +27894,7 @@ class _DirectCfgRecovery:
                         ),
                         left,
                         right,
+                        maximum_relation,
                     )
                 elif decoded.group(CS_GRP_CALL):
                     target = self.direct_call_targets_by_source.get(address)
@@ -27776,8 +27959,9 @@ class _DirectCfgRecovery:
                             if successor <= address:
                                 return None
                         else:
-                            row, left, right = predicate
+                            row, left, right, maximum_relation = predicate
                             truth = None
+                            maximum_greater = None
                             if row.kind in {"equal", "nullable"}:
                                 if mnemonic in {"je", "jz"}:
                                     truth = taken
@@ -27790,6 +27974,50 @@ class _DirectCfgRecovery:
                                     truth = not taken
                             outgoing_facts = facts
                             outgoing_registers = registers
+                            if maximum_relation is not None:
+                                (
+                                    current_token,
+                                    prior_token,
+                                    current_on_left,
+                                ) = maximum_relation
+                                if current_on_left:
+                                    if mnemonic == "ja":
+                                        maximum_greater = taken
+                                    elif mnemonic in {"jbe", "jna"}:
+                                        maximum_greater = not taken
+                                else:
+                                    if mnemonic in {"jb", "jnae"}:
+                                        maximum_greater = taken
+                                    elif mnemonic in {"jae", "jnb"}:
+                                        maximum_greater = not taken
+                                if maximum_greater is None:
+                                    return None
+                                if (
+                                    prior_token
+                                    == zero_value.expression_token
+                                    and not maximum_greater
+                                ):
+                                    # A certified free-list block has a
+                                    # nonzero aligned size; it cannot be at
+                                    # or below the zero initial maximum.
+                                    continue
+                                maximum_arm = (
+                                    "maximum-arm",
+                                    current_token,
+                                    prior_token,
+                                    maximum_greater,
+                                )
+                                outgoing_facts = outgoing_facts | {
+                                    maximum_arm
+                                }
+                                if maximum_greater:
+                                    outgoing_facts = outgoing_facts | {
+                                        (
+                                            "maximum-update-pending",
+                                            current_token,
+                                            prior_token,
+                                        )
+                                    }
                             if truth is not None:
                                 proved = replace(row, truth=truth)
                                 outgoing_facts = facts | {proved}

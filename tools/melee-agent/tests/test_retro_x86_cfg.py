@@ -5417,7 +5417,13 @@ def private_block_selector_image(
     mutation: str | None = None,
 ) -> PrivatePageArenaFixture:
     """Apply one exact Task 4 selector/split/unlink mutation."""
-    assert mutation in {None, "benign-unknown-join", *_PRIVATE_BLOCK_SELECTOR_HOSTILES}
+    assert mutation in {
+        None,
+        "benign-unknown-join",
+        "maximum-update-correct-control",
+        "maximum-update-branch-inverted",
+        *_PRIVATE_BLOCK_SELECTOR_HOSTILES,
+    }
     if mutation == "missing-minimum-guard":
         return private_page_arena_image(mutation="split-missing-guard")
     if mutation == "unlink-missing-reciprocal":
@@ -5514,6 +5520,10 @@ def private_block_selector_image(
             "89 f0 5d 5f 5e 5b c3 90 90 90 90 90 90",
             "85 c0 74 02 90 90 89 f0 5d 5f 5e 5b c3",
         )
+    elif mutation == "maximum-update-branch-inverted":
+        patch(selector + 0x27, "76 02", "77 02")
+    elif mutation == "maximum-update-correct-control":
+        pass
     elif mutation is not None:
         raise AssertionError(f"unhandled selector mutation: {mutation}")
 
@@ -17263,6 +17273,91 @@ def assert_private_block_selector_result(fixture, inputs, result):
     assert joined
     assert ring.selector_request_calls == ring.selector_page_calls
     assert len(select_transfer.invocations) == len(ring.selector_page_calls)
+
+
+def test_private_block_selector_maximum_update_correct_control():
+    fixture = private_block_selector_image(
+        "maximum-update-correct-control"
+    )
+    inputs = private_page_arena_ring(fixture)
+    recovery, contract, extent, effects, ring_evidence = inputs
+    assert ring_evidence.layout.page_link_offsets == (0, 4)
+    assert ring_evidence.layout.minimum_split_remainder is None
+    assert all(
+        row.block_state.allocation == "none"
+        and row.block_state.membership == "none"
+        for row in ring_evidence.role.selector_invocations
+    )
+
+    result = recovery._publication_private_block_selector_role(
+        contract,
+        extent,
+        effects,
+        ring_evidence,
+    )
+
+    assert_private_block_selector_result(fixture, inputs, result)
+    baseline = private_block_selector_image()
+    baseline_inputs = private_page_arena_ring(baseline)
+    baseline_result = baseline_inputs[0]._publication_private_block_selector_role(
+        baseline_inputs[1],
+        baseline_inputs[2],
+        baseline_inputs[3],
+        baseline_inputs[4],
+    )
+    assert result == baseline_result
+
+
+def test_private_block_selector_maximum_update_branch_inverted():
+    control = private_block_selector_image(
+        "maximum-update-correct-control"
+    )
+    hostile = private_block_selector_image(
+        "maximum-update-branch-inverted"
+    )
+    assert private_page_image_changed_addresses(control, hostile) == {
+        control.selector + 0x27
+    }
+    control_inputs = private_page_arena_ring(control)
+    hostile_inputs = private_page_arena_ring(hostile)
+    for fixture, inputs in (
+        (control, control_inputs),
+        (hostile, hostile_inputs),
+    ):
+        recovery, _contract, _extent, effects, ring_evidence = inputs
+        assert len(effects.symbolic_writes) == 13
+        assert len(effects.terminal_symbolic_memory) == 9
+        assert ring_evidence.layout.page_link_offsets == (0, 4)
+        assert ring_evidence.layout.minimum_split_remainder is None
+        assert all(
+            row.block_state.allocation == "none"
+            and row.block_state.membership == "none"
+            for row in ring_evidence.role.selector_invocations
+        )
+        compared = recovery._owned_decoded(fixture.selector + 0x25)
+        branch = recovery._owned_decoded(fixture.selector + 0x27)
+        updated = recovery._owned_decoded(fixture.selector + 0x29)
+        assert compared.mnemonic == "cmp"
+        assert compared.op_str == "eax, ecx"
+        assert branch.op_str == hex(fixture.selector + 0x2B)
+        assert updated.mnemonic == "mov"
+        assert updated.op_str == "ecx, eax"
+    assert control_inputs[0]._owned_decoded(control.selector + 0x27).mnemonic == "jbe"
+    assert hostile_inputs[0]._owned_decoded(hostile.selector + 0x27).mnemonic == "ja"
+    control_result = control_inputs[0]._publication_private_block_selector_role(
+        control_inputs[1],
+        control_inputs[2],
+        control_inputs[3],
+        control_inputs[4],
+    )
+    assert_private_block_selector_result(control, control_inputs, control_result)
+
+    assert hostile_inputs[0]._publication_private_block_selector_role(
+        hostile_inputs[1],
+        hostile_inputs[2],
+        hostile_inputs[3],
+        hostile_inputs[4],
+    ) is None
 
 
 def test_private_block_selector_walks_only_same_page_blocks():
