@@ -28459,6 +28459,29 @@ class _DirectCfgRecovery:
                 )
             )
 
+        def condition_is_decided_equal(
+            condition: tuple[Any, ...],
+        ) -> bool:
+            """Recognize a branch whose equality truth is fully constant."""
+            if len(condition) != 4 or condition[1] != "equal":
+                return False
+            predicate = condition[0]
+            if not (
+                isinstance(predicate, tuple)
+                and len(predicate) == 3
+                and predicate[0] == "cmp"
+                and all(
+                    isinstance(component, tuple)
+                    and len(component) == 2
+                    and component[0] == "constant"
+                    for component in predicate[1:]
+                )
+            ):
+                return False
+            return bool(predicate[1][1] == predicate[2][1]) == bool(
+                condition[2]
+            )
+
         initializer_targets = set()
         initializer_call_addresses = set()
         saw_free_split = False
@@ -28585,7 +28608,15 @@ class _DirectCfgRecovery:
                     if allocation_condition is None
                     else (allocation_condition,)
                 )
-                if interval_conditions != expected_conditions:
+                decided_interval = bool(
+                    allocation_condition is None
+                    and len(interval_conditions) == 1
+                    and condition_is_decided_equal(interval_conditions[0])
+                )
+                if (
+                    interval_conditions != expected_conditions
+                    and not decided_interval
+                ):
                     return None
             else:
                 saw_allocated_split = True
@@ -28797,8 +28828,18 @@ class _DirectCfgRecovery:
             replaced_head = sentinel_next_write in ordered_remainder
             singleton = remainder == singleton_writes
             if (
-                len(head_conditions) != 1
-                or bool(head_conditions[0][2]) != replaced_head
+                not head_conditions
+                or (
+                    replaced_head
+                    and (
+                        len(head_conditions) != 1
+                        or not bool(head_conditions[0][2])
+                    )
+                )
+                or (
+                    not replaced_head
+                    and any(bool(condition[2]) for condition in head_conditions)
+                )
                 or (
                     replaced_head
                     and (

@@ -5544,6 +5544,7 @@ def private_block_selector_order_image(
         "split-relink-before-second-initializer",
         "split-transient-join-escape",
         "unlink-order-control",
+        "unlink-pointer-to-pointer-control",
         "unlink-detach-before-bit2",
         "unlink-head-discriminator-inverted",
         "unlink-singleton-discriminator-inverted",
@@ -5631,9 +5632,15 @@ def private_block_selector_order_image(
             0x74
             if mutation == "unlink-head-discriminator-inverted"
             else 0x75,
-            "nonempty",
+            (
+                "second_head_test"
+                if mutation == "unlink-pointer-to-pointer-control"
+                else "nonempty"
+            ),
         )
-        emit("8b 53 0c 89 10 39 18")
+        emit("8b 53 0c 89 10")
+        label("second_head_test")
+        emit("39 18")
         branch(
             0x74
             if mutation == "unlink-singleton-discriminator-inverted"
@@ -17944,6 +17951,14 @@ def test_private_block_selector_order_rejects_split_transient_join_escape():
     )
 
     assert private_block_selector_task4_result(hostile)[1] is None
+
+
+def test_private_block_selector_order_accepts_pointer_to_pointer_unlink():
+    fixture = private_block_selector_order_image(
+        "unlink-pointer-to-pointer-control"
+    )
+    inputs, result = private_block_selector_task4_result(fixture)
+    assert_private_block_selector_result(fixture, inputs, result)
 
 
 @pytest.mark.parametrize("component", ("selector", "splitter", "unlinker"))
