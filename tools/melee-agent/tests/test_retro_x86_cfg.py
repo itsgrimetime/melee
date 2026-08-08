@@ -25123,7 +25123,7 @@ def test_private_arena_task5_slice5_rejects_resize_body_hostile(mutation):
     ("offset", "operand_index", "region", "field"),
     (
         (0x18, 0, "successor", "successor-header"),
-        (0x21, 1, "page-end", "sentinel"),
+        (0x25, 0, "page-end", "sentinel"),
         (0x50, 0, "block", "block-next"),
     ),
     ids=("successor-header", "computed-sentinel", "reciprocal-next"),
@@ -25228,6 +25228,22 @@ def test_private_page_arena_invariant_serializes_complete_evidence():
         for row in invariant.spans
     )
     assert span_keys == tuple(sorted(set(span_keys)))
+    for span in invariant.spans:
+        decoded = recovery._owned_decoded(span.instruction_address)
+        assert decoded.id != capstone.x86.X86_INS_LEA
+        assert span.operand_index < len(decoded.operands)
+        operand = decoded.operands[span.operand_index]
+        assert operand.type == capstone.x86.X86_OP_MEM
+        assert operand.size == span.width
+    assert {
+        (fixture.coalescers[0], fixture.coalescers[0] + 0x12, 0),
+        (fixture.coalescers[1], fixture.coalescers[1] + 0x24, 0),
+        (fixture.coalescers[1], fixture.coalescers[1] + 0x73, 0),
+    } <= {
+        (span.function_entry, span.instruction_address, span.operand_index)
+        for span in invariant.spans
+        if span.width == 1
+    }
     assert set(span_keys) == {
         key for transfer in invariant.transfers for key in transfer.span_keys
     }
@@ -28649,6 +28665,699 @@ def test_private_page_provider_returns_with_balanced_stack():
 
     assert len(returns) == 2
     assert {delta for _address, delta in returns} == {0}
+
+
+def private_page_arena_publication_inputs(fixture):
+    rows = private_page_arena_selector(fixture)
+    recovery, contract, extent, effects = rows[:4]
+    invariant = recovery._publication_private_page_arena_invariant(
+        contract,
+        extent,
+        effects,
+    )
+    assert invariant is not None
+    historical_contexts = {"provider", "initializer-base"}
+    historical_calls = {
+        (
+            invocation.caller_entry,
+            invocation.call_address,
+            invocation.callee_entry,
+        )
+        for transfer in invariant.transfers
+        for invocation in transfer.invocations
+        if invocation.context in historical_contexts
+    }
+    active_calls = {
+        (
+            invocation.caller_entry,
+            invocation.call_address,
+            invocation.callee_entry,
+        )
+        for transfer in invariant.transfers
+        for invocation in transfer.invocations
+        if invocation.context not in historical_contexts
+    }
+    historical_only_calls = historical_calls - active_calls
+    active_owner_entries = {
+        transfer.function_entry for transfer in invariant.transfers
+    }
+    active_owner_entries.update(
+        invocation.caller_entry
+        for transfer in invariant.transfers
+        for invocation in transfer.invocations
+        if invocation.context not in historical_contexts
+    )
+    active_owner_entries.update(
+        transition.restoration_entry
+        for transfer in invariant.transfers
+        for transition in transfer.state_transitions
+        if transition.context not in historical_contexts
+        and transition.restoration_entry is not None
+    )
+    active_owner_entries.update(
+        entry
+        for edge in invariant.call_edges
+        if (
+            edge.caller_entry,
+            edge.call_address,
+            edge.target_entry,
+        )
+        not in historical_only_calls
+        for entry in (edge.caller_entry, edge.target_entry)
+    )
+    active_entries = {
+        transfer.function_entry for transfer in invariant.transfers
+    }
+    active_entries.discard(invariant.page_provider)
+    active_entries.discard(invariant.initializer_effects.root_helper)
+    bodies = tuple(
+        recovery._publication_function_body(entry)
+        for entry in sorted(active_entries)
+    )
+    assert all(body is not None for body in bodies)
+    body_entries = frozenset(active_entries)
+    direct_calls = tuple(
+        x86_cfg_module.DirectCall(edge.call_address, edge.target_entry)
+        for edge in invariant.call_edges
+        if (
+            edge.caller_entry,
+            edge.call_address,
+            edge.target_entry,
+        )
+        not in historical_only_calls
+    )
+    call_edges = tuple(
+        x86_cfg_module._PublicationCallEdge(
+            source_address=call.address,
+            target_address=call.target,
+            flow_kind="direct",
+            returns_to_continuation=True,
+        )
+        for call in sorted(
+            set(direct_calls),
+            key=lambda row: (row.address, row.target),
+        )
+    )
+    import_witnesses = tuple(
+        witness
+        for terminal in sorted(
+            recovery.terminal_external_edges,
+            key=lambda row: row.source,
+        )
+        if recovery._registrar_function_entry(terminal.source)
+        in body_entries
+        if (
+            witness := recovery._exact_publication_import_effect(
+                terminal.source,
+                fixture.arena.callback_slot,
+            )
+        )
+        is not None
+    )
+    import_edges = tuple(
+        x86_cfg_module._PublicationCallEdge(
+            source_address=row.call_address,
+            target_address=row.iat_va,
+            flow_kind="import",
+            returns_to_continuation=True,
+        )
+        for row in import_witnesses
+    )
+    closure = x86_cfg_module._ReturningPublicationClosure(
+        bodies=tuple(body for body in bodies if body is not None),
+        call_edges=(*call_edges, *import_edges),
+        candidate_targets=frozenset(
+            edge.target_address for edge in call_edges
+        ),
+        imports=import_witnesses,
+    )
+    bridge = SimpleNamespace(
+        allocator_certificate=SimpleNamespace(
+            call_return_domains=(
+                (
+                    fixture.arena.publication_body_private_call,
+                    "private-heap",
+                    frozenset(),
+                ),
+            )
+        )
+    )
+    assert invariant.page_provider not in body_entries
+    assert invariant.initializer_effects.root_helper not in body_entries
+    assert active_owner_entries - body_entries
+    return recovery, closure, bridge, invariant
+
+
+def test_publication_body_uses_private_page_arena_invariant():
+    fixture = private_page_arena_image()
+    recovery, closure, bridge, invariant = (
+        private_page_arena_publication_inputs(fixture)
+    )
+
+    witnesses = recovery._publication_body_address_domains(
+        fixture.arena.callback_slot,
+        closure,
+        (bridge,),
+    )
+
+    assert witnesses is not None
+    arena_witnesses = tuple(
+        witness
+        for witness in witnesses
+        if witness.private_page_arena_invariant is not None
+    )
+    assert arena_witnesses
+    assert all(
+        witness.private_page_arena_span is not None
+        for witness in arena_witnesses
+    )
+    assert all(
+        witness.private_page_arena_invariant == invariant
+        for witness in arena_witnesses
+    )
+    assert tuple(
+        recovery._publication_private_arena_span_key(
+            witness.private_page_arena_span
+        )
+        for witness in arena_witnesses
+    ) == tuple(
+        recovery._publication_private_arena_span_key(span)
+        for span in invariant.spans
+    )
+    assert all(
+        (witness.private_page_arena_span is None)
+        == (witness.private_page_arena_invariant is None)
+        for witness in witnesses
+    )
+    arena_entries = {
+        witness.returning_body.function_entry
+        for witness in arena_witnesses
+    }
+    assert {
+        fixture.selector,
+        fixture.block_initializer,
+        fixture.block_inserter,
+        fixture.arena_free,
+    } <= arena_entries
+
+
+def test_private_page_arena_integration_requires_shared_active_edge():
+    fixture = private_page_arena_image()
+    recovery, closure, bridge, invariant = (
+        private_page_arena_publication_inputs(fixture)
+    )
+    invocation_contexts = {}
+    for transfer in invariant.transfers:
+        for invocation in transfer.invocations:
+            key = (
+                invocation.caller_entry,
+                invocation.call_address,
+                invocation.callee_entry,
+            )
+            invocation_contexts.setdefault(key, set()).add(
+                invocation.context
+            )
+    shared = next(
+        key
+        for key, contexts in invocation_contexts.items()
+        if "initializer-base" in contexts and len(contexts) > 1
+    )
+    hostile = replace(
+        closure,
+        call_edges=tuple(
+            edge
+            for edge in closure.call_edges
+            if (edge.source_address, edge.target_address)
+            != (shared[1], shared[2])
+        ),
+    )
+    assert len(hostile.call_edges) + 1 == len(closure.call_edges)
+
+    assert recovery._publication_body_address_domains(
+        fixture.arena.callback_slot,
+        hostile,
+        (bridge,),
+    ) is None
+
+
+def test_private_page_arena_integration_is_replay_stable(monkeypatch):
+    fixture = private_page_arena_image()
+    recovery, closure, bridge, _invariant = (
+        private_page_arena_publication_inputs(fixture)
+    )
+    currentness_calls = 0
+    original_currentness = (
+        recovery._publication_private_page_arena_invariant_is_current
+    )
+
+    def traced_currentness(invariant):
+        nonlocal currentness_calls
+        currentness_calls += 1
+        return original_currentness(invariant)
+
+    monkeypatch.setattr(
+        recovery,
+        "_publication_private_page_arena_invariant_is_current",
+        traced_currentness,
+    )
+    first = recovery._publication_body_address_domains(
+        fixture.arena.callback_slot,
+        closure,
+        (bridge,),
+    )
+    second = recovery._publication_body_address_domains(
+        fixture.arena.callback_slot,
+        closure,
+        (bridge,),
+    )
+
+    assert first is not None
+    assert second == first
+    assert currentness_calls == 2
+    assert tuple(
+        recovery._publication_private_arena_span_key(
+            witness.private_page_arena_span
+        )
+        for witness in first
+        if witness.private_page_arena_span is not None
+    ) == tuple(
+        recovery._publication_private_arena_span_key(
+            witness.private_page_arena_span
+        )
+        for witness in second
+        if witness.private_page_arena_span is not None
+    )
+
+
+def test_private_page_arena_integration_bounds_helper_candidates(
+    monkeypatch,
+):
+    fixture = private_page_arena_image()
+    recovery, closure, bridge, invariant = (
+        private_page_arena_publication_inputs(fixture)
+    )
+    unrelated_entry = fixture.arena.private_allocator
+    unrelated_body = recovery._publication_function_body(unrelated_entry)
+    assert unrelated_body is not None
+    assert unrelated_entry not in {
+        call.target
+        for call in recovery._function_direct_calls(invariant.page_provider)
+    }
+    offered = []
+    original_extent = recovery._publication_private_heap_extent_witness
+
+    def traced_extent(contract, helper_entry):
+        offered.append(helper_entry)
+        return original_extent(contract, helper_entry)
+
+    monkeypatch.setattr(
+        recovery,
+        "_publication_private_heap_extent_witness",
+        traced_extent,
+    )
+    witnesses = recovery._publication_body_address_domains(
+        fixture.arena.callback_slot,
+        replace(closure, bodies=(*closure.bodies, unrelated_body)),
+        (bridge,),
+        excluded_functions=frozenset({unrelated_entry}),
+    )
+
+    assert witnesses is not None
+    assert unrelated_entry not in offered
+    assert set(offered) == {
+        call.target
+        for call in recovery._function_direct_calls(invariant.page_provider)
+    }
+
+
+def test_private_page_arena_integration_rejects_ambiguous_helper_candidates(
+    monkeypatch,
+):
+    fixture = private_page_arena_image()
+    recovery, closure, bridge, invariant = (
+        private_page_arena_publication_inputs(fixture)
+    )
+    extent = invariant.initializer_effects.extent_witness
+    effects = invariant.initializer_effects
+    provider_calls = recovery._function_direct_calls(invariant.page_provider)
+    alternate_call = next(
+        call for call in provider_calls if call.target != extent.helper_entry
+    )
+    alternate_extent = replace(
+        extent,
+        helper_entry=alternate_call.target,
+        helper_call=alternate_call.address,
+        helper_function_sha256=recovery._producer_function_fingerprint(
+            alternate_call.target
+        ),
+    )
+    original_extent = recovery._publication_private_heap_extent_witness
+    original_effects = recovery._publication_private_heap_effect_closure
+
+    def ambiguous_extent(contract, helper_entry):
+        if helper_entry == alternate_call.target:
+            return alternate_extent
+        return original_extent(contract, helper_entry)
+
+    def ambiguous_effects(candidate):
+        if candidate == alternate_extent:
+            return replace(effects, extent_witness=alternate_extent)
+        return original_effects(candidate)
+
+    monkeypatch.setattr(
+        recovery,
+        "_publication_private_heap_extent_witness",
+        ambiguous_extent,
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_publication_private_heap_effect_closure",
+        ambiguous_effects,
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_publication_private_heap_effect_closure_is_current",
+        lambda candidate: candidate.extent_witness
+        in {extent, alternate_extent},
+    )
+
+    assert recovery._publication_body_address_domains(
+        fixture.arena.callback_slot,
+        closure,
+        (bridge,),
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing-reverse-index",
+        "retargeted-source",
+        "missing-raw-occurrence",
+        "duplicate-closure-edge",
+        "missing-active-edge",
+        "nonreturning-active-edge",
+        "indirect-active-edge",
+    ),
+    ids=lambda value: value,
+)
+def test_private_page_arena_integration_rejects_occurrence_hostile(
+    monkeypatch,
+    mutation,
+):
+    fixture = private_page_arena_image()
+    recovery, closure, bridge, invariant = (
+        private_page_arena_publication_inputs(fixture)
+    )
+    extent = invariant.initializer_effects.extent_witness
+    if mutation == "missing-reverse-index":
+        recovery.direct_call_sources_by_target[extent.helper_entry].remove(
+            extent.helper_call
+        )
+    elif mutation == "retargeted-source":
+        recovery.direct_call_targets_by_source[extent.helper_call] = (
+            invariant.page_provider
+        )
+    elif mutation == "missing-raw-occurrence":
+        original_raw = recovery._raw_direct_call_sites
+
+        def without_helper_call(target):
+            rows = original_raw(target)
+            return (
+                rows - {extent.helper_call}
+                if target == extent.helper_entry
+                else rows
+            )
+
+        monkeypatch.setattr(
+            recovery,
+            "_raw_direct_call_sites",
+            without_helper_call,
+        )
+    elif mutation == "duplicate-closure-edge":
+        closure = replace(
+            closure,
+            call_edges=(*closure.call_edges, closure.call_edges[0]),
+        )
+    else:
+        active = next(
+            invocation
+            for transfer in invariant.transfers
+            for invocation in transfer.invocations
+            if invocation.context == "deallocator"
+        )
+        active_edge = next(
+            edge
+            for edge in closure.call_edges
+            if (edge.source_address, edge.target_address)
+            == (active.call_address, active.callee_entry)
+        )
+        if mutation == "missing-active-edge":
+            replacement_edges = ()
+        elif mutation == "nonreturning-active-edge":
+            replacement_edges = (
+                replace(active_edge, returns_to_continuation=False),
+            )
+        else:
+            replacement_edges = (
+                replace(active_edge, flow_kind="indirect"),
+            )
+        closure = replace(
+            closure,
+            call_edges=tuple(
+                edge
+                for edge in closure.call_edges
+                if edge != active_edge
+            )
+            + replacement_edges,
+        )
+
+    assert recovery._publication_body_address_domains(
+        fixture.arena.callback_slot,
+        closure,
+        (bridge,),
+    ) is None
+
+
+@pytest.mark.parametrize(
+    "owner_kind",
+    ("transfer", "invocation"),
+    ids=lambda value: value,
+)
+def test_private_page_arena_integration_rejects_excluded_active_owner(
+    owner_kind,
+):
+    fixture = private_page_arena_image()
+    recovery, closure, bridge, invariant = (
+        private_page_arena_publication_inputs(fixture)
+    )
+    transfer_entries = {
+        transfer.function_entry for transfer in invariant.transfers
+    }
+    owner = (
+        fixture.selector
+        if owner_kind == "transfer"
+        else next(
+            invocation.caller_entry
+            for transfer in invariant.transfers
+            for invocation in transfer.invocations
+            if invocation.context not in {"provider", "initializer-base"}
+            and invocation.caller_entry not in transfer_entries
+        )
+    )
+
+    assert recovery._publication_body_address_domains(
+        fixture.arena.callback_slot,
+        closure,
+        (bridge,),
+        excluded_functions=frozenset({owner}),
+    ) is None
+
+
+def test_private_page_arena_integration_rejects_missing_transfer_body():
+    fixture = private_page_arena_image()
+    recovery, closure, bridge, _invariant = (
+        private_page_arena_publication_inputs(fixture)
+    )
+    closure = replace(
+        closure,
+        bodies=tuple(
+            body
+            for body in closure.bodies
+            if body.function_entry != fixture.arena_free
+        ),
+    )
+
+    assert recovery._publication_body_address_domains(
+        fixture.arena.callback_slot,
+        closure,
+        (bridge,),
+    ) is None
+
+
+def test_private_page_arena_integration_rechecks_currentness(monkeypatch):
+    fixture = private_page_arena_image()
+    recovery, closure, bridge, _invariant = (
+        private_page_arena_publication_inputs(fixture)
+    )
+    checked = []
+
+    def stale(invariant):
+        checked.append(invariant)
+        return False
+
+    monkeypatch.setattr(
+        recovery,
+        "_publication_private_page_arena_invariant_is_current",
+        stale,
+    )
+
+    assert recovery._publication_body_address_domains(
+        fixture.arena.callback_slot,
+        closure,
+        (bridge,),
+    ) is None
+    assert len(checked) == 1
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "missing-span",
+        "wrong-operand-index",
+        "unused-lea-span",
+        "effect-arena-collision",
+    ),
+    ids=lambda value: value,
+)
+def test_private_page_arena_integration_rejects_operand_authority_hostile(
+    monkeypatch,
+    mutation,
+):
+    fixture = private_page_arena_image()
+    recovery, closure, bridge, invariant = (
+        private_page_arena_publication_inputs(fixture)
+    )
+    if mutation in {"missing-span", "wrong-operand-index"}:
+        transfer = next(
+            row for row in invariant.transfers if row.role == "select"
+        )
+        missing_key = transfer.span_keys[0]
+        missing_span = next(
+            span
+            for span in invariant.spans
+            if recovery._publication_private_arena_span_key(span)
+            == missing_key
+        )
+        replacement_spans = ()
+        replacement_keys = ()
+        if mutation == "wrong-operand-index":
+            wrong_span = replace(
+                missing_span,
+                operand_index=(missing_span.operand_index + 1) % 2,
+            )
+            replacement_spans = (wrong_span,)
+            replacement_keys = (
+                recovery._publication_private_arena_span_key(wrong_span),
+            )
+        hostile_transfer = replace(
+            transfer,
+            span_keys=tuple(
+                sorted((*transfer.span_keys[1:], *replacement_keys))
+            ),
+        )
+        hostile = replace(
+            invariant,
+            spans=tuple(
+                sorted(
+                    (
+                        *(
+                            span
+                            for span in invariant.spans
+                            if recovery._publication_private_arena_span_key(
+                                span
+                            )
+                            != missing_key
+                        ),
+                        *replacement_spans,
+                    ),
+                    key=recovery._publication_private_arena_span_key,
+                )
+            ),
+            transfers=tuple(
+                hostile_transfer if row is transfer else row
+                for row in invariant.transfers
+            ),
+        )
+    elif mutation == "unused-lea-span":
+        transfer = next(
+            row for row in invariant.transfers if row.role == "split"
+        )
+        template = next(
+            span
+            for span in invariant.spans
+            if span.function_entry == transfer.function_entry
+        )
+        phantom = replace(
+            template,
+            instruction_address=fixture.splitter + 0x1B,
+            operand_index=1,
+            access="read",
+            displacement=0,
+            width=4,
+        )
+        phantom_key = recovery._publication_private_arena_span_key(phantom)
+        hostile_transfer = replace(
+            transfer,
+            span_keys=tuple(sorted((*transfer.span_keys, phantom_key))),
+        )
+        hostile = replace(
+            invariant,
+            spans=tuple(
+                sorted(
+                    (*invariant.spans, phantom),
+                    key=recovery._publication_private_arena_span_key,
+                )
+            ),
+            transfers=tuple(
+                hostile_transfer if row is transfer else row
+                for row in invariant.transfers
+            ),
+        )
+    else:
+        substituted = tuple(
+            entry
+            for entry in invariant.induction_substituted_entries
+            if entry != fixture.block_inserter
+        )
+        assert len(substituted) + 1 == len(
+            invariant.induction_substituted_entries
+        )
+        hostile = replace(
+            invariant,
+            induction_substituted_entries=substituted,
+        )
+        monkeypatch.setattr(
+            recovery,
+            "_publication_private_page_arena_induction_entries",
+            lambda effects, transfers: substituted,
+        )
+    monkeypatch.setattr(
+        recovery,
+        "_publication_private_page_arena_invariant",
+        lambda contract, extent, effects: hostile,
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_publication_private_page_arena_invariant_is_current",
+        lambda candidate: candidate == hostile,
+    )
+
+    assert recovery._publication_body_address_domains(
+        fixture.arena.callback_slot,
+        closure,
+        (bridge,),
+    ) is None
 
 
 def test_private_page_arena_still_requires_an_inductive_witness(

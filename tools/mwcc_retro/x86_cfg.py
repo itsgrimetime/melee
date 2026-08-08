@@ -2598,6 +2598,10 @@ class _PublicationBodyAddressDomainWitness:
     function_dependency: tuple[Literal["function"], int, str]
     bounded_private_heap_span: _PublicationPrivateHeapBoundedSpan | None = None
     private_heap_effect_closure: _PublicationPrivateHeapEffectClosure | None = None
+    private_page_arena_span: _PublicationPrivateArenaSpan | None = None
+    private_page_arena_invariant: (
+        _PublicationPrivatePageArenaInvariant | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -26774,18 +26778,34 @@ class _DirectCfgRecovery:
         for entry in allowed_head_owners | {selector_entry}:
             self._note_producer_dependency(entry)
 
-        def spans_for(summary: dict[str, Any], function_entry: int):
+        def spans_for(
+            summary: dict[str, Any],
+            function_entry: int,
+            *,
+            include_largest_free: bool = False,
+        ):
             rows = []
             for (
                 address,
                 operand_index,
                 access,
-                _base,
+                base,
                 displacement,
                 _source,
                 width,
             ) in summary["relative"]:
-                if displacement not in link_offsets or width != 4:
+                if width != 4:
+                    continue
+                if displacement in link_offsets:
+                    field = "page-link"
+                elif (
+                    include_largest_free
+                    and base == "page"
+                    and displacement == layout.page_largest_free_offset
+                    and access in {"read", "read-write"}
+                ):
+                    field = "largest-free"
+                else:
                     continue
                 rows.append(
                     _PublicationPrivateArenaSpan(
@@ -26794,7 +26814,7 @@ class _DirectCfgRecovery:
                         operand_index=operand_index,
                         access=access,
                         region="page",
-                        field="page-link",
+                        field=field,
                         displacement=displacement,
                         width=width,
                     )
@@ -26805,7 +26825,11 @@ class _DirectCfgRecovery:
         remover_spans = spans_for(remover, remover_entry)
         if len(remover_spans) != len(remover["relative"]):
             return None
-        large_spans = spans_for(large, contract.large_allocator)
+        large_spans = spans_for(
+            large,
+            contract.large_allocator,
+            include_largest_free=True,
+        )
         spans = tuple(
             sorted(
                 {*publisher_spans, *remover_spans, *large_spans},
@@ -26902,6 +26926,7 @@ class _DirectCfgRecovery:
                 sorted(
                     span.instruction_address
                     for span in spans
+                    if span.field == "page-link"
                     if span.access in {"read", "read-write"}
                 )
             ),
@@ -26909,6 +26934,7 @@ class _DirectCfgRecovery:
                 sorted(
                     span.instruction_address
                     for span in spans
+                    if span.field == "page-link"
                     if span.access in {"write", "read-write"}
                 )
             ),
@@ -30666,7 +30692,7 @@ class _DirectCfgRecovery:
         for address in self._function_instruction_addresses(function_entry):
             decoded = self._owned_decoded(address)
             for operand_index, operand in enumerate(decoded.operands):
-                if operand.type != X86_OP_MEM or operand.size != 4:
+                if operand.type != X86_OP_MEM or operand.size not in {1, 4}:
                     continue
                 if (
                     operand.mem.base != X86_REG_INVALID
@@ -30691,6 +30717,12 @@ class _DirectCfgRecovery:
                     displacement,
                     operand.size,
                 )
+                # Capstone represents LEA's address-expression source as a
+                # memory operand, but the instruction performs no memory
+                # access.  Keep charging the semantic expression above while
+                # excluding it from durable operand-authority spans.
+                if decoded.id == X86_INS_LEA:
+                    continue
                 if role == "block-initialize":
                     if base == "ebx" and displacement == 0:
                         region, field_name = "block", "block-header"
@@ -30747,7 +30779,7 @@ class _DirectCfgRecovery:
                     region=region,
                     field=field_name,
                     displacement=displacement,
-                    width=4,
+                    width=operand.size,
                 )
                 if role == "unlink":
                     span = assembly.spans_by_key.get(key)
@@ -39514,7 +39546,21 @@ class _DirectCfgRecovery:
             self._publication_private_arena_span_key(row)
             for row in invariant.spans
         )
-        if span_keys != tuple(sorted(set(span_keys))):
+        if (
+            span_keys != tuple(sorted(set(span_keys)))
+            or any(
+                self._registrar_function_entry(row.instruction_address)
+                != row.function_entry
+                or (decoded := self._owned_decoded(row.instruction_address)).id
+                == X86_INS_LEA
+                or row.operand_index >= len(decoded.operands)
+                or decoded.operands[row.operand_index].type != X86_OP_MEM
+                or decoded.operands[row.operand_index].size != row.width
+                or decoded.operands[row.operand_index].mem.disp
+                != row.displacement
+                for row in invariant.spans
+            )
+        ):
             return False
         referenced = set()
         for transfer in transfers:
@@ -71447,12 +71493,17 @@ class _DirectCfgRecovery:
                 factory_entry=contract.factory.function_entry,
             )
 
-        private_heap_contracts = {
-            contract.root: contract
-            for call_address in sorted(call_return_domains)
-            if (contract := private_heap_contract_for_call(call_address))
-            is not None
-        }
+        private_heap_contracts: dict[int, _PrivateHeapAllocatorContract] = {}
+        for call_address in sorted(call_return_domains):
+            contract = private_heap_contract_for_call(call_address)
+            if contract is None:
+                continue
+            prior_contract = private_heap_contracts.setdefault(
+                contract.root,
+                contract,
+            )
+            if prior_contract != contract:
+                return None
 
         def operand_register_families(operand) -> tuple[str, ...]:
             families = set()
@@ -72002,50 +72053,339 @@ class _DirectCfgRecovery:
                 dict[tuple[int, int], _PublicationPrivateHeapBoundedSpan],
             ],
         ] = {}
+        arena_invariants: dict[
+            tuple[Any, ...],
+            _PublicationPrivatePageArenaInvariant | None,
+        ] = {}
+        arena_invariant_by_entry: dict[
+            int, _PublicationPrivatePageArenaInvariant
+        ] = {}
+        arena_domain_by_entry: dict[
+            int, _PublicationPrivateHeapAddressDomain
+        ] = {}
+        arena_spans_by_entry: dict[
+            int,
+            dict[tuple[int, int, int], _PublicationPrivateArenaSpan],
+        ] = {}
+        required_arena_entries: set[int] = set()
+        active_arena_owner_entries: set[int] = set()
+        active_arena_call_sites: set[int] = set()
+        active_arena_context_by_entry: dict[
+            int, _PublicationPrivatePageArenaInvariant
+        ] = {}
+        historical_contexts = {"provider", "initializer-base"}
+        closure_edges: dict[
+            tuple[int, int], _PublicationCallEdge
+        ] = {}
+        for edge in closure.call_edges:
+            if edge.flow_kind == "import":
+                continue
+            key = (edge.source_address, edge.target_address)
+            if key in closure_edges:
+                return None
+            closure_edges[key] = edge
+
+        def direct_occurrence_is_exact(
+            owner_entry: int,
+            call_address: int,
+            target_entry: int,
+        ) -> bool:
+            if (
+                self._registrar_function_entry(call_address) != owner_entry
+                or self.direct_call_targets_by_source.get(call_address)
+                != target_entry
+                or call_address
+                not in self.direct_call_sources_by_target.get(
+                    target_entry,
+                    set(),
+                )
+                or set(self.call_targets_by_source.get(call_address, ()))
+                != {target_entry}
+                or DirectCall(call_address, target_entry)
+                not in self.direct_calls
+                or call_address
+                not in self._raw_direct_call_sites(target_entry)
+            ):
+                return False
+            decoded = self._owned_decoded(call_address)
+            return bool(
+                decoded.group(CS_GRP_CALL)
+                and decoded.size == 5
+                and bytes(decoded.bytes[:1]) == b"\xe8"
+                and self._direct_target(decoded) == target_entry
+            )
+
+        def bind_active_arena_context(
+            entry: int,
+            invariant: _PublicationPrivatePageArenaInvariant,
+        ) -> bool:
+            active_arena_owner_entries.add(entry)
+            prior = active_arena_context_by_entry.setdefault(
+                entry,
+                invariant,
+            )
+            return prior == invariant
+
         for contract in private_heap_contracts.values():
-            for body in returning_bodies:
+            provider_calls = self._function_direct_calls(
+                contract.page_provider
+            )
+            if any(
+                not direct_occurrence_is_exact(
+                    contract.page_provider,
+                    call.address,
+                    call.target,
+                )
+                for call in provider_calls
+            ):
+                return None
+            helper_candidates = tuple(
+                sorted({call.target for call in provider_calls})
+            )
+            current_candidates = []
+            for helper_entry in helper_candidates:
                 extent_witness = self._publication_private_heap_extent_witness(
                     contract,
-                    body.function_entry,
+                    helper_entry,
                 )
-                effects = (
-                    None
-                    if extent_witness is None
-                    else self._publication_private_heap_effect_closure(
-                        extent_witness
-                    )
-                )
-                if extent_witness is None or effects is None:
+                if extent_witness is None:
                     continue
-                domain = _PublicationPrivateHeapAddressDomain(
-                    kind="private-heap",
-                    call_address=extent_witness.factory_call,
-                    allocator_root=extent_witness.allocator_root,
-                    factory_entry=extent_witness.factory_entry,
+                matching_provider_calls = tuple(
+                    call
+                    for call in provider_calls
+                    if call.address == extent_witness.helper_call
+                    and call.target == extent_witness.helper_entry
                 )
-                for function_entry in effects.function_entries:
-                    spans = {
-                        (span.instruction_address, span.operand_index): span
-                        for span in effects.bounded_spans
-                        if self._registrar_function_entry(
+                if len(matching_provider_calls) != 1:
+                    return None
+                effects = self._publication_private_heap_effect_closure(
+                    extent_witness
+                )
+                if (
+                    effects is None
+                    or not self._publication_private_heap_effect_closure_is_current(
+                        effects
+                    )
+                ):
+                    return None
+                current_candidates.append((extent_witness, effects))
+            distinct_candidates = tuple(
+                sorted(
+                    set(current_candidates),
+                    key=lambda row: (
+                        row[0].helper_entry,
+                        row[0].extent_token_sha256,
+                    ),
+                )
+            )
+            if len(distinct_candidates) > 1:
+                return None
+            if not distinct_candidates:
+                continue
+            extent_witness, effects = distinct_candidates[0]
+            domain = _PublicationPrivateHeapAddressDomain(
+                kind="private-heap",
+                call_address=extent_witness.factory_call,
+                allocator_root=extent_witness.allocator_root,
+                factory_entry=extent_witness.factory_entry,
+            )
+            for function_entry in effects.function_entries:
+                spans: dict[
+                    tuple[int, int],
+                    _PublicationPrivateHeapBoundedSpan,
+                ] = {}
+                for span in effects.bounded_spans:
+                    if (
+                        self._registrar_function_entry(
                             span.instruction_address
                         )
-                        == function_entry
-                    }
-                    if not spans:
+                        != function_entry
+                    ):
+                        continue
+                    key = (span.instruction_address, span.operand_index)
+                    existing = spans.get(key)
+                    if existing is not None and existing != span:
                         return None
-                    context = (effects, domain, spans)
-                    prior = effect_contexts.setdefault(
-                        function_entry,
-                        context,
+                    spans[key] = span
+                if not spans:
+                    return None
+                context = (effects, domain, spans)
+                prior = effect_contexts.setdefault(
+                    function_entry,
+                    context,
+                )
+                if prior != context:
+                    return None
+
+            invariant_key = (
+                contract.root,
+                tuple(sorted(contract.protected_slots)),
+                self._private_heap_allocator_contract_sha256(contract),
+                extent_witness.extent_token_sha256,
+                effects,
+            )
+            if invariant_key not in arena_invariants:
+                arena_invariants[invariant_key] = (
+                    self._publication_private_page_arena_invariant(
+                        contract,
+                        extent_witness,
+                        effects,
                     )
-                    if prior != context:
+                )
+            invariant = arena_invariants[invariant_key]
+            if invariant is None:
+                continue
+            if (
+                invariant.allocator_root != contract.root
+                or invariant.initializer_effects != effects
+                or invariant.initializer_effects.extent_witness
+                != extent_witness
+                or not self._publication_private_page_arena_invariant_is_current(
+                    invariant
+                )
+            ):
+                return None
+
+            derived_induction = (
+                self._publication_private_page_arena_induction_entries(
+                    effects,
+                    invariant.transfers,
+                )
+            )
+            if derived_induction != invariant.induction_substituted_entries:
+                return None
+            spans_by_key = {
+                self._publication_private_arena_span_key(span): span
+                for span in invariant.spans
+            }
+            if len(spans_by_key) != len(invariant.spans):
+                return None
+            historical_calls = {
+                (
+                    invocation.caller_entry,
+                    invocation.call_address,
+                    invocation.callee_entry,
+                )
+                for transfer in invariant.transfers
+                for invocation in transfer.invocations
+                if invocation.context in historical_contexts
+            }
+            active_invocation_calls = {
+                (
+                    invocation.caller_entry,
+                    invocation.call_address,
+                    invocation.callee_entry,
+                )
+                for transfer in invariant.transfers
+                for invocation in transfer.invocations
+                if invocation.context not in historical_contexts
+            }
+            historical_only_calls = (
+                historical_calls - active_invocation_calls
+            )
+            active_edge_keys = {
+                (
+                    edge.caller_entry,
+                    edge.call_address,
+                    edge.target_entry,
+                )
+                for edge in invariant.call_edges
+                if (
+                    edge.caller_entry,
+                    edge.call_address,
+                    edge.target_entry,
+                )
+                not in historical_only_calls
+            }
+            for caller_entry, call_address, target_entry in sorted(
+                active_edge_keys
+            ):
+                active_arena_call_sites.add(call_address)
+                if not bind_active_arena_context(
+                    caller_entry,
+                    invariant,
+                ) or not bind_active_arena_context(
+                    target_entry,
+                    invariant,
+                ):
+                    return None
+                closure_edge = closure_edges.get(
+                    (call_address, target_entry)
+                )
+                if (
+                    closure_edge is None
+                    or closure_edge.flow_kind != "direct"
+                    or not closure_edge.returns_to_continuation
+                    or not direct_occurrence_is_exact(
+                        caller_entry,
+                        call_address,
+                        target_entry,
+                    )
+                ):
+                    return None
+            for transfer in invariant.transfers:
+                required_arena_entries.add(transfer.function_entry)
+                if not bind_active_arena_context(
+                    transfer.function_entry,
+                    invariant,
+                ):
+                    return None
+                for key in transfer.span_keys:
+                    span = spans_by_key.get(key)
+                    if span is None:
                         return None
+                    entry = span.function_entry
+                    prior_invariant = arena_invariant_by_entry.setdefault(
+                        entry,
+                        invariant,
+                    )
+                    prior_domain = arena_domain_by_entry.setdefault(
+                        entry,
+                        domain,
+                    )
+                    if prior_invariant != invariant or prior_domain != domain:
+                        return None
+                    entry_spans = arena_spans_by_entry.setdefault(entry, {})
+                    prior_span = entry_spans.setdefault(key, span)
+                    if prior_span != span:
+                        return None
+                for invocation in transfer.invocations:
+                    if invocation.context in historical_contexts:
+                        continue
+                    if any(
+                        not bind_active_arena_context(entry, invariant)
+                        for entry in (
+                            transfer.function_entry,
+                            invocation.caller_entry,
+                            invocation.callee_entry,
+                        )
+                    ):
+                        return None
+            for entry in derived_induction:
+                if arena_invariant_by_entry.get(entry) != invariant:
+                    return None
+                effect_context = effect_contexts.get(entry)
+                if effect_context is None or effect_context[0] != effects:
+                    return None
+                effect_contexts.pop(entry)
+
+        if active_arena_owner_entries & excluded_functions:
+            return None
+        if not required_arena_entries <= body_entries:
+            return None
+        for entry, invariant in arena_invariant_by_entry.items():
+            effect_context = effect_contexts.get(entry)
+            if (
+                effect_context is not None
+                and effect_context[0] != invariant.initializer_effects
+            ):
+                return None
 
         pruned_call_sites = {
             call_site
             for effects, _domain, _spans in effect_contexts.values()
             for call_site in effects.pruned_call_sites
+            if call_site not in active_arena_call_sites
         }
         pruned_functions = set()
         pruned_targets = {
@@ -72085,8 +72425,27 @@ class _DirectCfgRecovery:
         witnesses = []
         for body in returning_bodies:
             if body.function_entry in excluded_functions | pruned_functions:
+                if (
+                    body.function_entry in required_arena_entries
+                    or body.function_entry in arena_invariant_by_entry
+                ):
+                    return None
                 continue
             body_effect_context = effect_contexts.get(body.function_entry)
+            body_arena_invariant = arena_invariant_by_entry.get(
+                body.function_entry
+            )
+            body_arena_domain = arena_domain_by_entry.get(
+                body.function_entry
+            )
+            body_arena_spans = arena_spans_by_entry.get(
+                body.function_entry,
+                {},
+            )
+            if (body_arena_invariant is None) != (
+                body_arena_domain is None
+            ) or (body_arena_invariant is None) != (not body_arena_spans):
+                return None
             bounded_heap_operands: dict[
                 tuple[int, int],
                 tuple[
@@ -72101,7 +72460,15 @@ class _DirectCfgRecovery:
                     key: (span, domain, effects)
                     for key, span in body_spans.items()
                 }
+            if any(
+                (body.function_entry, address, operand_index)
+                in body_arena_spans
+                for address, operand_index in bounded_heap_operands
+            ):
+                return None
             used_bounded_heap_spans = set()
+            used_arena_span_keys: set[tuple[int, int, int]] = set()
+            arena_witness_counts: dict[tuple[int, int, int], int] = {}
             addresses = self._function_instruction_addresses(
                 body.function_entry
             )
@@ -72146,6 +72513,7 @@ class _DirectCfgRecovery:
             for address in addresses:
                 if (
                     body_effect_context is not None
+                    and body_arena_invariant is None
                     and address
                     not in body_effect_context[
                         0
@@ -72171,7 +72539,33 @@ class _DirectCfgRecovery:
                         bounded_heap = bounded_heap_operands.get(
                             (address, operand_index)
                         )
-                        if bounded_heap is not None:
+                        arena_key = (
+                            body.function_entry,
+                            address,
+                            operand_index,
+                        )
+                        arena_span = body_arena_spans.get(arena_key)
+                        if bounded_heap is not None and arena_span is not None:
+                            return None
+                        if arena_span is not None:
+                            if (
+                                body_arena_invariant is None
+                                or body_arena_domain is None
+                                or arena_span.width != memory_operand.size
+                                or arena_span.displacement
+                                != memory_operand.mem.disp
+                            ):
+                                return None
+                            used_arena_span_keys.add(arena_key)
+                            arena_witness_counts[arena_key] = (
+                                arena_witness_counts.get(arena_key, 0) + 1
+                            )
+                            address_input_domain = body_arena_domain
+                            address_output_domain = body_arena_domain
+                            address_lineage = frozenset()
+                            bounded_span = None
+                            bounded_effects = None
+                        elif bounded_heap is not None:
                             (
                                 bounded_span,
                                 bounded_domain,
@@ -72236,9 +72630,18 @@ class _DirectCfgRecovery:
                                 function_dependency=dependency,
                                 bounded_private_heap_span=bounded_span,
                                 private_heap_effect_closure=bounded_effects,
+                                private_page_arena_span=arena_span,
+                                private_page_arena_invariant=(
+                                    body_arena_invariant
+                                    if arena_span is not None
+                                    else None
+                                ),
                             )
                         )
-                if body_effect_context is not None:
+                if (
+                    body_effect_context is not None
+                    or body_arena_invariant is not None
+                ):
                     continue
                 operands = decoded.operands
                 if not operands or operands[0].type != X86_OP_REG:
@@ -72323,13 +72726,20 @@ class _DirectCfgRecovery:
                         input_domain=input_domain,
                         output_domain=output_domain,
                         protected_slot_relation="disjoint",
-                    function_dependency=dependency,
+                        function_dependency=dependency,
+                    )
                 )
-            )
             if used_bounded_heap_spans != {
                 span
                 for span, _domain, _effects in bounded_heap_operands.values()
             }:
+                return None
+            certified_arena_span_keys = set(body_arena_spans)
+            if (
+                used_arena_span_keys != certified_arena_span_keys
+                or set(arena_witness_counts) != certified_arena_span_keys
+                or any(count != 1 for count in arena_witness_counts.values())
+            ):
                 return None
             if dependency[2] != self._producer_function_fingerprint(
                 body.function_entry
@@ -72342,6 +72752,13 @@ class _DirectCfgRecovery:
                     row.returning_body.function_entry,
                     row.instruction_addresses,
                     row.instruction_bytes_sha256,
+                    (
+                        (-1, -1, -1)
+                        if row.private_page_arena_span is None
+                        else self._publication_private_arena_span_key(
+                            row.private_page_arena_span
+                        )
+                    ),
                 ),
             )
         )
