@@ -5543,6 +5543,10 @@ def private_block_selector_order_image(
         "split-order-control",
         "split-relink-before-second-initializer",
         "split-transient-join-escape",
+        "split-relink-join-after-new-prev",
+        "split-relink-join-after-new-next",
+        "split-relink-join-after-old-next",
+        "split-relink-decided-cmp",
         "unlink-order-control",
         "unlink-pointer-to-pointer-control",
         "unlink-detach-before-bit2",
@@ -5596,6 +5600,27 @@ def private_block_selector_order_image(
         body[0x47] += 8
         diamond = bytes.fromhex("85 ed 74 03 90 eb 01 90")
         body[0x48:0x48] = diamond
+        overwrite(entry, bytes(body), 0x80)
+    elif mutation.startswith("split-relink-"):
+        entry = fixture.splitter
+        offset = text.raw_offset + entry - text.va
+        body = bytearray(raw[offset : offset + 0x5E])
+        assert body[-1] == 0xC3
+        assert body[0x46:0x48] == bytes.fromhex("75 0f")
+        if mutation == "split-relink-decided-cmp":
+            insertion = bytes.fromhex(
+                "b8 01 00 00 00 83 f8 01 75 03 90 eb 01 90"
+            )
+            insertion_offset = 0x4B
+        else:
+            insertion = bytes.fromhex("85 ed 74 03 90 eb 01 90")
+            insertion_offset = {
+                "split-relink-join-after-new-prev": 0x4E,
+                "split-relink-join-after-new-next": 0x51,
+                "split-relink-join-after-old-next": 0x54,
+            }[mutation]
+        body[0x47] += len(insertion)
+        body[insertion_offset:insertion_offset] = insertion
         overwrite(entry, bytes(body), 0x80)
     else:
         code = bytearray()
@@ -17810,13 +17835,32 @@ def private_block_selector_task4_result(fixture):
     """Require current Task 1-3 inputs, then query only Task 4."""
     inputs = private_page_arena_ring(fixture)
     recovery, contract, extent, effects, ring_evidence = inputs
-    assert contract is not None and extent is not None
+    assert recovery._private_heap_allocator_contract(
+        contract.root,
+        contract.protected_slots,
+    ) == contract
+    assert recovery._publication_private_heap_effect_closure(extent) == effects
+    base_layout = recovery._publication_private_page_layout(
+        contract,
+        extent,
+        effects,
+    )
+    assert base_layout is not None
+    assert base_layout.page_link_offsets is None
+    assert recovery._publication_private_page_ring_role(
+        contract,
+        extent,
+        base_layout,
+    ) == ring_evidence
     assert len(effects.symbolic_writes) == 13
     assert len(effects.terminal_symbolic_memory) == 9
     assert ring_evidence.layout.page_link_offsets == (0, 4)
     assert ring_evidence.layout.minimum_split_remainder is None
+    assert len(ring_evidence.role.selector_invocations) == 2
     assert all(
-        row.block_state.allocation == "none"
+        row.callee_entry == fixture.selector
+        and row.role == "select"
+        and row.block_state.allocation == "none"
         and row.block_state.membership == "none"
         for row in ring_evidence.role.selector_invocations
     )
@@ -17958,6 +18002,51 @@ def test_private_block_selector_order_accepts_pointer_to_pointer_unlink():
         "unlink-pointer-to-pointer-control"
     )
     inputs, result = private_block_selector_task4_result(fixture)
+    assert_private_block_selector_result(fixture, inputs, result)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "split-relink-join-after-new-prev",
+        "split-relink-join-after-new-next",
+        "split-relink-join-after-old-next",
+    ),
+)
+def test_private_block_selector_order_rejects_partial_relink_join(mutation):
+    control = private_block_selector_order_image("split-order-control")
+    fixture = private_block_selector_order_image(mutation)
+    control_recovery, control_events = private_block_selector_order_events(
+        control,
+        control.splitter,
+    )
+    recovery, events = private_block_selector_order_events(
+        fixture,
+        fixture.splitter,
+    )
+    assert control_events == events
+    assert tuple(
+        call.target
+        for call in control_recovery._function_direct_calls(control.splitter)
+    ) == tuple(
+        call.target
+        for call in recovery._function_direct_calls(fixture.splitter)
+    )
+    inputs, result = private_block_selector_task4_result(fixture)
+    assert result is None
+
+
+def test_private_block_selector_order_accepts_decided_cmp_during_relink():
+    fixture = private_block_selector_order_image("split-relink-decided-cmp")
+    inputs, result = private_block_selector_task4_result(fixture)
+    comparisons = tuple(
+        inputs[0]._owned_decoded(address)
+        for address in inputs[0]._function_instruction_addresses(
+            fixture.splitter
+        )
+        if inputs[0]._owned_decoded(address).mnemonic == "cmp"
+    )
+    assert any(decoded.op_str == "eax, 1" for decoded in comparisons)
     assert_private_block_selector_result(fixture, inputs, result)
 
 

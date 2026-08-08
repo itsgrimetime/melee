@@ -28600,22 +28600,30 @@ class _DirectCfgRecovery:
                         len(condition) == 4
                         and second_call[0]
                         < condition[3]
-                        < writes[0][0]
+                        < writes[-1][0]
                     )
                 )
                 expected_conditions = (
                     ()
                     if allocation_condition is None
+                    or not (
+                        second_call[0]
+                        < allocation_condition[3]
+                        < writes[-1][0]
+                    )
                     else (allocation_condition,)
                 )
-                decided_interval = bool(
-                    allocation_condition is None
-                    and len(interval_conditions) == 1
-                    and condition_is_decided_equal(interval_conditions[0])
-                )
                 if (
-                    interval_conditions != expected_conditions
-                    and not decided_interval
+                    interval_conditions[: len(expected_conditions)]
+                    != expected_conditions
+                ):
+                    return None
+                extra_conditions = interval_conditions[
+                    len(expected_conditions) :
+                ]
+                if len(extra_conditions) > 1 or any(
+                    not condition_is_decided_equal(condition)
+                    for condition in extra_conditions
                 ):
                     return None
             else:
