@@ -25119,6 +25119,867 @@ def test_private_arena_task5_slice5_rejects_resize_body_hostile(mutation):
     )
 
 
+@pytest.mark.parametrize(
+    ("offset", "operand_index", "region", "field"),
+    (
+        (0x18, 0, "successor", "successor-header"),
+        (0x21, 1, "page-end", "sentinel"),
+        (0x50, 0, "block", "block-next"),
+    ),
+    ids=("successor-header", "computed-sentinel", "reciprocal-next"),
+)
+def test_private_page_arena_invariant_task5_unlink_span_is_semantic(
+    offset,
+    operand_index,
+    region,
+    field,
+):
+    fixture = private_page_arena_image()
+    rows = private_page_arena_selector(fixture)
+    recovery = rows[0]
+    assembly = recovery._publication_private_arena_full_assembly(
+        rows[1], rows[2], rows[3], rows[5], rows[4], rows[6], rows[7], rows[8]
+    )
+    assert assembly is not None
+    base = recovery._publication_private_arena_base_roles(assembly)
+    assert base is not None
+    key = (fixture.unlinker, fixture.unlinker + offset, operand_index)
+    task5_span = next(
+        row
+        for row in base.spans
+        if (row.function_entry, row.instruction_address, row.operand_index) == key
+    )
+    assert (task5_span.region, task5_span.field) == (region, field)
+    selector_span = next(
+        (
+            row
+            for row in rows[8]
+            if (row.function_entry, row.instruction_address, row.operand_index)
+            == key
+        ),
+        None,
+    )
+    if selector_span is not None:
+        assert task5_span == selector_span
+
+
+def test_private_page_arena_invariant_serializes_complete_evidence():
+    fixture = private_page_arena_image()
+    rows = private_page_arena_selector(fixture)
+    recovery, contract, extent, effects = rows[:4]
+
+    invariant = recovery._publication_private_page_arena_invariant(
+        contract,
+        extent,
+        effects,
+    )
+
+    assert invariant is not None
+    assert invariant.initializer_effects == effects
+    assert invariant.extent_token_sha256 == extent.extent_token_sha256
+    assert invariant.allocator_dependency_fingerprints == (
+        extent.allocator_dependency_fingerprints
+    )
+    assert invariant.layout == rows[5]
+    assert invariant.page_ring == rows[4].role
+    assert invariant.function_entries == tuple(
+        sorted(set(invariant.function_entries))
+    )
+    assert invariant.function_entries
+    assert invariant.call_edges
+    assert invariant.spans
+    assert tuple(row.role for row in invariant.transfers) == (
+        "ring-insert", "ring-remove", "ring-rotate", "select",
+        "block-initialize", "split", "unlink", "insert",
+        "coalesce-prev", "coalesce-next", "arena-free", "resize",
+    )
+    assert invariant.block_arena.arena_free_entries == (
+        fixture.arena_free,
+    )
+    assert invariant.block_arena.resize_entries == (fixture.reallocator,)
+    transfer_entries = {
+        row.function_entry
+        for row in invariant.transfers
+        if any(
+            invocation.context != "initializer-base"
+            for invocation in row.invocations
+        )
+    }
+    expected_substitutions = tuple(
+        sorted(set(effects.function_entries) & transfer_entries)
+    )
+    assert invariant.induction_substituted_entries == expected_substitutions
+    assert {
+        fixture.block_initializer,
+        fixture.block_inserter,
+    } <= set(invariant.induction_substituted_entries)
+    assert {row.kind for row in invariant.dependencies} == {
+        "function", "global-slot", "absolute-reference",
+    }
+    assert tuple(
+        (row.kind, row.identifier) for row in invariant.dependencies
+    ) == tuple(
+        sorted(
+            {(row.kind, row.identifier) for row in invariant.dependencies}
+        )
+    )
+    span_keys = tuple(
+        (row.function_entry, row.instruction_address, row.operand_index)
+        for row in invariant.spans
+    )
+    assert span_keys == tuple(sorted(set(span_keys)))
+    assert set(span_keys) == {
+        key for transfer in invariant.transfers for key in transfer.span_keys
+    }
+    arena_free = next(
+        row for row in invariant.transfers if row.role == "arena-free"
+    )
+    obligation_keys = tuple(
+        (row.caller_entry, row.call_address, row.remover_entry)
+        for row in invariant.page_ring.remover_call_obligations
+    )
+    discharge_keys = tuple(
+        (row.caller_entry, row.call_address, row.remover_entry)
+        for row in arena_free.removal_call_discharges
+    )
+    assert discharge_keys == obligation_keys
+    assert discharge_keys
+    assert all(
+        row.argument_index == 0
+        and row.argument_relation == "exact-untagged-recovered-page"
+        and row.proof_instruction_addresses
+        == tuple(sorted(set(row.proof_instruction_addresses)))
+        and row.call_address in row.proof_instruction_addresses
+        and row.caller_function_sha256
+        == recovery._producer_function_fingerprint(row.caller_entry)
+        for row in arena_free.removal_call_discharges
+    )
+    assert all(
+        row.removal_call_discharges == ()
+        for row in invariant.transfers
+        if row.role != "arena-free"
+    )
+    ring_remove = next(
+        row for row in invariant.transfers if row.role == "ring-remove"
+    )
+    assert ring_remove.invocations == ()
+    assert ring_remove.removal_call_discharges == ()
+    assert recovery._publication_private_page_arena_invariant_is_current(
+        invariant
+    )
+
+
+@pytest.fixture(scope="module")
+def private_page_arena_invariant_evidence():
+    fixture = private_page_arena_image()
+    rows = private_page_arena_selector(fixture)
+    invariant = rows[0]._publication_private_page_arena_invariant(
+        rows[1], rows[2], rows[3]
+    )
+    assert invariant is not None
+    return fixture, rows[0], invariant
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "invocation-order",
+        "invocation-duplicate",
+        "invocation-origins",
+        "transition-order",
+        "transition-role",
+        "transition-restoration",
+        "arena-free-transition-order",
+        "role-entry-duplicate",
+    ),
+    ids=lambda value: value,
+)
+def test_private_page_arena_invariant_shape_rejects_nested_rows_before_replay(
+    private_page_arena_invariant_evidence,
+    monkeypatch,
+    mutation,
+):
+    _fixture, recovery, invariant = private_page_arena_invariant_evidence
+    transfers = list(invariant.transfers)
+    role_indexes = {row.role: index for index, row in enumerate(transfers)}
+    select = transfers[role_indexes["select"]]
+    if mutation == "invocation-order":
+        select = replace(select, invocations=tuple(reversed(select.invocations)))
+    elif mutation == "invocation-duplicate":
+        select = replace(
+            select,
+            invocations=(*select.invocations, select.invocations[-1]),
+        )
+    elif mutation == "invocation-origins":
+        select = replace(
+            select,
+            invocations=(
+                replace(
+                    select.invocations[0],
+                    page_origins=("provider", "provider"),
+                ),
+                *select.invocations[1:],
+            ),
+        )
+    elif mutation == "transition-order":
+        select = replace(
+            select,
+            state_transitions=tuple(reversed(select.state_transitions)),
+        )
+    elif mutation == "transition-role":
+        select = replace(
+            select,
+            state_transitions=(
+                replace(select.state_transitions[0], role="resize"),
+                *select.state_transitions[1:],
+            ),
+        )
+    elif mutation == "transition-restoration":
+        select = replace(
+            select,
+            state_transitions=(
+                replace(
+                    select.state_transitions[0],
+                    restoration_role="none",
+                ),
+                *select.state_transitions[1:],
+            ),
+        )
+    elif mutation == "arena-free-transition-order":
+        arena_free_index = role_indexes["arena-free"]
+        arena_free = transfers[arena_free_index]
+        transitions = arena_free.state_transitions
+        transfers[arena_free_index] = replace(
+            arena_free,
+            state_transitions=(
+                transitions[1], transitions[0], *transitions[2:]
+            ),
+        )
+    else:
+        role = invariant.block_arena
+        hostile = replace(
+            invariant,
+            block_arena=replace(
+                role,
+                coalescer_entries=(
+                    *role.coalescer_entries,
+                    role.coalescer_entries[-1],
+                ),
+            ),
+        )
+        transfers = None
+    if transfers is not None:
+        transfers[role_indexes["select"]] = select
+        hostile = replace(invariant, transfers=tuple(transfers))
+
+    assert not recovery._publication_private_page_arena_invariant_shape_is_valid(
+        hostile
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_producer_dependency_fingerprint",
+        lambda *_args, **_kwargs: pytest.fail(
+            "malformed shape reached dependency replay"
+        ),
+    )
+    assert not recovery._publication_private_page_arena_invariant_is_current(
+        hostile
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "allocator-root", "factory-entry", "page-provider", "large-allocator",
+        "extent-token", "initializer-effects", "layout", "ring-head",
+        "block-role", "induction-missing", "induction-duplicate",
+        "induction-extra", "function-missing", "function-duplicate",
+        "edge-missing", "edge-duplicate", "edge-order", "edge-retarget",
+        "edge-raw", "span-missing", "span-duplicate", "span-order",
+        "span-conflict", "dependency-missing", "dependency-duplicate",
+        "dependency-order", "dependency-function",
+        "dependency-global-slot", "dependency-absolute-reference",
+        "allocator-fingerprint-missing", "allocator-fingerprint-order",
+        "allocator-fingerprint-stale", "transfer-missing",
+        "transfer-duplicate", "transfer-order", "select-transfer-missing",
+        "select-transfer-duplicate", "arena-free-transfer-missing",
+        "arena-free-transfer-duplicate", "initialize-transfer",
+        "arena-free-entry-missing", "arena-free-entry-duplicate",
+    ),
+    ids=lambda value: value,
+)
+def test_private_page_arena_invariant_rejects_aggregate_hostile(
+    private_page_arena_invariant_evidence,
+    mutation,
+):
+    _fixture, recovery, invariant = private_page_arena_invariant_evidence
+    hostile = invariant
+    if mutation == "allocator-root":
+        hostile = replace(invariant, allocator_root=invariant.allocator_root + 0x10)
+    elif mutation == "factory-entry":
+        hostile = replace(invariant, factory_entry=invariant.factory_entry + 0x10)
+    elif mutation == "page-provider":
+        hostile = replace(invariant, page_provider=invariant.page_provider + 0x10)
+    elif mutation == "large-allocator":
+        hostile = replace(invariant, large_allocator=invariant.large_allocator + 0x10)
+    elif mutation == "extent-token":
+        hostile = replace(invariant, extent_token_sha256="0" * 64)
+    elif mutation == "initializer-effects":
+        effects = invariant.initializer_effects
+        hostile = replace(
+            invariant,
+            initializer_effects=replace(
+                effects,
+                function_fingerprints=(
+                    ((effects.function_fingerprints[0][0], "0" * 64),)
+                    + effects.function_fingerprints[1:]
+                ),
+            ),
+        )
+    elif mutation == "layout":
+        hostile = replace(
+            invariant,
+            layout=replace(
+                invariant.layout,
+                block_next_offset=invariant.layout.block_next_offset + 4,
+            ),
+        )
+    elif mutation == "ring-head":
+        hostile = replace(
+            invariant,
+            page_ring=replace(
+                invariant.page_ring,
+                head_slot=invariant.page_ring.head_slot + 4,
+            ),
+        )
+    elif mutation == "block-role":
+        hostile = replace(
+            invariant,
+            block_arena=replace(
+                invariant.block_arena,
+                block_payload_offset=invariant.block_arena.block_payload_offset + 4,
+            ),
+        )
+    elif mutation.startswith("arena-free-entry-"):
+        entries = invariant.block_arena.arena_free_entries
+        changed = () if mutation.endswith("missing") else (*entries, entries[-1])
+        hostile = replace(
+            invariant,
+            block_arena=replace(invariant.block_arena, arena_free_entries=changed),
+        )
+    elif mutation == "induction-missing":
+        hostile = replace(
+            invariant,
+            induction_substituted_entries=invariant.induction_substituted_entries[1:],
+        )
+    elif mutation == "induction-duplicate":
+        entries = invariant.induction_substituted_entries
+        hostile = replace(invariant, induction_substituted_entries=(*entries, entries[-1]))
+    elif mutation == "induction-extra":
+        entries = invariant.induction_substituted_entries
+        extra = next(row for row in invariant.function_entries if row not in entries)
+        hostile = replace(
+            invariant,
+            induction_substituted_entries=tuple(sorted((*entries, extra))),
+        )
+    elif mutation == "function-missing":
+        hostile = replace(invariant, function_entries=invariant.function_entries[1:])
+    elif mutation == "function-duplicate":
+        entries = invariant.function_entries
+        hostile = replace(invariant, function_entries=(*entries, entries[-1]))
+    elif mutation.startswith("edge-"):
+        edges = invariant.call_edges
+        if mutation == "edge-missing":
+            changed = edges[1:]
+        elif mutation == "edge-duplicate":
+            changed = (*edges, edges[-1])
+        elif mutation == "edge-order":
+            changed = (edges[1], edges[0], *edges[2:])
+        elif mutation == "edge-retarget":
+            changed = (replace(edges[0], target_entry=edges[0].target_entry + 0x10), *edges[1:])
+        else:
+            changed = (replace(edges[0], raw_reconciled=False), *edges[1:])
+        hostile = replace(invariant, call_edges=changed)
+    elif mutation.startswith("span-"):
+        spans = invariant.spans
+        if mutation == "span-missing":
+            changed = spans[1:]
+        elif mutation == "span-duplicate":
+            changed = (*spans, spans[-1])
+        elif mutation == "span-order":
+            changed = (spans[1], spans[0], *spans[2:])
+        else:
+            field = "block-next" if spans[0].field != "block-next" else "block-prev"
+            changed = (replace(spans[0], region="block", field=field), *spans[1:])
+        hostile = replace(invariant, spans=changed)
+    elif mutation.startswith("dependency-"):
+        dependencies = invariant.dependencies
+        if mutation == "dependency-missing":
+            changed = dependencies[1:]
+        elif mutation == "dependency-duplicate":
+            changed = (*dependencies, dependencies[-1])
+        elif mutation == "dependency-order":
+            changed = (dependencies[1], dependencies[0], *dependencies[2:])
+        else:
+            kind = mutation.removeprefix("dependency-")
+            index = next(i for i, row in enumerate(dependencies) if row.kind == kind)
+            changed = (
+                *dependencies[:index],
+                replace(dependencies[index], fingerprint="0" * 64),
+                *dependencies[index + 1 :],
+            )
+        hostile = replace(invariant, dependencies=changed)
+    elif mutation.startswith("allocator-fingerprint-"):
+        rows = invariant.allocator_dependency_fingerprints
+        if mutation.endswith("missing"):
+            changed = rows[1:]
+        elif mutation.endswith("order"):
+            changed = (rows[1], rows[0], *rows[2:])
+        else:
+            changed = ((rows[0][0], "0" * 64), *rows[1:])
+        hostile = replace(invariant, allocator_dependency_fingerprints=changed)
+    else:
+        transfers = invariant.transfers
+        if mutation == "transfer-missing":
+            changed = transfers[:-1]
+        elif mutation == "transfer-duplicate":
+            changed = (*transfers, transfers[-1])
+        elif mutation == "transfer-order":
+            changed = (transfers[1], transfers[0], *transfers[2:])
+        elif mutation == "select-transfer-missing":
+            changed = tuple(row for row in transfers if row.role != "select")
+        elif mutation == "select-transfer-duplicate":
+            changed = (*transfers, transfers[3])
+        elif mutation == "arena-free-transfer-missing":
+            changed = tuple(row for row in transfers if row.role != "arena-free")
+        elif mutation == "arena-free-transfer-duplicate":
+            changed = (*transfers, transfers[-2])
+        else:
+            changed = (*transfers, replace(transfers[-1], role="initialize"))
+        hostile = replace(invariant, transfers=changed)
+
+    outer = {("function", invariant.page_provider)}
+    recovery.producer_dependency_collectors.append(outer)
+    try:
+        assert not recovery._publication_private_page_arena_invariant_is_current(
+            hostile
+        )
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is outer
+    assert outer == {("function", invariant.page_provider)}
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "transfer-span-key-missing", "transfer-span-key-duplicate",
+        "transfer-instruction-missing", "transfer-instruction-duplicate",
+        "transfer-fingerprint", "ring-span-key-missing",
+        "ring-span-key-duplicate", "ring-remove-invocation",
+        "block-initialize-invocation-missing",
+        "block-initialize-invocation-duplicate",
+        "block-initialize-invocation-order", "block-initialize-call",
+        "block-initialize-context", "block-initialize-state",
+        "block-initialize-transition-missing",
+        "block-initialize-transition-after",
+        "block-initialize-transition-subject",
+        "block-initialize-restoration-role",
+        "block-initialize-restoration-entry", "split-invocation-missing",
+        "split-invocation-order", "select-invocation-order",
+        "arena-free-invocation-missing", "arena-free-invocation-duplicate",
+        "arena-free-invocation-order", "arena-free-direct-nested-collapse",
+        "arena-free-transition-missing",
+        "arena-free-transition-order", "arena-free-restoration",
+        "discharge-missing", "discharge-duplicate", "discharge-caller",
+        "discharge-call", "discharge-remover", "discharge-index",
+        "discharge-relation", "discharge-fingerprint",
+        "discharge-proof-missing-call", "discharge-proof-order",
+        "discharge-wrong-role", "obligation-missing", "obligation-duplicate",
+        "obligation-caller", "obligation-call", "obligation-remover",
+        "obligation-fingerprint", "obligation-proof-missing-call",
+        "obligation-proof-order",
+    ),
+    ids=lambda value: value,
+)
+def test_private_page_arena_invariant_rejects_nested_hostile(
+    private_page_arena_invariant_evidence,
+    mutation,
+):
+    _fixture, recovery, invariant = private_page_arena_invariant_evidence
+    transfers = list(invariant.transfers)
+    role_indexes = {row.role: index for index, row in enumerate(transfers)}
+
+    def transfer(role):
+        return transfers[role_indexes[role]]
+
+    def install(role, row):
+        transfers[role_indexes[role]] = row
+
+    if mutation.startswith("transfer-"):
+        row = transfer("resize")
+        if mutation == "transfer-span-key-missing":
+            row = replace(row, span_keys=row.span_keys[1:])
+        elif mutation == "transfer-span-key-duplicate":
+            row = replace(row, span_keys=(*row.span_keys, row.span_keys[-1]))
+        elif mutation == "transfer-instruction-missing":
+            row = replace(
+                row,
+                instruction_addresses=row.instruction_addresses[1:],
+            )
+        elif mutation == "transfer-instruction-duplicate":
+            row = replace(
+                row,
+                instruction_addresses=(
+                    *row.instruction_addresses,
+                    row.instruction_addresses[-1],
+                ),
+            )
+        else:
+            row = replace(row, function_sha256="0" * 64)
+        install("resize", row)
+    elif mutation.startswith("ring-span-key-"):
+        row = transfer("ring-insert")
+        keys = (
+            row.span_keys[1:]
+            if mutation.endswith("missing")
+            else (*row.span_keys, row.span_keys[-1])
+        )
+        install("ring-insert", replace(row, span_keys=keys))
+    elif mutation == "ring-remove-invocation":
+        row = transfer("ring-remove")
+        row = replace(row, invocations=transfer("ring-insert").invocations)
+        install("ring-remove", row)
+    elif mutation.startswith("block-initialize-"):
+        row = transfer("block-initialize")
+        if mutation == "block-initialize-invocation-missing":
+            row = replace(row, invocations=row.invocations[1:])
+        elif mutation == "block-initialize-invocation-duplicate":
+            row = replace(row, invocations=(*row.invocations, row.invocations[-1]))
+        elif mutation == "block-initialize-invocation-order":
+            row = replace(
+                row,
+                invocations=(row.invocations[1], row.invocations[0], *row.invocations[2:]),
+            )
+        elif mutation == "block-initialize-call":
+            row = replace(
+                row,
+                invocations=(
+                    replace(row.invocations[0], call_address=row.invocations[0].call_address + 1),
+                    *row.invocations[1:],
+                ),
+            )
+        elif mutation == "block-initialize-context":
+            row = replace(
+                row,
+                invocations=(
+                    replace(row.invocations[0], context="selector-split"),
+                    *row.invocations[1:],
+                ),
+            )
+        elif mutation == "block-initialize-state":
+            row = replace(
+                row,
+                invocations=(
+                    replace(row.invocations[0], block_state=row.invocations[1].block_state),
+                    *row.invocations[1:],
+                ),
+            )
+        elif mutation == "block-initialize-transition-missing":
+            row = replace(row, state_transitions=row.state_transitions[1:])
+        else:
+            transition = row.state_transitions[0]
+            if mutation == "block-initialize-transition-after":
+                transition = replace(transition, after=transition.before)
+            elif mutation == "block-initialize-transition-subject":
+                transition = replace(transition, subject="split-block")
+            elif mutation == "block-initialize-restoration-role":
+                transition = replace(transition, restoration_role="none")
+            else:
+                transition = replace(
+                    transition,
+                    restoration_entry=transition.restoration_entry + 0x10,
+                )
+            row = replace(
+                row,
+                state_transitions=(transition, *row.state_transitions[1:]),
+            )
+        install("block-initialize", row)
+    elif mutation.startswith("split-invocation-"):
+        row = transfer("split")
+        invocations = (
+            row.invocations[1:]
+            if mutation.endswith("missing")
+            else (row.invocations[1], row.invocations[0], *row.invocations[2:])
+        )
+        install("split", replace(row, invocations=invocations))
+    elif mutation == "select-invocation-order":
+        row = transfer("select")
+        install("select", replace(row, invocations=tuple(reversed(row.invocations))))
+    elif mutation.startswith("arena-free-"):
+        row = transfer("arena-free")
+        if mutation == "arena-free-invocation-missing":
+            row = replace(row, invocations=row.invocations[1:])
+        elif mutation == "arena-free-invocation-duplicate":
+            row = replace(row, invocations=(*row.invocations, row.invocations[-1]))
+        elif mutation == "arena-free-invocation-order":
+            row = replace(row, invocations=tuple(reversed(row.invocations)))
+        elif mutation == "arena-free-direct-nested-collapse":
+            row = replace(row, invocations=(row.invocations[0], row.invocations[0]))
+        elif mutation == "arena-free-transition-missing":
+            row = replace(row, state_transitions=row.state_transitions[1:])
+        elif mutation == "arena-free-transition-order":
+            row = replace(
+                row,
+                state_transitions=(
+                    row.state_transitions[1],
+                    row.state_transitions[0],
+                    *row.state_transitions[2:],
+                ),
+            )
+        else:
+            transition = row.state_transitions[-1]
+            row = replace(
+                row,
+                state_transitions=(
+                    *row.state_transitions[:-1],
+                    replace(transition, restoration_entry=transition.restoration_entry + 0x10),
+                ),
+            )
+        install("arena-free", row)
+    elif mutation.startswith("discharge-"):
+        arena_free = transfer("arena-free")
+        discharge = arena_free.removal_call_discharges[0]
+        if mutation == "discharge-missing":
+            changed = ()
+        elif mutation == "discharge-duplicate":
+            changed = (discharge, discharge)
+        elif mutation == "discharge-caller":
+            changed = (replace(discharge, caller_entry=discharge.caller_entry + 0x10),)
+        elif mutation == "discharge-call":
+            changed = (replace(discharge, call_address=discharge.call_address + 1),)
+        elif mutation == "discharge-remover":
+            changed = (replace(discharge, remover_entry=discharge.remover_entry + 0x10),)
+        elif mutation == "discharge-index":
+            changed = (replace(discharge, argument_index=1),)
+        elif mutation == "discharge-relation":
+            changed = (replace(discharge, argument_relation="recovered-page"),)
+        elif mutation == "discharge-fingerprint":
+            changed = (replace(discharge, caller_function_sha256="0" * 64),)
+        elif mutation == "discharge-proof-missing-call":
+            changed = (
+                replace(
+                    discharge,
+                    proof_instruction_addresses=tuple(
+                        row
+                        for row in discharge.proof_instruction_addresses
+                        if row != discharge.call_address
+                    ),
+                ),
+            )
+        elif mutation == "discharge-proof-order":
+            changed = (
+                replace(
+                    discharge,
+                    proof_instruction_addresses=tuple(
+                        reversed(discharge.proof_instruction_addresses)
+                    ),
+                ),
+            )
+        else:
+            changed = ()
+            wrong = transfer("unlink")
+            install(
+                "unlink",
+                replace(wrong, removal_call_discharges=(discharge,)),
+            )
+        install(
+            "arena-free",
+            replace(arena_free, removal_call_discharges=changed),
+        )
+    else:
+        obligations = invariant.page_ring.remover_call_obligations
+        obligation = obligations[0]
+        if mutation == "obligation-missing":
+            changed = ()
+        elif mutation == "obligation-duplicate":
+            changed = (obligation, obligation)
+        elif mutation == "obligation-caller":
+            changed = (replace(obligation, caller_entry=obligation.caller_entry + 0x10),)
+        elif mutation == "obligation-call":
+            changed = (replace(obligation, call_address=obligation.call_address + 1),)
+        elif mutation == "obligation-remover":
+            changed = (replace(obligation, remover_entry=obligation.remover_entry + 0x10),)
+        elif mutation == "obligation-proof-missing-call":
+            changed = (
+                replace(
+                    obligation,
+                    proof_instruction_addresses=tuple(
+                        row
+                        for row in obligation.proof_instruction_addresses
+                        if row != obligation.call_address
+                    ),
+                ),
+            )
+        elif mutation == "obligation-proof-order":
+            changed = (
+                replace(
+                    obligation,
+                    proof_instruction_addresses=tuple(
+                        reversed(obligation.proof_instruction_addresses)
+                    ),
+                ),
+            )
+        else:
+            changed = (replace(obligation, caller_function_sha256="0" * 64),)
+        hostile = replace(
+            invariant,
+            page_ring=replace(
+                invariant.page_ring,
+                remover_call_obligations=changed,
+            ),
+        )
+        transfers = None
+
+    if transfers is not None:
+        hostile = replace(invariant, transfers=tuple(transfers))
+    outer = {("function", invariant.page_provider)}
+    recovery.producer_dependency_collectors.append(outer)
+    try:
+        assert not recovery._publication_private_page_arena_invariant_is_current(
+            hostile
+        )
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is outer
+    assert outer == {("function", invariant.page_provider)}
+
+
+def test_private_page_arena_invariant_currentness_freshly_replays_tasks_2_to_5(
+    private_page_arena_invariant_evidence,
+    monkeypatch,
+):
+    _fixture, recovery, invariant = private_page_arena_invariant_evidence
+    names = (
+        "_publication_private_page_arena_invariant",
+        "_publication_private_page_layout",
+        "_publication_private_page_ring_role",
+        "_publication_private_block_selector_role",
+        "_publication_private_block_arena_role",
+    )
+    counts = Counter({name: 0 for name in names})
+    for name in names:
+        original = getattr(recovery, name)
+
+        def wrapper(*args, __name=name, __original=original, **kwargs):
+            counts[__name] += 1
+            return __original(*args, **kwargs)
+
+        monkeypatch.setattr(recovery, name, wrapper)
+    outer = set()
+    recovery.producer_dependency_collectors.append(outer)
+    try:
+        assert recovery._publication_private_page_arena_invariant_is_current(
+            invariant
+        )
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is outer
+    assert counts["_publication_private_page_arena_invariant"] == 1
+    assert counts["_publication_private_block_arena_role"] == 1
+    assert all(counts[name] >= 1 for name in names)
+    assert outer == {
+        (row.kind, row.identifier) for row in invariant.dependencies
+    }
+
+
+def test_private_page_arena_invariant_builder_failure_has_no_dependency_effect(
+    private_page_arena_invariant_evidence,
+    monkeypatch,
+):
+    _fixture, recovery, invariant = private_page_arena_invariant_evidence
+    monkeypatch.setattr(
+        recovery,
+        "_publication_private_block_arena_role",
+        lambda *_args, **_kwargs: None,
+    )
+    extent = invariant.initializer_effects.extent_witness
+    contract = recovery._private_heap_allocator_contract(
+        invariant.allocator_root,
+        extent.allocator_protected_slots,
+    )
+    assert contract is not None
+    outer = {("function", invariant.page_provider)}
+    recovery.producer_dependency_collectors.append(outer)
+    try:
+        assert recovery._publication_private_page_arena_invariant(
+            contract,
+            extent,
+            invariant.initializer_effects,
+        ) is None
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is outer
+    assert outer == {("function", invariant.page_provider)}
+
+
+def test_private_page_arena_invariant_builder_rejects_unsupported_dependency(
+    private_page_arena_invariant_evidence,
+    monkeypatch,
+):
+    _fixture, recovery, invariant = private_page_arena_invariant_evidence
+    original = recovery._publication_private_block_arena_role
+
+    def add_dynamic_dependency(*args, **kwargs):
+        result = original(*args, **kwargs)
+        assert result is not None
+        recovery.producer_dependency_collectors[-1].add(
+            ("dynamic-field", invariant.page_provider)
+        )
+        return result
+
+    monkeypatch.setattr(
+        recovery,
+        "_publication_private_block_arena_role",
+        add_dynamic_dependency,
+    )
+    extent = invariant.initializer_effects.extent_witness
+    contract = recovery._private_heap_allocator_contract(
+        invariant.allocator_root,
+        extent.allocator_protected_slots,
+    )
+    assert contract is not None
+    outer = {("function", invariant.page_provider)}
+    recovery.producer_dependency_collectors.append(outer)
+    try:
+        assert recovery._publication_private_page_arena_invariant(
+            contract,
+            extent,
+            invariant.initializer_effects,
+        ) is None
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is outer
+    assert outer == {("function", invariant.page_provider)}
+
+
+def test_private_page_arena_invariant_relative_pointer_cache_replays_dependencies():
+    fixture = private_page_arena_image()
+    rows = private_page_arena_selector(fixture)
+    recovery = rows[0]
+    recovery.relative_pointer_state_cache.clear()
+    observed = []
+    for _ in range(2):
+        dependencies = set()
+        recovery.producer_dependency_collectors.append(dependencies)
+        try:
+            result = recovery._relative_pointer_states(
+                fixture.realloc_driver,
+                argument_index=0,
+            )
+        finally:
+            assert recovery.producer_dependency_collectors.pop() is dependencies
+        observed.append((result, dependencies))
+    assert observed[0][0] == observed[1][0]
+    assert observed[0][1]
+    assert observed[0][1] == observed[1][1]
+
+
 def test_private_page_arena_selector_documents_anchor_fingerprint_drift():
     fixture = private_page_arena_image()
     plain = private_page_arena_recovery(fixture, ())

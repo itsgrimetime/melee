@@ -2494,6 +2494,39 @@ class _PublicationPrivateBlockArenaRole:
 
 
 @dataclass(frozen=True, slots=True)
+class _PublicationPrivateArenaDependency:
+    kind: Literal["function", "global-slot", "absolute-reference"]
+    identifier: int
+    fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PublicationPrivatePageArenaInvariant:
+    allocator_root: int
+    factory_entry: int
+    page_provider: int
+    large_allocator: int
+    extent_token_sha256: str
+    initializer_effects: _PublicationPrivateHeapEffectClosure
+    layout: _PublicationPrivatePageLayout
+    page_ring: _PublicationPrivatePageRingRole
+    block_arena: _PublicationPrivateBlockArenaRole
+    induction_substituted_entries: tuple[int, ...]
+    function_entries: tuple[int, ...]
+    call_edges: tuple[_PublicationPrivateArenaCallEdge, ...]
+    spans: tuple[_PublicationPrivateArenaSpan, ...]
+    transfers: tuple[_PublicationPrivateArenaTransfer, ...]
+    dependencies: tuple[_PublicationPrivateArenaDependency, ...]
+    allocator_dependency_fingerprints: tuple[tuple[int, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _RelativePointerStateMemoEntry:
+    dependencies: frozenset[tuple[str, int]] | None
+    result: dict[int, tuple[tuple[frozenset[int], ...], int]] | None
+
+
+@dataclass(frozen=True, slots=True)
 class _PublicationPrivateArenaAbstractValue:
     kind: Literal[
         "zero",
@@ -30705,18 +30738,22 @@ class _DirectCfgRecovery:
                     access = "write"
                 else:
                     access = "read"
-                spans.append(
-                    _PublicationPrivateArenaSpan(
-                        function_entry=function_entry,
-                        instruction_address=address,
-                        operand_index=operand_index,
-                        access=access,
-                        region=region,
-                        field=field_name,
-                        displacement=displacement,
-                        width=4,
-                    )
+                key = (function_entry, address, operand_index)
+                span = _PublicationPrivateArenaSpan(
+                    function_entry=function_entry,
+                    instruction_address=address,
+                    operand_index=operand_index,
+                    access=access,
+                    region=region,
+                    field=field_name,
+                    displacement=displacement,
+                    width=4,
                 )
+                if role == "unlink":
+                    span = assembly.spans_by_key.get(key)
+                    if span is None:
+                        return None
+                spans.append(span)
         result = tuple(
             sorted(
                 set(spans),
@@ -38378,6 +38415,79 @@ class _DirectCfgRecovery:
             scenarios[scenario] = (prev, next_block, head)
             self._task5_enqueue_state(assembly, phase, entry, state)
 
+        semantic_spans: dict[
+            tuple[int, int, int], _PublicationPrivateArenaSpan
+        ] = {}
+
+        def note_semantic_spans(
+            state: _Task5UnlinkSemanticState,
+            decoded: capstone.CsInsn,
+        ) -> bool:
+            prev, next_block, _head = scenarios[state.scenario]
+            fields = {
+                block_header_address: ("block", "block-header"),
+                block_prev_address: ("block", "block-prev"),
+                block_next_address: ("block", "block-next"),
+                page_extent_address: ("page", "extent"),
+                page_largest_address: ("page", "largest-free"),
+                successor_header_address: (
+                    "successor",
+                    "successor-header",
+                ),
+                sentinel: ("page-end", "sentinel"),
+                address_offset(next_block, layout.block_prev_offset): (
+                    "block",
+                    "block-prev",
+                ),
+                address_offset(prev, layout.block_next_offset): (
+                    "block",
+                    "block-next",
+                ),
+            }
+            for operand_index, operand in enumerate(decoded.operands):
+                if operand.type != X86_OP_MEM:
+                    continue
+                if stack_offset(state, operand) is not None:
+                    continue
+                semantic_address = effective_address(state, operand)
+                field = fields.get(semantic_address)
+                if operand.size != 4 or semantic_address is None or field is None:
+                    return False
+                reads = bool(operand.access & CS_AC_READ)
+                writes = bool(operand.access & CS_AC_WRITE)
+                if not reads and not writes:
+                    if decoded.mnemonic == "mov":
+                        writes = operand_index == 0
+                        reads = operand_index != 0
+                    elif decoded.mnemonic in {"cmp", "test", "push", "lea"}:
+                        reads = True
+                    else:
+                        reads = True
+                        writes = operand_index == 0
+                access = (
+                    "read-write"
+                    if reads and writes
+                    else "write"
+                    if writes
+                    else "read"
+                )
+                span = _PublicationPrivateArenaSpan(
+                    function_entry=entry,
+                    instruction_address=decoded.address,
+                    operand_index=operand_index,
+                    access=access,
+                    region=field[0],
+                    field=field[1],
+                    displacement=operand.mem.disp,
+                    width=operand.size,
+                )
+                key = (entry, decoded.address, operand_index)
+                existing = semantic_spans.get(key)
+                if existing is not None and existing != span:
+                    return False
+                semantic_spans[key] = span
+            return True
+
         returns: list[_Task5UnlinkSemanticState] = []
         while assembly.semantic_pending:
             address, state = assembly.semantic_pending.popleft()
@@ -38404,6 +38514,8 @@ class _DirectCfgRecovery:
                 state,
                 instruction_addresses=state.instruction_addresses | {address},
             )
+            if not note_semantic_spans(state, decoded):
+                return False
             mnemonic = decoded.mnemonic
             operands = decoded.operands
             next_states: list[tuple[int, _Task5UnlinkSemanticState]] = []
@@ -38579,11 +38691,18 @@ class _DirectCfgRecovery:
                 or memory.get(page_largest_address) != expected_largest
             ):
                 return False
-        return {state.scenario for state in returns} == {
+        if {state.scenario for state in returns} != {
             "singleton",
             "head",
             "non-head",
-        }
+        }:
+            return False
+        for key, span in semantic_spans.items():
+            existing = assembly.spans_by_key.get(key)
+            if existing is not None and existing != span:
+                return False
+        assembly.spans_by_key.update(semantic_spans)
+        return True
 
     def _task5_prove_unlink(
         self,
@@ -39057,6 +39176,7 @@ class _DirectCfgRecovery:
         self._task5_last_budget_counts = {}
         local_dependencies: set[tuple[str, int]] = set()
         self.producer_dependency_collectors.append(local_dependencies)
+        result = None
         try:
             assembly = self._publication_private_arena_full_assembly(
                 contract,
@@ -39068,24 +39188,696 @@ class _DirectCfgRecovery:
                 select_transfer,
                 selector_spans,
             )
-            if assembly is None or assembly.mode != "full-role":
-                return None
-            base = self._publication_private_arena_base_roles(assembly)
-            if base is None:
-                return None
-            proved_roles = frozenset(row.role for row in base.transfers)
-            required_roles = frozenset(
-                {
-                    "block-initialize", "split", "unlink", "insert",
-                    "coalesce-prev", "coalesce-next", "arena-free", "resize",
-                }
-            )
-            if proved_roles != required_roles:
-                return None
-            return base.role, base.transfers, base.spans
+            if assembly is not None and assembly.mode == "full-role":
+                base = self._publication_private_arena_base_roles(assembly)
+                required_roles = frozenset(
+                    {
+                        "block-initialize", "split", "unlink", "insert",
+                        "coalesce-prev", "coalesce-next", "arena-free", "resize",
+                    }
+                )
+                if (
+                    base is not None
+                    and frozenset(row.role for row in base.transfers)
+                    == required_roles
+                ):
+                    result = base.role, base.transfers, base.spans
         finally:
             popped = self.producer_dependency_collectors.pop()
             assert popped is local_dependencies
+        if result is not None:
+            self._propagate_producer_dependencies(local_dependencies)
+        return result
+
+    @staticmethod
+    def _publication_private_arena_span_key(
+        span: _PublicationPrivateArenaSpan,
+    ) -> tuple[int, int, int]:
+        return (
+            span.function_entry,
+            span.instruction_address,
+            span.operand_index,
+        )
+
+    @staticmethod
+    def _publication_private_arena_edge_key(
+        edge: _PublicationPrivateArenaCallEdge,
+    ) -> tuple[int, int, int, str]:
+        return (
+            edge.caller_entry,
+            edge.call_address,
+            edge.target_entry,
+            edge.edge_kind,
+        )
+
+    def _publication_private_page_arena_call_edges(
+        self,
+        ring: _PublicationPrivatePageRingEvidence,
+        select_transfer: _PublicationPrivateArenaTransfer,
+        block_role: _PublicationPrivateBlockArenaRole,
+    ) -> tuple[_PublicationPrivateArenaCallEdge, ...]:
+        edges = {
+            *block_role.deallocator_call_edges,
+            *block_role.mutation_call_edges,
+        }
+        for transfer in ring.transfers:
+            edges.update(
+                _PublicationPrivateArenaCallEdge(
+                    row.caller_entry,
+                    row.call_address,
+                    row.callee_entry,
+                    "ring",
+                    True,
+                )
+                for row in transfer.invocations
+            )
+        edges.update(
+            _PublicationPrivateArenaCallEdge(
+                row.caller_entry,
+                row.call_address,
+                row.callee_entry,
+                "selector",
+                True,
+            )
+            for row in select_transfer.invocations
+        )
+        edges.update(
+            _PublicationPrivateArenaCallEdge(
+                row.caller_entry,
+                row.call_address,
+                row.remover_entry,
+                "ring",
+                True,
+            )
+            for row in ring.role.remover_call_obligations
+        )
+        return tuple(sorted(edges, key=self._publication_private_arena_edge_key))
+
+    @staticmethod
+    def _publication_private_page_arena_function_entries(
+        ring_role: _PublicationPrivatePageRingRole,
+        block_role: _PublicationPrivateBlockArenaRole,
+        transfers: tuple[_PublicationPrivateArenaTransfer, ...],
+        edges: tuple[_PublicationPrivateArenaCallEdge, ...],
+    ) -> tuple[int, ...]:
+        entries = {
+            ring_role.provider_entry,
+            ring_role.inserter_entry,
+            *(row.function_entry for row in transfers),
+            *(row.caller_entry for row in edges),
+            *(row.target_entry for row in edges),
+            *(row.caller_entry for row in ring_role.remover_call_obligations),
+            *(row.remover_entry for row in ring_role.remover_call_obligations),
+            *block_role.deallocator_function_entries,
+            *block_role.mutation_context_entries,
+            *block_role.block_initializer_entries,
+            *block_role.arena_free_entries,
+            *block_role.splitter_entries,
+            *block_role.unlink_entries,
+            *block_role.insert_entries,
+            *block_role.coalescer_entries,
+            *block_role.resize_entries,
+        }
+        if ring_role.remover_entry is not None:
+            entries.add(ring_role.remover_entry)
+        if block_role.deallocator_root is not None:
+            entries.add(block_role.deallocator_root)
+        return tuple(sorted(entries))
+
+    @staticmethod
+    def _publication_private_page_arena_induction_entries(
+        effects: _PublicationPrivateHeapEffectClosure,
+        transfers: tuple[_PublicationPrivateArenaTransfer, ...],
+    ) -> tuple[int, ...]:
+        later_entries = {
+            row.function_entry
+            for row in transfers
+            if any(
+                invocation.context != "initializer-base"
+                for invocation in row.invocations
+            )
+        }
+        return tuple(sorted(set(effects.function_entries) & later_entries))
+
+    def _publication_private_page_arena_final_residue_is_current(self) -> bool:
+        if (
+            self.publication_final_data_regions is None
+            or self.publication_final_padding_regions is None
+            or self.publication_final_residue is None
+        ):
+            return False
+        try:
+            candidates = self._raw_e8_candidates(
+                self.publication_final_data_regions,
+                self.publication_final_padding_regions,
+                self.publication_final_residue,
+            )
+            self._record_provisional_unowned_raw_caller_diagnostics(candidates)
+        except CfgRecoveryError:
+            return False
+        return True
+
+    def _publication_private_page_arena_invariant_shape_is_valid(
+        self,
+        invariant: _PublicationPrivatePageArenaInvariant,
+    ) -> bool:
+        if not isinstance(invariant, _PublicationPrivatePageArenaInvariant):
+            return False
+        expected_roles = (
+            "ring-insert", "ring-remove", "ring-rotate", "select",
+            "block-initialize", "split", "unlink", "insert",
+            "coalesce-prev", "coalesce-next", "arena-free", "resize",
+        )
+        transfers = invariant.transfers
+        transfer_roles = tuple(row.role for row in transfers)
+        if transfer_roles != expected_roles or len(set(transfer_roles)) != len(transfers):
+            return False
+        context_order = {
+            context: index
+            for index, context in enumerate(
+                (
+                    "provider", "initializer-base", "selector-ring",
+                    "selector-provider", "selector-split", "deallocator",
+                    "resize-shrink", "resize-grow", "resize-split",
+                )
+            )
+        }
+        transition_contexts = {
+            "initializer-base", "selector-split", "selector-ring",
+            "selector-provider", "deallocator", "resize-split",
+            "resize-grow", "resize-shrink",
+        }
+        subject_order = {
+            subject: index
+            for index, subject in enumerate(
+                (
+                    "initial-block", "selected-block", "split-block",
+                    "payload-block", "remainder-block",
+                    "predecessor-block", "successor-block",
+                    "released-page",
+                )
+            )
+        }
+        transition_phase = {
+            (("none", "none"), ("free", "unlisted")): 0,
+            (("none", "none"), ("allocated", "unlisted")): 0,
+            (("free", "listed"), ("allocated", "unlisted")): 0,
+            (("free", "listed"), ("free", "listed")): 0,
+            (("free", "unlisted"), ("free", "listed")): 1,
+            (("allocated", "unlisted"), ("allocated", "unlisted")): 1,
+            (("allocated", "unlisted"), ("free", "unlisted")): 0,
+            (("allocated", "unlisted"), ("free", "listed")): 0,
+            (("free", "listed"), ("allocated", "listed")): 0,
+            (("allocated", "listed"), ("allocated", "unlisted")): 1,
+            (("free", "listed"), ("none", "none")): 2,
+        }
+
+        def invocation_key(
+            row: _PublicationPrivateArenaInvocation,
+        ) -> tuple[Any, ...]:
+            return (
+                row.caller_entry,
+                context_order[row.context],
+                row.call_address,
+                row.callee_entry,
+                row.role,
+                row.page_origins,
+                row.block_state.allocation,
+                row.block_state.membership,
+            )
+
+        def transition_key(
+            row: _PublicationPrivateArenaStateTransition,
+        ) -> tuple[Any, ...]:
+            before = (row.before.allocation, row.before.membership)
+            after = (row.after.allocation, row.after.membership)
+            return (
+                context_order[row.context],
+                subject_order[row.subject],
+                transition_phase[(before, after)],
+                row.function_entry,
+                row.role,
+                before,
+                after,
+                row.restoration_role,
+                -1 if row.restoration_entry is None else row.restoration_entry,
+            )
+
+        function_entry_set = set(invariant.function_entries)
+        for transfer in transfers:
+            if not isinstance(transfer, _PublicationPrivateArenaTransfer):
+                return False
+            invocations = transfer.invocations
+            if any(
+                not isinstance(row, _PublicationPrivateArenaInvocation)
+                or row.role != transfer.role
+                or row.context not in context_order
+                or row.page_origins
+                not in {(), ("provider",), ("ring",), ("provider", "ring")}
+                or not self._publication_private_arena_state_is_valid(
+                    row.block_state
+                )
+                or (
+                    transfer.role != "ring-rotate"
+                    and row.callee_entry != transfer.function_entry
+                )
+                for row in invocations
+            ):
+                return False
+            invocation_keys = tuple(invocation_key(row) for row in invocations)
+            if invocation_keys != tuple(sorted(set(invocation_keys))):
+                return False
+            transitions = transfer.state_transitions
+            if any(
+                not isinstance(row, _PublicationPrivateArenaStateTransition)
+                or row.role != transfer.role
+                or row.function_entry != transfer.function_entry
+                or row.context not in transition_contexts
+                or row.subject not in subject_order
+                or not self._publication_private_arena_state_is_valid(row.before)
+                or not self._publication_private_arena_state_is_valid(row.after)
+                or (
+                    (row.before.allocation, row.before.membership),
+                    (row.after.allocation, row.after.membership),
+                )
+                not in transition_phase
+                or row.restoration_role
+                not in {"none", "initializer-base", "select", "resize", "deallocator"}
+                or (row.restoration_role == "none")
+                != (row.restoration_entry is None)
+                or (
+                    row.restoration_entry is not None
+                    and row.restoration_entry not in function_entry_set
+                )
+                for row in transitions
+            ):
+                return False
+            transition_keys = tuple(transition_key(row) for row in transitions)
+            if transfer.role == "arena-free":
+                if (
+                    not invocations
+                    or len(transitions) % len(invocations)
+                    or not transitions
+                ):
+                    return False
+                chunk_size = len(transitions) // len(invocations)
+                chunks = tuple(
+                    transition_keys[index : index + chunk_size]
+                    for index in range(0, len(transition_keys), chunk_size)
+                )
+                if (
+                    chunks != (chunks[0],) * len(invocations)
+                    or chunks[0] != tuple(sorted(set(chunks[0])))
+                ):
+                    return False
+            elif transition_keys != tuple(sorted(set(transition_keys))):
+                return False
+        if (
+            invariant.function_entries
+            != tuple(sorted(set(invariant.function_entries)))
+            or invariant.induction_substituted_entries
+            != tuple(sorted(set(invariant.induction_substituted_entries)))
+            or not set(invariant.induction_substituted_entries)
+            <= set(invariant.function_entries)
+        ):
+            return False
+        edge_keys = tuple(
+            self._publication_private_arena_edge_key(row)
+            for row in invariant.call_edges
+        )
+        if (
+            edge_keys != tuple(sorted(set(edge_keys)))
+            or not all(row.raw_reconciled for row in invariant.call_edges)
+        ):
+            return False
+        span_keys = tuple(
+            self._publication_private_arena_span_key(row)
+            for row in invariant.spans
+        )
+        if span_keys != tuple(sorted(set(span_keys))):
+            return False
+        referenced = set()
+        for transfer in transfers:
+            if transfer.span_keys != tuple(sorted(set(transfer.span_keys))):
+                return False
+            referenced.update(transfer.span_keys)
+            if (
+                transfer.instruction_addresses
+                != tuple(sorted(set(transfer.instruction_addresses)))
+                or len(transfer.function_sha256) != 64
+            ):
+                return False
+        if referenced != set(span_keys):
+            return False
+        dependency_keys = tuple(
+            (row.kind, row.identifier) for row in invariant.dependencies
+        )
+        if (
+            dependency_keys != tuple(sorted(set(dependency_keys)))
+            or {row.kind for row in invariant.dependencies}
+            != {"function", "global-slot", "absolute-reference"}
+            or any(len(row.fingerprint) != 64 for row in invariant.dependencies)
+        ):
+            return False
+        role = invariant.block_arena
+        role_entry_tuples = (
+            invariant.page_ring.provider_calls,
+            invariant.page_ring.selector_page_calls,
+            invariant.page_ring.selector_request_calls,
+            invariant.page_ring.head_reads,
+            invariant.page_ring.head_writes,
+            invariant.page_ring.ring_link_reads,
+            invariant.page_ring.ring_link_writes,
+            role.selector_calls,
+            role.deallocator_function_entries,
+            role.mutation_context_entries,
+            role.block_initializer_entries,
+            role.arena_free_entries,
+            role.splitter_entries,
+            role.unlink_entries,
+            role.insert_entries,
+            role.coalescer_entries,
+            role.resize_entries,
+        )
+        if any(
+            rows != tuple(sorted(set(rows))) for rows in role_entry_tuples
+        ):
+            return False
+        if (
+            invariant.page_ring.selector_invocations != transfers[3].invocations
+            or invariant.page_ring.inserter_entry != transfers[0].function_entry
+            or invariant.page_ring.remover_entry != transfers[1].function_entry
+            or role.selector_entry != transfers[3].function_entry
+            or role.block_initializer_entries != (transfers[4].function_entry,)
+            or role.splitter_entries != (transfers[5].function_entry,)
+            or role.unlink_entries != (transfers[6].function_entry,)
+            or role.insert_entries != (transfers[7].function_entry,)
+            or role.coalescer_entries
+            != tuple(sorted((transfers[8].function_entry, transfers[9].function_entry)))
+            or role.arena_free_entries != (transfers[10].function_entry,)
+            or role.resize_entries != (transfers[11].function_entry,)
+        ):
+            return False
+        if (
+            invariant.layout.page_link_offsets is None
+            or len(set(invariant.layout.page_link_offsets)) != 2
+            or invariant.layout.minimum_split_remainder is None
+            or invariant.layout.minimum_split_remainder <= 0
+            or len(
+                {
+                    role.block_page_pointer_flag,
+                    role.block_allocated_flag,
+                    role.block_previous_allocated_flag,
+                }
+            )
+            != 3
+            or any(
+                value <= 0 or value & (value - 1)
+                for value in {
+                    role.block_page_pointer_flag,
+                    role.block_allocated_flag,
+                    role.block_previous_allocated_flag,
+                }
+            )
+        ):
+            return False
+        obligations = invariant.page_ring.remover_call_obligations
+        obligation_keys = tuple(
+            (row.caller_entry, row.call_address, row.remover_entry)
+            for row in obligations
+        )
+        if obligation_keys != tuple(sorted(set(obligation_keys))):
+            return False
+        arena_free = transfers[-2]
+        discharges = arena_free.removal_call_discharges
+        discharge_keys = tuple(
+            (row.caller_entry, row.call_address, row.remover_entry)
+            for row in discharges
+        )
+        obligation_by_key = {
+            key: row for key, row in zip(obligation_keys, obligations, strict=True)
+        }
+        if (
+            not discharges
+            or discharge_keys != obligation_keys
+            or any(
+                transfer.removal_call_discharges
+                for transfer in transfers
+                if transfer.role != "arena-free"
+            )
+        ):
+            return False
+        for key, discharge in zip(discharge_keys, discharges, strict=True):
+            obligation = obligation_by_key[key]
+            if (
+                discharge.argument_index != 0
+                or discharge.argument_relation
+                != "exact-untagged-recovered-page"
+                or discharge.caller_function_sha256
+                != obligation.caller_function_sha256
+                or discharge.proof_instruction_addresses
+                != tuple(sorted(set(discharge.proof_instruction_addresses)))
+                or discharge.call_address
+                not in discharge.proof_instruction_addresses
+            ):
+                return False
+        ring_remove = transfers[1]
+        if ring_remove.invocations or ring_remove.removal_call_discharges:
+            return False
+        return bool(
+            invariant.initializer_effects.extent_witness.extent_token_sha256
+            == invariant.extent_token_sha256
+            and invariant.allocator_dependency_fingerprints
+            == invariant.initializer_effects.extent_witness.allocator_dependency_fingerprints
+        )
+
+    def _publication_private_page_arena_invariant(
+        self,
+        contract: _PrivateHeapAllocatorContract,
+        extent: _PublicationPrivateHeapExtentWitness,
+        effects: _PublicationPrivateHeapEffectClosure,
+    ) -> _PublicationPrivatePageArenaInvariant | None:
+        local_dependencies: set[tuple[str, int]] = set()
+        self.producer_dependency_collectors.append(local_dependencies)
+        result = None
+        try:
+            current_contract = self._private_heap_allocator_contract(
+                contract.root,
+                contract.protected_slots,
+            )
+            if (
+                current_contract != contract
+                or contract.protected_slots != extent.allocator_protected_slots
+            ):
+                return None
+            current_extent = self._publication_private_heap_extent_witness(
+                contract,
+                extent.helper_entry,
+            )
+            if current_extent != extent:
+                return None
+            current_effects = self._publication_private_heap_effect_closure(extent)
+            if (
+                current_effects != effects
+                or not self._publication_private_heap_effect_closure_is_current(
+                    effects
+                )
+                or not self._publication_private_page_arena_final_residue_is_current()
+            ):
+                return None
+            pre_layout = self._publication_private_page_layout(
+                contract,
+                extent,
+                effects,
+            )
+            if pre_layout is None:
+                return None
+            ring = self._publication_private_page_ring_role(
+                contract,
+                extent,
+                pre_layout,
+            )
+            if ring is None:
+                return None
+            selector = self._publication_private_block_selector_role(
+                contract,
+                extent,
+                effects,
+                ring,
+            )
+            if selector is None:
+                return None
+            layout, selector_role, select_transfer, selector_spans = selector
+            block = self._publication_private_block_arena_role(
+                contract,
+                extent,
+                effects,
+                layout,
+                ring,
+                selector_role,
+                select_transfer,
+                selector_spans,
+            )
+            if block is None:
+                return None
+            block_role, block_transfers, block_spans = block
+            transfers = (*ring.transfers, select_transfer, *block_transfers)
+            if tuple(row.role for row in transfers) != (
+                "ring-insert", "ring-remove", "ring-rotate", "select",
+                "block-initialize", "split", "unlink", "insert",
+                "coalesce-prev", "coalesce-next", "arena-free", "resize",
+            ):
+                return None
+            spans_by_key: dict[
+                tuple[int, int, int], _PublicationPrivateArenaSpan
+            ] = {}
+            for span in (*ring.spans, *selector_spans, *block_spans):
+                key = self._publication_private_arena_span_key(span)
+                existing = spans_by_key.get(key)
+                if existing is not None and existing != span:
+                    return None
+                spans_by_key[key] = span
+            spans = tuple(spans_by_key[key] for key in sorted(spans_by_key))
+            call_edges = self._publication_private_page_arena_call_edges(
+                ring,
+                select_transfer,
+                block_role,
+            )
+            function_entries = self._publication_private_page_arena_function_entries(
+                ring.role,
+                block_role,
+                transfers,
+                call_edges,
+            )
+            local_dependencies.update(
+                ("function", entry) for entry in function_entries
+            )
+            if any(
+                kind not in {
+                    "function", "global-slot", "absolute-reference"
+                }
+                for kind, _identifier in local_dependencies
+            ):
+                return None
+            dependency_rows = []
+            for kind, identifier in sorted(local_dependencies):
+                try:
+                    fingerprint = self._producer_dependency_fingerprint(
+                        kind,
+                        identifier,
+                    )
+                except CfgRecoveryError:
+                    return None
+                dependency_rows.append(
+                    _PublicationPrivateArenaDependency(
+                        cast(
+                            Literal[
+                                "function", "global-slot", "absolute-reference"
+                            ],
+                            kind,
+                        ),
+                        identifier,
+                        fingerprint,
+                    )
+                )
+            result = _PublicationPrivatePageArenaInvariant(
+                allocator_root=contract.root,
+                factory_entry=contract.factory.function_entry,
+                page_provider=contract.page_provider,
+                large_allocator=contract.large_allocator,
+                extent_token_sha256=extent.extent_token_sha256,
+                initializer_effects=effects,
+                layout=layout,
+                page_ring=ring.role,
+                block_arena=block_role,
+                induction_substituted_entries=(
+                    self._publication_private_page_arena_induction_entries(
+                        effects,
+                        transfers,
+                    )
+                ),
+                function_entries=function_entries,
+                call_edges=call_edges,
+                spans=spans,
+                transfers=transfers,
+                dependencies=tuple(dependency_rows),
+                allocator_dependency_fingerprints=(
+                    extent.allocator_dependency_fingerprints
+                ),
+            )
+            if not self._publication_private_page_arena_invariant_shape_is_valid(
+                result
+            ):
+                result = None
+        finally:
+            popped = self.producer_dependency_collectors.pop()
+            assert popped is local_dependencies
+        if result is not None:
+            self._propagate_producer_dependencies(local_dependencies)
+        return result
+
+    def _publication_private_page_arena_invariant_is_current(
+        self,
+        invariant: _PublicationPrivatePageArenaInvariant,
+    ) -> bool:
+        if not self._publication_private_page_arena_invariant_shape_is_valid(
+            invariant
+        ):
+            return False
+        local_dependencies: set[tuple[str, int]] = set()
+        self.producer_dependency_collectors.append(local_dependencies)
+        success = False
+        try:
+            extent = invariant.initializer_effects.extent_witness
+            current_allocator_fingerprints = tuple(
+                (entry, self._producer_function_fingerprint(entry))
+                for entry, _fingerprint in invariant.allocator_dependency_fingerprints
+            )
+            if (
+                current_allocator_fingerprints
+                != invariant.allocator_dependency_fingerprints
+                or invariant.allocator_dependency_fingerprints
+                != extent.allocator_dependency_fingerprints
+                or not self._publication_private_heap_effect_closure_is_current(
+                    invariant.initializer_effects
+                )
+            ):
+                return False
+            for dependency in invariant.dependencies:
+                try:
+                    current = self._producer_dependency_fingerprint(
+                        dependency.kind,
+                        dependency.identifier,
+                    )
+                except CfgRecoveryError:
+                    return False
+                if current != dependency.fingerprint:
+                    return False
+            if not self._publication_private_page_arena_final_residue_is_current():
+                return False
+            contract = self._private_heap_allocator_contract(
+                invariant.allocator_root,
+                extent.allocator_protected_slots,
+            )
+            if (
+                contract is None
+                or contract.factory.function_entry != invariant.factory_entry
+                or contract.page_provider != invariant.page_provider
+                or contract.large_allocator != invariant.large_allocator
+            ):
+                return False
+            current = self._publication_private_page_arena_invariant(
+                contract,
+                extent,
+                invariant.initializer_effects,
+            )
+            success = current == invariant
+        finally:
+            popped = self.producer_dependency_collectors.pop()
+            assert popped is local_dependencies
+        if success:
+            self._propagate_producer_dependencies(local_dependencies)
+        return success
 
     def _publication_private_heap_effect_closure_replay(
         self,
@@ -62279,12 +63071,13 @@ class _DirectCfgRecovery:
             for candidate in self._function_instruction_addresses(
                 function_entry
             ):
-                if not self._owned_decoded(candidate).group(CS_GRP_CALL):
+                targets = self.call_targets_by_source.get(candidate)
+                if not targets or not self._owned_decoded(candidate).group(
+                    CS_GRP_CALL
+                ):
                     continue
                 call_addresses.append(candidate)
-                dependencies.update(
-                    self.call_targets_by_source.get(candidate, ())
-                )
+                dependencies.update(targets)
                 dependency_prefixes.append(frozenset(dependencies))
             cached = (
                 tuple(call_addresses),
@@ -75190,15 +75983,6 @@ class _DirectCfgRecovery:
         root_stack_aliases: tuple[tuple[int, int], ...] = (),
         root_region_only: bool = False,
     ) -> dict[int, tuple[tuple[frozenset[int], ...], int]] | None:
-        """Track one pointer identity and constant interior offsets.
-
-        Exactly one root is supplied: a stack argument, the EAX return from a
-        particular direct call, or a register definition.  Unsupported pointer
-        arithmetic, an unowned path, or an excessive offset domain fails
-        closed.
-        """
-        if sum(value is not None for value in (argument_index, root_call, root_definition)) != 1:
-            return None
         cache_key = (
             function_entry,
             argument_index,
@@ -75215,9 +75999,109 @@ class _DirectCfgRecovery:
             self._summary_fact_signature(),
             self.control_flow_revision,
         )
-        if cache_key in self.relative_pointer_state_cache:
-            return self.relative_pointer_state_cache[cache_key]
+        cached = self.relative_pointer_state_cache.get(cache_key)
+        if isinstance(cached, _RelativePointerStateMemoEntry):
+            if cached.dependencies is None:
+                if not self.producer_dependency_collectors:
+                    return cached.result
+                self.relative_pointer_state_cache.pop(cache_key, None)
+            else:
+                if self.producer_dependency_collectors:
+                    self.producer_dependency_collectors[-1].update(
+                        cached.dependencies
+                    )
+                return cached.result
+        elif cache_key in self.relative_pointer_state_cache:
+            # ``None`` is the active-recursion sentinel.  Any other legacy or
+            # test-only value is not a dependency-bound semantic result.
+            if cached is None:
+                return None
+            self.relative_pointer_state_cache.pop(cache_key, None)
+
         self.relative_pointer_state_cache[cache_key] = None
+        if not self.producer_dependency_collectors:
+            try:
+                result = self._relative_pointer_states_uncached(
+                    function_entry,
+                    argument_index=argument_index,
+                    root_call=root_call,
+                    root_definition=root_definition,
+                    propagate_call_returns=propagate_call_returns,
+                    allow_partial_taint=allow_partial_taint,
+                    collapse_nonnegative_offsets=collapse_nonnegative_offsets,
+                    stop_address=stop_address,
+                    excluded_addresses=excluded_addresses,
+                    root_stack_alias=root_stack_alias,
+                    root_stack_aliases=root_stack_aliases,
+                    root_region_only=root_region_only,
+                )
+            except Exception:
+                self.relative_pointer_state_cache.pop(cache_key, None)
+                raise
+            self.relative_pointer_state_cache[cache_key] = (
+                _RelativePointerStateMemoEntry(
+                    dependencies=None,
+                    result=result,
+                )
+            )
+            return result
+
+        local_dependencies: set[tuple[str, int]] = set()
+        self.producer_dependency_collectors.append(local_dependencies)
+        try:
+            result = self._relative_pointer_states_uncached(
+                function_entry,
+                argument_index=argument_index,
+                root_call=root_call,
+                root_definition=root_definition,
+                propagate_call_returns=propagate_call_returns,
+                allow_partial_taint=allow_partial_taint,
+                collapse_nonnegative_offsets=collapse_nonnegative_offsets,
+                stop_address=stop_address,
+                excluded_addresses=excluded_addresses,
+                root_stack_alias=root_stack_alias,
+                root_stack_aliases=root_stack_aliases,
+                root_region_only=root_region_only,
+            )
+            entry = _RelativePointerStateMemoEntry(
+                dependencies=frozenset(local_dependencies),
+                result=result,
+            )
+            self.relative_pointer_state_cache[cache_key] = entry
+        except Exception:
+            self.relative_pointer_state_cache.pop(cache_key, None)
+            raise
+        finally:
+            popped = self.producer_dependency_collectors.pop()
+            assert popped is local_dependencies
+        self._propagate_producer_dependencies(local_dependencies)
+        return result
+
+    def _relative_pointer_states_uncached(
+        self,
+        function_entry: int,
+        *,
+        argument_index: int | None = None,
+        root_call: int | None = None,
+        root_definition: int | None = None,
+        propagate_call_returns: bool = True,
+        allow_partial_taint: bool = False,
+        collapse_nonnegative_offsets: bool = False,
+        stop_address: int | None = None,
+        excluded_addresses: frozenset[int] = frozenset(),
+        root_stack_alias: tuple[int, int] | None = None,
+        root_stack_aliases: tuple[tuple[int, int], ...] = (),
+        root_region_only: bool = False,
+    ) -> dict[int, tuple[tuple[frozenset[int], ...], int]] | None:
+        """Track one pointer identity and constant interior offsets.
+
+        Exactly one root is supplied: a stack argument, the EAX return from a
+        particular direct call, or a register definition.  Unsupported pointer
+        arithmetic, an unowned path, or an excessive offset domain fails
+        closed.
+        """
+        if sum(value is not None for value in (argument_index, root_call, root_definition)) != 1:
+            return None
         if (
             function_entry not in self.function_addresses
             or function_entry in excluded_addresses
@@ -75715,7 +76599,6 @@ class _DirectCfgRecovery:
                     queued.add(successor)
             iterations += 1
             self.limits.check("max_summary_iterations", iterations)
-        self.relative_pointer_state_cache[cache_key] = states
         return states
 
     def _call_argument_is_exact_forwarded_argument(
