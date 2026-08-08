@@ -27300,6 +27300,18 @@ class _DirectCfgRecovery:
                     function_entry,
                     following_entry,
                 )
+                if not decoded.group(CS_GRP_RET) and not successors:
+                    return None
+                if decoded.group(CS_GRP_JUMP):
+                    raw_successors = tuple(
+                        sorted(self.non_call_successors.get(address, ()))
+                    )
+                    if any(
+                        not function_entry <= target < following_entry
+                        or target not in self.instructions
+                        for target in raw_successors
+                    ) or successors != raw_successors:
+                        return None
                 if any(successor <= address for successor in successors):
                     return None
                 if len(successors) > 2:
@@ -28269,6 +28281,18 @@ class _DirectCfgRecovery:
                     selector_entry,
                     selector_following,
                 )
+                if not decoded.group(CS_GRP_RET) and not successors:
+                    return None
+                if decoded.group(CS_GRP_JUMP):
+                    raw_successors = tuple(
+                        sorted(self.non_call_successors.get(address, ()))
+                    )
+                    if any(
+                        not selector_entry <= target < selector_following
+                        or target not in self.instructions
+                        for target in raw_successors
+                    ) or successors != raw_successors:
+                        return None
                 if len(successors) > 2:
                     return None
                 direct = self._direct_target(decoded)

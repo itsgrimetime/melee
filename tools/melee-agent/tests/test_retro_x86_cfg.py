@@ -5852,6 +5852,85 @@ def private_block_selector_stack_image(
     return replace(fixture, arena=replace(fixture.arena, image=image))
 
 
+def private_block_selector_successor_image(
+    component: str,
+    variant: str,
+) -> PrivatePageArenaFixture:
+    """Insert an unknown branch with resolved, unresolved, or escaped arms."""
+    assert component in {"selector", "splitter", "unlinker"}
+    assert variant in {"unresolved", "resolved", "out-of-domain"}
+    fixture = private_page_arena_image()
+    recovery, _contract, _extent, _effects = private_page_arena_contract(
+        fixture
+    )
+    entry = getattr(fixture, component)
+    section = next(
+        row
+        for row in fixture.arena.image.sections
+        if row.va <= entry < row.va + row.raw_size
+    )
+    raw = bytearray(fixture.arena.image.data)
+    raw_offset = section.raw_offset + entry - section.va
+    if component == "selector":
+        tail_offset = 0x6E
+        tail = bytes.fromhex("89 f0 5d 5f 5e 5b c3")
+        assert raw[
+            raw_offset + tail_offset : raw_offset + tail_offset + len(tail)
+        ] == tail
+        if variant == "out-of-domain":
+            probe = bytes.fromhex("85 c0 74 8c") + tail
+            assert len(probe) == 0xB
+        else:
+            arm = bytes.fromhex(
+                "ff e0" if variant == "unresolved" else "eb 00"
+            )
+            probe = bytes.fromhex("85 c0 74 02 eb 02") + arm + tail
+            assert len(probe) == 0xF
+        raw[
+            raw_offset + tail_offset : raw_offset + 0x80
+        ] = probe + b"\x90" * (0x12 - len(probe))
+    else:
+        instruction_addresses = recovery._function_instruction_addresses(
+            entry
+        )
+        end = max(
+            address + recovery._owned_decoded(address).size
+            for address in instruction_addresses
+        )
+        body = bytes(raw[raw_offset : raw_offset + end - entry])
+        if variant == "out-of-domain":
+            probe = bytes.fromhex("83 7c 24 08 00 74 f7")
+            assert len(probe) == 7
+        else:
+            arm = bytes.fromhex(
+                "ff e0" if variant == "unresolved" else "eb 00"
+            )
+            probe = bytes.fromhex("83 7c 24 08 00 74 02 eb 02") + arm
+            assert len(probe) == 0xB
+        code = bytearray(probe + body)
+        assert len(code) <= 0x80
+        for call in recovery._function_direct_calls(entry):
+            original_offset = call.address - entry
+            decoded = recovery._owned_decoded(call.address)
+            assert decoded.mnemonic == "call" and decoded.size == 5
+            new_address = call.address + len(probe)
+            struct.pack_into(
+                "<i",
+                code,
+                len(probe) + original_offset + 1,
+                call.target - (new_address + decoded.size),
+            )
+        raw[raw_offset : raw_offset + 0x80] = code + b"\x90" * (
+            0x80 - len(code)
+        )
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
 def private_block_selector_return_form_image(
     component: str,
     tail: str,
@@ -17978,6 +18057,103 @@ def private_block_selector_task4_result(fixture):
         ring_evidence,
     )
     return inputs, result
+
+
+@pytest.mark.parametrize("component", ("selector", "splitter", "unlinker"))
+def test_private_block_selector_rejects_unresolved_successor_arm(component):
+    fixture = private_block_selector_successor_image(component, "unresolved")
+    inputs, result = private_block_selector_task4_result(fixture)
+    recovery = inputs[0]
+    entry = getattr(fixture, component)
+    following = recovery._following_function_entry(entry)
+    diamond = entry + (0x70 if component == "selector" else 5)
+    indirect = entry + (0x74 if component == "selector" else 9)
+    assert recovery._summary_successors(
+        diamond,
+        entry,
+        following,
+    ) == (diamond + 2, indirect)
+    decoded = recovery._owned_decoded(indirect)
+    assert decoded.mnemonic == "jmp" and decoded.op_str == "eax"
+    assert recovery._summary_successors(indirect, entry, following) == ()
+    cfg = recover_cfg(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    assert [
+        (row.kind, row.detail)
+        for row in cfg.control_targets.unresolved
+        if row.address == indirect
+    ] == [("indirect-flow", "unresolved indirect jump: jmp eax")]
+    assert result is None
+
+
+@pytest.mark.parametrize("component", ("selector", "splitter", "unlinker"))
+def test_private_block_selector_accepts_resolved_two_arm_control(component):
+    fixture = private_block_selector_successor_image(component, "resolved")
+    inputs, result = private_block_selector_task4_result(fixture)
+    recovery = inputs[0]
+    entry = getattr(fixture, component)
+    following = recovery._following_function_entry(entry)
+    diamond = entry + (0x70 if component == "selector" else 5)
+    join = entry + (0x76 if component == "selector" else 0xB)
+    successors = recovery._summary_successors(diamond, entry, following)
+    assert successors == (diamond + 2, join - 2)
+    assert all(
+        recovery._reachable_within_function(
+            successor,
+            join,
+            entry,
+            following,
+        )
+        for successor in successors
+    )
+    cfg = recover_cfg(
+        fixture.arena.image,
+        build_seed_inventory(fixture.arena.image, ()),
+        replace(
+            generous_limits(fixture.arena.image),
+            max_instructions=1024,
+            max_blocks=1024,
+        ),
+    )
+    assert not [
+        row
+        for row in cfg.control_targets.unresolved
+        if row.address == join - 2
+    ]
+    assert_private_block_selector_result(fixture, inputs, result)
+
+
+@pytest.mark.parametrize("component", ("selector", "splitter", "unlinker"))
+def test_private_block_selector_rejects_out_of_domain_successor_arm(
+    component,
+):
+    fixture = private_block_selector_successor_image(
+        component,
+        "out-of-domain",
+    )
+    inputs, result = private_block_selector_task4_result(fixture)
+    recovery = inputs[0]
+    entry = getattr(fixture, component)
+    following = recovery._following_function_entry(entry)
+    branch = entry + (0x70 if component == "selector" else 5)
+    raw = tuple(sorted(recovery.non_call_successors.get(branch, ())))
+    assert raw == (entry - 2, branch + 2)
+    assert entry - 2 not in recovery.instructions or not (
+        entry <= entry - 2 < following
+    )
+    assert recovery._summary_successors(
+        branch,
+        entry,
+        following,
+    ) == (branch + 2,)
+    assert result is None
 
 
 @pytest.mark.parametrize(
