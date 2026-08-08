@@ -20815,6 +20815,62 @@ PRIVATE_ARENA_TASK5_SLICE3_NODE_IDS = (
     "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice3_rejects_context_or_domain_hostile[insert-effect-authority-duplicated]",
 )
 
+PRIVATE_ARENA_TASK5_SLICE4_NODE_IDS = (
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_seventh_role_is_exact",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_invocations_are_exact",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_transitions_are_exact",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_removal_discharge_is_exact",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_narrow_is_exact",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_ring_evidence_is_immutable",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_public_full_result_remains_none",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_release_target_is_exact",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_backing_lineage_hostile[producer-self]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_backing_lineage_hostile[missing-header-load]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_backing_lineage_hostile[original-small-payload]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_backing_lineage_hostile[retarget-non-arena]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_remover_argument_hostile[wrong-existing-register]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_remover_argument_hostile[partial-page-source]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_remover_argument_hostile[wrong-page-field]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_remover_argument_hostile[adjusted-page]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_remover_argument_hostile[tag-not-cleared]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_remover_argument_hostile[address-bit-cleared]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_remover_argument_hostile[in-context-extra-call]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_remover_argument_hostile[unowned-raw-residue]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_body_hostile[payload-offset-wrong]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_body_hostile[insert-arguments-swapped]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_body_hostile[whole-first-branch-inverted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_body_hostile[whole-free-branch-inverted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_body_hostile[whole-size-branch-inverted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_body_hostile[whole-prev-branch-inverted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_body_hostile[whole-next-branch-inverted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_body_hostile[owned-backedge]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_body_hostile[removal-release-reordered]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_body_hostile[release-wrong-page]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_body_hostile[unbalanced-return]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_body_hostile[partial-extent-load]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_invocation_hostile[missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_invocation_hostile[duplicate]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_invocation_hostile[collapsed]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_invocation_hostile[page-origins]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_invocation_hostile[mixed-none]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[discharge-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[discharge-duplicate]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[discharge-caller]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[discharge-call]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[discharge-remover]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[discharge-argument-index]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[discharge-relation]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[proof-empty]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[proof-duplicate]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[proof-unsorted]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[proof-call-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[discharge-fingerprint]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[transition-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[invocation-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[span-missing]",
+    "tools/melee-agent/tests/test_retro_x86_cfg.py::test_private_arena_task5_slice4_rejects_serialized_output_hostile[function-fingerprint]",
+)
+
 PRIVATE_ARENA_TASK5_ALL_NODE_IDS = (
     *PRIVATE_ARENA_TASK5_SLICE2_NODE_IDS,
     *PRIVATE_ARENA_TASK5_SLICE2_CARRIED_PREDICATE_NODE_IDS,
@@ -20822,6 +20878,7 @@ PRIVATE_ARENA_TASK5_ALL_NODE_IDS = (
     *PRIVATE_ARENA_TASK5_SLICE2_REPEATED_CONDITION_NODE_IDS,
     *PRIVATE_ARENA_TASK5_SLICE2_SPLITTER_STACK_NODE_IDS,
     *PRIVATE_ARENA_TASK5_SLICE3_NODE_IDS,
+    *PRIVATE_ARENA_TASK5_SLICE4_NODE_IDS,
 )
 
 
@@ -22833,8 +22890,11 @@ def test_private_arena_task5_slice2_cap_is_exact_and_fail_closed(counter, monkey
         assert rows[0]._publication_private_arena_base_roles(assembly) is None
     finally:
         assert rows[0].producer_dependency_collectors.pop() is outer
+    expected_phase = (
+        "arena-free" if counter in {"state", "instruction"} else "base-roles"
+    )
     assert rows[0]._task5_last_limit_exhaustion == (
-        "base-roles", counter, used, used - 1
+        expected_phase, counter, used, used - 1
     )
     assert assembly.budget.counts[counter] == used
     assert assembly.narrow_result is None
@@ -23951,6 +24011,7 @@ def test_private_arena_task5_slice3_role_inventory_spans_and_dependencies_are_ex
         "insert",
         "coalesce-prev",
         "coalesce-next",
+        "arena-free",
     }
     span_by_key = {
         (row.function_entry, row.instruction_address, row.operand_index): row
@@ -23959,7 +24020,10 @@ def test_private_arena_task5_slice3_role_inventory_spans_and_dependencies_are_ex
     referenced = set()
     for transfer in base.transfers:
         assert transfer.function_sha256
-        assert transfer.removal_call_discharges == ()
+        if transfer.role == "arena-free":
+            assert len(transfer.removal_call_discharges) == 1
+        else:
+            assert transfer.removal_call_discharges == ()
         assert transfer.span_keys
         assert set(transfer.span_keys) <= set(span_by_key)
         referenced.update(transfer.span_keys)
@@ -23970,7 +24034,7 @@ def test_private_arena_task5_slice3_role_inventory_spans_and_dependencies_are_ex
 def test_private_arena_task5_slice3_public_full_result_remains_none():
     fixture = private_page_arena_image()
     rows, _assembly, base = private_arena_task5_slice3_base(fixture)
-    assert len(base.transfers) == 6
+    assert len(base.transfers) == 7
     recovery, contract, extent, effects, ring, layout, selector_role, select_transfer, selector_spans = rows
     assert recovery._publication_private_block_arena_role(
         contract,
@@ -24110,6 +24174,456 @@ def test_private_arena_task5_slice3_rejects_context_or_domain_hostile(
     assert private_arena_task5_slice3_narrow(
         hostile_rows, hostile_claim, "insert"
     ) is None
+
+
+_PRIVATE_ARENA_TASK5_SLICE4_BODY_HOSTILES = (
+    "payload-offset-wrong",
+    "insert-arguments-swapped",
+    "whole-first-branch-inverted",
+    "whole-free-branch-inverted",
+    "whole-size-branch-inverted",
+    "whole-prev-branch-inverted",
+    "whole-next-branch-inverted",
+    "owned-backedge",
+    "removal-release-reordered",
+    "release-wrong-page",
+    "unbalanced-return",
+    "partial-extent-load",
+)
+
+
+def private_arena_task5_slice4_body_image(mutation):
+    """Change one arena-free compound fact without moving its boundaries."""
+    assert mutation in _PRIVATE_ARENA_TASK5_SLICE4_BODY_HOSTILES
+    fixture = private_page_arena_image()
+    raw = bytearray(fixture.arena.image.data)
+    text = next(
+        section
+        for section in fixture.arena.image.sections
+        if section.name == ".text"
+    )
+    patched = set()
+
+    def replace_bytes(address, expected, replacement):
+        before = bytes.fromhex(expected)
+        after = bytes.fromhex(replacement)
+        assert len(before) == len(after)
+        offset = text.raw_offset + address - text.va
+        assert raw[offset : offset + len(before)] == before
+        patched.update(
+            address + index
+            for index, (left, right) in enumerate(
+                zip(before, after, strict=True)
+            )
+            if left != right
+        )
+        raw[offset : offset + len(after)] = after
+
+    def call_bytes(address, target):
+        return "e8" + (target - address - 5).to_bytes(
+            4, "little", signed=True
+        ).hex()
+
+    entry = fixture.arena_free
+    if mutation == "payload-offset-wrong":
+        replace_bytes(entry + 0x09, "08", "04")
+    elif mutation == "insert-arguments-swapped":
+        replace_bytes(entry + 0x10, "53 56", "56 53")
+    elif mutation == "whole-first-branch-inverted":
+        replace_bytes(entry + 0x21, "75", "74")
+    elif mutation == "whole-free-branch-inverted":
+        replace_bytes(entry + 0x26, "75", "74")
+    elif mutation == "whole-size-branch-inverted":
+        replace_bytes(entry + 0x38, "75", "74")
+    elif mutation == "whole-prev-branch-inverted":
+        replace_bytes(entry + 0x3D, "75", "74")
+    elif mutation == "whole-next-branch-inverted":
+        replace_bytes(entry + 0x42, "75", "74")
+    elif mutation == "owned-backedge":
+        replace_bytes(entry + 0x27, "2a", "fb")
+    elif mutation == "removal-release-reordered":
+        release = fixture.arena.private_free + 0xA0
+        replace_bytes(
+            entry + 0x45,
+            call_bytes(entry + 0x45, fixture.page_remover),
+            call_bytes(entry + 0x45, release),
+        )
+        replace_bytes(
+            entry + 0x4C,
+            call_bytes(entry + 0x4C, release),
+            call_bytes(entry + 0x4C, fixture.page_remover),
+        )
+    elif mutation == "release-wrong-page":
+        replace_bytes(entry + 0x4B, "56", "53")
+    elif mutation == "unbalanced-return":
+        replace_bytes(entry + 0x54, "5b", "53")
+    else:
+        assert mutation == "partial-extent-load"
+        replace_bytes(entry + 0x2D, "8b", "8a")
+
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    hostile = replace(fixture, arena=replace(fixture.arena, image=image))
+    assert private_page_image_changed_addresses(fixture, hostile) == frozenset(
+        patched
+    )
+    assert patched
+    return hostile
+
+
+def private_arena_task5_slice4_claim(fixture, rows):
+    """Build the literal two-lineage arena-free invocation inventory."""
+    recovery = rows[0]
+    sites = tuple(
+        sorted(
+            (
+                recovery._registrar_function_entry(call.address),
+                call.address,
+            )
+            for caller in (
+                fixture.arena.private_free,
+                fixture.arena.private_free + 0x50,
+            )
+            for call in recovery._function_direct_calls(caller)
+            if call.target == fixture.arena_free
+        )
+    )
+    assert len(sites) == 2 and all(owner is not None for owner, _site in sites)
+    state = x86_cfg_module._PublicationPrivateArenaBlockState(
+        "allocated", "unlisted"
+    )
+    invocations = tuple(
+        x86_cfg_module._PublicationPrivateArenaInvocation(
+            caller_entry=owner,
+            call_address=call_address,
+            callee_entry=fixture.arena_free,
+            role="arena-free",
+            context="deallocator",
+            page_origins=(),
+            block_state=state,
+        )
+        for owner, call_address in sites
+    )
+    return fixture.arena_free, invocations
+
+
+def private_arena_task5_slice4_narrow(rows, claim):
+    recovery, contract, extent, effects, ring, layout, *_ = rows
+    entry, invocations = claim
+    return recovery._publication_private_arena_transfer(
+        role="arena-free",
+        function_entry=entry,
+        invocations=invocations,
+        contract=contract,
+        extent=extent,
+        effects=effects,
+        layout=layout,
+        ring_evidence=ring,
+    )
+
+
+def private_arena_task5_slice4_base(fixture):
+    rows = private_page_arena_selector(fixture)
+    assembly = rows[0]._publication_private_arena_full_assembly(
+        rows[1], rows[2], rows[3], rows[5], rows[4], rows[6], rows[7], rows[8]
+    )
+    assert assembly is not None
+    base = rows[0]._publication_private_arena_base_roles(assembly)
+    assert base is not None
+    return rows, assembly, base
+
+
+def test_private_arena_task5_slice4_seventh_role_is_exact():
+    fixture = private_page_arena_image()
+    _rows, _assembly, base = private_arena_task5_slice4_base(fixture)
+    assert {row.role for row in base.transfers} == {
+        "block-initialize", "split", "unlink", "insert", "coalesce-prev",
+        "coalesce-next", "arena-free",
+    }
+    assert base.role.arena_free_entries == (fixture.arena_free,)
+    assert base.role.resize_entries == ()
+
+
+def test_private_arena_task5_slice4_invocations_are_exact():
+    fixture = private_page_arena_image()
+    rows, _assembly, base = private_arena_task5_slice4_base(fixture)
+    transfer = next(row for row in base.transfers if row.role == "arena-free")
+    assert (transfer.function_entry, transfer.invocations) == (
+        fixture.arena_free,
+        private_arena_task5_slice4_claim(fixture, rows)[1],
+    )
+
+
+def test_private_arena_task5_slice4_transitions_are_exact():
+    fixture = private_page_arena_image()
+    _rows, _assembly, base = private_arena_task5_slice4_base(fixture)
+    transfer = next(row for row in base.transfers if row.role == "arena-free")
+    by_invocation = len(transfer.invocations)
+    assert by_invocation == 2
+    assert len(transfer.state_transitions) == 3 * by_invocation
+    assert tuple(
+        (
+            row.subject,
+            row.before.allocation,
+            row.before.membership,
+            row.after.allocation,
+            row.after.membership,
+            row.restoration_role,
+            row.restoration_entry,
+        )
+        for row in transfer.state_transitions[:3]
+    ) == (
+        ("payload-block", "allocated", "unlisted", "free", "unlisted", "deallocator", fixture.arena.private_free),
+        ("payload-block", "free", "unlisted", "free", "listed", "deallocator", fixture.arena.private_free),
+        ("released-page", "free", "listed", "none", "none", "deallocator", fixture.arena.private_free),
+    )
+
+
+def test_private_arena_task5_slice4_removal_discharge_is_exact():
+    fixture = private_page_arena_image()
+    rows, _assembly, base = private_arena_task5_slice4_base(fixture)
+    transfer = next(row for row in base.transfers if row.role == "arena-free")
+    obligations = rows[4].role.remover_call_obligations
+    discharges = transfer.removal_call_discharges
+    def key(row):
+        return (row.caller_entry, row.call_address, row.remover_entry)
+
+    assert tuple(map(key, discharges)) == tuple(map(key, obligations))
+    assert len(discharges) == 1
+    discharge = discharges[0]
+    assert discharge.argument_index == 0
+    assert discharge.argument_relation == "exact-untagged-recovered-page"
+    assert discharge.proof_instruction_addresses == tuple(
+        sorted(set(discharge.proof_instruction_addresses))
+    )
+    assert discharge.call_address in discharge.proof_instruction_addresses
+    assert discharge.caller_function_sha256 == obligations[0].caller_function_sha256
+    assert all(
+        row.removal_call_discharges == ()
+        for row in (*rows[4].transfers, *base.transfers)
+        if row.role != "arena-free"
+    )
+
+
+def test_private_arena_task5_slice4_narrow_is_exact():
+    fixture = private_page_arena_image()
+    rows, _assembly, base = private_arena_task5_slice4_base(fixture)
+    expected = next(row for row in base.transfers if row.role == "arena-free")
+    keys = frozenset(expected.span_keys)
+    spans = tuple(
+        row
+        for row in base.spans
+        if (row.function_entry, row.instruction_address, row.operand_index)
+        in keys
+    )
+    assert private_arena_task5_slice4_narrow(
+        rows,
+        private_arena_task5_slice4_claim(fixture, rows),
+    ) == (expected, spans)
+
+
+def test_private_arena_task5_slice4_ring_evidence_is_immutable():
+    fixture = private_page_arena_image()
+    rows = private_page_arena_selector(fixture)
+    before = rows[4]
+    _rows, _assembly, _base = private_arena_task5_slice4_base(fixture)
+    assert rows[4] == before
+    assert rows[4].role.remover_call_obligations == before.role.remover_call_obligations
+    assert rows[4].transfers == before.transfers
+    assert rows[4].spans == before.spans
+
+
+def test_private_arena_task5_slice4_public_full_result_remains_none():
+    fixture = private_page_arena_image()
+    rows, _assembly, base = private_arena_task5_slice4_base(fixture)
+    assert len(base.transfers) == 7
+    assert rows[0]._publication_private_block_arena_role(
+        rows[1], rows[2], rows[3], rows[5], rows[4], rows[6], rows[7], rows[8]
+    ) is None
+
+
+def test_private_arena_task5_slice4_release_target_is_exact():
+    fixture = private_page_arena_image()
+    rows, assembly, _base = private_arena_task5_slice4_base(fixture)
+    release = fixture.arena.private_free + 0xA0
+    assert rows[0]._task5_release_entry_is_exact(assembly, release)
+    assert not rows[0]._task5_release_entry_is_exact(
+        assembly, fixture.block_initializer
+    )
+
+
+def private_arena_task5_slice4_assert_hostile_rejects(control, hostile):
+    control_rows = private_page_arena_selector(control)
+    hostile_rows = private_page_arena_selector(hostile)
+    assert len(hostile_rows) == 9 and all(row is not None for row in hostile_rows)
+    insert_claim = private_arena_task5_slice3_claim(control, control_rows, "insert")
+    assert private_arena_task5_slice3_narrow(
+        hostile_rows, insert_claim, "insert"
+    ) is not None
+    arena_claim = private_arena_task5_slice4_claim(control, control_rows)
+    assert private_arena_task5_slice4_narrow(control_rows, arena_claim) is not None
+    assert private_arena_task5_slice4_narrow(hostile_rows, arena_claim) is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("producer-self", "missing-header-load", "original-small-payload", "retarget-non-arena"),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice4_rejects_backing_lineage_hostile(mutation):
+    if mutation == "retarget-non-arena":
+        control = private_page_arena_image()
+        hostile = private_page_backing_retirement_image(mutation)
+        control_rows = private_page_arena_selector(control)
+        hostile_rows = private_page_arena_selector(hostile)
+        assert len(hostile_rows) == 9
+        assert all(row is not None for row in hostile_rows)
+        claim = private_arena_task5_slice4_claim(control, control_rows)
+        assert private_arena_task5_slice4_narrow(control_rows, claim) is not None
+        assert private_arena_task5_slice4_narrow(hostile_rows, claim) is None
+        return
+    private_arena_task5_slice4_assert_hostile_rejects(
+        private_page_arena_image(),
+        private_page_backing_retirement_image(mutation),
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "wrong-existing-register", "partial-page-source", "wrong-page-field",
+        "adjusted-page", "tag-not-cleared", "address-bit-cleared",
+        "in-context-extra-call", "unowned-raw-residue",
+    ),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice4_rejects_remover_argument_hostile(mutation):
+    private_arena_task5_slice4_assert_hostile_rejects(
+        private_page_arena_image(),
+        private_page_ring_remover_invocation_image(mutation),
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    _PRIVATE_ARENA_TASK5_SLICE4_BODY_HOSTILES,
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice4_rejects_body_hostile(mutation):
+    private_arena_task5_slice4_assert_hostile_rejects(
+        private_page_arena_image(),
+        private_arena_task5_slice4_body_image(mutation),
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("missing", "duplicate", "collapsed", "page-origins", "mixed-none"),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice4_rejects_invocation_hostile(mutation):
+    fixture = private_page_arena_image()
+    rows = private_page_arena_selector(fixture)
+    claim = private_arena_task5_slice4_claim(fixture, rows)
+    entry, invocations = claim
+    if mutation == "missing":
+        invocations = invocations[:-1]
+    elif mutation == "duplicate":
+        invocations = (*invocations, invocations[-1])
+    elif mutation == "collapsed":
+        invocations = (invocations[0], replace(invocations[1], caller_entry=invocations[0].caller_entry, call_address=invocations[0].call_address))
+    elif mutation == "page-origins":
+        invocations = (replace(invocations[0], page_origins=("provider",)), *invocations[1:])
+    else:
+        invocations = (replace(invocations[0], block_state=x86_cfg_module._PublicationPrivateArenaBlockState("none", "listed")), *invocations[1:])
+    assert private_arena_task5_slice4_narrow(rows, claim) is not None
+    assert private_arena_task5_slice4_narrow(rows, (entry, invocations)) is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "discharge-missing", "discharge-duplicate", "discharge-caller",
+        "discharge-call", "discharge-remover", "discharge-argument-index",
+        "discharge-relation", "proof-empty", "proof-duplicate",
+        "proof-unsorted", "proof-call-missing", "discharge-fingerprint",
+        "transition-missing", "invocation-missing", "span-missing",
+        "function-fingerprint",
+    ),
+    ids=lambda value: value,
+)
+def test_private_arena_task5_slice4_rejects_serialized_output_hostile(
+    mutation,
+):
+    fixture = private_page_arena_image()
+    rows, assembly, base = private_arena_task5_slice4_base(fixture)
+    recovery = rows[0]
+    transfer = next(row for row in base.transfers if row.role == "arena-free")
+    keys = frozenset(transfer.span_keys)
+    spans = tuple(
+        row
+        for row in base.spans
+        if (row.function_entry, row.instruction_address, row.operand_index)
+        in keys
+    )
+    assert recovery._task5_arena_free_output_is_valid(
+        assembly, transfer, spans
+    )
+    discharge = transfer.removal_call_discharges[0]
+    discharges = transfer.removal_call_discharges
+    if mutation == "discharge-missing":
+        discharges = ()
+    elif mutation == "discharge-duplicate":
+        discharges = (*discharges, discharge)
+    elif mutation == "discharge-caller":
+        discharges = (replace(discharge, caller_entry=discharge.caller_entry + 1),)
+    elif mutation == "discharge-call":
+        discharges = (replace(discharge, call_address=discharge.call_address + 1),)
+    elif mutation == "discharge-remover":
+        discharges = (replace(discharge, remover_entry=discharge.remover_entry + 1),)
+    elif mutation == "discharge-argument-index":
+        discharges = (replace(discharge, argument_index=1),)
+    elif mutation == "discharge-relation":
+        discharges = (replace(discharge, argument_relation="related-page"),)
+    elif mutation == "proof-empty":
+        discharges = (replace(discharge, proof_instruction_addresses=()),)
+    elif mutation == "proof-duplicate":
+        proof = discharge.proof_instruction_addresses
+        discharges = (replace(discharge, proof_instruction_addresses=(*proof, proof[-1])),)
+    elif mutation == "proof-unsorted":
+        discharges = (replace(discharge, proof_instruction_addresses=tuple(reversed(discharge.proof_instruction_addresses))),)
+    elif mutation == "proof-call-missing":
+        discharges = (
+            replace(
+                discharge,
+                proof_instruction_addresses=tuple(
+                    row
+                    for row in discharge.proof_instruction_addresses
+                    if row != discharge.call_address
+                ),
+            ),
+        )
+    elif mutation == "discharge-fingerprint":
+        discharges = (replace(discharge, caller_function_sha256="0" * 64),)
+    elif mutation == "transition-missing":
+        transfer = replace(
+            transfer, state_transitions=transfer.state_transitions[:-1]
+        )
+    elif mutation == "invocation-missing":
+        transfer = replace(transfer, invocations=transfer.invocations[:-1])
+    elif mutation == "span-missing":
+        spans = spans[:-1]
+    else:
+        assert mutation == "function-fingerprint"
+        transfer = replace(transfer, function_sha256="0" * 64)
+    if mutation.startswith("discharge-") or mutation.startswith("proof-"):
+        transfer = replace(transfer, removal_call_discharges=discharges)
+    assert not recovery._task5_arena_free_output_is_valid(
+        assembly, transfer, spans
+    )
 
 
 def test_private_page_arena_selector_documents_anchor_fingerprint_drift():

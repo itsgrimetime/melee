@@ -2263,6 +2263,7 @@ class _Task5ProofAssembly:
     selector_role: _PublicationPrivateBlockArenaRole | None
     select_transfer: _PublicationPrivateArenaTransfer | None
     selector_spans: tuple[_PublicationPrivateArenaSpan, ...]
+    arena_free_body_proof: _Task5ArenaFreeBodyProof | None
     narrow_result: tuple[
         _PublicationPrivateArenaTransfer,
         tuple[_PublicationPrivateArenaSpan, ...],
@@ -2407,6 +2408,28 @@ class _Task5CoalesceSemanticState:
         "next-allocated",
         "next-free",
     ]
+
+
+@dataclass(frozen=True, slots=True)
+class _Task5ArenaFreeSemanticState:
+    registers: tuple[tuple[str, tuple[object, ...]], ...]
+    stack_offset: int
+    stack_values: tuple[tuple[int, tuple[object, ...]], ...]
+    condition: tuple[object, ...] | None
+    facts: frozenset[str]
+    calls: tuple[tuple[str, int, tuple[object, ...]], ...]
+    instruction_addresses: frozenset[int]
+    spans: frozenset[_PublicationPrivateArenaSpan]
+
+
+@dataclass(frozen=True, slots=True)
+class _Task5ArenaFreeBodyProof:
+    retained_instruction_addresses: tuple[int, ...]
+    release_instruction_addresses: tuple[int, ...]
+    spans: tuple[_PublicationPrivateArenaSpan, ...]
+    remover_call: int
+    release_call: int
+    release_entry: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -29650,6 +29673,7 @@ class _DirectCfgRecovery:
             selector_role=selector_role,
             select_transfer=select_transfer,
             selector_spans=selector_spans,
+            arena_free_body_proof=None,
             narrow_result=None,
         )
 
@@ -30216,10 +30240,35 @@ class _DirectCfgRecovery:
             )
             if len(driver_reallocator_calls) == 1 and len(candidates) == 1:
                 driver_allocator_calls = candidates
+        deallocator_entries: set[int] = set()
+        if (
+            assembly.mode == "narrow-transfer"
+            and assembly.allowed_role == "arena-free"
+            and assembly.contract.deallocator_root is not None
+        ):
+            pending_deallocators = [assembly.contract.deallocator_root]
+            while pending_deallocators:
+                candidate = pending_deallocators.pop()
+                if candidate in deallocator_entries:
+                    continue
+                assembly.budget.tick("arena-free", "fixed-point")
+                deallocator_entries.add(candidate)
+                pending_deallocators.extend(
+                    call.target
+                    for call in self._function_direct_calls(candidate)
+                    if call.target in self.function_addresses
+                )
         initializer_sources = tuple(
             source
             for source in incoming_initializer
             if self._registrar_function_entry(source) != splitter_entry
+            and self._registrar_function_entry(source)
+            not in deallocator_entries
+        )
+        extra_deallocator_initializer_sources = tuple(
+            source
+            for source in incoming_initializer
+            if self._registrar_function_entry(source) in deallocator_entries
         )
         if len(initializer_sources) != 1:
             return None
@@ -30228,7 +30277,25 @@ class _DirectCfgRecovery:
         )
         if (
             page_initializer_entry is None
-            or len(incoming_initializer) != 3
+            or (
+                tuple(
+                    sorted(
+                        (
+                            *(
+                                row.address
+                                for row in split_to_initializer
+                            ),
+                            *initializer_sources,
+                            *extra_deallocator_initializer_sources,
+                        )
+                    )
+                )
+                != incoming_initializer
+            )
+            or (
+                not deallocator_entries
+                and len(incoming_initializer) != 3
+            )
             or len(split_to_initializer) != 2
             or len(selector_split_calls) != 1
             or len(selector_unlink_calls) != 1
@@ -35827,6 +35894,1436 @@ class _DirectCfgRecovery:
             "coalesce-next",
         )
 
+    def _task5_arena_free_body_semantics(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: _Task5BaseTopology,
+    ) -> _Task5ArenaFreeBodyProof | None:
+        entry = topology.arena_free_candidate_entry
+        insert_entry = topology.insert_entry
+        insert_call = topology.arena_free_insert_call
+        remover_entry = assembly.ring_evidence.role.remover_entry
+        obligations = assembly.ring_evidence.role.remover_call_obligations
+        if (
+            entry is None
+            or insert_entry is None
+            or insert_call is None
+            or remover_entry is None
+            or len(obligations) != 1
+            or obligations[0].caller_entry != entry
+            or obligations[0].remover_entry != remover_entry
+        ):
+            return None
+        remover_call = obligations[0].call_address
+        calls = tuple(self._function_direct_calls(entry))
+        if (
+            len(calls) != 3
+            or {row.address for row in calls}
+            != {insert_call, remover_call, *(row.address for row in calls)}
+            or self.direct_call_targets_by_source.get(insert_call)
+            != insert_entry
+            or self.direct_call_targets_by_source.get(remover_call)
+            != remover_entry
+        ):
+            return None
+        release_calls = tuple(
+            row
+            for row in calls
+            if row.address not in {insert_call, remover_call}
+        )
+        if len(release_calls) != 1:
+            return None
+        release_call = release_calls[0]
+        if not (
+            insert_call < remover_call < release_call.address
+            and self._task5_release_entry_is_exact(
+                assembly, release_call.target
+            )
+        ):
+            return None
+
+        layout = assembly.base_layout
+        flags = tuple(
+            bit
+            for shift in range(32)
+            if layout.size_flag_mask & (bit := 1 << shift)
+        )
+        if len(flags) != 3:
+            return None
+        page_flag, allocation_flag, _previous_flag = flags
+        whole_overhead = layout.first_block_offset + layout.block_prev_offset
+        value_unknown = ("unknown",)
+        value_return = ("return-address",)
+        value_q = ("payload",)
+
+        register_families = (
+            "eax", "ebx", "ecx", "edx", "esi", "edi", "ebp"
+        )
+
+        def initial_registers() -> dict[str, tuple[object, ...]]:
+            return {
+                family: ("initial-register", family)
+                for family in register_families
+            }
+
+        def signed32(value: int) -> int:
+            value &= 0xFFFF_FFFF
+            return value - 0x1_0000_0000 if value & 0x8000_0000 else value
+
+        def affine(
+            value: tuple[object, ...], delta: int
+        ) -> tuple[object, ...]:
+            if value == value_q and delta == -layout.block_prev_offset:
+                return ("payload-block",)
+            if value and value[0] == "affine":
+                return ("affine", value[1], int(value[2]) + delta)
+            if value and value[0] == "extent" and delta == -whole_overhead:
+                return ("whole-block-size", value[1])
+            if value and value[0] == "page" and delta == layout.first_block_offset:
+                return ("first-block", value)
+            return ("affine", value, delta)
+
+        def state_parts(
+            state: _Task5ArenaFreeSemanticState,
+        ) -> tuple[
+            dict[str, tuple[object, ...]],
+            dict[int, tuple[object, ...]],
+        ]:
+            return dict(state.registers), dict(state.stack_values)
+
+        def make_state(
+            state: _Task5ArenaFreeSemanticState,
+            *,
+            registers: dict[str, tuple[object, ...]] | None = None,
+            stack_offset: int | None = None,
+            stack_values: dict[int, tuple[object, ...]] | None = None,
+            condition: tuple[object, ...] | None | object = ...,
+            facts: frozenset[str] | None = None,
+            calls: tuple[tuple[str, int, tuple[object, ...]], ...]
+            | None = None,
+            instruction_addresses: frozenset[int] | None = None,
+            spans: frozenset[_PublicationPrivateArenaSpan] | None = None,
+        ) -> _Task5ArenaFreeSemanticState:
+            return _Task5ArenaFreeSemanticState(
+                tuple(sorted((registers or dict(state.registers)).items())),
+                state.stack_offset if stack_offset is None else stack_offset,
+                tuple(sorted((stack_values or dict(state.stack_values)).items())),
+                state.condition if condition is ... else condition,
+                state.facts if facts is None else facts,
+                state.calls if calls is None else calls,
+                (
+                    state.instruction_addresses
+                    if instruction_addresses is None
+                    else instruction_addresses
+                ),
+                state.spans if spans is None else spans,
+            )
+
+        def reg_family(operand) -> str | None:
+            if operand.type != X86_OP_REG or operand.size != 4:
+                return None
+            return self._register_family(operand.reg)
+
+        def memory_value(
+            state: _Task5ArenaFreeSemanticState,
+            address: int,
+            operand_index: int,
+            operand,
+        ) -> tuple[
+            tuple[object, ...] | None,
+            _PublicationPrivateArenaSpan | None,
+        ]:
+            if (
+                operand.type != X86_OP_MEM
+                or bytes(self._owned_decoded(address).bytes[:1]) == b"\x67"
+                or operand.mem.index != X86_REG_INVALID
+            ):
+                return None, None
+            registers, stack = state_parts(state)
+            base_family = (
+                None
+                if operand.mem.base == X86_REG_INVALID
+                else self._register_family(operand.mem.base)
+            )
+            displacement = operand.mem.disp
+            if base_family == "esp":
+                if operand.size != 4:
+                    return None, None
+                return stack.get(state.stack_offset + displacement), None
+            if base_family is None:
+                return None, None
+            base = registers.get(base_family, value_unknown)
+            region: str
+            field_name: str
+            value: tuple[object, ...]
+            if (
+                base == ("payload-block",)
+                and displacement == layout.block_page_flags_offset
+                and operand.size == 4
+            ):
+                region, field_name = "block", "block-page-flags"
+                value = ("tagged-page",)
+            elif (
+                base
+                and base[0] == "page"
+                and displacement == layout.page_extent_offset
+                and operand.size == 4
+            ):
+                region, field_name = "page", "extent"
+                value = ("tagged-extent", base)
+            elif (
+                base
+                and base[0] in {"first-block", "free-block"}
+                and displacement == layout.block_header_offset
+                and operand.size in {1, 4}
+            ):
+                region, field_name = "block", "block-header"
+                value = ("block-header", base)
+            elif (
+                base
+                and base[0] == "free-block"
+                and displacement in {
+                    layout.block_prev_offset,
+                    layout.block_next_offset,
+                }
+                and operand.size == 4
+            ):
+                region = "block"
+                field_name = (
+                    "block-prev"
+                    if displacement == layout.block_prev_offset
+                    else "block-next"
+                )
+                value = (field_name, base)
+            else:
+                return None, None
+            access = "read"
+            if operand.access & CS_AC_WRITE:
+                return None, None
+            return value, _PublicationPrivateArenaSpan(
+                function_entry=entry,
+                instruction_address=address,
+                operand_index=operand_index,
+                access=access,
+                region=region,
+                field=field_name,
+                displacement=displacement,
+                width=operand.size,
+            )
+
+        def operand_value(
+            state: _Task5ArenaFreeSemanticState,
+            address: int,
+            operand_index: int,
+            operand,
+        ) -> tuple[
+            tuple[object, ...] | None,
+            _PublicationPrivateArenaSpan | None,
+        ]:
+            if operand.type == X86_OP_REG:
+                family = reg_family(operand)
+                if family is None:
+                    return None, None
+                return dict(state.registers).get(family, value_unknown), None
+            if operand.type == X86_OP_IMM:
+                return ("constant", operand.imm & 0xFFFF_FFFF), None
+            if operand.type == X86_OP_MEM:
+                return memory_value(state, address, operand_index, operand)
+            return None, None
+
+        needs_prev = False
+        needs_next = False
+        for address in self._function_instruction_addresses(entry):
+            decoded = self._owned_decoded(address)
+            if decoded.mnemonic != "cmp":
+                continue
+            for operand in decoded.operands:
+                if operand.type != X86_OP_MEM:
+                    continue
+                if operand.mem.disp == layout.block_prev_offset:
+                    needs_prev = True
+                elif operand.mem.disp == layout.block_next_offset:
+                    needs_next = True
+
+        first_state = _Task5ArenaFreeSemanticState(
+            tuple(sorted(initial_registers().items())),
+            0,
+            ((0, value_return), (4, value_q)),
+            None,
+            frozenset(),
+            (),
+            frozenset(),
+            frozenset(),
+        )
+        pending = deque([(entry, first_state)])
+        seen: set[tuple[int, _Task5ArenaFreeSemanticState]] = set()
+        retained_states = []
+        release_states = []
+        while pending:
+            address, state = pending.popleft()
+            key = (address, state)
+            if key in seen:
+                continue
+            assembly.budget.tick("arena-free", "state")
+            seen.add(key)
+            self._task5_cache_instruction(
+                assembly,
+                "arena-free",
+                entry,
+                "deallocator",
+                address,
+            )
+            decoded = self._owned_decoded(address)
+            if bytes(decoded.bytes[:1]) in {b"\x66", b"\x67"}:
+                return None
+            state = make_state(
+                state,
+                instruction_addresses=(
+                    state.instruction_addresses | {address}
+                ),
+            )
+            registers, stack = state_parts(state)
+            next_state = state
+            mnemonic = decoded.mnemonic
+            groups = self._owned_decoded_groups(decoded)
+
+            if CS_GRP_RET in groups or CS_GRP_IRET in groups:
+                if (
+                    not self._task5_plain_return(decoded, 0)
+                    or state.stack_offset != 0
+                    or stack.get(0) != value_return
+                    or any(
+                        registers.get(family)
+                        != ("initial-register", family)
+                        for family in ("ebx", "esi", "edi", "ebp")
+                    )
+                ):
+                    return None
+                call_names = tuple(row[0] for row in state.calls)
+                if call_names == ("insert",):
+                    retained_states.append(state)
+                elif call_names == ("insert", "remove", "release"):
+                    required = {"first-block", "free", "whole-size"}
+                    if needs_prev:
+                        required.add("singleton-prev")
+                    if needs_next:
+                        required.add("singleton-next")
+                    if not required <= state.facts:
+                        return None
+                    release_states.append(state)
+                else:
+                    return None
+                continue
+
+            if mnemonic == "push":
+                if len(decoded.operands) != 1 or decoded.operands[0].size != 4:
+                    return None
+                value, span = operand_value(
+                    state, address, 0, decoded.operands[0]
+                )
+                if value is None or span is not None:
+                    return None
+                new_offset = state.stack_offset - 4
+                stack[new_offset] = value
+                next_state = make_state(
+                    state,
+                    stack_offset=new_offset,
+                    stack_values=stack,
+                    condition=None,
+                )
+            elif mnemonic == "pop":
+                if (
+                    len(decoded.operands) != 1
+                    or (family := reg_family(decoded.operands[0])) is None
+                    or family == "esp"
+                    or state.stack_offset >= 0
+                    or state.stack_offset not in stack
+                ):
+                    return None
+                registers[family] = stack.pop(state.stack_offset)
+                next_state = make_state(
+                    state,
+                    registers=registers,
+                    stack_offset=state.stack_offset + 4,
+                    stack_values=stack,
+                    condition=None,
+                )
+            elif mnemonic == "mov":
+                if (
+                    len(decoded.operands) != 2
+                    or (family := reg_family(decoded.operands[0])) is None
+                ):
+                    return None
+                value, span = operand_value(
+                    state, address, 1, decoded.operands[1]
+                )
+                if value is None:
+                    return None
+                registers[family] = value
+                facts = state.facts
+                if value and value[0] == "block-header" and value[1][0] == "first-block":
+                    facts = facts | {"first-block"}
+                next_state = make_state(
+                    state,
+                    registers=registers,
+                    facts=facts,
+                    spans=(state.spans | ({span} if span is not None else set())),
+                )
+            elif mnemonic == "lea":
+                if (
+                    len(decoded.operands) != 2
+                    or (family := reg_family(decoded.operands[0])) is None
+                    or decoded.operands[1].type != X86_OP_MEM
+                    or decoded.operands[1].size != 4
+                    or decoded.operands[1].mem.index != X86_REG_INVALID
+                    or decoded.operands[1].mem.base == X86_REG_INVALID
+                ):
+                    return None
+                source_family = self._register_family(
+                    decoded.operands[1].mem.base
+                )
+                registers[family] = affine(
+                    registers.get(source_family, value_unknown),
+                    decoded.operands[1].mem.disp,
+                )
+                next_state = make_state(state, registers=registers)
+            elif mnemonic in {"add", "sub"}:
+                if (
+                    len(decoded.operands) != 2
+                    or (family := reg_family(decoded.operands[0])) is None
+                    or decoded.operands[1].type != X86_OP_IMM
+                ):
+                    return None
+                amount = signed32(decoded.operands[1].imm)
+                if mnemonic == "sub":
+                    amount = -amount
+                if family == "esp":
+                    if amount % 4 or not -0x1000 <= amount <= 0x1000:
+                        return None
+                    new_offset = state.stack_offset + amount
+                    if new_offset > 0:
+                        return None
+                    if amount > 0:
+                        stack = {
+                            offset: value
+                            for offset, value in stack.items()
+                            if offset >= new_offset
+                        }
+                    next_state = make_state(
+                        state,
+                        stack_offset=new_offset,
+                        stack_values=stack,
+                        condition=None,
+                    )
+                else:
+                    registers[family] = affine(
+                        registers.get(family, value_unknown), amount
+                    )
+                    next_state = make_state(
+                        state, registers=registers, condition=None
+                    )
+            elif mnemonic == "and":
+                if (
+                    len(decoded.operands) != 2
+                    or (family := reg_family(decoded.operands[0])) is None
+                    or decoded.operands[1].type != X86_OP_IMM
+                ):
+                    return None
+                before = registers.get(family, value_unknown)
+                mask = decoded.operands[1].imm & 0xFFFF_FFFF
+                if before == ("tagged-page",) and mask == ((~page_flag) & 0xFFFF_FFFF):
+                    after = ("page",)
+                elif before and before[0] == "tagged-extent" and mask == ((~layout.size_flag_mask) & 0xFFFF_FFFF):
+                    after = ("extent", before[1])
+                elif before and before[0] == "block-header" and mask == ((~layout.size_flag_mask) & 0xFFFF_FFFF):
+                    after = ("block-size", before[1])
+                elif before and before[0] == "block-header" and mask == allocation_flag:
+                    after = ("allocation-flag", before[1])
+                elif before and before[0] == "constant":
+                    after = ("constant", int(before[1]) & mask)
+                else:
+                    return None
+                registers[family] = after
+                next_state = make_state(
+                    state,
+                    registers=registers,
+                    condition=("test-zero", after),
+                )
+            elif mnemonic == "xor":
+                if (
+                    len(decoded.operands) != 2
+                    or (left := reg_family(decoded.operands[0])) is None
+                    or (right := reg_family(decoded.operands[1])) != left
+                ):
+                    return None
+                registers[left] = ("constant", 0)
+                next_state = make_state(
+                    state,
+                    registers=registers,
+                    condition=("test-zero", ("constant", 0)),
+                )
+            elif mnemonic == "inc":
+                if (
+                    len(decoded.operands) != 1
+                    or (family := reg_family(decoded.operands[0])) is None
+                    or registers.get(family, value_unknown)[0] != "constant"
+                ):
+                    return None
+                registers[family] = (
+                    "constant",
+                    (int(registers[family][1]) + 1) & 0xFFFF_FFFF,
+                )
+                next_state = make_state(
+                    state, registers=registers, condition=None
+                )
+            elif mnemonic == "cmp":
+                if len(decoded.operands) != 2:
+                    return None
+                left, left_span = operand_value(
+                    state, address, 0, decoded.operands[0]
+                )
+                right, right_span = operand_value(
+                    state, address, 1, decoded.operands[1]
+                )
+                if left is None or right is None:
+                    return None
+                next_state = make_state(
+                    state,
+                    condition=("equal", left, right),
+                    spans=(
+                        state.spans
+                        | {
+                            row
+                            for row in (left_span, right_span)
+                            if row is not None
+                        }
+                    ),
+                )
+            elif mnemonic == "test":
+                if len(decoded.operands) != 2:
+                    return None
+                left, left_span = operand_value(
+                    state, address, 0, decoded.operands[0]
+                )
+                right, right_span = operand_value(
+                    state, address, 1, decoded.operands[1]
+                )
+                if left is None or right is None:
+                    return None
+                if right[0] == "constant":
+                    condition = ("masked-zero", left, right)
+                elif left == right:
+                    condition = ("test-zero", left)
+                else:
+                    return None
+                next_state = make_state(
+                    state,
+                    condition=condition,
+                    spans=(
+                        state.spans
+                        | {
+                            row
+                            for row in (left_span, right_span)
+                            if row is not None
+                        }
+                    ),
+                )
+            elif CS_GRP_CALL in groups:
+                target = self.direct_call_targets_by_source.get(address)
+                if target is None or state.stack_offset not in stack:
+                    return None
+                argument = stack[state.stack_offset]
+                calls_done = state.calls
+                if address == insert_call and target == insert_entry:
+                    if (
+                        calls_done
+                        or argument != ("page",)
+                        or stack.get(state.stack_offset + 4)
+                        != ("payload-block",)
+                    ):
+                        return None
+                    name = "insert"
+                    registers["eax"] = ("free-block", ("page",))
+                elif address == remover_call and target == remover_entry:
+                    if (
+                        tuple(row[0] for row in calls_done) != ("insert",)
+                        or argument != ("page",)
+                        or not {"first-block", "free", "whole-size"}
+                        <= state.facts
+                    ):
+                        return None
+                    name = "remove"
+                    registers["eax"] = value_unknown
+                elif address == release_call.address and target == release_call.target:
+                    if (
+                        tuple(row[0] for row in calls_done)
+                        != ("insert", "remove")
+                        or argument != ("page",)
+                    ):
+                        return None
+                    name = "release"
+                    registers["eax"] = value_unknown
+                else:
+                    return None
+                registers["ecx"] = value_unknown
+                registers["edx"] = value_unknown
+                next_state = make_state(
+                    state,
+                    registers=registers,
+                    condition=None,
+                    calls=(*calls_done, (name, address, argument)),
+                )
+            elif mnemonic == "nop":
+                pass
+            elif CS_GRP_JUMP not in groups:
+                return None
+
+            successors = self._task5_complete_successors(
+                assembly, entry, address
+            )
+            if (
+                successors is None
+                or any(successor <= address for successor in successors)
+            ):
+                return None
+            if CS_GRP_JUMP in groups and mnemonic != "jmp":
+                if mnemonic not in {"je", "jz", "jne", "jnz"}:
+                    return None
+                condition = next_state.condition
+                if condition is None:
+                    return None
+                target = self._direct_target(decoded)
+                fallthrough = address + decoded.size
+                if target is None or set(successors) != {target, fallthrough}:
+                    return None
+
+                known: bool | None = None
+                if condition[0] == "equal":
+                    left, right = condition[1], condition[2]
+                    if left == right:
+                        known = True
+                    elif left[0] == right[0] == "constant":
+                        known = left[1] == right[1]
+                elif condition[0] == "test-zero":
+                    value = condition[1]
+                    if value[0] == "constant":
+                        known = int(value[1]) == 0
+                elif condition[0] == "masked-zero":
+                    left, right = condition[1], condition[2]
+                    if left[0] == right[0] == "constant":
+                        known = not (int(left[1]) & int(right[1]))
+
+                for successor in successors:
+                    taken = successor == target
+                    equality = taken if mnemonic in {"je", "jz"} else not taken
+                    if known is not None and equality != known:
+                        continue
+                    facts = set(next_state.facts)
+                    if equality:
+                        if condition[0] == "equal":
+                            pair = {condition[1][0], condition[2][0]}
+                            if pair == {"first-block", "free-block"}:
+                                facts.add("first-block")
+                            elif pair == {"block-size", "whole-block-size"}:
+                                facts.add("whole-size")
+                            elif "block-prev" in pair:
+                                facts.add("singleton-prev")
+                            elif "block-next" in pair:
+                                facts.add("singleton-next")
+                        elif condition[0] in {"test-zero", "masked-zero"}:
+                            tested = condition[1]
+                            if tested[0] in {"allocation-flag", "block-header"}:
+                                facts.add("free")
+                    successor_state = make_state(
+                        next_state,
+                        condition=None,
+                        facts=frozenset(facts),
+                    )
+                    pending.append((successor, successor_state))
+                continue
+            if len(successors) != 1:
+                return None
+            pending.append((successors[0], next_state))
+
+        if not retained_states or not release_states:
+            return None
+        release_addresses = tuple(
+            sorted(
+                {
+                    address
+                    for state in release_states
+                    for address in state.instruction_addresses
+                }
+            )
+        )
+        retained_addresses = tuple(
+            sorted(
+                {
+                    address
+                    for state in retained_states
+                    for address in state.instruction_addresses
+                }
+            )
+        )
+        spans = tuple(
+            sorted(
+                {
+                    span
+                    for state in (*retained_states, *release_states)
+                    for span in state.spans
+                },
+                key=lambda row: (
+                    row.function_entry,
+                    row.instruction_address,
+                    row.operand_index,
+                ),
+            )
+        )
+        if (
+            remover_call not in release_addresses
+            or release_call.address not in release_addresses
+            or not spans
+        ):
+            return None
+        return _Task5ArenaFreeBodyProof(
+            retained_addresses,
+            release_addresses,
+            spans,
+            remover_call,
+            release_call.address,
+            release_call.target,
+        )
+
+    def _task5_release_entry_is_exact(
+        self,
+        assembly: _Task5ProofAssembly,
+        release_entry: int,
+    ) -> bool:
+        root = assembly.contract.deallocator_root
+        if root is None:
+            return False
+        entries, _edges = self._task5_deallocator_closure(
+            root, assembly.budget
+        )
+        candidates = []
+        for entry in entries:
+            imports = tuple(
+                imported
+                for address in self._function_instruction_addresses(entry)
+                if self._owned_decoded(address).group(CS_GRP_CALL)
+                and self.direct_call_targets_by_source.get(address) is None
+                and (imported := self._import_for_call(
+                    self._owned_decoded(address)
+                ))
+                is not None
+            )
+            if (
+                len(imports) == 1
+                and imports[0].ordinal is None
+                and imports[0].dll.lower() == "kernel32.dll"
+                and imports[0].name == "GlobalFree"
+                and not self._function_direct_calls(entry)
+            ):
+                candidates.append(entry)
+        if candidates != [release_entry]:
+            return False
+        self._note_producer_dependency(release_entry)
+        return True
+
+    def _task5_arena_free_root_partition_is_exact(
+        self,
+        assembly: _Task5ProofAssembly,
+        root: int,
+        nested_entry: int,
+        arena_entry: int,
+        nested_call: int,
+        arena_call: int,
+    ) -> bool:
+        pending = deque([(root, 0)])
+        seen = set()
+        returns = set()
+        while pending:
+            address, selected = pending.popleft()
+            key = (address, selected)
+            if key in seen:
+                continue
+            assembly.budget.tick("arena-free", "state")
+            seen.add(key)
+            decoded = self._owned_decoded(address)
+            if CS_GRP_CALL in self._owned_decoded_groups(decoded):
+                target = self.direct_call_targets_by_source.get(address)
+                if address == nested_call and target == nested_entry:
+                    selected |= 1
+                elif address == arena_call and target == arena_entry:
+                    selected |= 2
+                if selected == 3:
+                    return False
+            if decoded.group(CS_GRP_RET):
+                if decoded.bytes != b"\xc3":
+                    return False
+                returns.add(selected)
+                continue
+            successors = self._task5_complete_successors(
+                assembly, root, address
+            )
+            if (
+                successors is None
+                or any(successor <= address for successor in successors)
+            ):
+                return False
+            pending.extend((successor, selected) for successor in successors)
+        return {1, 2} <= returns and returns <= {0, 1, 2}
+
+    def _task5_direct_arena_payload_is_exact(
+        self,
+        root: int,
+        call_address: int,
+    ) -> bool:
+        pushed = self._pushed_call_argument(call_address, 0)
+        if (
+            pushed is None
+            or pushed[2] != root
+            or pushed[1].type != X86_OP_REG
+            or pushed[1].size != 4
+        ):
+            return False
+        family = self._register_family(pushed[1].reg)
+        definitions = self._register_definitions_across_blocks(
+            pushed[0].address, family, root
+        )
+        if definitions is None or len(definitions) != 1:
+            return False
+        definition = self._owned_decoded(next(iter(definitions)))
+        return bool(
+            definition.mnemonic == "mov"
+            and len(definition.operands) == 2
+            and definition.operands[0].type == X86_OP_REG
+            and definition.operands[0].size == 4
+            and self._register_family(definition.operands[0].reg) == family
+            and definition.operands[1].type == X86_OP_MEM
+            and definition.operands[1].size == 4
+            and self._stack_argument_index_at(
+                definition.address,
+                definition.operands[1],
+                root,
+            )
+            == 0
+            and self._incoming_stack_argument_value_is_unchanged(
+                definition.address, 0, root
+            )
+        )
+
+    def _task5_synthetic_backing_producer_is_exact(
+        self,
+        assembly: _Task5ProofAssembly,
+    ) -> bool:
+        for entry in sorted(assembly.contract.dependency_functions):
+            instructions = tuple(
+                self._owned_decoded(address)
+                for address in self._function_instruction_addresses(entry)
+            )
+            for lea in instructions:
+                if (
+                    lea.mnemonic != "lea"
+                    or len(lea.operands) != 2
+                    or lea.operands[0].type != X86_OP_REG
+                    or lea.operands[0].size != 4
+                    or lea.operands[1].type != X86_OP_MEM
+                    or lea.operands[1].size != 4
+                    or lea.operands[1].mem.base == X86_REG_INVALID
+                    or lea.operands[1].mem.index != X86_REG_INVALID
+                    or lea.operands[1].mem.disp == 0
+                ):
+                    continue
+                header_family = self._register_family(lea.operands[0].reg)
+                page_family = self._register_family(lea.operands[1].mem.base)
+                definitions = self._register_definitions_across_blocks(
+                    lea.address, page_family, entry
+                )
+                if definitions is None or len(definitions) != 1:
+                    continue
+                page_definition = self._owned_decoded(next(iter(definitions)))
+                if (
+                    page_definition.mnemonic != "mov"
+                    or page_definition.operands[1].type != X86_OP_MEM
+                    or self._stack_argument_index_at(
+                        page_definition.address,
+                        page_definition.operands[1],
+                        entry,
+                    )
+                    != 0
+                ):
+                    continue
+                stored_header = False
+                stored_page = False
+                for decoded in instructions:
+                    if (
+                        decoded.mnemonic != "mov"
+                        or len(decoded.operands) != 2
+                        or decoded.operands[0].type != X86_OP_MEM
+                        or decoded.operands[0].size != 4
+                        or decoded.operands[1].type != X86_OP_REG
+                        or decoded.operands[1].size != 4
+                    ):
+                        continue
+                    source = self._register_family(decoded.operands[1].reg)
+                    memory = decoded.operands[0].mem
+                    if (
+                        source == page_family
+                        and memory.base != X86_REG_INVALID
+                        and self._register_family(memory.base) == header_family
+                        and memory.index == X86_REG_INVALID
+                        and memory.disp == 0
+                    ):
+                        stored_page = True
+                    if (
+                        source == header_family
+                        and not (
+                            memory.base != X86_REG_INVALID
+                            and self._register_family(memory.base)
+                            == header_family
+                        )
+                    ):
+                        stored_header = True
+                if stored_header and stored_page:
+                    self._note_producer_dependency(entry)
+                    return True
+        return False
+
+    def _task5_backing_list_producer_is_exact(
+        self,
+        assembly: _Task5ProofAssembly,
+        head_displacement: int,
+    ) -> bool:
+        if head_displacement not in assembly.contract.mutable_state:
+            return False
+        page_sources = {
+            assembly.contract.page_provider,
+            assembly.contract.large_allocator,
+        }
+        for entry in sorted(assembly.contract.dependency_functions):
+            provider_calls = tuple(
+                row
+                for row in self._function_direct_calls(entry)
+                if row.target in page_sources
+            )
+            if len(provider_calls) != 1:
+                continue
+            call = provider_calls[0]
+            instructions = tuple(
+                self._owned_decoded(address)
+                for address in self._function_instruction_addresses(entry)
+                if address > call.address
+            )
+
+            def is_provider_value(
+                address: int,
+                family: str,
+                active: frozenset[tuple[int, str]] = frozenset(),
+            ) -> bool:
+                key = (address, family)
+                if key in active:
+                    return False
+                definitions = self._register_definitions_across_blocks(
+                    address, family, entry
+                )
+                if definitions is None or len(definitions) != 1:
+                    return False
+                definition_address = next(iter(definitions))
+                if definition_address == call.address and family == "eax":
+                    return True
+                definition = self._owned_decoded(definition_address)
+                return bool(
+                    definition.mnemonic == "mov"
+                    and len(definition.operands) == 2
+                    and definition.operands[0].type == X86_OP_REG
+                    and definition.operands[0].size == 4
+                    and definition.operands[1].type == X86_OP_REG
+                    and definition.operands[1].size == 4
+                    and is_provider_value(
+                        definition.address,
+                        self._register_family(definition.operands[1].reg),
+                        active | {key},
+                    )
+                )
+
+            for decoded in instructions:
+                if (
+                    decoded.mnemonic == "mov"
+                    and len(decoded.operands) == 2
+                    and decoded.operands[0].type == X86_OP_MEM
+                    and decoded.operands[0].size == 4
+                    and decoded.operands[0].mem.disp == head_displacement
+                    and decoded.operands[1].type == X86_OP_REG
+                    and decoded.operands[1].size == 4
+                    and is_provider_value(
+                        decoded.address,
+                        self._register_family(decoded.operands[1].reg),
+                    )
+                ):
+                    self._note_producer_dependency(entry)
+                    return True
+        return False
+
+    def _task5_backing_arena_payload_is_exact(
+        self,
+        assembly: _Task5ProofAssembly,
+        owner: int,
+        call_address: int,
+    ) -> bool:
+        pushed = self._pushed_call_argument(call_address, 0)
+        if (
+            pushed is None
+            or pushed[2] != owner
+            or pushed[1].type != X86_OP_REG
+            or pushed[1].size != 4
+        ):
+            return False
+        pushed_family = self._register_family(pushed[1].reg)
+        definitions = self._register_definitions_across_blocks(
+            pushed[0].address, pushed_family, owner
+        )
+        if definitions is None or not definitions:
+            return False
+        layout = assembly.base_layout
+
+        # Compact synthetic form: the backing page is loaded from the header
+        # immediately derived from the original small payload.
+        if len(definitions) == 1:
+            loaded = self._owned_decoded(next(iter(definitions)))
+            if (
+                loaded.mnemonic == "mov"
+                and loaded.operands[1].type == X86_OP_MEM
+                and loaded.operands[1].size == 4
+                and loaded.operands[1].mem.index == X86_REG_INVALID
+                and loaded.operands[1].mem.disp == 0
+                and loaded.operands[1].mem.base != X86_REG_INVALID
+            ):
+                header_family = self._register_family(
+                    loaded.operands[1].mem.base
+                )
+                earlier = tuple(
+                    self._owned_decoded(address)
+                    for address in self._function_instruction_addresses(owner)
+                    if address < loaded.address
+                )
+                arithmetic = tuple(
+                    row
+                    for row in earlier
+                    if row.mnemonic in {"add", "sub"}
+                    and len(row.operands) == 2
+                    and row.operands[0].type == X86_OP_REG
+                    and row.operands[0].size == 4
+                    and self._register_family(row.operands[0].reg)
+                    == header_family
+                    and row.operands[1].type == X86_OP_IMM
+                )
+                if len(arithmetic) == 1:
+                    signed = (
+                        arithmetic[0].operands[1].imm & 0xFFFF_FFFF
+                    )
+                    if signed & 0x8000_0000:
+                        signed -= 0x1_0000_0000
+                    if arithmetic[0].mnemonic == "sub":
+                        signed = -signed
+                    definitions_before = self._register_definitions_across_blocks(
+                        arithmetic[0].address, header_family, owner
+                    )
+                    if (
+                        signed == layout.block_boundary_tag_displacement
+                        and definitions_before is not None
+                        and len(definitions_before) == 1
+                    ):
+                        source = self._owned_decoded(
+                            next(iter(definitions_before))
+                        )
+                        if (
+                            source.mnemonic == "mov"
+                            and source.operands[1].type == X86_OP_MEM
+                            and self._stack_argument_index_at(
+                                source.address,
+                                source.operands[1],
+                                owner,
+                            )
+                            == 0
+                            and self._task5_synthetic_backing_producer_is_exact(
+                                assembly
+                            )
+                        ):
+                            return True
+
+        # Retail form: walk a provider-produced backing-page list.  Every
+        # definition reaching the pushed register is either the current head
+        # or its exact page-link successor.
+        head_rows = []
+        next_rows = []
+        copies = []
+        instructions = tuple(
+            self._owned_decoded(address)
+            for address in self._function_instruction_addresses(owner)
+        )
+        for decoded in instructions:
+            if decoded.mnemonic != "mov" or len(decoded.operands) != 2:
+                continue
+            destination = decoded.operands[0]
+            source = decoded.operands[1]
+            if destination.type != X86_OP_REG or destination.size != 4:
+                continue
+            destination_family = self._register_family(destination.reg)
+            if source.type == X86_OP_MEM and source.size == 4:
+                if source.mem.disp in assembly.contract.mutable_state:
+                    head_rows.append((decoded, destination_family))
+                elif (
+                    source.mem.base != X86_REG_INVALID
+                    and source.mem.index == X86_REG_INVALID
+                    and source.mem.disp in (layout.page_link_offsets or ())
+                ):
+                    next_rows.append(
+                        (
+                            decoded,
+                            destination_family,
+                            self._register_family(source.mem.base),
+                        )
+                    )
+            elif source.type == X86_OP_REG and source.size == 4:
+                copies.append(
+                    (
+                        decoded,
+                        destination_family,
+                        self._register_family(source.reg),
+                    )
+                )
+        valid_heads = []
+        for head, head_family in head_rows:
+            head_displacement = head.operands[1].mem.disp
+            if not self._task5_backing_list_producer_is_exact(
+                assembly, head_displacement
+            ):
+                continue
+            if not any(
+                destination == pushed_family
+                and source == head_family
+                and row.address < call_address
+                for row, destination, source in copies
+            ):
+                continue
+            if not any(
+                base == pushed_family
+                and any(
+                    copy_destination == pushed_family
+                    and copy_source == next_family
+                    and copy.address > call_address
+                    for copy, copy_destination, copy_source in copies
+                )
+                for _row, next_family, base in next_rows
+            ):
+                continue
+            valid_heads.append(head_displacement)
+        return len(set(valid_heads)) == 1
+
+    def _task5_arena_free_invocations(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: _Task5BaseTopology,
+    ) -> tuple[_PublicationPrivateArenaInvocation, ...] | None:
+        root = assembly.contract.deallocator_root
+        entry = topology.arena_free_candidate_entry
+        if root is None or entry is None:
+            return None
+        decoded = tuple(
+            sorted(self.direct_call_sources_by_target.get(entry, ()))
+        )
+        raw = tuple(sorted(self._raw_direct_call_sites(entry)))
+        if (
+            len(decoded) != 2
+            or raw != decoded
+            or not self._least_reachable_incoming_call_domain_is_closed(entry)
+            or self.provisional_unowned_raw_callers_by_target.get(entry, ())
+        ):
+            return None
+        owners = tuple(
+            self._registrar_function_entry(address) for address in decoded
+        )
+        if None in owners or owners.count(root) != 1:
+            return None
+        nested_owners = tuple(owner for owner in owners if owner != root)
+        if len(nested_owners) != 1:
+            return None
+        nested = nested_owners[0]
+        root_calls = tuple(self._function_direct_calls(root))
+        nested_calls = tuple(row for row in root_calls if row.target == nested)
+        root_arena_calls = tuple(row for row in root_calls if row.target == entry)
+        if len(nested_calls) != 1 or len(root_arena_calls) != 1:
+            return None
+        nested_site = decoded[owners.index(nested)]
+        root_site = decoded[owners.index(root)]
+        if (
+            not self._task5_arena_free_root_partition_is_exact(
+                assembly,
+                root,
+                nested,
+                entry,
+                nested_calls[0].address,
+                root_arena_calls[0].address,
+            )
+            or root_site != root_arena_calls[0].address
+            or not self._task5_direct_arena_payload_is_exact(root, root_site)
+            or not self._task5_backing_arena_payload_is_exact(
+                assembly, nested, nested_site
+            )
+        ):
+            return None
+        allocated = _PublicationPrivateArenaBlockState(
+            "allocated", "unlisted"
+        )
+        return tuple(
+            _PublicationPrivateArenaInvocation(
+                caller_entry=owner,
+                call_address=address,
+                callee_entry=entry,
+                role="arena-free",
+                context="deallocator",
+                page_origins=(),
+                block_state=allocated,
+            )
+            for owner, address in sorted(zip(owners, decoded, strict=True))
+        )
+
+    def _task5_arena_free_discharges(
+        self,
+        assembly: _Task5ProofAssembly,
+        body: _Task5ArenaFreeBodyProof,
+    ) -> tuple[_PublicationPrivateRemovalCallDischarge, ...] | None:
+        obligations = assembly.ring_evidence.role.remover_call_obligations
+        remover_entry = assembly.ring_evidence.role.remover_entry
+        if remover_entry is None:
+            return None
+        raw_sites = tuple(sorted(self._raw_direct_call_sites(remover_entry)))
+        decoded_sites = tuple(
+            sorted(self.direct_call_sources_by_target.get(remover_entry, ()))
+        )
+        obligation_keys = tuple(
+            (row.caller_entry, row.call_address, row.remover_entry)
+            for row in obligations
+        )
+        if (
+            not obligations
+            or raw_sites != decoded_sites
+            or decoded_sites != tuple(row.call_address for row in obligations)
+            or obligation_keys != tuple(sorted(set(obligation_keys)))
+            or body.remover_call not in decoded_sites
+        ):
+            return None
+        rows = tuple(
+            _PublicationPrivateRemovalCallDischarge(
+                caller_entry=row.caller_entry,
+                call_address=row.call_address,
+                remover_entry=row.remover_entry,
+                argument_index=0,
+                argument_relation="exact-untagged-recovered-page",
+                caller_function_sha256=self._producer_function_fingerprint(
+                    row.caller_entry
+                ),
+                proof_instruction_addresses=body.release_instruction_addresses,
+            )
+            for row in obligations
+        )
+        for obligation, discharge in zip(obligations, rows, strict=True):
+            if (
+                discharge.caller_function_sha256
+                != obligation.caller_function_sha256
+                or discharge.proof_instruction_addresses
+                != tuple(sorted(set(discharge.proof_instruction_addresses)))
+                or discharge.call_address
+                not in discharge.proof_instruction_addresses
+            ):
+                return None
+        return rows
+
+    def _task5_arena_free_transitions(
+        self,
+        assembly: _Task5ProofAssembly,
+        entry: int,
+        invocations: tuple[_PublicationPrivateArenaInvocation, ...],
+    ) -> tuple[_PublicationPrivateArenaStateTransition, ...]:
+        allocated = _PublicationPrivateArenaBlockState(
+            "allocated", "unlisted"
+        )
+        free_unlisted = _PublicationPrivateArenaBlockState(
+            "free", "unlisted"
+        )
+        free_listed = _PublicationPrivateArenaBlockState("free", "listed")
+        none = _PublicationPrivateArenaBlockState("none", "none")
+        return tuple(
+            transition
+            for _invocation in invocations
+            for transition in (
+                _PublicationPrivateArenaStateTransition(
+                    entry,
+                    "arena-free",
+                    "deallocator",
+                    "payload-block",
+                    allocated,
+                    free_unlisted,
+                    "deallocator",
+                    assembly.contract.deallocator_root,
+                ),
+                _PublicationPrivateArenaStateTransition(
+                    entry,
+                    "arena-free",
+                    "deallocator",
+                    "payload-block",
+                    free_unlisted,
+                    free_listed,
+                    "deallocator",
+                    assembly.contract.deallocator_root,
+                ),
+                _PublicationPrivateArenaStateTransition(
+                    entry,
+                    "arena-free",
+                    "deallocator",
+                    "released-page",
+                    free_listed,
+                    none,
+                    "deallocator",
+                    assembly.contract.deallocator_root,
+                ),
+            )
+        )
+
+    def _task5_arena_free_output_is_valid(
+        self,
+        assembly: _Task5ProofAssembly,
+        transfer: _PublicationPrivateArenaTransfer,
+        spans: tuple[_PublicationPrivateArenaSpan, ...],
+    ) -> bool:
+        topology = assembly.topology
+        body = assembly.arena_free_body_proof
+        if (
+            topology is None
+            or body is None
+            or topology.arena_free_candidate_entry is None
+            or transfer.role != "arena-free"
+            or transfer.function_entry != topology.arena_free_candidate_entry
+        ):
+            return False
+        invocations = self._task5_arena_free_invocations(assembly, topology)
+        discharges = self._task5_arena_free_discharges(assembly, body)
+        if invocations is None or discharges is None:
+            return False
+        expected_span_keys = tuple(
+            (row.function_entry, row.instruction_address, row.operand_index)
+            for row in spans
+        )
+        return bool(
+            spans == body.spans
+            and expected_span_keys == tuple(sorted(set(expected_span_keys)))
+            and transfer.invocations == invocations
+            and transfer.state_transitions
+            == self._task5_arena_free_transitions(
+                assembly, transfer.function_entry, invocations
+            )
+            and transfer.removal_call_discharges == discharges
+            and transfer.instruction_addresses
+            == self._function_instruction_addresses(transfer.function_entry)
+            and transfer.span_keys == expected_span_keys
+            and transfer.function_sha256
+            == self._producer_function_fingerprint(transfer.function_entry)
+            and all(
+                self._publication_private_arena_state_is_valid(
+                    row.block_state
+                )
+                for row in transfer.invocations
+            )
+        )
+
+    def _task5_prove_arena_free(
+        self,
+        assembly: _Task5ProofAssembly,
+        topology: _Task5BaseTopology,
+    ) -> _Task5RoleProof | None:
+        entry = topology.arena_free_candidate_entry
+        invocations = self._task5_arena_free_invocations(assembly, topology)
+        body = self._task5_arena_free_body_semantics(assembly, topology)
+        if entry is None or invocations is None or body is None:
+            return None
+        discharges = self._task5_arena_free_discharges(assembly, body)
+        if discharges is None:
+            return None
+        transitions = self._task5_arena_free_transitions(
+            assembly, entry, invocations
+        )
+        spans = body.spans
+        transfer = _PublicationPrivateArenaTransfer(
+            function_entry=entry,
+            role="arena-free",
+            invocations=invocations,
+            state_transitions=transitions,
+            removal_call_discharges=discharges,
+            instruction_addresses=self._function_instruction_addresses(entry),
+            span_keys=tuple(
+                (row.function_entry, row.instruction_address, row.operand_index)
+                for row in spans
+            ),
+            function_sha256=self._producer_function_fingerprint(entry),
+        )
+        edges = {
+            _PublicationPrivateArenaCallEdge(
+                row.caller_entry,
+                row.call_address,
+                row.callee_entry,
+                "deallocator-closure",
+                True,
+            )
+            for row in invocations
+        }
+        for call_address, target, edge_kind in (
+            (topology.arena_free_insert_call, topology.insert_entry, "mutation-role"),
+            (body.remover_call, assembly.ring_evidence.role.remover_entry, "ring"),
+            (body.release_call, body.release_entry, "deallocator-closure"),
+        ):
+            if call_address is None or target is None:
+                return None
+            edges.add(
+                _PublicationPrivateArenaCallEdge(
+                    entry, call_address, target, edge_kind, True
+                )
+            )
+        dependencies = set(self._task5_role_dependencies(assembly, topology))
+        dependencies.update(
+            ("function", row)
+            for row in {
+                entry,
+                body.release_entry,
+                *(invocation.caller_entry for invocation in invocations),
+                assembly.ring_evidence.role.remover_entry,
+            }
+            if row is not None
+        )
+        result = _Task5RoleProof(
+            transfer,
+            spans,
+            tuple(
+                sorted(
+                    edges,
+                    key=lambda row: (
+                        row.caller_entry,
+                        row.call_address,
+                        row.target_entry,
+                        row.edge_kind,
+                    ),
+                )
+            ),
+            frozenset(dependencies),
+        )
+        assembly.arena_free_body_proof = body
+        if not self._task5_arena_free_output_is_valid(
+            assembly, transfer, spans
+        ):
+            assembly.arena_free_body_proof = None
+            return None
+        return result
+
     def _task5_unlink_body_semantics_are_exact(
         self,
         assembly: _Task5ProofAssembly,
@@ -36463,6 +37960,7 @@ class _DirectCfgRecovery:
             ("insert", self._task5_prove_insert),
             ("coalesce-prev", self._task5_prove_coalesce_prev),
             ("coalesce-next", self._task5_prove_coalesce_next),
+            ("arena-free", self._task5_prove_arena_free),
         )
         proofs: list[_Task5RoleProof] = []
         for role_name, prover in provers:
@@ -36546,7 +38044,7 @@ class _DirectCfgRecovery:
                 )
             ),
             block_initializer_entries=(topology.block_initializer_entry,),
-            arena_free_entries=(),
+            arena_free_entries=(topology.arena_free_candidate_entry,),
             splitter_entries=(topology.splitter_entry,),
             unlink_entries=(topology.unlink_entry,),
             insert_entries=(topology.insert_entry,),
@@ -36627,6 +38125,7 @@ class _DirectCfgRecovery:
             "insert",
             "coalesce-prev",
             "coalesce-next",
+            "arena-free",
         }:
             return None
         current = self._publication_private_arena_current_inputs(
@@ -36650,7 +38149,9 @@ class _DirectCfgRecovery:
             topology = self._task5_discover_base_topology(
                 assembly,
                 include_mutation=role
-                in {"insert", "coalesce-prev", "coalesce-next"},
+                in {
+                    "insert", "coalesce-prev", "coalesce-next", "arena-free"
+                },
             )
             if topology is None:
                 return None
@@ -36661,6 +38162,7 @@ class _DirectCfgRecovery:
                 "insert": self._task5_prove_insert,
                 "coalesce-prev": self._task5_prove_coalesce_prev,
                 "coalesce-next": self._task5_prove_coalesce_next,
+                "arena-free": self._task5_prove_arena_free,
             }
             proof = role_provers[role](assembly, topology)
         except _Task5ProofLimit as exc:
