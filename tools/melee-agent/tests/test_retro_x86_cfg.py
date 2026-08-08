@@ -5687,6 +5687,99 @@ def private_block_selector_order_events(fixture, function_entry):
     return recovery, tuple(events)
 
 
+def private_block_selector_stack_image(
+    component: str,
+    program: str,
+) -> PrivatePageArenaFixture:
+    """Prepend a fixed-width stack probe to one Task 4 interpreter."""
+    assert component in {"selector", "splitter", "unlinker"}
+    program_bytes = bytes.fromhex(program)
+    assert len(program_bytes) == 4
+    fixture = private_page_arena_image()
+    recovery, _contract, _extent, _effects = private_page_arena_contract(
+        fixture
+    )
+    entry = getattr(fixture, component)
+    instruction_addresses = recovery._function_instruction_addresses(entry)
+    returns = tuple(
+        address
+        for address in instruction_addresses
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_RET)
+    )
+    assert returns
+    end = max(
+        address + recovery._owned_decoded(address).size
+        for address in instruction_addresses
+    )
+    section = next(
+        row
+        for row in fixture.arena.image.sections
+        if row.va <= entry < row.va + row.raw_size
+    )
+    raw = bytearray(fixture.arena.image.data)
+    raw_offset = section.raw_offset + entry - section.va
+    body = bytes(raw[raw_offset : raw_offset + end - entry])
+    code = bytearray(program_bytes + body)
+    assert len(code) <= 0x80
+    for call in recovery._function_direct_calls(entry):
+        original_offset = call.address - entry
+        decoded = recovery._owned_decoded(call.address)
+        assert decoded.mnemonic == "call" and decoded.size == 5
+        new_address = call.address + len(program_bytes)
+        struct.pack_into(
+            "<i",
+            code,
+            len(program_bytes) + original_offset + 1,
+            call.target - (new_address + decoded.size),
+        )
+    raw[raw_offset : raw_offset + 0x80] = code + b"\x90" * (
+        0x80 - len(code)
+    )
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
+def private_block_selector_return_form_image(
+    component: str,
+    tail: str,
+) -> PrivatePageArenaFixture:
+    """Replace one terminal Task 4 return without changing prerequisites."""
+    assert component in {"selector", "splitter", "unlinker"}
+    tail_bytes = bytes.fromhex(tail)
+    assert len(tail_bytes) == 3
+    fixture = private_page_arena_image()
+    recovery, _contract, _extent, _effects = private_page_arena_contract(
+        fixture
+    )
+    entry = getattr(fixture, component)
+    returns = tuple(
+        address
+        for address in recovery._function_instruction_addresses(entry)
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_RET)
+    )
+    assert returns
+    address = returns[-1]
+    section = next(
+        row
+        for row in fixture.arena.image.sections
+        if row.va <= address < row.va + row.raw_size
+    )
+    raw = bytearray(fixture.arena.image.data)
+    raw_offset = section.raw_offset + address - section.va
+    assert raw[raw_offset : raw_offset + 3] == b"\xc3\x90\x90"
+    raw[raw_offset : raw_offset + 3] = tail_bytes
+    image = replace(
+        fixture.arena.image,
+        data=bytes(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+    return replace(fixture, arena=replace(fixture.arena, image=image))
+
+
 def private_page_ring_absolute_reference_image(
     mutation: str,
 ) -> PrivatePageArenaFixture:
@@ -17681,6 +17774,210 @@ def test_private_block_selector_order_rejects_reordered_compound_events(
         hostile_inputs[3],
         hostile_inputs[4],
     ) is None
+
+
+def private_block_selector_task4_result(fixture):
+    """Require current Task 1-3 inputs, then query only Task 4."""
+    inputs = private_page_arena_ring(fixture)
+    recovery, contract, extent, effects, ring_evidence = inputs
+    assert contract is not None and extent is not None
+    assert len(effects.symbolic_writes) == 13
+    assert len(effects.terminal_symbolic_memory) == 9
+    assert ring_evidence.layout.page_link_offsets == (0, 4)
+    assert ring_evidence.layout.minimum_split_remainder is None
+    assert all(
+        row.block_state.allocation == "none"
+        and row.block_state.membership == "none"
+        for row in ring_evidence.role.selector_invocations
+    )
+    result = recovery._publication_private_block_selector_role(
+        contract,
+        extent,
+        effects,
+        ring_evidence,
+    )
+    return inputs, result
+
+
+@pytest.mark.parametrize("component", ("selector", "splitter", "unlinker"))
+def test_private_block_selector_stack_accepts_balanced_full_width(component):
+    fixture = private_block_selector_stack_image(component, "53 5b 90 90")
+
+    inputs, result = private_block_selector_task4_result(fixture)
+
+    assert_private_block_selector_result(fixture, inputs, result)
+
+
+@pytest.mark.parametrize("component", ("selector", "splitter", "unlinker"))
+def test_private_block_selector_stack_accepts_harmless_partial_scalar(
+    component,
+):
+    fixture = private_block_selector_stack_image(component, "88 db 90 90")
+
+    inputs, result = private_block_selector_task4_result(fixture)
+
+    assert_private_block_selector_result(fixture, inputs, result)
+
+
+@pytest.mark.parametrize("component", ("selector", "splitter", "unlinker"))
+@pytest.mark.parametrize(
+    ("control_program", "hostile_program", "expected_form"),
+    (
+        pytest.param(
+            "53 90 5b 90",
+            "53 66 5b 90",
+            ("pop", 2, 4),
+            id="partial-pop",
+        ),
+        pytest.param(
+            "90 53 5b 90",
+            "66 53 5b 90",
+            ("push", 2, 4),
+            id="partial-push",
+        ),
+        pytest.param(
+            "90 53 5b 90",
+            "67 53 5b 90",
+            ("push", 4, 2),
+            id="address-size-push",
+        ),
+        pytest.param(
+            "53 90 5b 90",
+            "53 67 5b 90",
+            ("pop", 4, 2),
+            id="address-size-pop",
+        ),
+        pytest.param(
+            "53 5b 90 90",
+            "53 5c 90 90",
+            ("pop", 4, 4),
+            id="pop-esp",
+        ),
+        pytest.param(
+            "53 90 5b 90",
+            "53 66 5c 90",
+            ("pop", 2, 4),
+            id="pop-sp",
+        ),
+    ),
+)
+def test_private_block_selector_stack_rejects_transfer_boundary(
+    component,
+    control_program,
+    hostile_program,
+    expected_form,
+):
+    control = private_block_selector_stack_image(component, control_program)
+    hostile = private_block_selector_stack_image(component, hostile_program)
+    entry = getattr(hostile, component)
+    changed_offsets = {
+        index
+        for index, (left, right) in enumerate(
+            zip(
+                bytes.fromhex(control_program),
+                bytes.fromhex(hostile_program),
+                strict=True,
+            )
+        )
+        if left != right
+    }
+    assert private_page_image_changed_addresses(control, hostile) == {
+        entry + offset for offset in changed_offsets
+    }
+    hostile_inputs = private_page_arena_ring(hostile)
+    decoded_forms = {
+        (
+            hostile_inputs[0]._owned_decoded(address).mnemonic,
+            hostile_inputs[0]._owned_decoded(address).operands[0].size,
+            hostile_inputs[0]._owned_decoded(address).addr_size,
+        )
+        for address in hostile_inputs[0]._function_instruction_addresses(entry)
+        if entry <= address < entry + 4
+        and hostile_inputs[0]._owned_decoded(address).mnemonic
+        in {"push", "pop"}
+    }
+    assert expected_form in decoded_forms
+    control_inputs, control_result = private_block_selector_task4_result(
+        control
+    )
+    assert_private_block_selector_result(
+        control,
+        control_inputs,
+        control_result,
+    )
+
+    assert private_block_selector_task4_result(hostile)[1] is None
+
+
+@pytest.mark.parametrize("component", ("selector", "splitter", "unlinker"))
+@pytest.mark.parametrize(
+    ("control_program", "hostile_program"),
+    (
+        pytest.param("53 5b 90 90", "5b 53 90 90", id="return-slot"),
+        pytest.param("53 5b 90 90", "53 90 90 90", id="unbalanced-push"),
+        pytest.param("53 5b 90 90", "5b 90 90 90", id="unbalanced-pop"),
+    ),
+)
+def test_private_block_selector_stack_rejects_owned_depth_escape(
+    component,
+    control_program,
+    hostile_program,
+):
+    control = private_block_selector_stack_image(component, control_program)
+    hostile = private_block_selector_stack_image(component, hostile_program)
+    control_inputs, control_result = private_block_selector_task4_result(
+        control
+    )
+    assert_private_block_selector_result(
+        control,
+        control_inputs,
+        control_result,
+    )
+
+    assert private_block_selector_task4_result(hostile)[1] is None
+
+
+@pytest.mark.parametrize("component", ("selector", "splitter", "unlinker"))
+@pytest.mark.parametrize(
+    "tail",
+    (
+        pytest.param("c2 04 00", id="near-ret-immediate"),
+        pytest.param("cb 90 90", id="far-ret"),
+        pytest.param("ca 04 00", id="far-ret-immediate"),
+    ),
+)
+def test_private_block_selector_return_form_rejects_nonplain_near_ret(
+    component,
+    tail,
+):
+    control = private_block_selector_return_form_image(component, "c3 90 90")
+    hostile = private_block_selector_return_form_image(component, tail)
+    assert private_page_image_changed_addresses(control, hostile)
+    control_inputs, control_result = private_block_selector_task4_result(
+        control
+    )
+    assert_private_block_selector_result(
+        control,
+        control_inputs,
+        control_result,
+    )
+    hostile_inputs = private_page_arena_ring(hostile)
+    hostile_entry = getattr(hostile, component)
+    hostile_returns = tuple(
+        hostile_inputs[0]._owned_decoded(address)
+        for address in hostile_inputs[0]._function_instruction_addresses(
+            hostile_entry
+        )
+        if hostile_inputs[0]
+        ._owned_decoded(address)
+        .group(capstone.CS_GRP_RET)
+    )
+    assert any(
+        decoded.mnemonic != "ret" or decoded.operands
+        for decoded in hostile_returns
+    )
+
+    assert private_block_selector_task4_result(hostile)[1] is None
 
 
 def test_private_block_selector_walks_only_same_page_blocks():

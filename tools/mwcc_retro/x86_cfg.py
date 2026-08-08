@@ -26655,6 +26655,39 @@ class _DirectCfgRecovery:
                 return "read"
             return None
 
+        def task4_stack_transfer(decoded, owned_depth: int) -> int | None:
+            """Validate one dword local-stack transfer, excluding RET slot."""
+            mnemonic = decoded.mnemonic
+            operands = decoded.operands
+            if (
+                mnemonic not in {"push", "pop"}
+                or len(operands) != 1
+                or decoded.addr_size != 4
+                or operands[0].size != 4
+            ):
+                return None
+            operand = operands[0]
+            if mnemonic == "push":
+                if operand.type not in {X86_OP_REG, X86_OP_MEM, X86_OP_IMM}:
+                    return None
+                return owned_depth + 4
+            if (
+                operand.type != X86_OP_REG
+                or self._register_family(operand.reg) == "esp"
+                or owned_depth < 4
+            ):
+                return None
+            return owned_depth - 4
+
+        def task4_plain_return(decoded, owned_depth: int) -> bool:
+            """Accept only an untouched entry slot and plain near RET."""
+            return bool(
+                owned_depth == 0
+                and decoded.mnemonic == "ret"
+                and not decoded.operands
+                and decoded.size == 1
+            )
+
         acyclic_reads_by_function: dict[
             int, frozenset[tuple[int, tuple[Any, ...]]]
         ] = {}
@@ -26812,6 +26845,8 @@ class _DirectCfgRecovery:
                     predicate = None
 
                 if decoded.group(CS_GRP_RET):
+                    if not task4_plain_return(decoded, -sp):
+                        return None
                     returns.append(
                         (
                             registers,
@@ -26825,8 +26860,14 @@ class _DirectCfgRecovery:
                         )
                     )
                     continue
+                if mnemonic in {"push", "pop"}:
+                    new_depth = task4_stack_transfer(decoded, -sp)
+                    if new_depth is None:
+                        return None
                 if mnemonic == "push" and len(operands) == 1:
                     value = read_operand(address, operands[0], state)
+                    if operands[0].type == X86_OP_MEM and value is None:
+                        return None
                     sp -= 4
                     stack[sp] = value
                 elif mnemonic == "pop" and len(operands) == 1:
@@ -26849,6 +26890,8 @@ class _DirectCfgRecovery:
                     if mnemonic == "sub":
                         sp -= amount
                     else:
+                        if amount > -sp:
+                            return None
                         for offset in tuple(stack):
                             if sp <= offset < sp + amount:
                                 stack.pop(offset, None)
@@ -27425,6 +27468,8 @@ class _DirectCfgRecovery:
                     predicate = None
 
                 if decoded.group(CS_GRP_RET):
+                    if not task4_plain_return(decoded, len(stack) * 4):
+                        return None
                     selector_returns.append(
                         (
                             registers,
@@ -27435,6 +27480,13 @@ class _DirectCfgRecovery:
                         )
                     )
                     continue
+                if mnemonic in {"push", "pop"}:
+                    new_depth = task4_stack_transfer(
+                        decoded,
+                        len(stack) * 4,
+                    )
+                    if new_depth is None:
+                        return None
                 if mnemonic == "push" and len(operands) == 1:
                     read = selector_read_operand(
                         address,
