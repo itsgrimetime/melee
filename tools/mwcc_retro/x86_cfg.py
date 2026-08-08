@@ -2084,6 +2084,17 @@ class _PublicationPrivateRemovalCallObligation:
 
 
 @dataclass(frozen=True, slots=True)
+class _PublicationPrivateRemovalCallDischarge:
+    caller_entry: int
+    call_address: int
+    remover_entry: int
+    argument_index: int
+    argument_relation: Literal["exact-untagged-recovered-page"]
+    caller_function_sha256: str
+    proof_instruction_addresses: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _PublicationPrivatePageRingRole:
     head_slot: int
     provider_entry: int
@@ -2145,6 +2156,9 @@ class _PublicationPrivateArenaTransfer:
     ]
     invocations: tuple[_PublicationPrivateArenaInvocation, ...]
     state_transitions: tuple[_PublicationPrivateArenaStateTransition, ...]
+    removal_call_discharges: tuple[
+        _PublicationPrivateRemovalCallDischarge, ...
+    ]
     instruction_addresses: tuple[int, ...]
     span_keys: tuple[tuple[int, int, int], ...]
     function_sha256: str
@@ -26515,6 +26529,7 @@ class _DirectCfgRecovery:
                 role="ring-insert",
                 invocations=(insert_invocation,),
                 state_transitions=(),
+                removal_call_discharges=(),
                 instruction_addresses=self._function_instruction_addresses(
                     publisher_call.target
                 ),
@@ -26528,6 +26543,7 @@ class _DirectCfgRecovery:
                 role="ring-remove",
                 invocations=remover_invocations,
                 state_transitions=(),
+                removal_call_discharges=(),
                 instruction_addresses=remover["instruction_addresses"],
                 span_keys=span_keys(remover_entry),
                 function_sha256=self._producer_function_fingerprint(remover_entry),
@@ -26537,6 +26553,7 @@ class _DirectCfgRecovery:
                 role="ring-rotate",
                 invocations=rotate_invocations,
                 state_transitions=(),
+                removal_call_discharges=(),
                 instruction_addresses=selector_proof["instruction_addresses"],
                 span_keys=span_keys(contract.large_allocator),
                 function_sha256=self._producer_function_fingerprint(
@@ -29235,6 +29252,7 @@ class _DirectCfgRecovery:
             role="select",
             invocations=ring.selector_invocations,
             state_transitions=transitions,
+            removal_call_discharges=(),
             instruction_addresses=instruction_addresses,
             span_keys=span_keys,
             function_sha256=self._producer_function_fingerprint(

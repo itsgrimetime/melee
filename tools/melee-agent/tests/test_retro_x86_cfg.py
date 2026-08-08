@@ -4,9 +4,10 @@ import json
 import struct
 import sys
 from collections import Counter
-from dataclasses import asdict, dataclass, fields, replace
+from dataclasses import MISSING, asdict, dataclass, fields, replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal, get_type_hints
 
 import capstone
 import pytest
@@ -20505,6 +20506,108 @@ def test_private_page_arena_selector_preserves_current_task1_to4_semantics():
     ) == (fixture.large_allocator, fixture.reallocator)
     assert fixture.realloc_driver in recovery.function_addresses
     assert fixture.reallocator in recovery.function_addresses
+
+
+def test_private_arena_task5_schema_exposes_exact_removal_call_discharge_row():
+    cls = x86_cfg_module._PublicationPrivateRemovalCallDischarge
+    field_names = (
+        "caller_entry",
+        "call_address",
+        "remover_entry",
+        "argument_index",
+        "argument_relation",
+        "caller_function_sha256",
+        "proof_instruction_addresses",
+    )
+    assert tuple(field.name for field in fields(cls)) == field_names
+    assert get_type_hints(cls) == {
+        "caller_entry": int,
+        "call_address": int,
+        "remover_entry": int,
+        "argument_index": int,
+        "argument_relation": Literal["exact-untagged-recovered-page"],
+        "caller_function_sha256": str,
+        "proof_instruction_addresses": tuple[int, ...],
+    }
+    assert cls.__dataclass_params__.frozen is True
+    assert tuple(cls.__slots__) == field_names
+
+    row = cls(
+        caller_entry=1,
+        call_address=2,
+        remover_entry=3,
+        argument_index=4,
+        argument_relation="exact-untagged-recovered-page",
+        caller_function_sha256="caller-sha256",
+        proof_instruction_addresses=(5, 6),
+    )
+    assert tuple(getattr(row, name) for name in field_names) == (
+        1,
+        2,
+        3,
+        4,
+        "exact-untagged-recovered-page",
+        "caller-sha256",
+        (5, 6),
+    )
+    assert not hasattr(row, "__dict__")
+
+
+def test_private_arena_task5_schema_requires_discharge_field_in_exact_order():
+    cls = x86_cfg_module._PublicationPrivateArenaTransfer
+    transfer_fields = fields(cls)
+    assert tuple(field.name for field in transfer_fields) == (
+        "function_entry",
+        "role",
+        "invocations",
+        "state_transitions",
+        "removal_call_discharges",
+        "instruction_addresses",
+        "span_keys",
+        "function_sha256",
+    )
+    discharge_field = next(
+        field
+        for field in transfer_fields
+        if field.name == "removal_call_discharges"
+    )
+    assert discharge_field.default is MISSING
+    assert discharge_field.default_factory is MISSING
+    assert get_type_hints(cls)["removal_call_discharges"] == tuple[
+        x86_cfg_module._PublicationPrivateRemovalCallDischarge, ...
+    ]
+
+
+def test_private_arena_task5_schema_current_task3_task4_transfers_have_empty_discharges():
+    fixture = private_page_arena_image()
+    (
+        recovery,
+        _contract,
+        _extent,
+        effects,
+        ring,
+        _layout,
+        _role,
+        select_transfer,
+        _spans,
+    ) = private_page_arena_selector(fixture)
+
+    assert recovery._publication_private_heap_effect_closure_is_current(effects)
+    assert tuple(row.role for row in ring.transfers) == (
+        "ring-insert",
+        "ring-remove",
+        "ring-rotate",
+    )
+    assert select_transfer.role == "select"
+    assert tuple(row.removal_call_discharges for row in ring.transfers) == (
+        (),
+        (),
+        (),
+    )
+    ring_remove = ring.transfers[1]
+    assert ring_remove.invocations == ()
+    assert ring_remove.removal_call_discharges == ()
+    assert select_transfer.removal_call_discharges == ()
 
 
 def test_private_page_arena_selector_documents_anchor_fingerprint_drift():
