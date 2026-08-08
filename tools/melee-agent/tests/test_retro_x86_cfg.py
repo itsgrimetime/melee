@@ -4102,6 +4102,8 @@ class PrivatePageArenaFixture:
     block_initializer: int
     block_initializer_calls: tuple[int, int, int]
     selector: int
+    selector_extent_load_address: int
+    selector_extent_operand_index: int
     selector_calls: tuple[int, int]
     splitter: int
     unlinker: int
@@ -4970,6 +4972,7 @@ def private_page_arena_image(
     # allocated transition and complete removal repair.
     cursor = emit(selector, "53 56 57 55 8b 5c 24 14")
     cursor = emit(cursor, "8b 54 24 18")
+    selector_extent_load_address = cursor
     cursor = emit(cursor, "8b 43 0c 83 e0 f8")
     cursor = emit(cursor, "8d 7c 03 fc 8b 37 31 c9 85 f6")
     no_blocks = cursor
@@ -5458,6 +5461,8 @@ def private_page_arena_image(
             block_initializer_split_remainder_call,
         ),
         selector=selector,
+        selector_extent_load_address=selector_extent_load_address,
+        selector_extent_operand_index=1,
         selector_calls=(selector_existing, selector_provider),
         splitter=splitter,
         unlinker=unlinker,
@@ -28821,6 +28826,11 @@ def test_publication_body_uses_private_page_arena_invariant():
     )
 
     assert witnesses is not None
+    selector_key = (
+        fixture.selector,
+        fixture.selector_extent_load_address,
+        fixture.selector_extent_operand_index,
+    )
     arena_witnesses = tuple(
         witness
         for witness in witnesses
@@ -28848,6 +28858,55 @@ def test_publication_body_uses_private_page_arena_invariant():
         (witness.private_page_arena_span is None)
         == (witness.private_page_arena_invariant is None)
         for witness in witnesses
+    )
+    selector_rows = tuple(
+        witness
+        for witness in arena_witnesses
+        if recovery._publication_private_arena_span_key(
+            witness.private_page_arena_span
+        )
+        == selector_key
+    )
+    assert len(selector_rows) == 1
+    selector_row = selector_rows[0]
+    selector_span = selector_row.private_page_arena_span
+    selector_invariant = selector_row.private_page_arena_invariant
+    assert selector_span is not None
+    assert selector_invariant is not None
+    assert (
+        selector_span.access,
+        selector_span.region,
+        selector_span.field,
+        selector_span.displacement,
+        selector_span.width,
+    ) == (
+        "read",
+        "page",
+        "extent",
+        selector_invariant.layout.page_extent_offset,
+        4,
+    )
+    assert recovery._publication_private_page_arena_invariant_is_current(
+        selector_invariant
+    )
+    certified_selector_keys = {
+        recovery._publication_private_arena_span_key(span)
+        for span in selector_invariant.spans
+        if span.function_entry == fixture.selector
+    }
+    used_selector_keys = {
+        recovery._publication_private_arena_span_key(
+            witness.private_page_arena_span
+        )
+        for witness in arena_witnesses
+        if witness.returning_body.function_entry == fixture.selector
+    }
+    assert used_selector_keys == certified_selector_keys
+    assert selector_key in used_selector_keys
+    assert selector_row.function_dependency == (
+        "function",
+        fixture.selector,
+        recovery._producer_function_fingerprint(fixture.selector),
     )
     arena_entries = {
         witness.returning_body.function_entry
@@ -29249,6 +29308,12 @@ def test_private_page_arena_integration_rejects_operand_authority_hostile(
             if recovery._publication_private_arena_span_key(span)
             == missing_key
         )
+        if mutation == "missing-span":
+            assert missing_key == (
+                fixture.selector,
+                fixture.selector_extent_load_address,
+                fixture.selector_extent_operand_index,
+            )
         replacement_spans = ()
         replacement_keys = ()
         if mutation == "wrong-operand-index":
