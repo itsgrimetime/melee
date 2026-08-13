@@ -201,7 +201,8 @@ and joins. Incoming register facts are mapped from the complete direct-call
 domain; any value without a closed caller proof is TOP. An ordinary call return
 family is TOP unless an interprocedural return-alias summary proves it
 stack-disjoint. An alias live in a return register or a caller-visible
-callee-saved register at RET is an escape.
+callee-saved register at RET is an escape; caller-clobbered GPRs are also
+observable machine outputs and must be proven non-alias or killed before RET.
 
 Storing a stack alias in non-stack memory, an incoming/caller-owned stack slot,
 or a stack slot visible to a call is also an escape. Only a currently allocated,
