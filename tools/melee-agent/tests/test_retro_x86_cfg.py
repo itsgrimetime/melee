@@ -1554,6 +1554,46 @@ def private_stack_noreturn_branch_image(tmp_path, *, mutation=None):
     )
 
 
+def direction_flag_dead_return_image(tmp_path, *, returning_import=False):
+    """Separate one live ABI-clear return from a dead DF-set return."""
+    base = 0x00401080
+    iat = 0x00402160
+    program = bytearray(b"\x90" * 0x40)
+    body = bytes.fromhex(
+        "85 c9 "  # test ecx, ecx
+        "75 0a "  # jne live_return
+        "fd "  # std
+        "6a 01 "  # push 1
+        f"ff 15 {iat.to_bytes(4, 'little').hex()} "
+        "c3 "  # dead when ExitProcess is proven no-return
+        "c3"  # live_return
+    )
+    program[: len(body)] = body
+    image = load_large_cfg_program(tmp_path, program)
+    return (
+        replace(
+            image,
+            imports=(
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name=(
+                        "GetCurrentProcess"
+                        if returning_import
+                        else "ExitProcess"
+                    ),
+                    ordinal=None,
+                    hint=0,
+                    iat_va=iat,
+                ),
+            ),
+        ),
+        base,
+        base + 7,
+        base + 13,
+        base + 14,
+    )
+
+
 def private_stack_scalar_noreturn_branch_image(
     tmp_path,
     *,
@@ -3478,6 +3518,30 @@ def transitive_partial_return_scalar_overwrite_image(tmp_path, *, mutation=None)
     return load_large_cfg_program(tmp_path, program), wrapper, leaf
 
 
+def partial_return_local_scalar_store_image(tmp_path, *, mutation=None):
+    """Replace AL locally before a byte-only store of one opaque return."""
+    assert mutation in {None, "missing-overwrite", "wrong-register", "full-store"}
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x60)
+    program[0] = 0xE8
+    program[1:5] = (callee - (base + 5)).to_bytes(
+        4,
+        "little",
+        signed=True,
+    )
+    overwrite = {
+        "missing-overwrite": "90 90 90 90 90 90",
+        "wrong-register": "8a 0d 00 30 40 00",
+    }.get(mutation, "8a 05 00 30 40 00")
+    program[5:11] = bytes.fromhex(overwrite)
+    store = "89 07" if mutation == "full-store" else "88 07"
+    program[11:13] = bytes.fromhex(store)
+    program[13:16] = bytes.fromhex("31 c0 c3")
+    program[0x40:0x48] = bytes.fromhex("a1 04 30 40 00 c3 90 90")
+    return load_large_cfg_program(tmp_path, program), callee, base + 11
+
+
 def partial_word_return_with_raw_residue_image(
     tmp_path,
     *,
@@ -4529,6 +4593,68 @@ def byte_predicate_unrelated_direct_call_image(tmp_path, mutation=None):
     )
 
 
+def byte_predicate_noreturn_branch_image(
+    tmp_path,
+    *,
+    returning_import=False,
+):
+    """Observe one spill byte while excluding only a fatal call tail."""
+    base = 0x00401080
+    fatal = base + 0x50
+    iat = 0x00402160
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 08 89 44 24 04 85 c9")
+    store_address = base + 3
+    branch_address = base + cursor
+    cursor = emit(cursor, "74 00")
+    call_address = base + cursor
+    cursor = emit_call(cursor, fatal)
+    cursor = emit(cursor, "8b 44 24 04 83 c4 08 c3")
+    live = cursor
+    cursor = emit(cursor, "80 7c 24 04 00 83 c4 08 c3")
+    program[branch_address - base + 1] = live - (branch_address - base + 2)
+
+    cursor = emit(0x50, "6a 01")
+    cursor = emit(cursor, f"ff 15 {iat.to_bytes(4, 'little').hex()}")
+    emit(cursor, "c3")
+    image = load_large_cfg_program(tmp_path, program)
+    return (
+        replace(
+            image,
+            imports=(
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name=(
+                        "GetCurrentProcess"
+                        if returning_import
+                        else "ExitProcess"
+                    ),
+                    ordinal=None,
+                    hint=0,
+                    iat_va=iat,
+                ),
+            ),
+        ),
+        base,
+        store_address,
+        call_address,
+    )
+
+
 def byte_predicate_exact_zero_callback_image(
     tmp_path,
     *,
@@ -4700,6 +4826,59 @@ def partial_register_across_preserving_call_image(
         )
         program[0x80 : 0x80 + len(restore_body)] = restore_body
     return load_large_cfg_program(tmp_path, program), base, base
+
+
+def partial_register_across_complex_saved_call_image(
+    tmp_path,
+    *,
+    nested_reads_register=False,
+    expose_saved_slot=False,
+    wrong_restore=False,
+    prologue_prelude=False,
+):
+    """Carry a narrow EBX value across a framed, preserving exact call."""
+    base = 0x00401080
+    callee = base + 0x40
+    nested = base + 0x80
+    program = bytearray(b"\x90" * 0xC0)
+    program[:4] = bytes.fromhex("8b 5c 24 04")
+    program[4:6] = bytes.fromhex("84 db")
+    program[6] = 0xE8
+    program[7:11] = (callee - (base + 11)).to_bytes(
+        4,
+        "little",
+        signed=True,
+    )
+    program[11:17] = bytes.fromhex("84 db 31 db c3 90")
+
+    displacement = 0x20 if expose_saved_slot else 0x10
+    prefix = "8b 44 24 04 " if prologue_prelude else ""
+    callee_body = bytearray(
+        bytes.fromhex(
+            prefix
+            +
+            "53 83 ec 20 "
+            f"8d 44 24 {displacement:02x} "
+            "50 e8 00 00 00 00 59 89 c3 83 c4 20 "
+            + ("5e" if wrong_restore else "5b")
+            + " c3"
+        )
+    )
+    prefix_size = 4 if prologue_prelude else 0
+    nested_call = callee + prefix_size + 9
+    callee_body[prefix_size + 10 : prefix_size + 14] = (
+        nested - (nested_call + 5)
+    ).to_bytes(
+        4,
+        "little",
+        signed=True,
+    )
+    program[0x40 : 0x40 + len(callee_body)] = callee_body
+    nested_body = bytes.fromhex(
+        "85 db 31 c0 c3" if nested_reads_register else "31 c0 c3"
+    )
+    program[0x80 : 0x80 + len(nested_body)] = nested_body
+    return load_large_cfg_program(tmp_path, program), base, callee, nested
 
 
 def signed_word_loop_private_stack_read_image(tmp_path, mutation=None):
@@ -40908,6 +41087,50 @@ def test_partial_result_consumer_accepts_path_local_scalar_overwrite(
     ) is expected
 
 
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("missing-overwrite", False),
+        ("wrong-register", False),
+        ("full-store", False),
+    ),
+)
+def test_partial_result_consumer_accepts_local_scalar_byte_store(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, callee, store_address = partial_return_local_scalar_store_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    store = recovery._owned_decoded(store_address)
+
+    assert not recovery._function_return_slice_is_independently_scalar(
+        callee,
+        capstone.x86.X86_REG_AL,
+        1,
+    )
+    if mutation != "full-store":
+        assert recovery._partial_register_load_is_scalar_before(
+            store_address,
+            store.operands[1],
+            0x00401080,
+        ) is (mutation is None)
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        callee,
+        "eax",
+        _protected_slots=frozenset({0x00403004}),
+    ) is expected
+
+
 def test_partial_return_closure_memoizes_completed_revision(
     tmp_path,
     monkeypatch,
@@ -42930,6 +43153,47 @@ def test_private_stack_preservation_audits_noreturn_branch(
 
 
 @pytest.mark.parametrize("returning_import", (False, True))
+def test_direction_return_summary_ignores_only_proven_dead_return(
+    tmp_path,
+    returning_import,
+):
+    image, function_entry, call_address, dead_return, live_return = (
+        direction_flag_dead_return_image(
+            tmp_path,
+            returning_import=returning_import,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    call = recovery._owned_decoded(call_address)
+    states = recovery._local_direction_flag_clear_states(
+        function_entry,
+        entry_clear=True,
+    )
+
+    assert recovery._call_is_proven_no_return(
+        call,
+        frozenset(),
+    ) is (not returning_import)
+    assert states is not None
+    assert states[live_return] is True
+    assert (dead_return in states) is returning_import
+    assert recovery._local_function_returns_direction_clear(
+        function_entry,
+        entry_clear=True,
+    ) is (not returning_import)
+    assert recovery._direction_return_clear_summary(
+        function_entry,
+        entry_clear=True,
+        deferred_call_sites=frozenset(),
+    ) is (not returning_import)
+
+
+@pytest.mark.parametrize("returning_import", (False, True))
 def test_private_stack_scalar_flow_closes_only_audited_noreturn_arm(
     tmp_path,
     returning_import,
@@ -42956,6 +43220,43 @@ def test_private_stack_scalar_flow_closes_only_audited_noreturn_arm(
         store_address,
         function_entry,
     ) is (not returning_import)
+
+
+def test_private_stack_scalar_flow_reuses_partial_stack_states_per_query(
+    tmp_path,
+    monkeypatch,
+):
+    image, function_entry, store_address, _call_address = (
+        private_stack_scalar_noreturn_branch_image(tmp_path)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    del recovery.stack_state_query_caches
+    original = recovery._function_stack_states
+    query_results = []
+
+    def counted(entry):
+        result = original(entry)
+        query_results.append((entry, result))
+        return result
+
+    monkeypatch.setattr(recovery, "_function_stack_states", counted)
+
+    assert recovery._private_stack_store_is_scalar_flow_quarantined(
+        store_address,
+        function_entry,
+    )
+    matching = [
+        result
+        for entry, result in query_results
+        if entry == function_entry
+    ]
+    assert len(matching) > 1
+    assert all(result is matching[0] for result in matching)
 
 
 @pytest.mark.parametrize(
@@ -44876,6 +45177,35 @@ def test_private_stack_byte_predicate_allows_only_unrelated_direct_call(
         assert dependencies == {("function", 0x004010C0)}
 
 
+@pytest.mark.parametrize("returning_import", (False, True))
+def test_private_stack_byte_predicate_ignores_only_proven_dead_call_tail(
+    tmp_path,
+    returning_import,
+):
+    image, function_entry, store_address, call_address = (
+        byte_predicate_noreturn_branch_image(
+            tmp_path,
+            returning_import=returning_import,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    call = recovery._owned_decoded(call_address)
+
+    assert recovery._call_is_proven_no_return(
+        call,
+        frozenset(),
+    ) is (not returning_import)
+    assert recovery._private_stack_store_is_byte_predicate_quarantined(
+        store_address,
+        function_entry,
+    ) is (not returning_import)
+
+
 @pytest.mark.parametrize("nonzero_callback", (False, True))
 def test_private_stack_byte_predicate_prunes_only_exact_zero_callback(
     tmp_path,
@@ -45056,6 +45386,68 @@ def test_partial_register_use_crosses_only_nonobserving_direct_call(
         ) is (not callee_reads_register)
     assert recovery._register_definition_is_used_only_partially_before_kill(
         definition_address,
+        "ebx",
+        function_entry,
+        maximum_partial_width=1,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    (
+        "nested_reads_register",
+        "expose_saved_slot",
+        "wrong_restore",
+        "prologue_prelude",
+        "expected",
+    ),
+    (
+        (False, False, False, False, True),
+        (False, False, False, True, True),
+        (True, False, False, False, False),
+        (False, True, False, False, False),
+        (False, False, True, False, False),
+    ),
+)
+def test_partial_register_use_crosses_complex_callee_saved_frame(
+    tmp_path,
+    nested_reads_register,
+    expose_saved_slot,
+    wrong_restore,
+    prologue_prelude,
+    expected,
+):
+    image, function_entry, callee, nested = (
+        partial_register_across_complex_saved_call_image(
+            tmp_path,
+            nested_reads_register=nested_reads_register,
+            expose_saved_slot=expose_saved_slot,
+            wrong_restore=wrong_restore,
+            prologue_prelude=prologue_prelude,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    tracked = recovery._function_private_stack_coordinate_states(callee)
+    assert tracked is not None
+    assert any(
+        recovery._owned_decoded(address).group(capstone.CS_GRP_RET)
+        for address in tracked[0]
+    )
+    assert recovery._function_reads_incoming_register(
+        nested,
+        "ebx",
+    ) is nested_reads_register
+    assert recovery._function_reads_incoming_register(
+        callee,
+        "ebx",
+    ) is (not expected)
+    assert recovery._register_definition_is_used_only_partially_before_kill(
+        function_entry,
         "ebx",
         function_entry,
         maximum_partial_width=1,
@@ -47034,10 +47426,20 @@ def test_return_path_publication_backend_bridge_binds_exact_session_and_callers(
     )
 
 
-def test_task8_publication_seal_reuses_only_equivalent_bridge_context(
+def test_task8_publication_seal_audits_equivalent_bridge_group_once(
     monkeypatch,
 ):
     recovery = object.__new__(_DirectCfgRecovery)
+    recovery.image = SimpleNamespace(sha256="image")
+    recovery.control_flow_revision = 1
+    recovery.producer_seed_revision = 2
+    recovery.absolute_memory_write_revision = 3
+    recovery.reference_classification_revision = 4
+    monkeypatch.setattr(
+        recovery,
+        "_summary_fact_signature",
+        lambda: ("facts",),
+    )
     session = object()
     incoming_calls = (object(),)
     backend_bodies = (object(),)
@@ -47055,56 +47457,82 @@ def test_task8_publication_seal_reuses_only_equivalent_bridge_context(
 
     calls = []
     seal = SimpleNamespace(
-        session_relevant_functions=frozenset({0x4100, 0x4200})
+        session_relevant_functions=frozenset({0x4100, 0x4200, 0x4300})
     )
 
-    def prove(candidate, closure):
-        calls.append((candidate, closure))
+    def prove(candidate, closure, *, allocation_callers=None):
+        calls.append((candidate, closure, allocation_callers))
+        assert allocation_callers == frozenset({0x4100, 0x4200, 0x4300})
         return seal
 
     monkeypatch.setattr(recovery, "_session_state_capability_seal", prove)
     closure = object()
-    reusable = []
     first = bridge(0x4100)
     equivalent = bridge(0x4200)
-    outside_audit = bridge(0x4300)
-    changed_incoming = bridge(0x4200, incoming=(object(),))
+    third = bridge(0x4300)
 
     assert (
-        recovery._session_state_capability_seal_with_query_reuse(
-            first,
+        recovery._session_state_capability_seal_for_bridge_group(
+            (first, equivalent, third),
             closure,
-            reusable,
-        )
-        is seal
-    )
-    assert (
-        recovery._session_state_capability_seal_with_query_reuse(
-            equivalent,
-            closure,
-            reusable,
         )
         is seal
     )
     assert len(calls) == 1
+    assert calls[0][0] is first
 
-    assert (
-        recovery._session_state_capability_seal_with_query_reuse(
-            outside_audit,
-            closure,
-            reusable,
-        )
-        is seal
+
+def test_task8_publication_seal_group_rejects_mismatch_and_drift(
+    monkeypatch,
+):
+    recovery = object.__new__(_DirectCfgRecovery)
+    recovery.image = SimpleNamespace(sha256="image")
+    recovery.control_flow_revision = 1
+    recovery.producer_seed_revision = 2
+    recovery.absolute_memory_write_revision = 3
+    recovery.reference_classification_revision = 4
+    monkeypatch.setattr(
+        recovery,
+        "_summary_fact_signature",
+        lambda: ("facts",),
     )
-    assert (
-        recovery._session_state_capability_seal_with_query_reuse(
-            changed_incoming,
-            closure,
-            reusable,
+    session = object()
+    incoming_calls = (object(),)
+    backend_bodies = (object(),)
+
+    def bridge(allocation_caller, *, incoming=incoming_calls):
+        return SimpleNamespace(
+            consumer_entry=0x1000,
+            incoming_calls=incoming,
+            allocator=0x2000,
+            allocation_caller=allocation_caller,
+            allocator_session=session,
+            backend_root=0x3000,
+            backend_bodies=backend_bodies,
         )
-        is seal
+
+    closure = object()
+    first = bridge(0x4100)
+    equivalent = bridge(0x4200)
+    changed_incoming = bridge(0x4200, incoming=(object(),))
+    seal = SimpleNamespace(
+        session_relevant_functions=frozenset({0x4100, 0x4200})
     )
-    assert len(calls) == 3
+    calls = []
+
+    def prove(candidate, candidate_closure, *, allocation_callers=None):
+        calls.append((candidate, candidate_closure, allocation_callers))
+        return seal
+
+    monkeypatch.setattr(recovery, "_session_state_capability_seal", prove)
+    assert (
+        recovery._session_state_capability_seal_for_bridge_group(
+            (first, changed_incoming),
+            closure,
+        )
+        is None
+    )
+    assert not calls
 
     for field, value in (
         ("consumer_entry", 0x1001),
@@ -47120,53 +47548,144 @@ def test_task8_publication_seal_reuses_only_equivalent_bridge_context(
             }
         )
         assert (
-            recovery._session_state_capability_seal_with_query_reuse(
-                changed,
+            recovery._session_state_capability_seal_for_bridge_group(
+                (first, changed),
                 closure,
-                reusable,
             )
-            is seal
+            is None
         )
-    assert len(calls) == 8
-    assert (
-        recovery._session_state_capability_seal_with_query_reuse(
-            equivalent,
-            object(),
-            reusable,
-        )
-        is seal
+    assert not calls
+
+    def mutate_during_audit(*_args, **_kwargs):
+        recovery.control_flow_revision += 1
+        return seal
+
+    monkeypatch.setattr(
+        recovery,
+        "_session_state_capability_seal",
+        mutate_during_audit,
     )
-    assert len(calls) == 9
+    assert (
+        recovery._session_state_capability_seal_for_bridge_group(
+            (first, equivalent),
+            closure,
+        )
+        is None
+    )
 
-    failed_calls = []
 
-    def fail_then_pass(candidate, candidate_closure):
-        failed_calls.append((candidate, candidate_closure))
-        return None if len(failed_calls) == 1 else seal
+def test_task8_publication_seal_group_caches_failure_only_for_one_query_call(
+    monkeypatch,
+):
+    recovery = object.__new__(_DirectCfgRecovery)
+    recovery.image = SimpleNamespace(sha256="image")
+    recovery.control_flow_revision = 1
+    recovery.producer_seed_revision = 2
+    recovery.absolute_memory_write_revision = 3
+    recovery.reference_classification_revision = 4
+    monkeypatch.setattr(
+        recovery,
+        "_summary_fact_signature",
+        lambda: ("facts",),
+    )
+    session = object()
+    bridge = SimpleNamespace(
+        consumer_entry=0x1000,
+        incoming_calls=(object(),),
+        allocator=0x2000,
+        allocation_caller=0x4100,
+        allocator_session=session,
+        backend_root=0x3000,
+        backend_bodies=(object(),),
+    )
+    closure = object()
+    calls = []
+
+    def fail_then_pass(candidate, candidate_closure, **_kwargs):
+        calls.append((candidate, candidate_closure))
+        if len(calls) == 1:
+            return None
+        return SimpleNamespace(
+            session_relevant_functions=frozenset({0x4100})
+        )
 
     monkeypatch.setattr(
         recovery,
         "_session_state_capability_seal",
         fail_then_pass,
     )
-    reusable = []
     assert (
-        recovery._session_state_capability_seal_with_query_reuse(
-            first,
+        recovery._session_state_capability_seal_for_bridge_group(
+            (bridge,),
             closure,
-            reusable,
         )
         is None
     )
     assert (
-        recovery._session_state_capability_seal_with_query_reuse(
-            equivalent,
+        recovery._session_state_capability_seal_for_bridge_group(
+            (bridge,),
             closure,
-            reusable,
         )
-        is seal
+        is not None
     )
-    assert len(failed_calls) == 2
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("cached_failure", (False, True))
+def test_task8_publication_seal_group_preserves_totality_cache_hits(
+    monkeypatch,
+    cached_failure,
+):
+    recovery = object.__new__(_DirectCfgRecovery)
+    session = object()
+    closure = object()
+    callers = (0x4100, 0x4200)
+    bridges = tuple(
+        SimpleNamespace(
+            consumer_entry=0x1000,
+            incoming_calls=("incoming",),
+            allocator=0x2000,
+            allocation_caller=caller,
+            allocator_session=session,
+            backend_root=0x3000,
+            backend_bodies=("body",),
+        )
+        for caller in callers
+    )
+    seal = SimpleNamespace(
+        session_relevant_functions=frozenset(callers)
+    )
+    certificates = {
+        caller: SimpleNamespace(capability_seal=seal) for caller in callers
+    }
+    monkeypatch.setattr(
+        recovery,
+        "_returning_capability_totality_cache_key",
+        lambda bridge, _closure: bridge.allocation_caller,
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_cached_returning_capability_totality",
+        lambda key: (
+            (True, None)
+            if cached_failure and key == callers[0]
+            else (True, certificates[key])
+        ),
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_session_state_capability_seal_for_bridge_group",
+        lambda *_args, **_kwargs: pytest.fail(
+            "valid totality cache hits reran the whole-image seal"
+        ),
+    )
+
+    result = recovery._session_state_capability_seals_for_bridges(
+        bridges,
+        closure,
+    )
+
+    assert result == (None if cached_failure else (seal, seal))
 
 
 def test_capability_seal_rejects_exported_prior_callback_writer():
@@ -73049,6 +73568,64 @@ def test_nested_affine_ignores_clobber_on_non_backedge_exit(tmp_path):
         for row in cfg.control_targets.finite_internal_edges
         if row.source == 0x0040100D and row.flow_kind == "indirect-call-finite-value"
     } == {0x00401090, 0x004010A0, 0x004010B0}
+
+
+def test_affine_loop_indexes_and_values_are_revision_cached(
+    tmp_path,
+    monkeypatch,
+):
+    image = load_dispatch_image(tmp_path, mode="bounded-descriptor-array")
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    function_entry = 0x00401000
+    use_address = 0x00401009
+    backedges = recovery._function_non_call_backedges(function_entry)
+    assert len(backedges) == 1
+    cycle = recovery._affine_loop_cycle_addresses(
+        backedges[0],
+        function_entry,
+    )
+    values = recovery._finite_affine_loop_register_values(
+        use_address,
+        "edi",
+        function_entry,
+    )
+    assert values[0] is True
+    assert values[1] is not None
+
+    monkeypatch.setattr(
+        recovery,
+        "_summary_successors",
+        lambda *_args, **_kwargs: pytest.fail(
+            "cached affine cycle rebuilt its adjacency"
+        ),
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_finite_affine_loop_register_values_uncached",
+        lambda *_args, **_kwargs: pytest.fail(
+            "cached affine values were recomputed"
+        ),
+    )
+    assert (
+        recovery._affine_loop_cycle_addresses(
+            backedges[0],
+            function_entry,
+        )
+        == cycle
+    )
+    assert (
+        recovery._finite_affine_loop_register_values(
+            use_address,
+            "edi",
+            function_entry,
+        )
+        == values
+    )
 
 
 @pytest.mark.parametrize(

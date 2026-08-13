@@ -4286,6 +4286,16 @@ class _DirectCfgRecovery:
         self.non_call_successors: dict[int, set[int]] = {}
         self.incoming_edges: dict[int, set[tuple[int, str]]] = {}
         self.non_call_backedges: set[CfgEdge] = set()
+        self.function_non_call_backedges_cache: dict[
+            tuple[int, int], tuple[CfgEdge, ...]
+        ] = {}
+        self.affine_loop_cycle_addresses_cache: dict[
+            tuple[CfgEdge, int, tuple[Any, ...], int], frozenset[int]
+        ] = {}
+        self.finite_affine_loop_register_values_cache: dict[
+            tuple[int, str, int, tuple[Any, ...], int],
+            tuple[bool, tuple[frozenset[int], str] | None],
+        ] = {}
         self.control_flow_revision = 0
         self.edge_provenance: dict[CfgEdge, str] = {}
         self.direct_calls: set[DirectCall] = set()
@@ -4703,6 +4713,12 @@ class _DirectCfgRecovery:
         self.stack_state_cache: dict[
             tuple[int, int, int], dict[int, tuple[int, int | None]] | None
         ] = {}
+        self.stack_state_query_caches: list[
+            dict[
+                tuple[int, int, int],
+                dict[int, tuple[int, int | None]] | None,
+            ]
+        ] = []
         self.callee_cleanup_cache: dict[tuple[int, int, int], int | None] = {}
         self.argument_state_cache: dict[
             tuple[int, str, tuple[int, ...], int],
@@ -19008,13 +19024,14 @@ class _DirectCfgRecovery:
                         queued.add(successor)
                 iterations += 1
                 self.limits.check("max_summary_iterations", iterations)
-            returns = tuple(
+            reachable_returns = tuple(
                 address
                 for address in self._function_instruction_addresses(entry)
                 if self._owned_decoded(address).group(CS_GRP_RET)
+                and address in states
             )
-            return bool(returns) and all(
-                states.get(address, False) for address in returns
+            return bool(reachable_returns) and all(
+                states[address] for address in reachable_returns
             )
 
         worklist = list(summaries)
@@ -19340,15 +19357,16 @@ class _DirectCfgRecovery:
         )
         if states is None:
             return False
-        returns = tuple(
+        reachable_returns = tuple(
             address
             for address in self._function_instruction_addresses(
                 function_entry
             )
             if self._owned_decoded(address).group(CS_GRP_RET)
+            and address in states
         )
-        return bool(returns) and all(
-            states.get(address, False) for address in returns
+        return bool(reachable_returns) and all(
+            states[address] for address in reachable_returns
         )
 
     def _direction_sensitive_call_is_safe(
@@ -72043,6 +72061,12 @@ class _DirectCfgRecovery:
         )
         if cache_key in self.stack_state_cache:
             return self.stack_state_cache[cache_key]
+        query_caches = getattr(self, "stack_state_query_caches", ())
+        if (
+            query_caches
+            and cache_key in query_caches[-1]
+        ):
+            return query_caches[-1][cache_key]
         states: dict[int, tuple[int, int | None]] = {function_entry: (0, None)}
         pending = [function_entry]
         queued = {function_entry}
@@ -72162,6 +72186,8 @@ class _DirectCfgRecovery:
             self.limits.check("max_summary_iterations", iterations)
         if not saw_open_call:
             self.stack_state_cache[cache_key] = states
+        elif query_caches:
+            query_caches[-1][cache_key] = states
         return states
 
     def _closed_function_stack_cleanup(self, function_entry: int) -> int | None:
@@ -76834,6 +76860,105 @@ class _DirectCfgRecovery:
             return across_blocks
         return affine_values if affine_loop else None
 
+    def _function_non_call_backedges(
+        self,
+        function_entry: int,
+    ) -> tuple[CfgEdge, ...]:
+        """Index exact local backedges once per CFG revision."""
+        cache = getattr(
+            self,
+            "function_non_call_backedges_cache",
+            None,
+        )
+        if cache is None:
+            cache = {}
+            self.function_non_call_backedges_cache = cache
+        key = (function_entry, self.control_flow_revision)
+        if key not in cache:
+            following_entry = self._following_function_entry(function_entry)
+            cache[key] = tuple(
+                sorted(
+                    (
+                        edge
+                        for edge in self.non_call_backedges
+                        if function_entry
+                        <= edge.target
+                        <= edge.source
+                        < following_entry
+                    ),
+                    key=_edge_key,
+                )
+            )
+        return cache[key]
+
+    def _affine_loop_cycle_addresses(
+        self,
+        edge: CfgEdge,
+        function_entry: int,
+    ) -> frozenset[int]:
+        """Cache one exact entry-to-backedge cycle at current CFG facts."""
+        cache = getattr(
+            self,
+            "affine_loop_cycle_addresses_cache",
+            None,
+        )
+        if cache is None:
+            cache = {}
+            self.affine_loop_cycle_addresses_cache = cache
+        key = (
+            edge,
+            function_entry,
+            self._summary_fact_signature(),
+            self.control_flow_revision,
+        )
+        if key in cache:
+            return cache[key]
+        following_entry = self._following_function_entry(function_entry)
+        adjacency: dict[int, tuple[int, ...]] = {}
+        reverse: dict[int, set[int]] = {}
+        for row in self._function_instruction_addresses_between(
+            function_entry,
+            edge.target,
+            edge.source + 1,
+        ):
+            successors = tuple(
+                successor
+                for successor in self._summary_successors(
+                    row,
+                    function_entry,
+                    following_entry,
+                )
+                if edge.target <= successor <= edge.source
+            )
+            adjacency[row] = successors
+            for successor in successors:
+                reverse.setdefault(successor, set()).add(row)
+
+        reachable = set()
+        pending = [edge.target]
+        while pending:
+            current = heapq.heappop(pending)
+            if current in reachable:
+                continue
+            reachable.add(current)
+            for successor in adjacency.get(current, ()):
+                if successor not in reachable:
+                    heapq.heappush(pending, successor)
+
+        reaches_source = set()
+        pending = [edge.source]
+        while pending:
+            current = heapq.heappop(pending)
+            if current in reaches_source:
+                continue
+            reaches_source.add(current)
+            for predecessor in reverse.get(current, ()):
+                if predecessor not in reaches_source:
+                    heapq.heappush(pending, predecessor)
+        result = frozenset(reachable & reaches_source)
+        cache[key] = result
+        return result
+
     def _loop_can_bypass_register_definition(
         self,
         address: int,
@@ -76841,7 +76966,7 @@ class _DirectCfgRecovery:
         register_family: str,
         function_entry: int,
     ) -> bool:
-        for edge in self.non_call_backedges:
+        for edge in self._function_non_call_backedges(function_entry):
             if not (
                 function_entry <= definition < edge.target <= address
                 and address < edge.source
@@ -76869,69 +76994,49 @@ class _DirectCfgRecovery:
         register_family: str,
         function_entry: int,
     ) -> tuple[bool, tuple[frozenset[int], str] | None]:
-        following_entry = min(
-            (row for row in self.function_addresses if row > function_entry),
-            default=0x1_0000_0000,
+        """Reuse one exact affine-loop result at current CFG facts."""
+        cache = getattr(
+            self,
+            "finite_affine_loop_register_values_cache",
+            None,
         )
-        cycle_cache: dict[CfgEdge, frozenset[int]] = {}
-
-        def cycle_addresses(edge: CfgEdge) -> frozenset[int]:
-            if edge in cycle_cache:
-                return cycle_cache[edge]
-            adjacency: dict[int, tuple[int, ...]] = {}
-            reverse: dict[int, set[int]] = {}
-            for row in self._function_instruction_addresses_between(
-                function_entry, edge.target, edge.source + 1
-            ):
-                successors = tuple(
-                    successor
-                    for successor in self._summary_successors(
-                        row, function_entry, following_entry
-                    )
-                    if edge.target <= successor <= edge.source
-                )
-                adjacency[row] = successors
-                for successor in successors:
-                    reverse.setdefault(successor, set()).add(row)
-
-            reachable = set()
-            pending = [edge.target]
-            while pending:
-                current = heapq.heappop(pending)
-                if current in reachable:
-                    continue
-                reachable.add(current)
-                for successor in adjacency.get(current, ()):
-                    if successor not in reachable:
-                        heapq.heappush(pending, successor)
-
-            reaches_source = set()
-            pending = [edge.source]
-            while pending:
-                current = heapq.heappop(pending)
-                if current in reaches_source:
-                    continue
-                reaches_source.add(current)
-                for predecessor in reverse.get(current, ()):
-                    if predecessor not in reaches_source:
-                        heapq.heappush(pending, predecessor)
-            result = frozenset(reachable & reaches_source)
-            cycle_cache[edge] = result
-            return result
-
-        backedges = tuple(
-            sorted(
-                (
-                    edge
-                    for edge in self.non_call_backedges
-                    if edge.target <= address < edge.source
-                    and function_entry <= edge.target
-                ),
-                key=_edge_key,
+        if cache is None:
+            cache = {}
+            self.finite_affine_loop_register_values_cache = cache
+        key = (
+            address,
+            register_family,
+            function_entry,
+            self._summary_fact_signature(),
+            self.control_flow_revision,
+        )
+        if key not in cache:
+            cache[key] = self._finite_affine_loop_register_values_uncached(
+                address,
+                register_family,
+                function_entry,
             )
+        return cache[key]
+
+    def _finite_affine_loop_register_values_uncached(
+        self,
+        address: int,
+        register_family: str,
+        function_entry: int,
+    ) -> tuple[bool, tuple[frozenset[int], str] | None]:
+        backedges = tuple(
+            edge
+            for edge in self._function_non_call_backedges(function_entry)
+            if edge.target <= address < edge.source
         )
         if not backedges:
             return False, None
+
+        def cycle_addresses(edge: CfgEdge) -> frozenset[int]:
+            return self._affine_loop_cycle_addresses(
+                edge,
+                function_entry,
+            )
         writing_backedges = []
         for edge in backedges:
             writes_register = False
@@ -79739,6 +79844,8 @@ class _DirectCfgRecovery:
         self,
         bridge: _PublicationSessionBridge,
         closure: _ReturningPublicationClosure,
+        *,
+        allocation_callers: frozenset[int] | None = None,
     ) -> _SessionStateCapabilitySeal | None:
         """Seal every image-derived capability to allocator session state.
 
@@ -79748,6 +79855,13 @@ class _DirectCfgRecovery:
         image-derived literal/reference and every returning-body address
         domain must remain in one exact certified role.
         """
+        if allocation_callers is None:
+            allocation_callers = frozenset({bridge.allocation_caller})
+        if (
+            not allocation_callers
+            or bridge.allocation_caller not in allocation_callers
+        ):
+            return None
         session = bridge.allocator_session
         fact = self._owned_fixed_bump_allocator_fact(bridge.allocator)
         if fact is None or fact.grow_target != session.grow_target:
@@ -79992,7 +80106,7 @@ class _DirectCfgRecovery:
         session_relevant_functions = set(
             {
                 bridge.allocator,
-                bridge.allocation_caller,
+                *allocation_callers,
                 session.session_root,
                 session.init_target,
                 session.grow_target,
@@ -80176,6 +80290,9 @@ class _DirectCfgRecovery:
         ] = {}
         singleton_fallback_barriers: set[tuple[int, str, int]] = set()
         reaching_partial_write_memo: dict[tuple[int, str, int], bool] = {}
+        exact_register_values_memo: dict[
+            tuple[int, str, int], frozenset[int] | None
+        ] = {}
 
         def straight_line_singleton_constant_before(
             use_address: int,
@@ -80712,13 +80829,18 @@ class _DirectCfgRecovery:
             register_family: str,
             function_entry: int,
         ) -> frozenset[int] | None:
+            key = (use_address, register_family, function_entry)
+            if key in exact_register_values_memo:
+                return exact_register_values_memo[key]
             singleton = straight_line_singleton_constant_before(
                 use_address,
                 register_family,
                 function_entry,
             )
             if singleton is not None:
-                return frozenset({singleton})
+                result = frozenset({singleton})
+                exact_register_values_memo[key] = result
+                return result
             contextual = (
                 self._callback_table_literal_register_values_before(
                     use_address,
@@ -80727,6 +80849,7 @@ class _DirectCfgRecovery:
                 )
             )
             if contextual is not None:
+                exact_register_values_memo[key] = contextual
                 return contextual
             if has_singleton_fallback_barrier(
                 use_address,
@@ -80737,6 +80860,7 @@ class _DirectCfgRecovery:
                 register_family,
                 function_entry,
             ):
+                exact_register_values_memo[key] = None
                 return None
             finite = self._finite_register_values_before(
                 use_address,
@@ -80744,7 +80868,9 @@ class _DirectCfgRecovery:
                 function_entry,
                 frozenset(),
             )
-            return None if finite is None else finite[0]
+            result = None if finite is None else finite[0]
+            exact_register_values_memo[key] = result
+            return result
 
         def singleton_register_domains(
             use_address: int,
@@ -81898,46 +82024,62 @@ class _DirectCfgRecovery:
             ),
         )
 
-    def _session_state_capability_seal_with_query_reuse(
+    def _session_state_capability_seal_for_bridge_group(
         self,
-        bridge: _PublicationSessionBridge,
+        bridges: tuple[_PublicationSessionBridge, ...],
         closure: _ReturningPublicationClosure,
-        reusable: list[
-            tuple[
-                _PublicationSessionBridge,
-                _ReturningPublicationClosure,
-                _SessionStateCapabilitySeal,
-            ]
-        ],
     ) -> _SessionStateCapabilitySeal | None:
-        """Reuse an identical seal audit inside one publication query.
+        """Audit one exact bridge-equivalence group once per query.
 
-        ``allocation_caller`` is the only bridge field intentionally omitted
-        from the structural comparison.  It affects the seal solely by being
-        added to ``session_relevant_functions``.  Therefore a completed seal
-        covers another caller exactly when both callers are already members
-        of that returned audit set.  The list is query-local, so no mutable
-        recovery state or dependency snapshot can outlive the closure that
-        produced it.
+        The only permitted difference is ``allocation_caller``.  Supplying
+        the complete caller set makes a failed late whole-image audit just as
+        authoritative for the group as a success, without persisting either
+        result beyond this publication query.
         """
-        for source, source_closure, seal in reusable:
-            if (
-                source_closure is closure
-                and source.consumer_entry == bridge.consumer_entry
-                and source.incoming_calls == bridge.incoming_calls
-                and source.allocator == bridge.allocator
-                and source.allocator_session == bridge.allocator_session
-                and source.backend_root == bridge.backend_root
-                and source.backend_bodies == bridge.backend_bodies
-                and source.allocation_caller
-                in seal.session_relevant_functions
-                and bridge.allocation_caller
-                in seal.session_relevant_functions
-            ):
-                return seal
-        seal = self._session_state_capability_seal(bridge, closure)
-        if seal is not None:
-            reusable.append((bridge, closure, seal))
+        if not bridges:
+            return None
+        source = bridges[0]
+        if any(
+            bridge.consumer_entry != source.consumer_entry
+            or bridge.incoming_calls != source.incoming_calls
+            or bridge.allocator != source.allocator
+            or bridge.allocator_session != source.allocator_session
+            or bridge.backend_root != source.backend_root
+            or bridge.backend_bodies != source.backend_bodies
+            for bridge in bridges[1:]
+        ):
+            return None
+        currentness = (
+            self.image.sha256,
+            self._summary_fact_signature(),
+            self.control_flow_revision,
+            self.producer_seed_revision,
+            self.absolute_memory_write_revision,
+            self.reference_classification_revision,
+        )
+        allocation_callers = frozenset(
+            bridge.allocation_caller for bridge in bridges
+        )
+        seal = self._session_state_capability_seal(
+            source,
+            closure,
+            allocation_callers=allocation_callers,
+        )
+        if currentness != (
+            self.image.sha256,
+            self._summary_fact_signature(),
+            self.control_flow_revision,
+            self.producer_seed_revision,
+            self.absolute_memory_write_revision,
+            self.reference_classification_revision,
+        ):
+            return None
+        if (
+            seal is None
+            or not allocation_callers
+            <= seal.session_relevant_functions
+        ):
+            return None
         return seal
 
     def _allocator_totality_from_returning_closure(
@@ -81945,57 +82087,34 @@ class _DirectCfgRecovery:
         bridge: _PublicationSessionBridge,
         closure: _ReturningPublicationClosure,
         *,
-        capability_seal_reuse: list[
-            tuple[
-                _PublicationSessionBridge,
-                _ReturningPublicationClosure,
-                _SessionStateCapabilitySeal,
-            ]
-        ]
-        | None = None,
+        capability_seal: _SessionStateCapabilitySeal | None = None,
     ) -> _AllocatorTotalityCertificate | None:
         """Complete Phase A with a sealed returning-closure state audit."""
         session = bridge.allocator_session
-        body_signature = tuple(
-            (body.function_entry, body.instruction_sha256)
-            for body in closure.bodies
+        cache_key = self._returning_capability_totality_cache_key(
+            bridge,
+            closure,
         )
-        cache_key = (
-            "returning-capability-seal-v1",
-            bridge.allocator,
-            bridge.allocation_caller,
-            session.lifetime_roots,
-            body_signature,
-            self._summary_fact_signature(),
-            self.control_flow_revision,
-            self.producer_seed_revision,
-            self.absolute_memory_write_revision,
-            self.reference_classification_revision,
+        cache_hit, cached_result = (
+            self._cached_returning_capability_totality(cache_key)
         )
-        if cache_key in self.allocator_totality_cache:
-            cached = self.allocator_totality_cache[cache_key]
-            if cached is None:
-                return None
-            if self._dependency_memo_hit(cached):
-                result = cached.result
-                return (
-                    result
-                    if isinstance(result, _AllocatorTotalityCertificate)
-                    and result.capability_seal is not None
-                    else None
+        if cache_hit:
+            if (
+                cached_result is not None
+                and (
+                    capability_seal is None
+                    or cached_result.capability_seal == capability_seal
                 )
+            ):
+                return cached_result
+            if cached_result is None:
+                return None
             del self.allocator_totality_cache[cache_key]
         self.allocator_totality_cache[cache_key] = None
 
-        seal = (
-            self._session_state_capability_seal(bridge, closure)
-            if capability_seal_reuse is None
-            else self._session_state_capability_seal_with_query_reuse(
-                bridge,
-                closure,
-                capability_seal_reuse,
-            )
-        )
+        seal = capability_seal
+        if seal is None:
+            seal = self._session_state_capability_seal(bridge, closure)
         if seal is None:
             return None
         body_entries = seal.returning_body_functions
@@ -82055,6 +82174,10 @@ class _DirectCfgRecovery:
             for function_entry in body_entries
         )
         dependencies.update(
+            ("function", function_entry)
+            for function_entry in seal.session_relevant_functions
+        )
+        dependencies.update(
             ("function", role.function_entry)
             for role in seal.descriptor_rebuild_roles
         )
@@ -82086,24 +82209,138 @@ class _DirectCfgRecovery:
         self.allocator_totality_cache[cache_key] = entry
         return certificate
 
+    def _returning_capability_totality_cache_key(
+        self,
+        bridge: _PublicationSessionBridge,
+        closure: _ReturningPublicationClosure,
+    ) -> tuple[Any, ...]:
+        """Key one returning-closure totality proof to exact currentness."""
+        session = bridge.allocator_session
+        body_signature = tuple(
+            (body.function_entry, body.instruction_sha256)
+            for body in closure.bodies
+        )
+        return (
+            "returning-capability-seal-v1",
+            bridge.allocator,
+            bridge.allocation_caller,
+            session.lifetime_roots,
+            body_signature,
+            self._summary_fact_signature(),
+            self.control_flow_revision,
+            self.producer_seed_revision,
+            self.absolute_memory_write_revision,
+            self.reference_classification_revision,
+        )
+
+    def _cached_returning_capability_totality(
+        self,
+        cache_key: tuple[Any, ...],
+    ) -> tuple[bool, _AllocatorTotalityCertificate | None]:
+        """Read one valid totality hit without starting a new seal audit."""
+        if cache_key in self.allocator_totality_cache:
+            cached = self.allocator_totality_cache[cache_key]
+            if cached is None:
+                return True, None
+            if self._dependency_memo_hit(cached):
+                result = cached.result
+                if (
+                    isinstance(result, _AllocatorTotalityCertificate)
+                    and result.capability_seal is not None
+                ):
+                    return True, result
+            del self.allocator_totality_cache[cache_key]
+        return False, None
+
+    def _session_state_capability_seals_for_bridges(
+        self,
+        bridges: tuple[_PublicationSessionBridge, ...],
+        closure: _ReturningPublicationClosure,
+    ) -> tuple[_SessionStateCapabilitySeal, ...] | None:
+        """Resolve exact bridge-group seals, preserving totality cache hits."""
+        groups: list[list[int]] = []
+        for index, bridge in enumerate(bridges):
+            for group in groups:
+                source = bridges[group[0]]
+                if (
+                    bridge.consumer_entry == source.consumer_entry
+                    and bridge.incoming_calls == source.incoming_calls
+                    and bridge.allocator == source.allocator
+                    and bridge.allocator_session == source.allocator_session
+                    and bridge.backend_root == source.backend_root
+                    and bridge.backend_bodies == source.backend_bodies
+                ):
+                    group.append(index)
+                    break
+            else:
+                groups.append([index])
+
+        resolved: list[_SessionStateCapabilitySeal | None] = [
+            None
+        ] * len(bridges)
+        for group in groups:
+            cached_results = []
+            all_cached = True
+            for index in group:
+                bridge = bridges[index]
+                cache_key = self._returning_capability_totality_cache_key(
+                    bridge,
+                    closure,
+                )
+                cache_hit, cached_result = (
+                    self._cached_returning_capability_totality(cache_key)
+                )
+                if cache_hit and cached_result is None:
+                    return None
+                if not cache_hit:
+                    all_cached = False
+                    continue
+                cached_results.append(cached_result)
+            allocation_callers = frozenset(
+                bridges[index].allocation_caller for index in group
+            )
+            cached_seals = []
+            for result in cached_results:
+                if (
+                    result is None
+                    or result.capability_seal is None
+                    or any(
+                        seal == result.capability_seal
+                        for seal in cached_seals
+                    )
+                ):
+                    continue
+                cached_seals.append(result.capability_seal)
+            if (
+                all_cached
+                and len(cached_seals) == 1
+                and allocation_callers
+                <= next(iter(cached_seals)).session_relevant_functions
+            ):
+                seal = next(iter(cached_seals))
+            else:
+                frozen_group = tuple(bridges[index] for index in group)
+                seal = self._session_state_capability_seal_for_bridge_group(
+                    frozen_group,
+                    closure,
+                )
+                if seal is None:
+                    return None
+            for index in group:
+                resolved[index] = seal
+        return tuple(seal for seal in resolved if seal is not None)
+
     def _finalize_publication_backend_bridge(
         self,
         bridge: _PublicationSessionBridge,
         closure: _ReturningPublicationClosure,
         *,
-        capability_seal_reuse: list[
-            tuple[
-                _PublicationSessionBridge,
-                _ReturningPublicationClosure,
-                _SessionStateCapabilitySeal,
-            ]
-        ]
-        | None = None,
+        capability_seal: _SessionStateCapabilitySeal | None = None,
     ) -> _PublicationBackendBridge | None:
         certificate = self._allocator_totality_from_returning_closure(
             bridge,
             closure,
-            capability_seal_reuse=capability_seal_reuse,
+            capability_seal=capability_seal,
         )
         if certificate is None:
             return None
@@ -84743,20 +84980,25 @@ class _DirectCfgRecovery:
         )
         if closure is None:
             return None
-        capability_seal_reuse: list[
-            tuple[
-                _PublicationSessionBridge,
-                _ReturningPublicationClosure,
-                _SessionStateCapabilitySeal,
-            ]
-        ] = []
+        capability_seals = (
+            self._session_state_capability_seals_for_bridges(
+                frozen_session_bridges,
+                closure,
+            )
+        )
+        if capability_seals is None:
+            return None
         finalized_backend_bridges = tuple(
             self._finalize_publication_backend_bridge(
                 bridge,
                 closure,
-                capability_seal_reuse=capability_seal_reuse,
+                capability_seal=capability_seal,
             )
-            for bridge in frozen_session_bridges
+            for bridge, capability_seal in zip(
+                frozen_session_bridges,
+                capability_seals,
+                strict=True,
+            )
         )
         if any(bridge is None for bridge in finalized_backend_bridges):
             return None
@@ -90805,19 +91047,60 @@ class _DirectCfgRecovery:
             return False
         prologue_pushes = []
         cursor = function_entry
-        for _ in range(4):
+        for _ in range(16):
             decoded = self._owned_decoded(cursor)
-            if not (
+            exact_saved_push = bool(
                 decoded.id == X86_INS_PUSH
                 and len(decoded.operands) == 1
                 and decoded.operands[0].type == X86_OP_REG
                 and decoded.operands[0].size == 4
                 and self._register_family(decoded.operands[0].reg)
                 in {"ebx", "esi", "edi", "ebp"}
-            ):
+            )
+            if exact_saved_push:
+                prologue_pushes.append(decoded)
+            if cursor == push_address:
                 break
-            prologue_pushes.append(decoded)
-            cursor += decoded.size
+            if (
+                any(
+                    group
+                    in self._owned_decoded_groups(decoded)
+                    for group in (
+                        CS_GRP_CALL,
+                        CS_GRP_JUMP,
+                        CS_GRP_RET,
+                        CS_GRP_IRET,
+                    )
+                )
+                or self._instruction_reads_register_family(
+                    decoded,
+                    register_family,
+                )
+                or any(
+                    register != X86_REG_INVALID
+                    and self._register_family(register)
+                    in {register_family, "esp"}
+                    for register in decoded.regs_write
+                )
+                or any(
+                    operand.type == X86_OP_REG
+                    and operand.access & CS_AC_WRITE
+                    and self._register_family(operand.reg)
+                    in {register_family, "esp"}
+                    for operand in decoded.operands
+                )
+            ):
+                return False
+            next_address = cursor + decoded.size
+            if self._summary_successors(
+                cursor,
+                function_entry,
+                self._following_function_entry(function_entry),
+            ) != (next_address,):
+                return False
+            cursor = next_address
+        else:
+            return False
         matching_pushes = tuple(
             decoded
             for decoded in prologue_pushes
@@ -90829,18 +91112,35 @@ class _DirectCfgRecovery:
             or matching_pushes[0].address != push_address
         ):
             return False
-        stack_states = self._function_stack_states(function_entry)
+        tracked = self._function_private_stack_coordinate_states(
+            function_entry
+        )
         push_state = (
-            None if stack_states is None else stack_states.get(push_address)
+            None if tracked is None else tracked[0].get(push_address)
         )
         if push_state is None:
             return False
-        saved_offset = push_state[0] - 4
+        saved_coordinate = (
+            push_state[0][0],
+            push_state[0][1] - 4,
+        )
+
+        def overlaps_saved(
+            coordinate: tuple[int, int],
+            width: int,
+        ) -> bool:
+            return bool(
+                width > 0
+                and coordinate[0] == saved_coordinate[0]
+                and coordinate[1] < saved_coordinate[1] + 4
+                and saved_coordinate[1] < coordinate[1] + width
+            )
+
         following_entry = self._following_function_entry(function_entry)
         restores = []
         returns = []
         for address in self._function_instruction_addresses(function_entry):
-            state = stack_states.get(address)
+            state = tracked[0].get(address)
             if state is None:
                 continue
             decoded = self._owned_decoded(address)
@@ -90852,8 +91152,11 @@ class _DirectCfgRecovery:
             if CS_GRP_RET in groups:
                 returns.append(address)
                 continue
-            sp_delta, bp_delta = state
-            if decoded.mnemonic == "pop" and sp_delta == saved_offset:
+            sp_coordinate, bp_coordinate = state
+            if (
+                decoded.mnemonic == "pop"
+                and sp_coordinate == saved_coordinate
+            ):
                 if not (
                     len(decoded.operands) == 1
                     and decoded.operands[0].type == X86_OP_REG
@@ -90871,34 +91174,33 @@ class _DirectCfgRecovery:
                 continue
             if (
                 decoded.id == X86_INS_PUSH or CS_GRP_CALL in groups
-            ) and sp_delta - 4 == saved_offset:
+            ) and overlaps_saved(
+                (sp_coordinate[0], sp_coordinate[1] - 4),
+                4,
+            ):
+                return False
+            if decoded.mnemonic == "pop" and overlaps_saved(
+                sp_coordinate,
+                4,
+            ):
                 return False
             for operand in decoded.operands:
                 if operand.type != X86_OP_MEM:
                     continue
-                base_family = self._register_family(operand.mem.base)
-                index_family = self._register_family(operand.mem.index)
-                if index_family == "esp" or (
-                    index_family == "ebp" and bp_delta is not None
-                ):
-                    return False
-                base_delta = (
-                    sp_delta
-                    if base_family == "esp"
-                    else bp_delta
-                    if base_family == "ebp"
-                    else None
+                coordinate = self._private_stack_operand_coordinate(
+                    address,
+                    operand,
+                    function_entry,
                 )
-                if base_delta is None:
+                if coordinate is None:
+                    if self._is_stack_backed_memory(
+                        address,
+                        operand,
+                        function_entry,
+                    ):
+                        return False
                     continue
-                if decoded.id == X86_INS_LEA:
-                    return False
-                logical = base_delta + operand.mem.disp
-                width = max(operand.size, 1)
-                if (
-                    logical < saved_offset + 4
-                    and saved_offset < logical + width
-                ):
+                if overlaps_saved(coordinate, max(operand.size, 1)):
                     return False
             if any(
                 operand.type == X86_OP_REG
@@ -90906,7 +91208,7 @@ class _DirectCfgRecovery:
                 and (
                     self._register_family(operand.reg) == "esp"
                     or self._register_family(operand.reg) == "ebp"
-                    and bp_delta is not None
+                    and bp_coordinate is not None
                 )
                 for operand in decoded.operands
             ) and not (
@@ -91042,11 +91344,37 @@ class _DirectCfgRecovery:
             )
             if live_mask & read_mask and not ignored_prologue_save:
                 return True
-            if decoded.group(CS_GRP_CALL) and register_family in {
-                "eax",
-                "ecx",
-                "edx",
-            }:
+            groups = self._owned_decoded_groups(decoded)
+            if (
+                live_mask
+                and CS_GRP_CALL in groups
+                and register_family not in _CALL_CLOBBERED_REGISTER_NAMES
+            ):
+                targets = frozenset(
+                    self.call_targets_by_source.get(address, ())
+                )
+                direct = self.direct_call_targets_by_source.get(address)
+                if (
+                    not targets
+                    or direct is not None and targets != {direct}
+                    or any(
+                        self._registrar_function_entry(target) != target
+                        or self._function_reads_incoming_register(
+                            target,
+                            register_family,
+                        )
+                        for target in sorted(targets)
+                    )
+                    or any(
+                        edge.source == address
+                        for edge in self.terminal_external_edges
+                    )
+                ):
+                    return True
+            if (
+                CS_GRP_CALL in groups
+                and register_family in _CALL_CLOBBERED_REGISTER_NAMES
+            ):
                 write_mask |= full_mask
             output_mask = live_mask & ~write_mask
             for successor in self._summary_successors(
@@ -101034,8 +101362,7 @@ class _DirectCfgRecovery:
                 and (
                     not _path_local_partial_only
                     and returned_slice_is_scalar(operands[1])
-                    or _path_local_partial_only
-                    and self._partial_register_load_is_scalar_before(
+                    or self._partial_register_load_is_scalar_before(
                         decoded.address,
                         operands[1],
                         self._registrar_function_entry(decoded.address),
@@ -109662,6 +109989,7 @@ class _DirectCfgRecovery:
                 return False
 
         infeasible_call_addresses: set[int] = set()
+        no_return_call_addresses: set[int] = set()
 
         def raw_successors(decoded) -> tuple[int, ...] | None:
             groups = self._owned_decoded_groups(decoded)
@@ -109684,6 +110012,9 @@ class _DirectCfgRecovery:
                     # arm impossible.  Prune only that certified arm; a
                     # nonzero, open, or unresolved caller remains bottom.
                     infeasible_call_addresses.add(decoded.address)
+                    return ()
+                if self._call_is_proven_no_return(decoded, frozenset()):
+                    no_return_call_addresses.add(decoded.address)
                     return ()
                 return (
                     (decoded.address + decoded.size,)
@@ -109993,6 +110324,8 @@ class _DirectCfgRecovery:
             )
             if summary_successors != expected_summary_successors:
                 return False
+            if address in no_return_call_addresses:
+                saw_terminal = True
             for successor in successors:
                 if successor not in seen and successor not in queued:
                     heapq.heappush(pending, successor)
@@ -110691,6 +111024,28 @@ class _DirectCfgRecovery:
         store_address: int,
         function_entry: int,
     ) -> bool:
+        """Contain one scalar while sharing partial stack states per query."""
+        query_caches = getattr(self, "stack_state_query_caches", None)
+        if query_caches is None:
+            query_caches = []
+            self.stack_state_query_caches = query_caches
+        owns_query_cache = not query_caches
+        if owns_query_cache:
+            query_caches.append({})
+        try:
+            return self._private_stack_store_is_scalar_flow_quarantined_query(
+                store_address,
+                function_entry,
+            )
+        finally:
+            if owns_query_cache:
+                query_caches.pop()
+
+    def _private_stack_store_is_scalar_flow_quarantined_query(
+        self,
+        store_address: int,
+        function_entry: int,
+    ) -> bool:
         """Contain one local scalar through audited value flow and leaf calls."""
         if (
             store_address not in self.instructions
@@ -110895,6 +111250,47 @@ class _DirectCfgRecovery:
         incremental_stack_table_reads_cache: dict[
             int, frozenset[tuple[int, int]]
         ] = {}
+        query_stack_states_cache: dict[
+            int, dict[int, tuple[int, int | None]] | None
+        ] = {}
+
+        def query_register_has_private_stack_identity(
+            address: int,
+            register_family: str,
+            entry: int,
+        ) -> bool:
+            """Reuse partial stack states only inside this immutable query."""
+            if register_family not in {"esp", "ebp"}:
+                return False
+            self._note_stack_call_dependencies_before(address, entry)
+            if entry not in query_stack_states_cache:
+                query_stack_states_cache[entry] = (
+                    self._function_stack_states(entry)
+                )
+            stack_states = query_stack_states_cache[entry]
+            stack_state = (
+                None
+                if stack_states is None
+                else stack_states.get(address)
+            )
+            if stack_state is None:
+                stack_state = self._linear_stack_state_before(address, entry)
+            if stack_state is None:
+                identity_states = self._semantic_stack_identity_states(entry)
+                identity_state = identity_states.get(address)
+                if identity_state is None:
+                    return False
+                return (
+                    identity_state[0]
+                    if register_family == "esp"
+                    else identity_state[1]
+                )
+            sp_delta, bp_delta = stack_state
+            return (
+                sp_delta is not None
+                if register_family == "esp"
+                else bp_delta is not None
+            )
 
         def guarded_scan_index_values(
             entry: int,
@@ -111942,7 +112338,7 @@ class _DirectCfgRecovery:
                     and operand.access & CS_AC_READ
                     and (family := self._register_family(operand.reg))
                     in _REGISTER_FAMILIES
-                    and self._semantic_register_has_private_stack_identity(
+                    and query_register_has_private_stack_identity(
                         address,
                         family,
                         entry,
