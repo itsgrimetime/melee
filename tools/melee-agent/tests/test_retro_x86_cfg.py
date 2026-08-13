@@ -88,16 +88,39 @@ def load_cfg_program(tmp_path, program_hex):
     return pe.load(path, expected_sha256=digest, require_pe32_i386=True)
 
 
-def load_large_cfg_program(tmp_path, program):
+def load_large_cfg_program(tmp_path, program, *, relocation_offsets=()):
     path = write_synthetic_cfg_pe(tmp_path)
     data = bytearray(path.read_bytes())
     program = bytearray(program)
-    struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 8, 0x180)
-    struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, 0x180)
+    text_size = 0x200 if len(program) > 0x100 else 0x180
+    struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 8, text_size)
+    struct.pack_into("<I", data, SECTION_TABLE_OFFSET + 16, text_size)
     data[0x240:0x251] = b"\xc3" + b"\x90" * 0x10
     data[0x280:0x380] = b"\x90" * 0x100
     data[0x280 : 0x280 + len(program)] = program
     struct.pack_into("<I", data, 0x430, 0x1080)
+    if relocation_offsets:
+        entries = [
+            0x3000 | ((0x1080 + offset) & 0xFFF)
+            for offset in relocation_offsets
+        ]
+        if len(entries) % 2:
+            entries.append(0)
+        block_size = 8 + 2 * len(entries)
+        struct.pack_into(
+            "<II",
+            data,
+            OPTIONAL_OFFSET + 96 + 5 * 8,
+            0x3000,
+            block_size,
+        )
+        struct.pack_into("<II", data, 0x800, 0x1000, block_size)
+        struct.pack_into(
+            f"<{len(entries)}H",
+            data,
+            0x808,
+            *entries,
+        )
     path.write_bytes(data)
     digest = hashlib.sha256(data).hexdigest()
     return pe.load(path, expected_sha256=digest, require_pe32_i386=True)
@@ -143,6 +166,6870 @@ def bounded_call_return_interval_image(tmp_path, *, mutation=None):
 
     image = load_large_cfg_program(tmp_path, program)
     return image, base, call_address, use_address
+
+
+def bounded_unsigned_format_pointer_image(
+    tmp_path,
+    *,
+    format_bytes=b"%u",
+    swapped_destination=False,
+):
+    """Advance one output pointer by two constant-format call results."""
+    base = 0x00401080
+    formatter = base + 0x80
+    destination = 0x00403000
+    format_address = 0x00402200
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset):
+        program[offset] = 0xE8
+        displacement = formatter - (base + offset + 5)
+        program[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    destination_hex = destination.to_bytes(4, "little").hex(" ")
+    format_hex = format_address.to_bytes(4, "little").hex(" ")
+    cursor = emit(0, f"bd {destination_hex}")
+    for call_index in range(2):
+        cursor = emit(cursor, "6a 07")
+        cursor = emit(cursor, f"68 {format_hex}")
+        push_address = base + cursor
+        cursor = emit(
+            cursor,
+            f"68 {format_hex}" if swapped_destination else "55",
+        )
+        cursor = emit_call(cursor)
+        cursor = emit(cursor, "83 c4 0c 01 c5")
+    emit(cursor, "c3")
+    emit(0x80, "c3")
+
+    image = load_large_cfg_program(tmp_path, program)
+    data = bytearray(image.data)
+    raw_offset = 0x400 + (format_address - 0x00402000)
+    data[raw_offset : raw_offset + len(format_bytes) + 1] = (
+        format_bytes + b"\0"
+    )
+    return (
+        replace(
+            image,
+            data=bytes(data),
+            sha256=hashlib.sha256(data).hexdigest(),
+        ),
+        base,
+        formatter,
+        push_address,
+        destination,
+    )
+
+
+def bounded_affine_table_store_image(tmp_path, *, mutation=None):
+    """Index one fixed-stride table through a bounded early-exit loop."""
+    assert mutation in {None, "one-extra-entry", "partial-compare"}
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "31 d2 31 c0")
+    entry_jump = cursor
+    cursor = emit(cursor, "eb 00")
+    loop = cursor
+    cursor = emit(cursor, "83 c0 0c 42")
+    check = cursor
+    bound = 0x11 if mutation == "one-extra-entry" else 0x10
+    cursor = emit(
+        cursor,
+        (
+            f"66 83 fa {bound:02x}"
+            if mutation == "partial-compare"
+            else f"83 fa {bound:02x}"
+        ),
+    )
+    exhausted_branch = cursor
+    cursor = emit(cursor, "7d 00")
+    cursor = emit(cursor, "85 c9")
+    loop_branch = cursor
+    cursor = emit(cursor, "75 00")
+    multiply_address = base + cursor
+    cursor = emit(cursor, "6b da 0c")
+    store_address = base + cursor
+    cursor = emit(cursor, "89 8b 00 30 40 00 c3")
+    exhausted = cursor
+    emit(cursor, "c3")
+
+    for branch, target in (
+        (entry_jump, check),
+        (exhausted_branch, exhausted),
+        (loop_branch, loop),
+    ):
+        displacement = target - (branch + 2)
+        assert -0x80 <= displacement <= 0x7F
+        program[branch + 1] = displacement & 0xFF
+
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        multiply_address,
+        store_address,
+    )
+
+
+def transitive_partial_return_image(tmp_path, *, mutation=None):
+    """Carry upper return bits through one scalar-byte return layer."""
+    assert mutation in {
+        None,
+        "full-read",
+        "missing-scalar-return",
+        "partial-store",
+        "full-store",
+        "no-return-arm",
+        "partial-zero-return",
+        "setcc-return",
+        "movzx-return",
+        "identity-lea",
+        "offset-lea",
+    }
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target_offset):
+        program[offset] = 0xE8
+        displacement = (base + target_offset) - (base + offset + 5)
+        program[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    cursor = emit_call(0, 0x40)
+    if mutation == "partial-store":
+        cursor = emit(cursor, "a2 80 30 40 00")
+    elif mutation == "full-store":
+        cursor = emit(cursor, "a3 80 30 40 00")
+    else:
+        cursor = emit(
+            cursor,
+            "85 c0" if mutation == "full-read" else "84 c0",
+        )
+    emit(cursor, "b8 00 00 00 00 c3")
+
+    cursor = 0x40
+    if mutation == "no-return-arm":
+        cursor = emit(cursor, "85 c9 75 05")
+        cursor = emit_call(cursor, 0x80)
+    cursor = emit_call(cursor, 0x70)
+    cursor = emit(cursor, "84 c0")
+    if mutation == "partial-zero-return":
+        cursor = emit(cursor, "30 c0")
+    elif mutation == "setcc-return":
+        cursor = emit(cursor, "0f 94 c0 25 ff 00 00 00")
+    elif mutation == "movzx-return":
+        cursor = emit(cursor, "0f b6 c0")
+    elif mutation == "identity-lea":
+        cursor = emit(cursor, "8d 00 b8 00 00 00 00")
+    elif mutation == "offset-lea":
+        cursor = emit(cursor, "8d 40 04 b8 00 00 00 00")
+    elif mutation != "missing-scalar-return":
+        cursor = emit(cursor, "b0 01")
+    emit(cursor, "c3")
+
+    emit(0x70, "b8 04 30 40 00 c3")
+    if mutation == "no-return-arm":
+        emit(0x80, "eb fe")
+    return load_large_cfg_program(tmp_path, program), base + 0x70
+
+
+def imported_return_wrapper_image(tmp_path, import_name):
+    """Return one direct wrapper around an imported scalar/void API."""
+    iat_va = 0x00403000
+    program = bytearray(b"\x90" * 0x40)
+    program[:7] = bytes.fromhex("ff 15 00 30 40 00 c3")
+    image = load_large_cfg_program(tmp_path, program)
+    return replace(
+        image,
+        imports=(
+            pe_mod.Import(
+                dll="KERNEL32.dll",
+                name=import_name,
+                ordinal=None,
+                hint=1,
+                iat_va=iat_va,
+            ),
+        ),
+    )
+
+
+def scalar_import_subtraction_image(tmp_path, import_name):
+    """Subtract two results returned by one imported-call wrapper."""
+    base = 0x00401080
+    wrapper = base + 0x40
+    iat_va = 0x00403000
+    program = bytearray(b"\x90" * 0x80)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        call_address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (target - (call_address + 5)).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    cursor = emit(0, "83 ec 04")
+    cursor = emit_call(cursor, wrapper)
+    cursor = emit(cursor, "89 04 24")
+    cursor = emit_call(cursor, wrapper)
+    cursor = emit(cursor, "2b 04 24")
+    store_address = base + cursor
+    emit(cursor, "89 04 24 83 c4 04 c3")
+    emit(0x40, "ff 15 00 30 40 00 c3")
+
+    image = load_large_cfg_program(tmp_path, program)
+    return (
+        replace(
+            image,
+            imports=(
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name=import_name,
+                    ordinal=None,
+                    hint=1,
+                    iat_va=iat_va,
+                ),
+            ),
+        ),
+        base,
+        wrapper,
+        store_address,
+    )
+
+
+def partial_setcc_store_image(tmp_path, *, wrong_destination=False):
+    """Store a masked SETcc byte, or leave the stored byte unproven."""
+    program = bytearray(b"\x90" * 0x40)
+    setcc = "0f 95 c1" if wrong_destination else "0f 95 c0"
+    encoded = bytes.fromhex(
+        f"85 c9 {setcc} 25 ff 00 00 00 a2 80 30 40 00 c3"
+    )
+    program[: len(encoded)] = encoded
+    return load_large_cfg_program(tmp_path, program), 0x0040108A
+
+
+def finite_indirect_partial_result_image(tmp_path, *, mutation=None):
+    """Consume a finite affine-table callback result through AL only."""
+    assert mutation in {None, "full-read", "unresolved"}
+    image = load_dispatch_image(
+        tmp_path,
+        mode="bounded-descriptor-array",
+    )
+    data = bytearray(image.data)
+    text = image.sections[0]
+    if mutation == "unresolved":
+        data[text.raw_offset + 0x09 : text.raw_offset + 0x0C] = (
+            bytes.fromhex("ff d0 90")
+        )
+    test = "85 c0" if mutation == "full-read" else "84 c0"
+    suffix = bytes.fromhex(
+        f"{test} b8 00 00 00 00 45 83 c7 0c 83 fd 03 7c ed 5d 5f c3"
+    )
+    data[text.raw_offset + 0x0C : text.raw_offset + 0x0C + len(suffix)] = suffix
+    data[text.raw_offset + 0x90 : text.raw_offset + 0x93] = bytes.fromhex(
+        "b0 01 c3"
+    )
+    data[text.raw_offset + 0xA0 : text.raw_offset + 0xA3] = bytes.fromhex(
+        "b0 01 c3"
+    )
+    return replace(
+        image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+
+
+def finite_indirect_transitive_return_image(
+    tmp_path,
+    *,
+    full_read=False,
+    discard_caller=False,
+):
+    """Return a finite callback byte through one direct caller layer."""
+    image = load_dispatch_image(tmp_path, mode="bounded-descriptor-array")
+    data = bytearray(image.data)
+    text = image.sections[0]
+    for offset in (0x90, 0xA0, 0xB0):
+        data[text.raw_offset + offset : text.raw_offset + offset + 3] = (
+            bytes.fromhex("b0 01 c3")
+        )
+    test = "85 c0" if full_read else "84 c0"
+    if discard_caller:
+        local_consumer = bytes.fromhex(
+            f"{test} 45 83 c7 0c 83 fd 03 7c f2 5d 5f c3"
+        )
+        data[
+            text.raw_offset + 0x0C : text.raw_offset + 0x0C + len(local_consumer)
+        ] = local_consumer
+        caller = bytes.fromhex("e8 bb ff ff ff b8 00 00 00 00 c3")
+    else:
+        caller = bytes.fromhex(
+            f"e8 bb ff ff ff {test} b8 00 00 00 00 c3"
+        )
+    data[text.raw_offset + 0x40 : text.raw_offset + 0x40 + len(caller)] = caller
+    return replace(
+        image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        entrypoint=0x00401040,
+        exports=(),
+    )
+
+
+def finite_indirect_full_return_image(tmp_path, *, mutation=None):
+    """Return one exact finite indirect target's full EAX definition."""
+    assert mutation in {None, "partial-target", "unresolved"}
+    image = load_dispatch_image(tmp_path, mode="bounded-descriptor-array")
+    data = bytearray(image.data)
+    text = image.sections[0]
+    if mutation == "unresolved":
+        data[text.raw_offset + 0x09 : text.raw_offset + 0x0C] = (
+            bytes.fromhex("ff d0 90")
+        )
+    data[text.raw_offset + 0x0C] = 0xC3
+    for offset in (0x90, 0xA0, 0xB0):
+        body = (
+            "b0 01 c3"
+            if mutation == "partial-target" and offset == 0x90
+            else "b8 01 00 00 00 c3"
+        )
+        encoded = bytes.fromhex(body)
+        data[
+            text.raw_offset + offset : text.raw_offset + offset + len(encoded)
+        ] = encoded
+    return replace(
+        image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+
+
+def finite_indirect_result_replacement_image(tmp_path, *, partial_target=False):
+    """Replace one partial return through an exact finite indirect call."""
+    image = load_dispatch_image(tmp_path, mode="bounded-descriptor-array")
+    data = bytearray(image.data)
+    text = image.sections[0]
+    # Entry 0x401090 first receives only AL, then calls the relocated callback
+    # reached through the bounded descriptor at 0x402314.  A full callback
+    # result kills the residual EAX bits
+    # before the deliberately hostile-looking cross-family copy.
+    body = bytes.fromhex(
+        "e8 3b 00 00 00 "
+        "bf 00 23 40 00 "
+        "ff 57 14 "
+        "89 c3 c3"
+    )
+    data[text.raw_offset + 0x90 : text.raw_offset + 0x90 + len(body)] = body
+    target_body = bytes.fromhex(
+        "b0 01 c3" if partial_target else "b8 01 00 00 00 c3"
+    )
+    data[
+        text.raw_offset + 0xA0 : text.raw_offset + 0xA0 + len(target_body)
+    ] = target_body
+    data[text.raw_offset + 0xD0 : text.raw_offset + 0xD3] = bytes.fromhex(
+        "b0 01 c3"
+    )
+    return replace(
+        image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+    )
+
+
+def partial_scalar_rmw_image(tmp_path, *, full_load_arm=False):
+    """Join two byte-scalar arms before digit/carry arithmetic and a store."""
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x90)
+    program_hex = (
+        "85 d2 "
+        "74 04 "
+        + ("8b 0e " if full_load_arm else "8a 0e ")
+        + "eb 02 "
+        "8a 0f "
+        "80 c1 d0 "
+        "b0 01 "
+        "00 c1 "
+        "80 f9 09 "
+        "0f 9f c0 "
+        "25 ff 00 00 00 "
+        "00 c1 "
+        "80 c1 30 "
+    )
+    encoded = bytes.fromhex(program_hex)
+    program[: len(encoded)] = encoded
+    store_address = base + len(encoded)
+    program[len(encoded) : len(encoded) + 3] = bytes.fromhex("88 0f c3")
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def joined_stack_word_permutation_image(tmp_path, *, mutation=None):
+    """Join a narrow load with its private-stack byte permutation."""
+    assert mutation in {
+        None,
+        "full-source-load",
+        "missing-source-load",
+        "unknown-second-byte",
+        "wrong-reload-slot",
+        "wide-output-store",
+    }
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x80)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 08 8b 54 24 0c 80 3d 20 30 40 00 00")
+    cursor = emit(
+        cursor,
+        {
+            "full-source-load": "8b 02 90",
+            "missing-source-load": "90 90 90",
+        }.get(mutation, "66 8b 02"),
+    )
+    branch = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit(cursor, "66 89 44 24 06")
+    cursor = emit(cursor, "8a 4c 24 07 8a 44 24 06")
+    cursor = emit(cursor, "88 4c 24 04")
+    cursor = emit(
+        cursor,
+        "88 54 24 05"
+        if mutation == "unknown-second-byte"
+        else "88 44 24 05",
+    )
+    cursor = emit(
+        cursor,
+        "8b 04 24 90"
+        if mutation == "wrong-reload-slot"
+        else "8b 44 24 04",
+    )
+    store_address = base + cursor
+    cursor = emit(
+        cursor,
+        "89 02 90" if mutation == "wide-output-store" else "66 89 02",
+    )
+    program[branch + 1] = store_address - (base + branch + 2)
+    emit(cursor, "83 c4 08 c3")
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def scalar_entry_partial_return_image(
+    tmp_path,
+    *,
+    scalar_entry=True,
+    full_source_load=False,
+):
+    """Carry a caller's scalar upper bits through a narrow-return helper."""
+    base = 0x00401080
+    helper = base + 0x80
+    program = bytearray(b"\x90" * 0xC0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 04")
+    cursor = emit(
+        cursor,
+        "31 c0 90 90" if scalar_entry else "8b 44 24 08",
+    )
+    cursor = emit(cursor, "66 c7 04 24 34 12 8d 14 24 52")
+    call_address = base + cursor
+    cursor = emit(cursor, "e8 00 00 00 00")
+    program[call_address - base + 1 : call_address - base + 5] = (
+        (helper - (call_address + 5)).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+    )
+    cursor = emit(cursor, "59")
+    observation = base + cursor
+    emit(cursor, "50 59 31 c0 83 c4 04 c3")
+
+    cursor = 0x80
+    cursor = emit(cursor, "83 ec 08 8b 54 24 0c 80 3d 20 30 40 00 00")
+    cursor = emit(
+        cursor,
+        "8b 02 90" if full_source_load else "66 8b 02",
+    )
+    branch = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit(cursor, "66 89 44 24 06")
+    cursor = emit(cursor, "8a 4c 24 07 8a 44 24 06")
+    cursor = emit(cursor, "88 4c 24 04 88 44 24 05 8b 44 24 04")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 02 66 8b 02 83 c4 08 c3")
+    program[branch + 1] = store_address - (base + branch + 2)
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        helper,
+        call_address,
+        observation,
+    )
+
+
+def narrow_scalar_call_argument_image(
+    tmp_path,
+    *,
+    full_argument_read=False,
+    indirect_argument_width=None,
+    split_argument_read=None,
+    branch_import=None,
+):
+    """Pass a partial scalar return only to one low-byte argument reader."""
+    assert branch_import in {None, "ExitProcess", "GetCurrentProcess"}
+    base = 0x00401080
+    helper = base + 0x80
+    consumer = base + 0xD0
+    program = bytearray(b"\x90" * 0x100)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 04 8b 44 24 08 66 c7 04 24 34 12")
+    cursor = emit(cursor, "8d 14 24 52")
+    helper_call = base + cursor
+    cursor = emit(cursor, "e8 00 00 00 00")
+    program[helper_call - base + 1 : helper_call - base + 5] = (
+        (helper - (helper_call + 5)).to_bytes(4, "little", signed=True)
+    )
+    cursor = emit(cursor, "59 8a 44 24 08")
+    narrow_push = base + cursor
+    cursor = emit(cursor, "50 6a 23 6a 00")
+    consumer_call = base + cursor
+    cursor = emit(cursor, "e8 00 00 00 00")
+    program[consumer_call - base + 1 : consumer_call - base + 5] = (
+        (consumer - (consumer_call + 5)).to_bytes(4, "little", signed=True)
+    )
+    emit(cursor, "83 c4 0c 31 c0 83 c4 04 c3")
+
+    cursor = 0x80
+    cursor = emit(
+        cursor,
+        "83 ec 08 8b 54 24 0c 80 3d 20 30 40 00 00 66 8b 02",
+    )
+    branch = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit(cursor, "66 89 44 24 06 8a 4c 24 07 8a 44 24 06")
+    cursor = emit(cursor, "88 4c 24 04 88 44 24 05 8b 44 24 04")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 02 66 8b 02 83 c4 08 c3")
+    program[branch + 1] = store_address - (base + branch + 2)
+
+    cursor = 0xD0
+    cursor = emit(cursor, "55 31 ed 8d 54 05 00")
+    if branch_import is not None:
+        cursor = emit(
+            cursor,
+            "85 c9 74 0b ff 15 00 30 40 00 83 7c 24 10 00",
+        )
+    if split_argument_read is not None:
+        assert split_argument_read in {"low-word", "third-byte"}
+        cursor = emit(cursor, "8d 54 24 10 8a 02")
+        cursor = emit(
+            cursor,
+            "8a 4a 01"
+            if split_argument_read == "low-word"
+            else "8a 4a 02",
+        )
+        cursor = emit(cursor, "31 c0")
+    elif indirect_argument_width is not None:
+        cursor = emit(cursor, "8b 44 24 10")
+        cursor = emit(
+            cursor,
+            "84 c0" if indirect_argument_width == 1 else "66 85 c0",
+        )
+    else:
+        cursor = emit(
+            cursor,
+            "83 7c 24 10 00"
+            if full_argument_read
+            else "80 7c 24 10 00",
+        )
+    emit(cursor, "5d 31 c0 c3")
+    image = load_large_cfg_program(tmp_path, program)
+    if branch_import is not None:
+        image = replace(
+            image,
+            imports=(
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name=branch_import,
+                    ordinal=None,
+                    hint=1,
+                    iat_va=0x00403000,
+                ),
+            ),
+        )
+    return (
+        image,
+        base,
+        helper,
+        consumer,
+        helper_call,
+        consumer_call,
+        narrow_push,
+    )
+
+
+def scalar_transport_call_argument_image(tmp_path, *, pointer_use=False):
+    """Carry capability-shaped upper bits through one scalar-only helper."""
+    base = 0x00401080
+    leaf = base + 0x80
+    transformer = base + 0xC0
+    consumer = base + 0x120
+    program = bytearray(b"\x90" * 0x160)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit_call(0, leaf)
+    cursor = emit(cursor, "66 a1 20 30 40 00 89 c0 50")
+    cursor = emit_call(cursor, transformer)
+    cursor = emit(cursor, "59 50")
+    cursor = emit_call(cursor, consumer)
+    emit(cursor, "59 31 c0 c3")
+
+    left = 0x6A09_E667
+    cursor = emit(
+        0x80,
+        "b8 "
+        + left.to_bytes(4, "little").hex()
+        + " 35 "
+        + (left ^ 0x00403000).to_bytes(4, "little").hex(),
+    )
+    emit(cursor, "c3")
+
+    cursor = emit(0xC0, "83 ec 08 8b 44 24 0c")
+    if pointer_use:
+        cursor = emit(cursor, "8b 08")
+    cursor = emit(cursor, "80 3d 24 30 40 00 00")
+    branch = cursor
+    cursor = emit(cursor, "74 00 83 c4 08 c3")
+    transformed = base + cursor
+    program[branch + 1] = transformed - (base + branch + 2)
+    cursor = emit(
+        cursor,
+        "66 89 44 24 04 8a 44 24 05 88 44 24 06 "
+        "8a 44 24 04 88 44 24 07 8b 44 24 06 83 c4 08 c3",
+    )
+
+    emit(0x120, "8b 44 24 04 66 85 c0 31 c0 c3")
+    return load_large_cfg_program(tmp_path, program), leaf, transformer
+
+
+def indirect_narrow_scalar_call_argument_image(
+    tmp_path,
+    *,
+    mutation=None,
+):
+    """Load one dword argument, then confine it to an exact low slice."""
+    base = 0x00401080
+    consumer = base + 0x80
+    program = bytearray(b"\x90" * 0xC0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "8b 44 24 04")
+    narrow_push = base + cursor
+    cursor = emit(cursor, "50 6a 23 6a 00")
+    consumer_call = base + cursor
+    cursor = emit(cursor, "e8 00 00 00 00")
+    program[consumer_call - base + 1 : consumer_call - base + 5] = (
+        (consumer - (consumer_call + 5)).to_bytes(4, "little", signed=True)
+    )
+    emit(cursor, "83 c4 0c 31 c0 c3")
+
+    cursor = 0x80
+    load_address = base + cursor
+    cursor = emit(cursor, "8b 44 24 0c")
+    cursor = emit(
+        cursor,
+        {
+            None: "66 85 c0 31 c0 c3",
+            "full-read": "85 c0 31 c0 c3",
+            "high-byte": "84 e4 31 c0 c3",
+            "return-live": "66 85 c0 c3",
+        }[mutation],
+    )
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        consumer,
+        consumer_call,
+        narrow_push,
+        load_address,
+    )
+
+
+def partial_return_replaced_by_bounded_call_image(
+    tmp_path,
+    *,
+    unbounded_replacement=False,
+):
+    """Kill a partial return with a fresh result bounded off image slots."""
+    base = 0x00401080
+    helper = base + 0x80
+    replacement = base + 0xD0
+    program = bytearray(b"\x90" * 0x100)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 04 8b 44 24 08 66 c7 04 24 34 12")
+    cursor = emit(cursor, "8d 14 24 52")
+    helper_call = base + cursor
+    cursor = emit(cursor, "e8 00 00 00 00")
+    program[helper_call - base + 1 : helper_call - base + 5] = (
+        (helper - (helper_call + 5)).to_bytes(4, "little", signed=True)
+    )
+    cursor = emit(cursor, "59 68 00 30 40 00")
+    replacement_call = base + cursor
+    cursor = emit(cursor, "e8 00 00 00 00")
+    program[
+        replacement_call - base + 1 : replacement_call - base + 5
+    ] = (replacement - (replacement_call + 5)).to_bytes(
+        4,
+        "little",
+        signed=True,
+    )
+    observation = base + cursor
+    emit(cursor, "59 50 59 31 c0 83 c4 04 c3")
+
+    cursor = 0x80
+    cursor = emit(
+        cursor,
+        "83 ec 08 8b 54 24 0c 80 3d 20 30 40 00 00 66 8b 02",
+    )
+    branch = cursor
+    cursor = emit(cursor, "75 00")
+    cursor = emit(cursor, "66 89 44 24 06 8a 4c 24 07 8a 44 24 06")
+    cursor = emit(cursor, "88 4c 24 04 88 44 24 05 8b 44 24 04")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 02 66 8b 02 83 c4 08 c3")
+    program[branch + 1] = store_address - (base + branch + 2)
+
+    cursor = 0xD0
+    cursor = emit(
+        cursor,
+        (
+            "b8 00 30 40 00 83 c8 00"
+            if unbounded_replacement
+            else "8b 44 24 04 25 ff 00 00 00"
+        ),
+    )
+    emit(cursor, "c3")
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        helper,
+        replacement,
+        helper_call,
+        replacement_call,
+        observation,
+    )
+
+
+def partial_return_replaced_by_read_only_consumer_image(
+    tmp_path,
+    *,
+    writes_through_argument=False,
+):
+    """Pass a replacement result only to one closed read-only consumer."""
+    base = 0x00401080
+    helper = base + 0x80
+    replacement = base + 0xD0
+    consumer = base + 0x100
+    program = bytearray(b"\x90" * 0x130)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 04 8b 5c 24 08 8d 14 24 52")
+    cursor = emit_call(cursor, helper)
+    cursor = emit(cursor, "59 53")
+    cursor = emit_call(cursor, replacement)
+    cursor = emit(cursor, "59")
+    result_push = base + cursor
+    cursor = emit(cursor, "50")
+    cursor = emit_call(cursor, consumer)
+    emit(cursor, "59 31 c0 83 c4 04 c3")
+
+    emit(0x80, "66 b8 00 30 c3")
+    emit(
+        0xD0,
+        "8b 44 24 04 85 c9 75 05 b8 00 30 40 00 83 c8 00 c3",
+    )
+    cursor = emit(0x100, "8b 44 24 04")
+    cursor = emit(
+        cursor,
+        "80 08 00" if writes_through_argument else "80 38 00",
+    )
+    emit(cursor, "31 c0 c3")
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        helper,
+        replacement,
+        consumer,
+        result_push,
+    )
+
+
+def partial_bounded_bitfield_store_image(tmp_path, *, full_mask=False):
+    """Join an entry-derived byte with a bounded three-bit field."""
+    base = 0x00401080
+    mask = 0xFF if full_mask else 0x07
+    program = bytes.fromhex(
+        "85 d2 "
+        "74 04 "
+        "b1 03 "
+        "eb 00 "
+        f"80 e1 {mask:02x} "
+        "c0 e1 02 "
+        "8a 06 "
+        "24 e3 "
+        "08 c8 "
+        "88 06 "
+        "c3"
+    )
+    store_address = base + len(program) - 3
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def partial_argument_word_join_store_image(
+    tmp_path,
+    *,
+    full_load=False,
+    unbounded_argument=False,
+):
+    """Join a closed finite argument with a same-width memory scalar."""
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x90)
+    program[0:1] = b"\x50" if unbounded_argument else b"\x6a"
+    if not unbounded_argument:
+        program[1] = 7
+        call_offset = 2
+    else:
+        call_offset = 1
+    program[call_offset] = 0xE8
+    program[call_offset + 1 : call_offset + 5] = (
+        callee - (base + call_offset + 5)
+    ).to_bytes(4, "little", signed=True)
+    program[call_offset + 5 : call_offset + 7] = bytes.fromhex("59 c3")
+    body = bytes.fromhex(
+        "8b 74 24 04 85 c9 74 03 "
+        + ("8b 30 90 " if full_load else "66 8b 30 ")
+        + "66 89 33 c3"
+    )
+    program[0x40 : 0x40 + len(body)] = body
+    return load_large_cfg_program(tmp_path, program), callee, callee + 0x0B
+
+
+def byte_difference_return_image(tmp_path, *, unbounded_rhs=False):
+    """Return one full-width difference of two byte payloads."""
+    rhs = "8b 17" if unbounded_rhs else "0f b6 17"
+    program = bytes.fromhex(f"0f b6 06 {rhs} 29 d0 c3")
+    return load_large_cfg_program(tmp_path, program), 0x00401080
+
+
+def incremented_scalar_return_image(tmp_path, *, source):
+    """Return one incremented scalar or an unsupported incoming value."""
+    assert source in {"zero", "protected-predecessor", "argument"}
+    prefix = {
+        "zero": "31 c0",
+        "protected-predecessor": "b8 ff 2f 40 00",
+        "argument": "8b 44 24 04",
+    }[source]
+    program = bytes.fromhex(f"{prefix} 40 c3")
+    return load_large_cfg_program(tmp_path, program), 0x00401080
+
+
+def immediate_scalar_return_image(tmp_path, *, value):
+    """Return one exact full-width immediate value."""
+    program = bytes.fromhex(
+        f"b8 {(value & 0xFFFF_FFFF).to_bytes(4, 'little').hex()} c3"
+    )
+    return load_large_cfg_program(tmp_path, program), 0x00401080
+
+
+def joined_partial_boolean_return_image(tmp_path, *, unproven_increment=False):
+    """Return AL through partial-zero and full-zero/increment arms."""
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x90)
+    call_displacement = callee - (base + 5)
+    program[0] = 0xE8
+    program[1:5] = call_displacement.to_bytes(4, "little", signed=True)
+    program[5:10] = bytes.fromhex("88 03 31 c0 c3")
+    body = bytes.fromhex(
+        "85 c9 74 03 30 c0 c3 "
+        + ("90 90 40 c3" if unproven_increment else "31 c0 40 c3")
+    )
+    program[0x40 : 0x40 + len(body)] = body
+    return load_large_cfg_program(tmp_path, program), callee
+
+
+def full_boolean_to_partial_return_image(tmp_path, *, value):
+    """Copy one full-width literal into the low-byte return slice."""
+    base = 0x00401080
+    encoded = bytes.fromhex(
+        "bb "
+        f"{(value & 0xFFFF_FFFF).to_bytes(4, 'little').hex()} "
+        "88 d8 c3"
+    )
+    return load_large_cfg_program(tmp_path, encoded), base
+
+
+def exact_stdcall_import_cleanup_image(tmp_path, *, mutation=None):
+    """Call one named Win32 stdcall import with an exact argument domain."""
+    assert mutation in {
+        None,
+        "file-attributes",
+        "file-time",
+        "create-file",
+        "set-file-pointer",
+        "set-file-pointer-delayed-frame",
+        "set-file-pointer-delayed-missing-restore",
+        "close-handle",
+        "file-time-to-system-time",
+        "exit-process",
+        "get-file-size",
+        "set-file-attributes",
+        "create-directory",
+        "format-message",
+        "get-tick-count",
+        "get-time-zone-information",
+        "delete-file",
+        "remove-directory",
+        "current-directory",
+        "tls-get-value",
+        "tls-free",
+        "tls-set-value",
+        "get-std-handle",
+        "get-last-error",
+        "is-dbcs-lead-byte",
+        "global-alloc",
+        "global-realloc",
+        "global-realloc-framed",
+        "global-free",
+        "delete-critical-section",
+        "write-file",
+        "read-file",
+        "wrong-dll",
+        "wrong-name",
+        "missing-arg",
+        "extra-arg",
+    }
+    base = 0x00401080
+    iat = 0x00402160
+    argument_count = {
+        "file-attributes": 1,
+        "create-file": 7,
+        "set-file-pointer": 4,
+        "close-handle": 1,
+        "file-time-to-system-time": 2,
+        "exit-process": 1,
+        "get-file-size": 2,
+        "set-file-attributes": 2,
+        "create-directory": 2,
+        "format-message": 7,
+        "get-tick-count": 0,
+        "get-time-zone-information": 1,
+        "delete-file": 1,
+        "remove-directory": 1,
+        "current-directory": 2,
+        "tls-get-value": 1,
+        "tls-free": 1,
+        "tls-set-value": 2,
+        "get-std-handle": 1,
+        "get-last-error": 0,
+        "is-dbcs-lead-byte": 1,
+        "global-alloc": 2,
+        "global-realloc": 3,
+        "global-realloc-framed": 3,
+        "global-free": 1,
+        "delete-critical-section": 1,
+        "write-file": 5,
+        "read-file": 5,
+        "missing-arg": 3,
+        "extra-arg": 5,
+    }.get(mutation, 4)
+    if mutation in {
+        "set-file-pointer-delayed-frame",
+        "set-file-pointer-delayed-missing-restore",
+    }:
+        program = bytearray(
+            bytes.fromhex(
+                "8b 44 24 04 53 6a 01 6a 00 6a 00 50 "
+                "8b 5c 24 1c"
+            )
+        )
+        call_address = base + len(program)
+        program.extend(b"\xff\x15" + iat.to_bytes(4, "little"))
+        program.extend(
+            bytes.fromhex(
+                "c2 08 00"
+                if mutation == "set-file-pointer-delayed-missing-restore"
+                else "5b c2 08 00"
+            )
+        )
+    else:
+        program = bytearray(
+            bytes.fromhex("56 8b 74 24 08 57 55 8b 6c 24 14")
+            if mutation == "global-realloc-framed"
+            else b""
+        )
+        for value in range(argument_count):
+            program.extend(b"\x68" + value.to_bytes(4, "little"))
+        call_address = base + len(program)
+        program.extend(b"\xff\x15" + iat.to_bytes(4, "little"))
+        program.extend(
+            bytes.fromhex(
+                "5d 5f 5e 31 c0 c3"
+                if mutation == "global-realloc-framed"
+                else "31 c0 c3"
+            )
+        )
+    image = load_large_cfg_program(tmp_path, program)
+    return (
+        replace(
+            image,
+            imports=(
+                pe_mod.Import(
+                    dll=(
+                        "USER32.dll"
+                        if mutation == "wrong-dll"
+                        else "KERNEL32.dll"
+                    ),
+                    name=(
+                        "GetTempPathA"
+                        if mutation == "wrong-name"
+                        else "GetFileAttributesA"
+                        if mutation == "file-attributes"
+                        else "GetFileTime"
+                        if mutation == "file-time"
+                        else "CreateFileA"
+                        if mutation == "create-file"
+                        else "SetFilePointer"
+                        if mutation
+                        in {
+                            "set-file-pointer",
+                            "set-file-pointer-delayed-frame",
+                            "set-file-pointer-delayed-missing-restore",
+                        }
+                        else "CloseHandle"
+                        if mutation == "close-handle"
+                        else "FileTimeToSystemTime"
+                        if mutation == "file-time-to-system-time"
+                        else "ExitProcess"
+                        if mutation == "exit-process"
+                        else "GetFileSize"
+                        if mutation == "get-file-size"
+                        else "SetFileAttributesA"
+                        if mutation == "set-file-attributes"
+                        else "CreateDirectoryA"
+                        if mutation == "create-directory"
+                        else "FormatMessageA"
+                        if mutation == "format-message"
+                        else "GetTickCount"
+                        if mutation == "get-tick-count"
+                        else "GetTimeZoneInformation"
+                        if mutation == "get-time-zone-information"
+                        else "DeleteFileA"
+                        if mutation == "delete-file"
+                        else "RemoveDirectoryA"
+                        if mutation == "remove-directory"
+                        else "GetCurrentDirectoryA"
+                        if mutation == "current-directory"
+                        else "TlsGetValue"
+                        if mutation == "tls-get-value"
+                        else "TlsFree"
+                        if mutation == "tls-free"
+                        else "TlsSetValue"
+                        if mutation == "tls-set-value"
+                        else "GetStdHandle"
+                        if mutation == "get-std-handle"
+                        else "GetLastError"
+                        if mutation == "get-last-error"
+                        else "IsDBCSLeadByte"
+                        if mutation == "is-dbcs-lead-byte"
+                        else "GlobalAlloc"
+                        if mutation == "global-alloc"
+                        else "GlobalReAlloc"
+                        if mutation
+                        in {"global-realloc", "global-realloc-framed"}
+                        else "GlobalFree"
+                        if mutation == "global-free"
+                        else "DeleteCriticalSection"
+                        if mutation == "delete-critical-section"
+                        else "WriteFile"
+                        if mutation == "write-file"
+                        else "ReadFile"
+                        if mutation == "read-file"
+                        else "GetFullPathNameA"
+                    ),
+                    ordinal=None,
+                    hint=0,
+                    iat_va=iat,
+                ),
+            ),
+        ),
+        base,
+        call_address,
+    )
+
+
+def exact_stdcall_private_stack_preservation_image(tmp_path, *, mutation=None):
+    """Keep one caller local outside a named stdcall import's arguments."""
+    assert mutation in {
+        None,
+        "alias-protected",
+        "sync-enter",
+        "sync-alias-protected",
+        "wrong-import",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    iat = 0x00402160
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        call_address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (call_address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 40 89 44 24 3c")
+    call_address = base + cursor
+    cursor = emit_call(cursor, callee)
+    emit(cursor, "83 c4 40 c3")
+
+    cursor = emit(0x40, "83 ec 20")
+    aliases_protected = mutation in {
+        "alias-protected",
+        "sync-alias-protected",
+    }
+    pointer = "8d 44 24 60" if aliases_protected else "8d 44 24 1c"
+    cursor = emit(cursor, pointer)
+    if mutation in {"sync-enter", "sync-alias-protected"}:
+        cursor = emit(cursor, "50")
+    else:
+        cursor = emit(
+            cursor,
+            "50 8d 44 24 18 50 68 10 00 00 00 68 00 30 40 00",
+        )
+    cursor = emit(cursor, f"ff 15 {iat.to_bytes(4, 'little').hex()}")
+    emit(cursor, "83 c4 20 c3")
+
+    image = load_large_cfg_program(tmp_path, program)
+    return (
+        replace(
+            image,
+            imports=(
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name=(
+                        "GetTempPathA"
+                        if mutation == "wrong-import"
+                        else "EnterCriticalSection"
+                        if mutation in {
+                            "sync-enter",
+                            "sync-alias-protected",
+                        }
+                        else "GetFullPathNameA"
+                    ),
+                    ordinal=None,
+                    hint=0,
+                    iat_va=iat,
+                ),
+            ),
+        ),
+        base,
+        call_address,
+    )
+
+
+def private_stack_origin_after_stdcall_image(tmp_path):
+    """Materialize one exact local address after a closed stdcall import."""
+    base = 0x00401080
+    handle_iat = 0x00402160
+    free_iat = 0x00402164
+    program = bytearray()
+    program.extend(bytes.fromhex("83 ec 08 6a f5"))
+    program.extend(b"\xff\x15" + handle_iat.to_bytes(4, "little"))
+    lea_address = base + len(program)
+    program.extend(bytes.fromhex("8d 44 24 04"))
+    push_address = base + len(program)
+    program.extend(bytes.fromhex("50"))
+    program.extend(b"\xff\x15" + free_iat.to_bytes(4, "little"))
+    program.extend(bytes.fromhex("83 c4 08 c3"))
+    image = load_large_cfg_program(tmp_path, program)
+    return (
+        replace(
+            image,
+            imports=(
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name="GetStdHandle",
+                    ordinal=None,
+                    hint=0,
+                    iat_va=handle_iat,
+                ),
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name="GlobalFree",
+                    ordinal=None,
+                    hint=0,
+                    iat_va=free_iat,
+                ),
+            ),
+        ),
+        base,
+        lea_address,
+        push_address,
+    )
+
+
+def private_stack_identity_after_call_clobber_image(tmp_path):
+    """Keep one private-stack address in EAX and preserved EBX across a call."""
+    base = 0x00401080
+    iat = 0x00402160
+    program = bytearray(bytes.fromhex("83 ec 08 8d 44 24 04 89 c3"))
+    program.extend(b"\xff\x15" + iat.to_bytes(4, "little"))
+    eax_use = base + len(program)
+    program.extend(bytes.fromhex("50 59"))
+    ebx_use = base + len(program)
+    program.extend(bytes.fromhex("53 5a 83 c4 08 c3"))
+    image = load_large_cfg_program(tmp_path, program)
+    return (
+        replace(
+            image,
+            imports=(
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name="GetTickCount",
+                    ordinal=None,
+                    hint=0,
+                    iat_va=iat,
+                ),
+            ),
+        ),
+        base,
+        eax_use,
+        ebx_use,
+    )
+
+
+def private_stack_noreturn_branch_image(tmp_path, *, mutation=None):
+    """Retain one caller local across a callee with an audited fatal arm."""
+    assert mutation in {None, "reads-protected", "returning-import"}
+    base = 0x00401080
+    callee = base + 0x40
+    fatal = base + 0x70
+    iat = 0x00402160
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    call_address = base + cursor
+    cursor = emit_call(cursor, callee)
+    emit(cursor, "83 c4 10 c3")
+
+    cursor = emit(0x40, "85 c9 75 09")
+    if mutation == "reads-protected":
+        cursor = emit(cursor, "8b 44 24 08")
+    else:
+        cursor = emit(cursor, "90 90 90 90")
+    cursor = emit_call(cursor, fatal)
+    emit(cursor, "c3")
+
+    cursor = emit(0x70, "6a 01")
+    cursor = emit(cursor, f"ff 15 {iat.to_bytes(4, 'little').hex()}")
+    emit(cursor, "c3")
+
+    image = load_large_cfg_program(tmp_path, program)
+    return (
+        replace(
+            image,
+            imports=(
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name=(
+                        "GetCurrentProcess"
+                        if mutation == "returning-import"
+                        else "ExitProcess"
+                    ),
+                    ordinal=None,
+                    hint=0,
+                    iat_va=iat,
+                ),
+            ),
+        ),
+        base,
+        call_address,
+    )
+
+
+def private_stack_scalar_noreturn_branch_image(
+    tmp_path,
+    *,
+    returning_import=False,
+):
+    """Terminate one scalar-flow arm through an audited no-return wrapper."""
+    base = 0x00401080
+    fatal = base + 0x50
+    iat = 0x00402160
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 08")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 54 24 04 85 c9")
+    branch_address = base + cursor
+    cursor = emit(cursor, "74 00")
+    call_address = base + cursor
+    cursor = emit_call(cursor, fatal)
+    live = cursor
+    cursor = emit(cursor, "0f bf 44 24 04 83 c4 08 c3")
+    program[branch_address - base + 1] = live - (branch_address - base + 2)
+
+    cursor = emit(0x50, "6a 01")
+    cursor = emit(cursor, f"ff 15 {iat.to_bytes(4, 'little').hex()}")
+    emit(cursor, "c3")
+    image = load_large_cfg_program(tmp_path, program)
+    return (
+        replace(
+            image,
+            imports=(
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name=(
+                        "GetCurrentProcess"
+                        if returning_import
+                        else "ExitProcess"
+                    ),
+                    ordinal=None,
+                    hint=0,
+                    iat_va=iat,
+                ),
+            ),
+        ),
+        base,
+        store_address,
+        call_address,
+    )
+
+
+def private_stack_context_restore_image(tmp_path, *, mutation=None):
+    """Abandon a caller local only through an exact two-argument restore."""
+    assert mutation in {None, "reads-protected", "malformed-restore"}
+    base = 0x00401080
+    callee = base + 0x40
+    restore = base + 0x80
+    context = 0x00403000
+    program = bytearray(b"\x90" * 0xC0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    call_address = base + cursor
+    cursor = emit_call(cursor, callee)
+    emit(cursor, "83 c4 10 c3")
+
+    cursor = 0x40
+    if mutation == "reads-protected":
+        cursor = emit(cursor, "8b 44 24 08")
+    cursor = emit(cursor, "6a 01")
+    cursor = emit(cursor, f"68 {context.to_bytes(4, 'little').hex()}")
+    cursor = emit_call(cursor, restore)
+    emit(cursor, "c3")
+
+    restore_body = (
+        "59 5a 58 "
+        "8b 1a 8b 72 04 8b 7a 08 "
+        + (
+            "8b 62 10"
+            if mutation == "malformed-restore"
+            else "8b 62 0c"
+        )
+        + " 8b 6a 10 09 c0 75 01 40 50 ff 72 14 c3"
+    )
+    emit(0x80, restore_body)
+    return load_large_cfg_program(tmp_path, program), base, call_address, restore
+
+
+def private_stack_context_restore_side_call_image(
+    tmp_path,
+    *,
+    mutation=None,
+    scalar_split=False,
+):
+    """Prune a paired restore callback without expanding a disjoint side call."""
+    assert mutation in {None, "protected-pointer", "reads-protected"}
+    base = 0x00401080
+    callback = base + 0x30
+    side = base + 0x70
+    restore = base + 0xB0
+    context = 0x00403000
+    program = bytearray(b"\x90" * 0xF0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    callback_branch = None
+    if scalar_split:
+        cursor = emit(cursor, "85 c9")
+        callback_branch = cursor
+        cursor = emit(cursor, "75 00 80 7c 24 04 00 83 c4 10 c3")
+    call_address = base + cursor
+    cursor = emit_call(cursor, callback)
+    emit(cursor, "83 c4 10 c3")
+    if callback_branch is not None:
+        program[callback_branch + 1] = (
+            call_address - (base + callback_branch + 2)
+        )
+
+    cursor = emit(0x30, "83 ec 10")
+    if mutation == "reads-protected":
+        cursor = emit(cursor, "8b 44 24 18")
+    if mutation == "protected-pointer":
+        cursor = emit(cursor, "8d 44 24 18 50")
+    else:
+        cursor = emit(cursor, "6a 00")
+    cursor = emit_call(cursor, side)
+    cursor = emit(cursor, "6a 01")
+    cursor = emit(cursor, f"68 {context.to_bytes(4, 'little').hex()}")
+    cursor = emit_call(cursor, restore)
+    emit(cursor, "83 c4 10 c3")
+
+    side_body = 0x90 if scalar_split else 0x70
+    if scalar_split:
+        cursor = emit(0x70, "6a 00")
+        cursor = emit_call(cursor, base + side_body)
+        emit(cursor, "c2 04 00")
+    emit(
+        side_body,
+        "83 ec 40 "  # sub esp, 0x40
+        "31 db "  # xor ebx, ebx
+        "89 04 9c "  # mov [esp + ebx*4], eax
+        "85 c9 "  # test ecx, ecx
+        "74 03 "  # je exit
+        "43 "  # inc ebx
+        "eb f6 "  # jmp store
+        "83 c4 40 "  # exit: add esp, 0x40
+        "c2 04 00",  # ret 4
+    )
+    emit(
+        0xB0,
+        "59 5a 58 8b 1a 8b 72 04 8b 7a 08 8b 62 0c "
+        "8b 6a 10 09 c0 75 01 40 50 ff 72 14 c3",
+    )
+    return load_large_cfg_program(tmp_path, program), base, call_address, callback
+
+
+def guarded_context_restore_callback_image(tmp_path, *, mutation=None):
+    """Call a finite nullable callback only on its exact nonzero arm."""
+    assert mutation in {
+        None,
+        "missing-guard",
+        "malformed-restore",
+        "wrapped-restore",
+    }
+    base = 0x00401080
+    callback = base + 0x40
+    wrapper = base + 0x60
+    restore = base + 0xA0
+    slot = 0x00403080
+    context = 0x00403000
+    program = bytearray(b"\x90" * 0xE0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "85 c9 74 0a")
+    cursor = emit(
+        cursor,
+        "c7 05 "
+        + slot.to_bytes(4, "little").hex()
+        + " "
+        + callback.to_bytes(4, "little").hex(),
+    )
+    cursor = emit(
+        cursor,
+        "83 3d " + slot.to_bytes(4, "little").hex() + " 00",
+    )
+    cursor = emit(cursor, "90 90" if mutation == "missing-guard" else "74 06")
+    call_address = base + cursor
+    cursor = emit(
+        cursor,
+        "ff 15 " + slot.to_bytes(4, "little").hex(),
+    )
+    emit(cursor, "31 c0 c3")
+
+    if mutation == "wrapped-restore":
+        cursor = emit_call(0x40, wrapper)
+        emit(cursor, "c3")
+        cursor = emit(0x60, "6a 01")
+        cursor = emit(
+            cursor,
+            "68 " + context.to_bytes(4, "little").hex(),
+        )
+        cursor = emit_call(cursor, restore)
+        emit(cursor, "c3")
+        context_relocation = 0x63
+    else:
+        cursor = emit(0x40, "6a 01")
+        cursor = emit(
+            cursor,
+            "68 " + context.to_bytes(4, "little").hex(),
+        )
+        cursor = emit_call(cursor, restore)
+        emit(cursor, "c3")
+        context_relocation = 0x43
+
+    restore_body = (
+        "59 5a 58 "
+        "8b 1a 8b 72 04 8b 7a 08 "
+        + (
+            "8b 62 10"
+            if mutation == "malformed-restore"
+            else "8b 62 0c"
+        )
+        + " 8b 6a 10 09 c0 75 01 40 50 ff 72 14 c3"
+    )
+    emit(0xA0, restore_body)
+    return (
+        load_large_cfg_program(
+            tmp_path,
+            program,
+            relocation_offsets=(6, 10, 16, 25, context_relocation),
+        ),
+        base,
+        call_address,
+        callback,
+        restore,
+        slot,
+        context,
+    )
+
+
+def private_stack_scalar_nested_clobber_image(tmp_path, *, mutation=None):
+    """Keep a scalar spill private across a returning write-only call tree."""
+    assert mutation in {
+        None,
+        "dynamic-read",
+        "exact-address",
+        "dynamic-address",
+        "bounded-read",
+        "wide-read",
+        "unbounded-read",
+        "jecxz-read",
+        "jecxz-wide-read",
+        "jecxz-unbounded-read",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    nested = base + 0x80
+    program = bytearray(b"\x90" * 0xC0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    store_address = base + 3
+    cursor = emit(cursor, "0f b6 4c 24 04 31 c9")
+    cursor = emit_call(cursor, callee)
+    emit(cursor, "83 c4 10 c3")
+
+    cursor = emit(0x40, "50")
+    cursor = emit_call(cursor, nested)
+    emit(cursor, "83 c4 04 c3")
+
+    cursor = emit(0x80, "83 ec 40 90 90")
+    if mutation in {"jecxz-read", "jecxz-wide-read", "jecxz-unbounded-read"}:
+        cursor = emit(
+            cursor,
+            "89 d1 90 90 90"
+            if mutation == "jecxz-unbounded-read"
+            else "b9 15 00 00 00"
+            if mutation == "jecxz-wide-read"
+            else "b9 09 00 00 00",
+        )
+        cursor = emit(cursor, "49 8b 04 8c e3 02 eb f8")
+        emit(cursor, "83 c4 40 c3")
+        return load_large_cfg_program(tmp_path, program), base, store_address
+    if mutation in {"bounded-read", "wide-read", "unbounded-read"}:
+        cursor = emit(
+            cursor,
+            "89 cb 90 90 90"
+            if mutation == "unbounded-read"
+            else "bb 20 00 00 00"
+            if mutation == "wide-read"
+            else "bb 08 00 00 00",
+        )
+        cursor = emit(cursor, "8b 04 9c 4b 85 db 7d f8")
+        emit(cursor, "83 c4 40 c3")
+        return load_large_cfg_program(tmp_path, program), base, store_address
+    cursor = emit(
+        cursor,
+        {
+            None: "89 04 9c",  # write-only unknown local coordinate
+            "dynamic-read": "8b 04 9c",  # may read the protected coordinate
+            "exact-address": "8d 44 24 50",  # exact protected coordinate
+            "dynamic-address": "8d 04 9c",  # may form the protected address
+        }[mutation],
+    )
+    emit(cursor, "83 c4 40 c3")
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def private_stack_scalar_disjoint_context_save_image(tmp_path, *, mutation=None):
+    """Save a disjoint stack cursor without addressing a protected spill."""
+    assert mutation in {None, "reads-protected", "addresses-protected"}
+    base = 0x00401080
+    context_save = base + 0x40
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    store_address = base + 3
+    cursor = emit(cursor, "0f b6 4c 24 04 31 c9 8d 44 24 08 50")
+    cursor = emit_call(cursor, context_save)
+    emit(cursor, "83 c4 04 83 c4 10 c3")
+
+    cursor = emit(0x40, "59 58")
+    cursor = emit(cursor, "89 18 89 70 04 89 78 08")
+    if mutation == "reads-protected":
+        cursor = emit(cursor, "8b 54 24 04 89 50 0c")
+    elif mutation == "addresses-protected":
+        cursor = emit(cursor, "8d 54 24 04 89 50 0c")
+    else:
+        cursor = emit(cursor, "89 60 0c")
+    emit(cursor, "89 68 10 89 48 14 31 c0 50 51 c3")
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def private_stack_direct_context_restore_image(tmp_path, *, mutation=None):
+    """Call an exact context restore directly from the protected frame."""
+    assert mutation in {None, "malformed-restore", "protected-context"}
+    base = 0x00401080
+    restore = base + 0x80
+    context = 0x00403000
+    program = bytearray(b"\x90" * 0xC0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    cursor = emit(cursor, "8d 44 24 04" if mutation == "protected-context" else "90" * 4)
+    cursor = emit(cursor, "6a 01")
+    cursor = emit(
+        cursor,
+        "50"
+        if mutation == "protected-context"
+        else f"68 {context.to_bytes(4, 'little').hex()}",
+    )
+    call_address = base + cursor
+    cursor = emit_call(cursor, restore)
+    emit(cursor, "83 c4 10 c3")
+
+    restore_body = (
+        "59 5a 58 "
+        "8b 1a 8b 72 04 8b 7a 08 "
+        + (
+            "8b 62 10"
+            if mutation == "malformed-restore"
+            else "8b 62 0c"
+        )
+        + " 8b 6a 10 09 c0 75 01 40 50 ff 72 14 c3"
+    )
+    emit(0x80, restore_body)
+    return load_large_cfg_program(tmp_path, program), base, call_address, restore
+
+
+def private_stack_nested_context_restore_scalar_image(tmp_path):
+    """Observe one word before a nested exact restore abandons the frame."""
+    base = 0x00401080
+    wrapper = base + 0x40
+    restore = base + 0x80
+    context = 0x00403000
+    program = bytearray(b"\x90" * 0xC0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 54 24 04 0f bf 44 24 04")
+    cursor = emit_call(cursor, wrapper)
+    emit(cursor, "83 c4 10 c3")
+
+    cursor = emit(0x40, "6a 01")
+    cursor = emit(cursor, f"68 {context.to_bytes(4, 'little').hex()}")
+    cursor = emit_call(cursor, restore)
+    emit(cursor, "59 59 c3")
+
+    emit(
+        0x80,
+        "59 5a 58 8b 1a 8b 72 04 8b 7a 08 8b 62 0c "
+        "8b 6a 10 09 c0 75 01 40 50 ff 72 14 c3",
+    )
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def private_stack_unresolved_call_image(tmp_path, *, mutation=None):
+    """Pass only disjoint values across one caller-cleaned opaque call."""
+    assert mutation in {
+        None,
+        "delayed-pop",
+        "no-arguments",
+        "protected-pointer",
+        "missing-cleanup",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    call_address = base + cursor
+    cursor = emit_call(cursor, callee)
+    emit(cursor, "83 c4 10 c3")
+
+    cursor = emit(0x40, "83 ec 20")
+    if mutation == "no-arguments":
+        cursor = emit(cursor, "ff d3")
+    elif mutation == "delayed-pop":
+        cursor = emit(cursor, "6a 01 ff d3 89 c1 59")
+    else:
+        pointer_offset = 0x28 if mutation == "protected-pointer" else 0x1C
+        cursor = emit(cursor, f"8d 44 24 {pointer_offset:02x}")
+        cursor = emit(cursor, "6a 03 6a 02 6a 01 50 ff d3")
+        cursor = emit(
+            cursor,
+            "90 90 90" if mutation == "missing-cleanup" else "83 c4 10",
+        )
+    emit(cursor, "83 c4 20 c3")
+    return load_large_cfg_program(tmp_path, program), base, call_address
+
+
+def private_stack_scalar_unresolved_call_image(tmp_path, *, mutation=None):
+    """Carry one narrow scalar across a disjoint caller-cleaned call."""
+    assert mutation in {None, "protected-pointer", "missing-cleanup"}
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 54 24 04")
+    call_address = base + cursor
+    cursor = emit_call(cursor, callee)
+    cursor = emit(cursor, "0f bf 44 24 04")
+    emit(cursor, "83 c4 10 c3")
+
+    cursor = emit(0x40, "83 ec 20")
+    pointer_offset = 0x28 if mutation == "protected-pointer" else 0x1C
+    cursor = emit(cursor, f"8d 44 24 {pointer_offset:02x}")
+    cursor = emit(cursor, "6a 03 6a 02 6a 01 50 ff d3")
+    cursor = emit(
+        cursor,
+        "90 90 90" if mutation == "missing-cleanup" else "83 c4 10",
+    )
+    emit(cursor, "83 c4 20 c3")
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def private_stack_scalar_callee_cleaned_unresolved_call_image(
+    tmp_path,
+    *,
+    mutation=None,
+):
+    """Carry a narrow scalar past an exact callee-cleaned opaque call."""
+    assert mutation in {
+        None,
+        "wrong-restore",
+        "missing-restore",
+        "nonadjacent-arguments",
+        "near-return-cleanup",
+        "unaligned-return",
+        "far-return",
+        "protected-pointer",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 54 24 04")
+    if mutation == "near-return-cleanup":
+        cursor = emit(cursor, "6a 02 6a 01")
+    cursor = emit_call(cursor, callee)
+    cursor = emit(cursor, "0f bf 44 24 04")
+    emit(cursor, "83 c4 10 c3")
+
+    cursor = emit(0x40, "8b 54 24 04")
+    if mutation == "protected-pointer":
+        cursor = emit(cursor, "8d 44 24 08")
+    cursor = emit(cursor, "53")
+    cursor = emit(
+        cursor,
+        "6a 02 50" if mutation == "protected-pointer" else "6a 02 6a 01",
+    )
+    if mutation == "nonadjacent-arguments":
+        cursor = emit(cursor, "90")
+    call_address = base + cursor
+    cursor = emit(cursor, "ff d2")
+    if mutation == "missing-restore":
+        cursor = emit(cursor, "90")
+    elif mutation == "wrong-restore":
+        cursor = emit(cursor, "5e")
+    else:
+        cursor = emit(cursor, "5b")
+    emit(
+        cursor,
+        "cb"
+        if mutation == "far-return"
+        else "c2 06 00"
+        if mutation == "unaligned-return"
+        else "c2 08 00"
+        if mutation == "near-return-cleanup"
+        else "c3",
+    )
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        callee,
+        store_address,
+        call_address,
+    )
+
+
+def private_stack_scalar_delayed_callee_cleanup_image(
+    tmp_path,
+    *,
+    mutation=None,
+):
+    """Carry one scalar across a callee-pop callback with a delayed epilogue."""
+    assert mutation in {
+        None,
+        "nonadjacent-arguments",
+        "missing-local-restore",
+        "partial-local-restore",
+        "extra-post-call-push",
+        "wrong-saved-restore",
+        "pop-esp",
+        "near-return-cleanup",
+        "far-return",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0xA0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 54 24 04")
+    cursor = emit_call(cursor, callee)
+    cursor = emit(cursor, "0f bf 44 24 04")
+    emit(cursor, "83 c4 10 c3")
+
+    cursor = emit(0x40, "57 83 ec 08 8b 7c 24 10")
+    cursor = emit(cursor, "8d 04 24 8d 54 24 04 52")
+    if mutation == "nonadjacent-arguments":
+        cursor = emit(cursor, "90")
+    cursor = emit(cursor, "50")
+    call_address = base + cursor
+    cursor = emit(cursor, "ff d7")
+    cursor = emit(cursor, "66 85 c0 75 02 31 c0")
+    if mutation == "extra-post-call-push":
+        cursor = emit(cursor, "50")
+    cursor = emit(
+        cursor,
+        "90 90 90"
+        if mutation == "missing-local-restore"
+        else "83 c4 04"
+        if mutation == "partial-local-restore"
+        else "83 c4 08",
+    )
+    cursor = emit(
+        cursor,
+        "5e"
+        if mutation == "wrong-saved-restore"
+        else "5c"
+        if mutation == "pop-esp"
+        else "5f",
+    )
+    emit(
+        cursor,
+        "cb"
+        if mutation == "far-return"
+        else "c2 04 00"
+        if mutation == "near-return-cleanup"
+        else "c3",
+    )
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        callee,
+        store_address,
+        call_address,
+    )
+
+
+def private_stack_multiple_restore_callee_cleanup_image(
+    tmp_path,
+    *,
+    mutation=None,
+):
+    """Restore two saved registers after one three-argument opaque call."""
+    assert mutation in {
+        None,
+        "swapped-restores",
+        "missing-second-restore",
+        "far-return",
+    }
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x60)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "53 55 8b 44 24 0c 53 55 50")
+    call_address = base + cursor
+    cursor = emit(cursor, "ff d0")
+    cursor = emit(
+        cursor,
+        "5b 5d"
+        if mutation == "swapped-restores"
+        else "5d 90"
+        if mutation == "missing-second-restore"
+        else "5d 5b",
+    )
+    emit(cursor, "cb" if mutation == "far-return" else "c2 0c 00")
+    return load_large_cfg_program(tmp_path, program), base, call_address
+
+
+def private_stack_recursive_call_image(tmp_path, *, reads_protected=False):
+    """Shift the protected coordinate through one unclosed recursive call."""
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    call_address = base + cursor
+    cursor = emit_call(cursor, callee)
+    emit(cursor, "83 c4 10 c3")
+
+    payload = "8b 44 24 08" if reads_protected else "90 90 90 90"
+    cursor = emit(0x40, f"85 c9 74 0b {payload} 50")
+    cursor = emit_call(cursor, callee)
+    emit(cursor, "58 c3")
+    return load_large_cfg_program(tmp_path, program), base, call_address
+
+
+def private_stack_recursive_scalar_image(
+    tmp_path,
+    *,
+    reads_protected=False,
+    carries_protected=False,
+):
+    """Observe one word after a recursive call that cannot address it."""
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 54 24 04")
+    if carries_protected:
+        cursor = emit(cursor, "8b 4c 24 04")
+    cursor = emit_call(cursor, callee)
+    cursor = emit(cursor, "0f bf 44 24 04")
+    emit(cursor, "83 c4 10 c3")
+
+    payload = "8b 44 24 08" if reads_protected else "90 90 90 90"
+    cursor = emit(0x40, f"85 c9 74 0b {payload} 50")
+    cursor = emit_call(cursor, callee)
+    emit(cursor, "58 c3")
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def partial_call_result_copy_store_image(tmp_path, *, mutation=None):
+    """Copy one scalar AL result into a preserved byte before a store."""
+    assert mutation in {
+        None,
+        "full-return",
+        "wrong-slice",
+        "clobber-copy",
+        "caller-saved-copy",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    harmless = base + 0x80
+    program = bytearray(b"\x90" * 0xB0)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit_call(0, callee)
+    copy = {
+        "wrong-slice": "88 e3",  # mov bl, ah
+        "caller-saved-copy": "88 c1",  # mov cl, al
+    }.get(mutation, "88 c3")  # mov bl, al
+    encoded = bytes.fromhex(copy)
+    program[cursor : cursor + len(encoded)] = encoded
+    cursor += len(encoded)
+    compare = "80 f9 04" if mutation == "caller-saved-copy" else "80 fb 04"
+    encoded = bytes.fromhex(compare)
+    program[cursor : cursor + len(encoded)] = encoded
+    cursor += len(encoded)
+    branch = cursor
+    program[cursor : cursor + 2] = bytes.fromhex("75 00")
+    cursor += 2
+    cursor = emit_call(cursor, harmless)
+    cursor = emit_call(cursor, harmless)
+    clobber = (
+        "88 fb 90 90 90"
+        if mutation == "clobber-copy"
+        else "90 90 90 90 90"
+    )
+    encoded = bytes.fromhex(clobber)
+    program[cursor : cursor + len(encoded)] = encoded
+    cursor += len(encoded)
+    store_address = base + cursor
+    store = "88 0e" if mutation == "caller-saved-copy" else "88 1e"
+    encoded = bytes.fromhex(store)
+    program[cursor : cursor + len(encoded)] = encoded
+    cursor += len(encoded)
+    program[cursor] = 0xC3
+    cursor += 1
+    fallback = cursor
+    program[cursor : cursor + 3] = bytes.fromhex("31 c0 c3")
+    program[branch + 1] = (fallback - (branch + 2)) & 0xFF
+
+    callee_body = (
+        "b8 00 30 40 00 c3"
+        if mutation == "full-return"
+        else "b0 04 c3"
+    )
+    encoded = bytes.fromhex(callee_body)
+    program[0x40 : 0x40 + len(encoded)] = encoded
+    program[0x80 : 0x83] = bytes.fromhex("31 c0 c3")
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        callee,
+        store_address,
+    )
+
+
+def partial_boolean_return_cleanup_image(tmp_path, *, terminal):
+    """Return a fresh AL Boolean through one exact return encoding."""
+    assert terminal in {"plain", "near-cleanup", "far-cleanup", "iret"}
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x90)
+    terminal_bytes = {
+        "plain": bytes.fromhex("c3"),
+        "near-cleanup": bytes.fromhex("c2 08 00"),
+        "far-cleanup": bytes.fromhex("ca 08 00"),
+        "iret": bytes.fromhex("cf"),
+    }[terminal]
+
+    cursor = 0
+    program[cursor : cursor + 4] = bytes.fromhex("6a 00 6a 00")
+    cursor += 4
+    program[cursor] = 0xE8
+    program[cursor + 1 : cursor + 5] = (
+        callee - (base + cursor + 5)
+    ).to_bytes(4, "little", signed=True)
+    cursor += 5
+    program[cursor : cursor + 6] = bytes.fromhex("88 03 31 c0 c3 90")
+
+    body = bytearray(bytes.fromhex("85 c9 74 00 30 c0"))
+    body.extend(terminal_bytes)
+    success = len(body)
+    body.extend(bytes.fromhex("b0 01"))
+    body.extend(terminal_bytes)
+    body[3] = success - 4
+    program[0x40 : 0x40 + len(body)] = body
+    return load_large_cfg_program(tmp_path, program), callee
+
+
+def forwarded_partial_boolean_return_image(
+    tmp_path,
+    *,
+    overwrite=False,
+    full_compare=False,
+    wider_partial_compare=False,
+    wider_partial_test=False,
+):
+    """Forward one stdcall AL Boolean through a closed plain-return wrapper."""
+    assert sum((full_compare, wider_partial_compare, wider_partial_test)) <= 1
+    base = 0x00401080
+    wrapper = base + 0x40
+    callee = base + 0x80
+    program = bytearray(b"\x90" * 0xD0)
+
+    def emit_call(offset, target):
+        call_address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (call_address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = 0
+    program[cursor : cursor + 4] = bytes.fromhex("6a 00 6a 00")
+    cursor = emit_call(cursor + 4, wrapper)
+    consumer = (
+        bytes.fromhex("66 85 c0 31 c0 c3")
+        if wider_partial_test
+        else {
+            (False, False): bytes.fromhex("3c 2f 31 c0 c3"),
+            (False, True): bytes.fromhex("66 3d f9 ff 31 c0 c3"),
+            (True, False): bytes.fromhex("3d 00 30 40 00 31 c0 c3"),
+        }[(full_compare, wider_partial_compare)]
+    )
+    program[cursor : cursor + len(consumer)] = consumer
+
+    cursor = 0x40
+    program[cursor : cursor + 8] = bytes.fromhex(
+        "8b 44 24 04 8b 4c 24 08"
+    )
+    cursor = 0x48
+    program[cursor : cursor + 2] = bytes.fromhex("51 50")
+    cursor = emit_call(cursor + 2, callee)
+    if overwrite:
+        program[cursor : cursor + 6] = bytes.fromhex(
+            "b8 00 30 40 00 c3"
+        )
+    else:
+        program[cursor] = 0xC3
+
+    body = bytearray(bytes.fromhex("85 c9 74 05 30 c0 c2 08 00"))
+    body.extend(bytes.fromhex("b0 01 c2 08 00"))
+    program[0x80 : 0x80 + len(body)] = body
+    return load_large_cfg_program(tmp_path, program), wrapper, callee
+
+
+def partial_return_zero_extension_caller_image(tmp_path, *, mutation=None):
+    """Consume one partial EAX return by an exact full-width zero extension."""
+    assert mutation in {
+        None,
+        "word",
+        "other-destination",
+        "other-destination-overwritten",
+        "other-source",
+        "partial-copy",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x70)
+    program[0] = 0xE8
+    program[1:5] = (callee - (base + 5)).to_bytes(
+        4,
+        "little",
+        signed=True,
+    )
+    consumer = {
+        None: "0f b6 c0 c3",
+        "word": "0f b7 c0 c3",
+        "other-destination": "0f b6 c8 c3",
+        "other-destination-overwritten": "0f b6 d8 31 c0 c3",
+        "other-source": "0f b6 c1 c3",
+        "partial-copy": "88 c0 c3",
+    }[mutation]
+    encoded = bytes.fromhex(consumer)
+    program[5 : 5 + len(encoded)] = encoded
+    program[0x40 : 0x43] = bytes.fromhex("b0 01 c3")
+    return load_large_cfg_program(tmp_path, program), callee
+
+
+def private_stack_direct_argument_image(tmp_path, *, mutation=None):
+    """Pass one live-frame pointer only through an owned closed callee."""
+    assert mutation in {
+        None,
+        "incoming",
+        "pointer-store",
+        "pointer-return",
+        "pointer-return-killed",
+        "independent-return-used",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0xC0)
+    source = (
+        bytes.fromhex("8b 44 24 14")
+        if mutation == "incoming"
+        else bytes.fromhex("8d 44 24 04")
+    )
+    cursor = 0
+    program[cursor : cursor + 3] = bytes.fromhex("83 ec 10")
+    cursor += 3
+    program[cursor : cursor + len(source)] = source
+    cursor += len(source)
+    push_address = base + cursor
+    program[cursor] = 0x50
+    cursor += 1
+    program[cursor] = 0xE8
+    program[cursor + 1 : cursor + 5] = (
+        callee - (base + cursor + 5)
+    ).to_bytes(4, "little", signed=True)
+    cursor += 5
+    tail = (
+        bytes.fromhex("31 c0 83 c4 10 c3")
+        if mutation == "pointer-return-killed"
+        else (
+            bytes.fromhex("85 c0 31 c0 83 c4 10 c3")
+            if mutation == "independent-return-used"
+            else bytes.fromhex("83 c4 10 c3")
+        )
+    )
+    program[cursor : cursor + len(tail)] = tail
+
+    body = bytearray(bytes.fromhex("8b 44 24 04"))
+    if mutation == "independent-return-used":
+        leaf = callee + 0x40
+        body.append(0x50)
+        body.append(0xE8)
+        body.extend(
+            (leaf - (callee + len(body) + 4)).to_bytes(
+                4,
+                "little",
+                signed=True,
+            )
+        )
+        body.extend(bytes.fromhex("85 c0 c2 04 00"))
+        leaf_body = bytes.fromhex(
+            "8b 44 24 04 c6 00 01 a1 00 30 40 00 c2 04 00"
+        )
+        program[0x80 : 0x80 + len(leaf_body)] = leaf_body
+    elif mutation == "pointer-store":
+        body.extend(bytes.fromhex("a3 00 30 40 00 31 c0 c2 04 00"))
+    elif mutation in {"pointer-return", "pointer-return-killed"}:
+        body.extend(bytes.fromhex("c2 04 00"))
+    else:
+        body.extend(bytes.fromhex("c6 00 01 31 c0 c2 04 00"))
+    program[0x40 : 0x40 + len(body)] = body
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        callee,
+        push_address,
+    )
+
+
+def private_stack_finite_indirect_argument_image(*, mutation=None):
+    """Pass one private pointer through an exact finite indirect callee."""
+    assert mutation in {None, "unresolved", "forged", "pointer-store"}
+    text_va = 0x00401000
+    wrapper = text_va + 0x40
+    target = text_va + 0x80
+    data_va = 0x00403000
+    text = bytearray(b"\xcc" * 0xC0)
+    caller = bytes.fromhex(
+        "83 ec 10"  # sub esp, 0x10
+        "8d 44 24 04"  # lea eax, [esp + 4]
+        "50"  # push eax
+        "e8 33 00 00 00"  # call wrapper
+        "83 c4 10"  # add esp, 0x10
+        "c3"  # ret
+    )
+    text[: len(caller)] = caller
+    push_address = text_va + 7
+    callback_setup = (
+        bytes.fromhex("90" * 5)
+        if mutation in {"unresolved", "forged"}
+        else bytes.fromhex("bb 80 10 40 00")
+    )
+    wrapper_body = (
+        bytes.fromhex("8b 44 24 04 50")
+        + callback_setup
+        + bytes.fromhex(
+            "ff d3"  # call ebx
+            "31 c0"  # xor eax, eax
+            "c2 04 00"  # ret 4
+        )
+    )
+    text[0x40 : 0x40 + len(wrapper_body)] = wrapper_body
+    target_body = bytes.fromhex(
+        (
+            "8b 44 24 04"  # mov eax, [esp + 4]
+            "a3 04 30 40 00"  # mov [data_va + 4], eax
+            "31 c0"  # xor eax, eax
+            "c2 04 00"  # ret 4
+        )
+        if mutation == "pointer-store"
+        else (
+            "8b 44 24 04"  # mov eax, [esp + 4]
+            "c6 00 01"  # mov byte ptr [eax], 1
+            "31 c0"  # xor eax, eax
+            "c2 04 00"  # ret 4
+        )
+    )
+    text[0x80 : 0x80 + len(target_body)] = target_body
+    data = bytes(text) + bytes(0x20)
+    image = pe.Image(
+        data=data,
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe.Section(
+                ".text",
+                text_va,
+                0,
+                len(text),
+                len(text),
+                0x60000020,
+            ),
+            pe.Section(
+                ".data",
+                data_va,
+                len(text),
+                0x20,
+                0x20,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(text)),),
+    )
+    return image, text_va, wrapper, target, push_address, wrapper + 10
+
+
+def private_stack_memcpy_argument_image(tmp_path, *, killed_return):
+    """Pass a private destination to the exact audited memcpy body."""
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x100)
+    cursor = 0
+    program[cursor : cursor + 3] = bytes.fromhex("83 ec 20")
+    cursor += 3
+    program[cursor : cursor + 4] = bytes.fromhex("8d 54 24 04")
+    cursor += 4
+    program[cursor : cursor + 4] = bytes.fromhex("8d 44 24 10")
+    cursor += 4
+    program[cursor : cursor + 3] = bytes.fromhex("6a 04 50")
+    cursor += 3
+    push_address = base + cursor
+    program[cursor] = 0x52
+    cursor += 1
+    program[cursor] = 0xE8
+    program[cursor + 1 : cursor + 5] = (
+        callee - (base + cursor + 5)
+    ).to_bytes(4, "little", signed=True)
+    cursor += 5
+    tail = bytes.fromhex(
+        "83 c4 0c "
+        + ("31 c0 " if killed_return else "")
+        + "83 c4 20 c3"
+    )
+    program[cursor : cursor + len(tail)] = tail
+    memcpy_body = bytes.fromhex(
+        "8b54240456578b4424148b74241089d731c939f7772b3d100000007c1e"
+        "29f981e103000000740429c8f3a489c12503000000c1e902f3a585c074"
+        "4689c1f3a4eb40fd8d7406ff8d7c07ff3d100000007c2b8d4ffd81e103"
+        "000000740429c8f3a483ee0383ef0389c12503000000c1e902f3a585c0"
+        "740a83c60383c70389c1f3a4fc89d05f5ec3"
+    )
+    program[0x40 : 0x40 + len(memcpy_body)] = memcpy_body
+    return load_large_cfg_program(tmp_path, program), base, callee, push_address
+
+
+def protected_capability_mask_image(tmp_path, *, mask, partial=False):
+    """Mask one protected literal before a later scalar displacement."""
+    base = 0x00401080
+    program = bytearray(bytes.fromhex("ba 00 30 40 00"))
+    if partial:
+        program.extend(bytes.fromhex("66 81 e2"))
+        program.extend((mask & 0xFFFF).to_bytes(2, "little"))
+    else:
+        program.extend(bytes.fromhex("81 e2"))
+        program.extend((mask & 0xFFFF_FFFF).to_bytes(4, "little"))
+    program.extend(bytes.fromhex("83 c2 22"))
+    observation = base + len(program)
+    program.append(0xC3)
+    return load_large_cfg_program(tmp_path, program), base, observation
+
+
+def protected_capability_negation_image(tmp_path, *, source):
+    """Negate one ordinary scalar or one protected literal."""
+    assert source in {"scalar-memory", "protected-literal", "incoming"}
+    base = 0x00401080
+    prefix = {
+        "scalar-memory": "a1 04 30 40 00",
+        "protected-literal": "b8 00 30 40 00",
+        "incoming": "90 90 90 90 90",
+    }[source]
+    program = bytes.fromhex(f"{prefix} f7 d8 c3")
+    return load_large_cfg_program(tmp_path, program), base, base + 7
+
+
+def partial_return_full_division_caller_image(tmp_path, *, mutation=None):
+    """Kill a partial return with a callee's exact full-width DIV result."""
+    assert mutation in {
+        None,
+        "incoming-dividend",
+        "incoming-high-half",
+        "incoming-divisor",
+        "partial-divide",
+        "memory-divisor",
+        "signed-divide",
+    }
+    base = 0x00401080
+    divider = base + 0x40
+    partial = base + 0x80
+    program = bytearray(b"\x90" * 0xA0)
+
+    def emit_call(offset, target):
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (base + offset + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit_call(0, partial)
+    program[cursor : cursor + 2] = bytes.fromhex("84 c0")
+    cursor = emit_call(cursor + 2, divider)
+    program[cursor : cursor + 4] = bytes.fromhex("83 f8 01 c3")
+
+    dividend = "90 90 90 90" if mutation == "incoming-dividend" else "8b 44 24 04"
+    high_half = "90 90" if mutation == "incoming-high-half" else "31 d2"
+    divisor = "90 90 90 90" if mutation == "incoming-divisor" else "8b 4c 24 08"
+    divide = {
+        "partial-divide": "66 f7 f1",
+        "memory-divisor": "f7 34 24",
+        "signed-divide": "f7 f9 90",
+    }.get(mutation, "f7 f1 90")
+    divider_body = bytes.fromhex(
+        f"{dividend} {high_half} {divisor} {divide} c3"
+    )
+    program[0x40 : 0x40 + len(divider_body)] = divider_body
+    program[0x80 : 0x83] = bytes.fromhex("b0 01 c3")
+    return load_large_cfg_program(tmp_path, program), divider, partial
+
+
+def partial_return_call_passthrough_image(tmp_path, *, mutation=None):
+    """Retain partial-return taint through an unrelated callback result."""
+    assert mutation in {
+        None,
+        "call-register",
+        "call-memory-register",
+        "argument-register",
+        "missing-callback",
+        "direct-renewed-call",
+        "direct-preserving-call",
+        "direct-observing-call",
+        "full-compare",
+        "mixed-full-compare",
+        "mixed-full-test",
+        "full-test-address-use",
+    }
+    base = 0x00401080
+    wrapper = base + 0x40
+    partial = base + 0x80
+    program = bytearray(b"\x90" * 0xE0)
+
+    program[0] = 0xE8
+    program[1:5] = (wrapper - (base + 5)).to_bytes(
+        4,
+        "little",
+        signed=True,
+    )
+    outer_consumer = {
+        "full-compare": "83 f8 00 b8 00 00 00 00 c3",
+        "mixed-full-compare": "39 c8 b8 00 00 00 00 c3",
+        "mixed-full-test": "85 c8 b8 00 00 00 00 c3",
+        "full-test-address-use": "85 c0 8b 10 b8 00 00 00 00 c3",
+    }.get(mutation, "85 c0 b8 00 00 00 00 c3")
+    encoded = bytes.fromhex(outer_consumer)
+    program[5 : 5 + len(encoded)] = encoded
+
+    cursor = 0x40
+    program[cursor] = 0xE8
+    program[cursor + 1 : cursor + 5] = (
+        partial - (base + cursor + 5)
+    ).to_bytes(4, "little", signed=True)
+    cursor += 5
+    program[cursor : cursor + 2] = bytes.fromhex("84 c0")
+    cursor += 2
+    if mutation is not None and mutation.startswith("direct-"):
+        helper = base + 0xC0
+        program[cursor] = 0xE8
+        program[cursor + 1 : cursor + 5] = (
+            helper - (base + cursor + 5)
+        ).to_bytes(4, "little", signed=True)
+        cursor += 5
+        helper_body = {
+            "direct-renewed-call": "ff 53 04 c3",
+            "direct-preserving-call": "c3",
+            "direct-observing-call": "50 ff 53 04 59 c3",
+        }[mutation]
+        encoded = bytes.fromhex(helper_body)
+        program[0xC0 : 0xC0 + len(encoded)] = encoded
+    else:
+        callback = {
+            None: "ff 53 04",
+            "call-register": "ff d0 90",
+            "call-memory-register": "ff 50 04",
+            "argument-register": "50 ff 53 04 59",
+            "missing-callback": "90 90 90",
+        }.get(mutation, "ff 53 04")
+        encoded = bytes.fromhex(callback)
+        program[cursor : cursor + len(encoded)] = encoded
+        cursor += len(encoded)
+    program[cursor] = 0xC3
+    program[0x80 : 0x83] = bytes.fromhex("b0 01 c3")
+    return load_large_cfg_program(tmp_path, program), partial
+
+
+def partial_return_full_replacement_store_image(
+    tmp_path,
+    *,
+    mutation=None,
+):
+    """Read a partial result fully only after an internal full replacement."""
+    assert mutation in {None, "partial-replacement", "read-before-replacement"}
+    base = 0x00401080
+    partial = base + 0x40
+    replacement = base + 0x80
+    source = 0x00403080
+    destination = 0x00403084
+    program = bytearray(b"\x90" * 0xA0)
+
+    def emit_call(offset, target):
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (base + offset + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit_call(0, partial)
+    program[cursor : cursor + 2] = bytes.fromhex("84 c0")
+    cursor = emit_call(cursor + 2, replacement)
+    program[cursor : cursor + 5] = b"\xa3" + destination.to_bytes(4, "little")
+    program[cursor + 5 : cursor + 8] = bytes.fromhex("31 c0 c3")
+
+    program[0x40 : 0x43] = bytes.fromhex("b0 01 c3")
+    replacement_body = {
+        None: (
+            b"\xa1"
+            + source.to_bytes(4, "little")
+            + b"\x03\x05"
+            + (source + 8).to_bytes(4, "little")
+            + b"\xc3"
+        ),
+        "partial-replacement": (
+            b"\xa0"
+            + source.to_bytes(4, "little")
+            + b"\x03\x05"
+            + (source + 8).to_bytes(4, "little")
+            + b"\xc3"
+        ),
+        "read-before-replacement": (
+            b"\xa3"
+            + destination.to_bytes(4, "little")
+            + b"\xa1"
+            + source.to_bytes(4, "little")
+            + b"\x03\x05"
+            + (source + 8).to_bytes(4, "little")
+            + b"\xc3"
+        ),
+    }[mutation]
+    program[0x80 : 0x80 + len(replacement_body)] = replacement_body
+    return load_large_cfg_program(tmp_path, program), partial, replacement
+
+
+def partial_return_scalarizing_mask_store_image(tmp_path, *, mutation=None):
+    """Mask one independently scalar partial return before a full use."""
+    assert mutation in {None, "word-mask", "sparse-mask", "partial-mask"}
+    base = 0x00401080
+    partial = base + 0x40
+    destination = 0x00403084
+    program = bytearray(b"\x90" * 0x60)
+
+    program[0] = 0xE8
+    program[1:5] = (partial - (base + 5)).to_bytes(
+        4,
+        "little",
+        signed=True,
+    )
+    program[5:7] = bytes.fromhex("84 c0")
+    mask = {
+        None: "25 ff 00 00 00",
+        "word-mask": "25 ff ff 00 00",
+        "sparse-mask": "25 ff 00 ff 00",
+        "partial-mask": "66 25 ff 00 90",
+    }[mutation]
+    program[7:12] = bytes.fromhex(mask)
+    program[12:17] = b"\xa3" + destination.to_bytes(4, "little")
+    program[17:20] = bytes.fromhex("31 c0 c3")
+    program[0x40 : 0x43] = bytes.fromhex("b0 01 c3")
+    return load_large_cfg_program(tmp_path, program), partial
+
+
+def straight_line_partial_zero_store_image(tmp_path, *, mutation=None):
+    """Store one exact zeroed register slice after protected full lineage."""
+    assert mutation in {None, "wrong-byte", "partial-move", "join-bypass", "word-store"}
+    base = 0x00401080
+    protected = 0x00403084
+    destination = protected + 4
+    program = bytearray(b"\x90" * 0x30)
+    program[0:5] = b"\xba" + protected.to_bytes(4, "little")
+    if mutation == "join-bypass":
+        program[5:7] = bytes.fromhex("85 c9")
+        program[7:9] = bytes.fromhex("75 02")
+        program[9:11] = bytes.fromhex("30 d2")
+        store_offset = 11
+    else:
+        zero = {
+            None: "30 d2",
+            "wrong-byte": "30 f6",
+            "partial-move": "88 ca",
+            "word-store": "30 d2",
+        }[mutation]
+        program[5:7] = bytes.fromhex(zero)
+        store_offset = 7
+    store = (
+        b"\x66\x89\x15"
+        if mutation == "word-store"
+        else b"\x88\x15"
+    ) + destination.to_bytes(4, "little")
+    program[store_offset : store_offset + len(store)] = store
+    program[store_offset + len(store)] = 0xC3
+    return load_large_cfg_program(tmp_path, program), base, base + store_offset
+
+
+def private_stack_scan_index_store_image(tmp_path, *, mutation=None):
+    """Index a private stack byte by one exact forward SCASB count."""
+    assert mutation in {
+        None,
+        "wrong-count-seed",
+        "wrong-result-seed",
+        "partial-subtract",
+        "nonstack-base",
+        "direction-set",
+        "retail-seed-order",
+        "retail-result-before-scan",
+        "retail-result-pointer-mix",
+    }
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x40)
+    cursor = 0
+
+    def emit(encoded):
+        nonlocal cursor
+        encoded = bytes.fromhex(encoded)
+        program[cursor : cursor + len(encoded)] = encoded
+        cursor += len(encoded)
+
+    emit("83 ec 40")
+    if mutation in {
+        "retail-result-before-scan",
+        "retail-result-pointer-mix",
+    }:
+        emit("b9 ff ff ff ff")
+        emit("8d 7c 24 20")
+        emit("31 c0")
+        emit("ba fe ff ff ff")
+        emit("f2 ae")
+        emit("8d 44 24 20")
+        if mutation == "retail-result-pointer-mix":
+            emit("01 fa")
+        emit("29 ca")
+    else:
+        if mutation == "retail-seed-order":
+            emit("31 c0")
+            emit("31 c9")
+            emit("49")
+        else:
+            emit("31 c9")
+            emit("41" if mutation == "wrong-count-seed" else "49")
+            emit("31 c0")
+        if mutation == "direction-set":
+            emit("fd")
+        emit("f2 ae")
+        emit(
+            "ba fd ff ff ff"
+            if mutation == "wrong-result-seed"
+            else "ba fe ff ff ff"
+        )
+        emit("66 29 ca" if mutation == "partial-subtract" else "29 ca")
+    store_address = base + cursor
+    emit(
+        "c6 84 13 20 00 00 00 00"
+        if mutation == "nonstack-base"
+        else "c6 84 14 20 00 00 00 00"
+    )
+    if mutation == "direction-set":
+        emit("fc")
+    emit("83 c4 40 c3")
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def cyclic_partial_return_graph_image(tmp_path, *, node_count=8):
+    """Build one dense false scalar-return SCC with two calls per node."""
+    assert 3 <= node_count <= 8
+    base = 0x00401080
+    stride = 0x10
+    entries = tuple(base + index * stride for index in range(node_count))
+    program = bytearray(b"\x90" * (node_count * stride))
+
+    for index, entry in enumerate(entries):
+        offset = index * stride
+        program[offset : offset + 4] = bytes.fromhex("85 d2 74 06")
+        for call_offset, target_index in (
+            (offset + 4, (index + 1) % node_count),
+            (offset + 0xA, (index + 2) % node_count),
+        ):
+            program[call_offset] = 0xE8
+            program[call_offset + 1 : call_offset + 5] = (
+                entries[target_index] - (base + call_offset + 5)
+            ).to_bytes(4, "little", signed=True)
+            program[call_offset + 5] = 0xC3
+        assert entry == base + offset
+
+    return load_large_cfg_program(tmp_path, program), entries
+
+
+def transitive_unused_partial_return_image(tmp_path, *, full_read=False):
+    """Forward one partial return until an outer caller fully kills it."""
+    base = 0x00401080
+    wrapper = base + 0x40
+    leaf = base + 0x80
+    program = bytearray(b"\x90" * 0xA0)
+
+    def emit_call(offset, target):
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (base + offset + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit_call(0, wrapper)
+    consumer = "89 c2 31 c0 c3" if full_read else "31 c0 c3"
+    encoded = bytes.fromhex(consumer)
+    program[cursor : cursor + len(encoded)] = encoded
+    cursor = emit_call(0x40, leaf)
+    program[cursor] = 0xC3
+    program[0x80 : 0x83] = bytes.fromhex("b0 01 c3")
+    return load_large_cfg_program(tmp_path, program), leaf
+
+
+def recursive_partial_result_sink_image(tmp_path, *, mutation=None):
+    """Carry partial scalar bits through recursion to one outer full kill."""
+    assert mutation in {None, "outer-full-read", "recursive-full-read"}
+    base = 0x00401080
+    recursive = base + 0x40
+    leaf = base + 0x80
+    program = bytearray(b"\x90" * 0xA0)
+
+    def emit_call(offset, target):
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (base + offset + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit_call(0, recursive)
+    outer = (
+        "89 c2 31 c0 c3"
+        if mutation == "outer-full-read"
+        else "31 c0 c3"
+    )
+    encoded = bytes.fromhex(outer)
+    program[cursor : cursor + len(encoded)] = encoded
+
+    # The direct return arm fully kills EAX with a non-Boolean literal, so it
+    # does not create an independently scalar partial return.  The recursive
+    # arm replaces AX with the leaf result before comparing it, exercising
+    # path-local scalar provenance across the recursion backedge.
+    program[0x40:0x4A] = bytes.fromhex(
+        "85 c9 75 06 b8 02 00 00 00 c3"
+    )
+    emit_call(0x4A, recursive)
+    cursor = emit_call(0x4F, leaf)
+    consumer = (
+        "31 ed 39 c5 c3"
+        if mutation == "recursive-full-read"
+        else "31 ed 66 39 c5 c3"
+    )
+    encoded = bytes.fromhex(consumer)
+    program[cursor : cursor + len(encoded)] = encoded
+    program[0x80:0x87] = bytes.fromhex("66 a1 80 30 40 00 c3")
+    return load_large_cfg_program(tmp_path, program), leaf, recursive
+
+
+def partial_result_quarantined_full_spill_image(tmp_path, *, mutation=None):
+    """Spill stale upper result bits only into one byte-observed local."""
+    assert mutation in {
+        None,
+        "full-reload",
+        "address-escape",
+        "wide-read",
+        "nonstack-store",
+    }
+    base = 0x00401080
+    leaf = base + 0x40
+    program = bytearray(b"\x90" * 0x60)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 04")
+    call_address = base + cursor
+    cursor = emit(
+        cursor,
+        "e8 "
+        + (leaf - (call_address + 5)).to_bytes(
+            4,
+            "little",
+            signed=True,
+        ).hex(),
+    )
+    store_address = base + cursor
+    cursor = emit(
+        cursor,
+        "a3 00 30 40 00" if mutation == "nonstack-store" else "89 04 24",
+    )
+    observation = {
+        None: "80 3c 24 00",
+        "full-reload": "8b 0c 24",
+        "address-escape": "8d 0c 24 89 0d 00 30 40 00",
+        "wide-read": "83 3c 24 00",
+        "nonstack-store": "90 90 90 90",
+    }[mutation]
+    cursor = emit(cursor, observation)
+    emit(cursor, "83 c4 04 31 c0 c3")
+    emit(0x40, "b0 01 c3")
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        leaf,
+        store_address,
+    )
+
+
+def partial_result_quarantined_x87_scalar_image(tmp_path, *, mutation=None):
+    """Confine one returned byte to a local floating-point scalar."""
+    assert mutation in {None, "address-use", "x87-roundtrip-address"}
+    base = 0x00401080
+    leaf = base + 0x60
+    program = bytearray(b"\x90" * 0x80)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 0c c6 44 24 08 01 8d 54 24 08 52")
+    call_address = base + cursor
+    cursor = emit(
+        cursor,
+        "e8 "
+        + (leaf - (call_address + 5)).to_bytes(
+            4,
+            "little",
+            signed=True,
+        ).hex(),
+    )
+    cursor = emit(cursor, "59")
+    store_address = base + cursor
+    cursor = emit(cursor, "88 04 24")
+    if mutation == "address-use":
+        cursor = emit(cursor, "8b 04 24 8b 08")
+    else:
+        cursor = emit(
+            cursor,
+            "c7 44 24 01 00 00 00 00"
+            "66 c7 44 24 05 00 00"
+            "c6 44 24 07 00"
+            "dd 04 24",
+        )
+        if mutation == "x87-roundtrip-address":
+            cursor = emit(cursor, "dd 1c 24 8b 04 24 8b 08")
+    emit(cursor, "83 c4 0c 31 c0 c3")
+    emit(
+        0x60,
+        "8b 44 24 04 80 3d 20 30 40 00 00 75 02 8a 00 c3",
+    )
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        leaf,
+        store_address,
+    )
+
+
+def masked_partial_register_store_image(tmp_path, *, mutation=None):
+    """Overwrite a low byte after clearing every protected address prefix."""
+    assert mutation in {
+        None,
+        "retained-mask",
+        "partial-mask",
+        "bypass-mask",
+        "later-clobber",
+    }
+    base = 0x00401080
+    protected = 0x00403004
+    program = bytearray(b"\x90" * 0x60)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 04 b8 04 30 40 00")
+    branch_address = None
+    if mutation == "bypass-mask":
+        cursor = emit(cursor, "85 c9")
+        branch_address = cursor
+        cursor = emit(cursor, "74 00")
+    cursor = emit(
+        cursor,
+        "66 25 ff 7f"
+        if mutation == "partial-mask"
+        else "25 ff ff ff ff"
+        if mutation == "retained-mask"
+        else "25 ff 7f 00 00",
+    )
+    if branch_address is not None:
+        program[branch_address + 1] = cursor - (branch_address + 2)
+    cursor = emit(cursor, "a0 00 20 40 00")
+    if mutation == "later-clobber":
+        cursor = emit(cursor, "b8 04 30 40 00")
+    store_address = base + cursor
+    cursor = emit(cursor, "89 04 24 80 3c 24 00 83 c4 04 c3")
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        store_address,
+        protected,
+    )
+
+
+def partial_return_context_restore_sink_image(tmp_path, *, mutation=None):
+    """Consume a tainted full result only as a context-restore status."""
+    assert mutation in {None, "ordinary-callee", "value-as-context"}
+    base = 0x00401080
+    wrapper = base + 0x40
+    leaf = base + 0x80
+    restore = base + 0xC0
+    context = 0x00403000
+    program = bytearray(b"\x90" * 0xE0)
+
+    def emit_call(offset, target):
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (base + offset + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit_call(0, wrapper)
+    program[cursor : cursor + 2] = bytes.fromhex("85 c0")
+    cursor += 2
+    context_hex = context.to_bytes(4, "little").hex(" ")
+    arguments = (
+        f"68 {context_hex} 50"
+        if mutation == "value-as-context"
+        else f"50 68 {context_hex}"
+    )
+    encoded = bytes.fromhex(arguments)
+    program[cursor : cursor + len(encoded)] = encoded
+    cursor += len(encoded)
+    cursor = emit_call(cursor, restore)
+    program[cursor : cursor + 3] = bytes.fromhex("31 c0 c3")
+
+    cursor = emit_call(0x40, leaf)
+    program[cursor : cursor + 5] = bytes.fromhex("84 c0 ff 53 04")
+    program[cursor + 5] = 0xC3
+    program[0x80 : 0x83] = bytes.fromhex("b0 01 c3")
+    restore_body = (
+        "c3"
+        if mutation == "ordinary-callee"
+        else "8b 44 24 04 8b 60 0c c3"
+    )
+    encoded = bytes.fromhex(restore_body)
+    program[0xC0 : 0xC0 + len(encoded)] = encoded
+    return load_large_cfg_program(tmp_path, program), leaf, restore
+
+
+def transitive_partial_return_scalar_overwrite_image(tmp_path, *, mutation=None):
+    """Overwrite a nonscalar transitive AL return before observing it."""
+    assert mutation in {
+        None,
+        "missing-overwrite",
+        "wrong-register",
+        "late-overwrite",
+        "full-compare",
+        "joined-bypass",
+    }
+    base = 0x00401080
+    wrapper = base + 0x40
+    leaf = base + 0x80
+    program = bytearray(b"\x90" * 0xA0)
+
+    def emit_call(offset, target):
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (base + offset + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit_call(0, wrapper)
+    if mutation == "joined-bypass":
+        program[cursor : cursor + 2] = bytes.fromhex("85 d2")
+        cursor += 2
+        branch = cursor
+        program[cursor : cursor + 2] = bytes.fromhex("74 00")
+        cursor += 2
+    else:
+        branch = None
+    overwrite = {
+        "missing-overwrite": "90 90 90 90 90 90",
+        "wrong-register": "8a 0d 00 30 40 00",
+    }.get(mutation, "8a 05 00 30 40 00")
+    compare = "83 f8 0d" if mutation == "full-compare" else "3c 0d 90"
+    if mutation == "late-overwrite":
+        program[cursor : cursor + 3] = bytes.fromhex(compare)
+        cursor += 3
+        program[cursor : cursor + 6] = bytes.fromhex(overwrite)
+        cursor += 6
+    else:
+        program[cursor : cursor + 6] = bytes.fromhex(overwrite)
+        cursor += 6
+        if branch is not None:
+            program[branch + 1] = (cursor - (branch + 2)) & 0xFF
+        program[cursor : cursor + 3] = bytes.fromhex(compare)
+        cursor += 3
+    program[cursor : cursor + 3] = bytes.fromhex("31 c0 c3")
+
+    cursor = 0x40
+    program[cursor : cursor + 4] = bytes.fromhex("85 c9 74 08")
+    cursor = emit_call(cursor + 4, leaf)
+    program[cursor : cursor + 3] = bytes.fromhex("84 c0 c3")
+    program[cursor + 3] = 0xC3
+    program[0x80 : 0x85] = bytes.fromhex("8a 44 24 04 c3")
+    return load_large_cfg_program(tmp_path, program), wrapper, leaf
+
+
+def partial_word_return_with_raw_residue_image(
+    tmp_path,
+    *,
+    mutation=None,
+    wrapper_residue=False,
+):
+    """Return a scalar AX while one dead raw E8 names the same helper."""
+    assert mutation in {None, "full-read", "owned-interior", "address-taken"}
+    base = 0x00401080
+    wrapper = base + 0x40
+    callee = base + 0x80
+    program = bytearray(b"\x90" * 0xD0)
+
+    def emit_call(offset, target):
+        call_address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (call_address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit_call(0, wrapper)
+    program[cursor : cursor + 3] = bytes.fromhex("31 c0 c3")
+    if mutation != "owned-interior":
+        raw_site = base + 0x20
+        emit_call(0x20, callee)
+        program[0x25 : 0x29] = bytes.fromhex("66 85 c0 c3")
+    if wrapper_residue:
+        emit_call(0x30, wrapper)
+        program[0x35] = 0xC3
+
+    # One entry-derived arm returns an unbounded EAX, while the arm that calls
+    # the partial-return helper consumes AX only.  The sole outer caller
+    # discards both results.
+    program[0x40 : 0x45] = bytes.fromhex("85 c9 74 01 c3")
+    cursor = emit_call(0x45, callee)
+    live_call = base + 0x45
+    if mutation == "owned-interior":
+        # The raw E8 begins one byte inside MOV's immediate and spans the
+        # following ADD opcode.  It must never become provisional residue.
+        program[cursor : cursor + 3] = bytes.fromhex("66 85 c0")
+        cursor += 3
+        raw_site = base + cursor + 1
+        displacement = callee - (raw_site + 5)
+        assert displacement == 0x2D
+        program[cursor : cursor + 9] = bytes.fromhex(
+            "b8 e8 2d 00 00 00 c0 31 c0"
+        )
+        program[cursor + 9] = 0xC3
+    else:
+        consumer = (
+            bytes.fromhex("a3 00 30 40 00 c3")
+            if mutation == "full-read"
+            else bytes.fromhex("66 a3 00 30 40 00 c3")
+        )
+        program[cursor : cursor + len(consumer)] = consumer
+
+    program[0x80 : 0x87] = bytes.fromhex("66 a1 80 30 40 00 c3")
+    image = load_large_cfg_program(tmp_path, program)
+    if mutation == "address-taken":
+        image = replace(
+            image,
+            exports=(
+                *image.exports,
+                pe_mod.Export("partial_word", 1, callee, None),
+            ),
+        )
+    return image, callee, live_call, raw_site, wrapper
+
+
+def partial_word_register_compare_image(tmp_path, *, mutation=None):
+    """Compare scalar AX with a bounded loop counter past a noreturn arm."""
+    assert mutation in {None, "unbounded-counter", "full-compare"}
+    base = 0x00401080
+    noreturn = base + 0x40
+    callee = base + 0x80
+    program = bytearray(b"\x90" * 0xA0)
+    program[:11] = bytes.fromhex(
+        "85 c9 75 07 e8 00 00 00 00 90 90"
+    )
+    program[5:9] = (noreturn - (base + 9)).to_bytes(
+        4,
+        "little",
+        signed=True,
+    )
+    counter = (
+        "8b 2d 00 30 40 00"
+        if mutation == "unbounded-counter"
+        else "31 ed 90 90 90 90"
+    )
+    program[11:17] = bytes.fromhex(counter)
+    call_address = base + 17
+    program[17] = 0xE8
+    program[18:22] = (callee - (call_address + 5)).to_bytes(
+        4,
+        "little",
+        signed=True,
+    )
+    compare = "39 c5 90" if mutation == "full-compare" else "66 39 c5"
+    program[22:25] = bytes.fromhex(compare)
+    program[25:33] = bytes.fromhex("73 03 45 eb f3 31 c0 c3")
+    program[0x40:0x42] = bytes.fromhex("eb fe")
+    program[0x80:0x87] = bytes.fromhex("66 a1 80 30 40 00 c3")
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        callee,
+        base + 22,
+    )
+
+
+def nested_private_stack_call_image(tmp_path, *, aliases_protected=False):
+    """Call through one helper while retaining one caller-local coordinate."""
+    base = 0x00401080
+    callee = base + 0x40
+    nested = base + 0x70
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        call_address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (target - (call_address + 5)).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    call_address = base + cursor
+    cursor = emit_call(cursor, callee)
+    emit(cursor, "83 c4 10 c3")
+
+    cursor = emit(0x40, "55 89 e5 83 ec 04")
+    cursor = emit_call(cursor, nested)
+    emit(cursor, "83 c4 04 5d c3")
+
+    nested_offset = 0x14 if aliases_protected else 0
+    emit(
+        0x70,
+        "b9 04 00 00 00 49 "
+        f"8b 44 0c {nested_offset:02x} "
+        "e3 02 eb f7 c3",
+    )
+    return load_large_cfg_program(tmp_path, program), base, call_address
+
+
+def irrelevant_index_private_stack_call_image(tmp_path):
+    """Retain a caller local across a leaf with an unrelated index loop."""
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x80)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    call_address = base + cursor
+    displacement = callee - (call_address + 5)
+    cursor = emit(cursor, "e8 " + displacement.to_bytes(4, "little", signed=True).hex())
+    emit(cursor, "83 c4 10 c3")
+
+    # This LEA is register arithmetic, not a memory access.  The following
+    # loop deliberately has an unbounded ESI value set: preservation must not
+    # enumerate it merely because Capstone represents LEA's source as MEM.
+    emit(0x40, "8d 34 b6 be 00 00 00 00 4e 75 fd c3")
+    return load_large_cfg_program(tmp_path, program), base, call_address
+
+
+def unbounded_index_private_stack_call_image(tmp_path):
+    """Index a callee frame through a recurrence guarded by another value."""
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x80)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    call_address = base + cursor
+    displacement = callee - (call_address + 5)
+    cursor = emit(
+        cursor,
+        "e8 " + displacement.to_bytes(4, "little", signed=True).hex(),
+    )
+    emit(cursor, "83 c4 10 c3")
+
+    emit(
+        0x40,
+        "83 ec 40 "  # sub esp, 0x40
+        "31 db "  # xor ebx, ebx
+        "89 04 9c "  # mov [esp + ebx*4], eax
+        "85 c9 "  # test ecx, ecx
+        "74 03 "  # je exit
+        "43 "  # inc ebx
+        "eb f6 "  # jmp store
+        "83 c4 40 "  # exit: add esp, 0x40
+        "c3",  # ret
+    )
+    return load_large_cfg_program(tmp_path, program), base, call_address
+
+
+def guarded_counter_private_stack_call_image(tmp_path, *, mutation=None):
+    """Index one callee-owned byte array through a zero-based bounded loop."""
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    call_address = base + cursor
+    displacement = callee - (call_address + 5)
+    cursor = emit(
+        cursor,
+        "e8 " + displacement.to_bytes(4, "little", signed=True).hex(),
+    )
+    emit(cursor, "83 c4 10 c3")
+
+    bound = 0x10D if mutation == "overlap-bound" else 0xFF
+    branch = "90 90" if mutation == "missing-guard" else "7d 06"
+    emit(
+        0x40,
+        "55 "  # push ebp
+        "81 ec 00 01 00 00 "  # sub esp, 0x100
+        "31 ed "  # xor ebp, ebp
+        "84 c9 "  # test cl, cl
+        "74 0e "  # je done before the next bound check
+        f"81 fd {bound.to_bytes(4, 'little').hex(' ')} "  # cmp ebp, bound
+        f"{branch} "  # jge done
+        "88 0c 2c "  # mov byte ptr [esp + ebp], cl
+        "45 "  # inc ebp
+        "eb ee "  # jmp test
+        "c6 04 2c 00 "  # done: mov byte ptr [esp + ebp], 0
+        "81 c4 00 01 00 00 "  # add esp, 0x100
+        "5d c3",  # pop ebp; ret
+    )
+    return load_large_cfg_program(tmp_path, program), base, call_address
+
+
+def guarded_narrow_counter_private_stack_call_image(tmp_path, *, mutation=None):
+    """Index one local array through a byte-bounded post-test loop."""
+    assert mutation in {
+        None,
+        "signed-bound",
+        "wide-bound",
+        "missing-zero-guard",
+        "wrong-compare",
+        "decrement",
+        "overlap-displacement",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    source = 0x00403000
+    program = bytearray(b"\x90" * 0xA0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    call_address = base + cursor
+    displacement = callee - (call_address + 5)
+    cursor = emit(
+        cursor,
+        "e8 " + displacement.to_bytes(4, "little", signed=True).hex(),
+    )
+    emit(cursor, "83 c4 10 c3")
+
+    bound_opcode = (
+        "0f be 1d"
+        if mutation == "signed-bound"
+        else "0f b7 1d"
+        if mutation == "wide-bound"
+        else "0f b6 1d"
+    )
+    zero_guard = "90 90" if mutation == "missing-zero-guard" else "7e 09"
+    increment = "49" if mutation == "decrement" else "41"
+    compare = "39 f1" if mutation == "wrong-compare" else "39 d9"
+    stack_displacement = "2d" if mutation == "overlap-displacement" else "20"
+    emit(
+        0x40,
+        "55 81 ec 20 01 00 00 "
+        f"{bound_opcode} {source.to_bytes(4, 'little').hex(' ')} "
+        "31 c9 85 db "
+        f"{zero_guard} "
+        f"{increment} "
+        f"8a 44 0c {stack_displacement} "
+        f"{compare} 7c f7 "
+        "81 c4 20 01 00 00 5d c3",
+    )
+    use_address = callee + 0x15
+    return load_large_cfg_program(tmp_path, program), base, call_address, callee, use_address
+
+
+def reverse_initialized_table_private_stack_call_image(tmp_path, *, mutation=None):
+    """Read a fully initialized stack table through a reverse spill counter."""
+    assert mutation in {
+        None,
+        "missing-collection-bound",
+        "wrong-spill-slot",
+        "missing-nonnegative-guard",
+        "index-clobber",
+        "overlap-table",
+        "register-entry-guard",
+        "register-entry-wrong-source",
+        "register-entry-missing-decrement",
+        "register-entry-inverted",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0xC0)
+    code = bytearray()
+    labels = {}
+    fixups = []
+
+    def emit(encoded):
+        code.extend(bytes.fromhex(encoded))
+
+    def label(name):
+        labels[name] = len(code)
+
+    def branch(opcode, target):
+        emit(opcode)
+        fixups.append((len(code), target))
+        code.append(0)
+
+    emit("53 83 ec 48 31 f6")
+    label("collect")
+    emit("83 fe 10")
+    branch("eb" if mutation == "missing-collection-bound" else "7d", "collected")
+    table_disp = "50" if mutation == "overlap-table" else "08"
+    emit(f"89 44 b4 {table_disp} 46")
+    branch("eb", "collect")
+    label("collected")
+    spill_disp = "00" if mutation == "wrong-spill-slot" else "04"
+    register_entry_guard = mutation in {
+        "register-entry-guard",
+        "register-entry-wrong-source",
+        "register-entry-missing-decrement",
+        "register-entry-inverted",
+    }
+    if register_entry_guard:
+        source = "fb" if mutation == "register-entry-wrong-source" else "f0"
+        decrement = (
+            "90" if mutation == "register-entry-missing-decrement" else "48"
+        )
+        emit(
+            f"89 {source} 89 74 24 {spill_disp} {decrement} "
+            "ff 4c 24 04 85 c0"
+        )
+        branch(
+            "7d" if mutation == "register-entry-inverted" else "7c",
+            "done",
+        )
+    else:
+        emit(f"89 74 24 {spill_disp} ff 4c 24 04")
+    label("process")
+    emit("8b 44 24 04")
+    if mutation == "index-clobber":
+        emit("31 c0")
+    if register_entry_guard:
+        pass
+    else:
+        emit("83 f8 00")
+        if mutation == "missing-nonnegative-guard":
+            emit("90 90")
+        else:
+            branch("7c", "done")
+    use_address = callee + len(code)
+    emit(f"8b 54 84 {table_disp} ff 4c 24 04")
+    if register_entry_guard:
+        emit("83 7c 24 04 00")
+        branch("7d", "process")
+    else:
+        branch("eb", "process")
+    label("done")
+    emit("83 c4 48 5b c3")
+    for displacement_offset, target in fixups:
+        displacement = labels[target] - (displacement_offset + 1)
+        assert -128 <= displacement <= 127
+        code[displacement_offset] = displacement & 0xFF
+    program[0x40 : 0x40 + len(code)] = code
+
+    cursor = 0
+    caller = bytes.fromhex("83 ec 10 89 44 24 04")
+    program[cursor : cursor + len(caller)] = caller
+    cursor += len(caller)
+    call_address = base + cursor
+    program[cursor] = 0xE8
+    program[cursor + 1 : cursor + 5] = (
+        callee - (call_address + 5)
+    ).to_bytes(4, "little", signed=True)
+    cursor += 5
+    tail = bytes.fromhex("83 c4 10 c3")
+    program[cursor : cursor + len(tail)] = tail
+    return load_large_cfg_program(tmp_path, program), base, call_address, callee, use_address
+
+
+def initialized_indexed_private_stack_table_image(tmp_path, *, mutation=None):
+    """Overwrite every unbounded stack-table element before reading it."""
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x100)
+    code = bytearray()
+    labels = {}
+    fixups = []
+
+    def emit(encoded):
+        code.extend(bytes.fromhex(encoded))
+
+    def label(name):
+        labels[name] = len(code)
+
+    def branch(opcode, target):
+        emit(opcode)
+        fixups.append((len(code), target))
+        code.append(0)
+
+    emit("53 83 ec 40 31 db")  # push ebx; sub esp,0x40; xor ebx,ebx
+    label("collect")
+    emit("85 c9")  # test ecx,ecx
+    branch("74", "collected")  # je collected
+    source_offset = 0x40 if mutation == "tainted-store" else 0x48
+    emit(f"8b 44 24 {source_offset:02x}")  # mov eax,[esp+source]
+    if mutation == "increment-before-store":
+        emit("43")
+    emit("89 04 9c")  # mov [esp+ebx*4],eax
+    if mutation != "increment-before-store":
+        emit("43")  # inc ebx
+    emit("49")  # dec ecx
+    branch("eb", "collect")
+    label("collected")
+    emit("85 db")  # test ebx,ebx
+    if mutation == "missing-zero-guard":
+        emit("90 90")
+    else:
+        branch("74", "done")  # je done
+    emit("4b")  # dec ebx
+    if mutation == "index-clobber":
+        emit("31 db")  # xor ebx,ebx
+    emit("8b 0c 9c")  # mov ecx,[esp+ebx*4]
+    emit("83 eb 01")  # sub ebx,1
+    branch("72", "done")  # jb done
+    label("consume")
+    read_offset = 4 if mutation == "wrong-read-table" else 0
+    emit(f"8b 54 9c {read_offset:02x}")  # mov edx,[esp+ebx*4+disp]
+    emit("83 eb 01")  # sub ebx,1
+    branch("73", "consume")  # jae consume
+    label("done")
+    emit("83 c4 40 5b c3")  # add esp,0x40; pop ebx; ret
+
+    for displacement_index, target in fixups:
+        displacement = labels[target] - (displacement_index + 1)
+        assert -0x80 <= displacement <= 0x7F
+        code[displacement_index] = displacement & 0xFF
+    program[: len(code)] = code
+    return load_large_cfg_program(tmp_path, program), base
+
+
+def direct_reverse_initialized_private_stack_table_image(
+    tmp_path,
+    *,
+    mutation=None,
+):
+    """Read the current initialized table slot before decrementing its index."""
+    assert mutation in {
+        None,
+        "missing-initial-write",
+        "inverted-reverse-guard",
+        "wrong-reverse-test",
+        "wrong-read-table",
+        "index-clobber",
+        "tainted-store",
+    }
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x100)
+    code = bytearray()
+    labels = {}
+    fixups = []
+
+    def emit(encoded):
+        code.extend(bytes.fromhex(encoded))
+
+    def label(name):
+        labels[name] = len(code)
+
+    def branch(opcode, target):
+        emit(opcode)
+        fixups.append((len(code), target))
+        code.append(0)
+
+    emit("53 83 ec 40 31 db")  # push ebx; sub esp,0x40; xor ebx,ebx
+    source_offset = 0x40 if mutation == "tainted-store" else 0x48
+    emit(f"8b 44 24 {source_offset:02x}")
+    if mutation == "missing-initial-write":
+        emit("90 90 90")
+    else:
+        emit("89 04 24")  # mov [esp],eax (the exact index-zero cell)
+    emit("b9 03 00 00 00")  # mov ecx,3
+    label("collect")
+    emit("85 c9")  # test ecx,ecx
+    branch("74", "reverse")
+    emit("43 89 04 9c 49")  # inc ebx; store current; dec ecx
+    branch("eb", "collect")
+    label("reverse")
+    if mutation == "index-clobber":
+        emit("31 db")
+    read_offset = 4 if mutation == "wrong-read-table" else 0
+    emit(f"8b 54 9c {read_offset:02x}")
+    emit("4b")  # dec ebx
+    emit("85 c9" if mutation == "wrong-reverse-test" else "85 db")
+    branch(
+        "7c" if mutation == "inverted-reverse-guard" else "7d",
+        "reverse",
+    )
+    emit("83 c4 40 5b c3")
+
+    for displacement_index, target in fixups:
+        displacement = labels[target] - (displacement_index + 1)
+        assert -0x80 <= displacement <= 0x7F
+        code[displacement_index] = displacement & 0xFF
+    program[: len(code)] = code
+    return load_large_cfg_program(tmp_path, program), base
+
+
+def incremental_initialized_private_stack_table_image(
+    tmp_path,
+    *,
+    mutation=None,
+):
+    """Append one table slot only after consuming its committed prefix."""
+    assert mutation in {
+        None,
+        "missing-counter-init",
+        "partial-counter-init",
+        "wrong-write-table",
+        "increment-before-write",
+        "wrong-read-bound",
+        "missing-initial-guard",
+        "writer-index-clobber",
+        "extra-counter-increment",
+    }
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x100)
+    code = bytearray()
+    labels = {}
+    fixups = []
+
+    def emit(encoded):
+        code.extend(bytes.fromhex(encoded))
+
+    def label(name):
+        labels[name] = len(code)
+
+    def branch(opcode, target):
+        emit(opcode)
+        fixups.append((len(code), target))
+        code.append(0)
+
+    emit("53 55 83 ec 40 bd 02 00 00 00")
+    if mutation == "missing-counter-init":
+        emit("90 90 90 90 90 90 90")
+    elif mutation == "partial-counter-init":
+        emit("66 c7 04 24 01 00 90")
+    else:
+        emit("c7 04 24 01 00 00 00")
+    label("outer")
+    emit("bf 01 00 00 00")  # mov edi,1
+    bound_disp = "04" if mutation == "wrong-read-bound" else "00"
+    emit(f"66 39 7c 24 {bound_disp}")  # cmp word ptr [esp+slot],di
+    if mutation == "missing-initial-guard":
+        emit("90 90")
+    else:
+        branch("7e", "append")  # jle append
+    label("read")
+    emit("0f bf c7")  # movsx eax,di
+    emit("8b 4c 84 04")  # mov ecx,[esp+eax*4+4]
+    emit("47")  # inc edi
+    emit("66 3b 3c 24")  # cmp di,word ptr [esp]
+    branch("7c", "read")  # jl read
+    label("append")
+    emit("0f bf 34 24")  # movsx esi,word ptr [esp]
+    if mutation == "writer-index-clobber":
+        emit("31 f6")
+    if mutation == "increment-before-write":
+        emit("ff 04 24")
+    write_disp = "08" if mutation == "wrong-write-table" else "04"
+    emit(f"89 54 b4 {write_disp}")  # mov [esp+esi*4+disp],edx
+    if mutation != "increment-before-write":
+        emit("ff 04 24")  # inc dword ptr [esp]
+    if mutation == "extra-counter-increment":
+        emit("ff 04 24")
+    emit("4d")  # dec ebp
+    branch("75", "outer")  # jne outer
+    emit("83 c4 40 5d 5b c3")
+
+    for displacement_index, target in fixups:
+        displacement = labels[target] - (displacement_index + 1)
+        assert -0x80 <= displacement <= 0x7F
+        code[displacement_index] = displacement & 0xFF
+    program[: len(code)] = code
+    return load_large_cfg_program(tmp_path, program), base
+
+
+def incremental_chunk_initialized_private_stack_table_image(
+    tmp_path,
+    *,
+    mutation=None,
+):
+    """Consume a committed prefix in exact two-element chunks."""
+    assert mutation in {
+        None,
+        "missing-chunk-guard",
+        "wrong-chunk-step",
+        "wrong-counter-minus",
+        "extra-chunk-read",
+        "flag-clobber",
+        "partial-zero-reset",
+        "nonzero-reset",
+        "zero-reset-to-chunk",
+    }
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x180)
+    code = bytearray()
+    labels = {}
+    fixups = []
+    batch_read_offsets = []
+
+    def emit(encoded):
+        code.extend(bytes.fromhex(encoded))
+
+    def label(name):
+        labels[name] = len(code)
+
+    def branch(opcode, target):
+        emit(opcode)
+        fixups.append((len(code), target))
+        code.append(0)
+
+    emit("53 55 56 83 ec 40 bd 03 00 00 00")
+    emit("c7 04 24 01 00 00 00")  # committed count = 1
+    label("outer")
+    emit("bf 01 00 00 00")  # read index = 1
+    emit("85 f6")  # retain an unknown alternative reset path
+    branch("75", "active")
+    if mutation == "partial-zero-reset":
+        emit("66 c7 04 24 00 00")
+    elif mutation == "nonzero-reset":
+        emit("c7 04 24 02 00 00 00")
+    else:
+        emit("c7 04 24 00 00 00 00")
+    branch(
+        "eb",
+        "chunk_setup" if mutation == "zero-reset-to-chunk" else "done",
+    )
+    label("active")
+    emit("66 39 3c 24")  # cmp word ptr [esp],di
+    branch("7e", "append")  # jle append
+    emit("8b 04 24 48 66 83 f8 02")  # count-1; cmp ax,2
+    if mutation == "missing-chunk-guard":
+        emit("90 90")
+    else:
+        branch("7e", "remainder")
+    label("chunk_setup")
+    emit("8b 14 24")  # mov edx,[esp]
+    emit("83 ea 01" if mutation == "wrong-counter-minus" else "83 ea 02")
+    label("chunk")
+    emit("0f bf c7")  # movsx eax,di
+    emit("83 c7 03" if mutation == "wrong-chunk-step" else "83 c7 02")
+    emit("66 39 d7")  # cmp di,dx
+    batch_read_offsets.append(len(code))
+    emit("8b 4c 84 04")  # mov ecx,[esp+eax*4+4]
+    batch_read_offsets.append(len(code))
+    emit("8b 5c 84 08")  # mov ebx,[esp+eax*4+8]
+    if mutation == "extra-chunk-read":
+        batch_read_offsets.append(len(code))
+        emit("8b 4c 84 0c")
+    if mutation == "flag-clobber":
+        emit("85 c9")
+    branch("7c", "chunk")  # jl chunk
+    label("remainder")
+    emit("66 3b 3c 24")  # cmp di,word ptr [esp]
+    branch("7d", "append")
+    label("remainder_read")
+    emit("0f bf c7 8b 4c 84 04 47")
+    emit("66 3b 3c 24")
+    branch("7c", "remainder_read")
+    label("append")
+    emit("0f bf 1c 24")  # movsx ebx,word ptr [esp]
+    emit("89 54 9c 04")  # mov [esp+ebx*4+4],edx
+    emit("ff 04 24")  # commit the appended element
+    emit("4d")
+    branch("75", "outer")
+    label("done")
+    emit("83 c4 40 5e 5d 5b c3")
+
+    for displacement_index, target in fixups:
+        displacement = labels[target] - (displacement_index + 1)
+        assert -0x80 <= displacement <= 0x7F
+        code[displacement_index] = displacement & 0xFF
+    program[: len(code)] = code
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        tuple(base + offset for offset in batch_read_offsets),
+    )
+
+
+def bounded_signed_word_countdown_private_stack_image(
+    tmp_path,
+    *,
+    mutation=None,
+):
+    """Read a bounded local byte buffer through a positive countdown."""
+    assert mutation in {
+        None,
+        "missing-upper-guard",
+        "wrong-upper-slot",
+        "counter-clobber",
+        "missing-positive-guard",
+        "countdown-increment",
+        "unsigned-backedge",
+        "flag-clobber",
+        "overlap-root",
+    }
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x100)
+    code = bytearray()
+    labels = {}
+    fixups = []
+
+    def emit(encoded):
+        code.extend(bytes.fromhex(encoded))
+
+    def label(name):
+        labels[name] = len(code)
+
+    def branch(opcode, target):
+        emit(opcode)
+        fixups.append((len(code), target))
+        code.append(0)
+
+    emit("53 83 ec 40 89 44 24 04")
+    root_store = base + 4
+    emit("c7 44 24 08 00 00 00 00")
+    label("collect_guard")
+    upper_slot = "0c" if mutation == "wrong-upper-slot" else "08"
+    emit(f"66 81 7c 24 {upper_slot} 0e 00")
+    if mutation == "missing-upper-guard":
+        emit("90 90")
+    else:
+        branch("7e", "append")
+    branch("eb", "collected")
+    label("append")
+    emit("ff 44 24 08")
+    emit("0f bf 4c 24 08")
+    emit("88 44 0c 10")
+    emit("83 7c 24 08 04")
+    branch("7c", "collect_guard")
+    label("collected")
+    if mutation == "counter-clobber":
+        emit("c7 44 24 08 00 01 00 00")
+    emit("8b 5c 24 08 66 85 db")
+    if mutation == "missing-positive-guard":
+        emit("90 90")
+    else:
+        branch("7e", "done")
+    label("countdown")
+    emit("0f bf d3")
+    use_address = base + len(code)
+    read_disp = "04" if mutation == "overlap-root" else "10"
+    emit(f"0f b6 4c 14 {read_disp}")
+    emit("43" if mutation == "countdown-increment" else "4b")
+    emit("66 85 db")
+    if mutation == "flag-clobber":
+        emit("85 c9")
+    branch("77" if mutation == "unsigned-backedge" else "7f", "countdown")
+    label("done")
+    emit("80 7c 24 04 00 83 c4 40 5b c3")
+
+    for displacement_index, target in fixups:
+        displacement = labels[target] - (displacement_index + 1)
+        assert -0x80 <= displacement <= 0x7F
+        code[displacement_index] = displacement & 0xFF
+    program[: len(code)] = code
+    return load_large_cfg_program(tmp_path, program), base, root_store, use_address
+
+
+def narrow_quotient_private_stack_bitset_image(tmp_path, *, mutation=None):
+    """Index a 32-byte local bitset with one narrowed byte quotient."""
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x80)
+    extend = "0f be 06" if mutation == "signed-source" else "0f b6 06"
+    shift = {
+        None: "c1 f8 03",
+        "signed-source": "c1 f8 03",
+        "wide-quotient": "c1 f8 02",
+        "missing-shift": "90 90 90",
+    }[mutation]
+    body = bytes.fromhex(
+        "53 "  # push ebx
+        "83 ec 20 "  # sub esp,0x20
+        "8b 74 24 28 "  # mov esi,[esp+0x28]
+        f"{extend} "  # movzx/movsx eax,byte ptr [esi]
+        f"{shift} "  # sar eax,3
+        "ba 01 00 00 00 "  # mov edx,1
+        "08 14 04 "  # or byte ptr [esp+eax],dl
+        "83 c4 20 5b c3"  # add esp,0x20; pop ebx; ret
+    )
+    program[: len(body)] = body
+    return load_large_cfg_program(tmp_path, program), base
+
+
+def guarded_scan_private_stack_index_image(tmp_path, *, mutation=None):
+    """Bound one forward NUL-scan count before indexing a local array."""
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x90)
+    bound = 0x20 if mutation == "overlap-bound" else 0x1F
+    guard = "eb 05" if mutation == "missing-guard" else "7e 05"
+    clobber = "89 f7" if mutation == "index-clobber" else "90 90"
+    count_seed = "31 c9 90 90 90" if mutation == "malformed-scan" else "b9 ff ff ff ff"
+    body = bytes.fromhex(
+        "53 "  # push ebx
+        "83 ec 20 "  # sub esp,0x20
+        "8b 7c 24 28 "  # mov edi,[esp+0x28]
+        f"{count_seed} "  # mov ecx,-1
+        "31 c0 "  # xor eax,eax
+        "f2 ae "  # repne scasb
+        "bf fe ff ff ff "  # mov edi,-2
+        "29 cf "  # sub edi,ecx
+        f"83 ff {bound:02x} "  # cmp edi,bound
+        f"{guard} "  # jle use
+        "83 c4 20 5b c3 "  # reject: restore and return
+        f"{clobber} "
+        "80 3c 3c 00 "  # use: cmp byte ptr [esp+edi],0
+        "83 c4 20 5b c3"
+    )
+    program[: len(body)] = body
+    return load_large_cfg_program(tmp_path, program), base
+
+
+def aligned_private_stack_call_image(tmp_path, mutation=None):
+    """Retain a caller local across one callee-owned aligned frame."""
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x80)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    call_address = base + cursor
+    displacement = callee - (call_address + 5)
+    cursor = emit(cursor, "e8 " + displacement.to_bytes(4, "little", signed=True).hex())
+    emit(cursor, "83 c4 10 c3")
+
+    access = {
+        None: "89 44 24 04",
+        "caller-overlap": "89 45 0c 90",
+        "outside-frame": "89 44 24 29",
+        "owned-address-escape": "8d 44 24 04",
+        "caller-address-escape": "8d 45 0c 90",
+    }[mutation]
+    tail = (
+        "a3 00 30 40 00"
+        if mutation in {"owned-address-escape", "caller-address-escape"}
+        else "90 90 90 90 90"
+    )
+    emit(
+        0x40,
+        "55 89 e5 83 ec 24 81 e4 f8 ff ff ff "
+        f"{access} {tail} 89 ec 5d c3",
+    )
+    return load_large_cfg_program(tmp_path, program), base, call_address
+
+
+def aligned_nested_private_stack_call_image(tmp_path, *, aliases_candidate=False):
+    """Call through an aligned frame without collapsing its entry offset."""
+    base = 0x00401080
+    callee = base + 0x40
+    nested = base + 0x70
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        call_address = base + offset
+        encoded = b"\xe8" + (target - (call_address + 5)).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    call_address = base + cursor
+    cursor = emit_call(cursor, callee)
+    emit(cursor, "83 c4 10 c3")
+
+    cursor = emit(0x40, "55 89 e5 83 ec 24 81 e4 f8 ff ff ff")
+    cursor = emit_call(cursor, nested)
+    emit(cursor, "89 ec 5d c3")
+
+    nested_offset = 0x34 if aliases_candidate else 8
+    emit(0x70, f"8b 44 24 {nested_offset:02x} c3")
+    return load_large_cfg_program(tmp_path, program), base, call_address
+
+
+def aligned_nested_private_stack_scalar_image(
+    tmp_path,
+    *,
+    aliases_candidate=False,
+):
+    """Carry one narrow scalar through a callee-owned aligned frame."""
+    base = 0x00401080
+    callee = base + 0x40
+    nested = base + 0x70
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        call_address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (call_address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 54 24 04")
+    cursor = emit_call(cursor, callee)
+    cursor = emit(cursor, "0f bf 44 24 04")
+    emit(cursor, "83 c4 10 c3")
+
+    cursor = emit(0x40, "55 89 e5 83 ec 24 81 e4 f8 ff ff ff")
+    cursor = emit_call(cursor, nested)
+    emit(cursor, "89 ec 5d c3")
+
+    nested_offset = 0x34 if aliases_candidate else 8
+    emit(0x70, f"8b 44 24 {nested_offset:02x} c3")
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def loop_redefined_byte_predicate_stack_image(tmp_path, mutation):
+    """Observe one spill byte until an exact full-slot redefinition."""
+    if mutation == "same-store":
+        program = "83 ec 04 89 04 24 80 3c 24 00 75 f7 83 c4 04 c3"
+    else:
+        replacement = {
+            "distinct-store": "89 0c 24",
+            "read-modify-write": "01 0c 24",
+            "shifted-store": "89 4c 24 01",
+            "full-reload": "8b 0c 24",
+        }[mutation]
+        replacement_size = len(bytes.fromhex(replacement))
+        # The true arm reaches one replacement, then rejoins the byte compare;
+        # the false arm restores the frame and returns.
+        program = (
+            "83 ec 04 89 04 24 80 3c 24 00 75 05 "
+            "83 c4 04 c3 90 "
+            f"{replacement} "
+            + ("eb f0" if replacement_size == 3 else "eb ef")
+        )
+    image = load_large_cfg_program(tmp_path, bytes.fromhex(program))
+    return image, 0x00401080, 0x00401083
+
+
+def byte_predicate_unrelated_direct_call_image(tmp_path, mutation=None):
+    """Keep one local predicate spill across a capability-free direct call."""
+    assert mutation in {
+        None,
+        "protected-pointer",
+        "disjoint-pointer",
+        "no-arguments",
+        "indirect-call",
+        "missing-cleanup",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x80)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    store_address = base + 3
+    cursor = emit(cursor, "b8 34 12 00 00")
+    if mutation == "protected-pointer":
+        cursor = emit(cursor, "8d 4c 24 04 51")
+    elif mutation == "disjoint-pointer":
+        cursor = emit(cursor, "8d 4c 24 08 51")
+    elif mutation == "no-arguments":
+        cursor = emit(cursor, "90 90 90 90 90")
+    else:
+        cursor = emit(cursor, "6a 01 90 90 90")
+    call_address = base + cursor
+    if mutation == "indirect-call":
+        cursor = emit(cursor, "ff d0 90 90 90")
+    else:
+        cursor = emit_call(cursor, callee)
+    cursor = emit(
+        cursor,
+        "90 90 90"
+        if mutation in {"missing-cleanup", "no-arguments"}
+        else "83 c4 04",
+    )
+    cursor = emit(cursor, "80 7c 24 04 00 83 c4 10 c3")
+
+    emit(0x40, "c3")
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        store_address,
+        call_address,
+    )
+
+
+def byte_predicate_exact_zero_callback_image(
+    tmp_path,
+    *,
+    nonzero_callback=False,
+):
+    """Guard one local predicate spill from an exact-caller callback."""
+    base = 0x00401080
+    worker = base + 0x40
+    callback = base + 0x80
+    program = bytearray(b"\x90" * 0xA0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    callback_value = 1 if nonzero_callback else 0
+    cursor = emit(0, "68 " + callback_value.to_bytes(4, "little").hex())
+    cursor = emit_call(cursor, worker)
+    emit(cursor, "83 c4 04 31 c0 c3")
+
+    cursor = emit(0x40, "83 ec 08")
+    store_address = base + cursor
+    cursor = emit(cursor, "89 44 24 04 8b 5c 24 0c 85 db")
+    branch_offset = cursor
+    cursor = emit(cursor, "74 02 ff d3")
+    call_address = base + branch_offset + 2
+    # Reloading the dword is harmless only because every subsequent use is
+    # the low scalar byte and every feasible path restores the frame.
+    cursor = emit(cursor, "8b 44 24 04 88 04 24 83 c4 08 c3")
+
+    # A nonzero exact caller must keep the unresolved indirect arm live and
+    # fail closed.  Dead executable bytes cannot turn that value into an
+    # authorized callback target.
+    emit(0x80, "8b 44 24 08 c3")
+    return (
+        load_large_cfg_program(tmp_path, program),
+        worker,
+        store_address,
+        call_address,
+        callback_value,
+    )
+
+
+def partial_reload_direct_kill_image(tmp_path, mutation=None):
+    """Consume one reloaded byte before a direct call kills the full word."""
+    assert mutation in {
+        None,
+        "nested-observation",
+        "bypass-kill",
+        "no-kill",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    nested = base + 0x60
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    store_address = base + 3
+    reload_address = base + cursor
+    cursor = emit(cursor, "8b 44 24 04 88 44 24 08")
+    cursor = emit_call(cursor, callee)
+    emit(cursor, "83 c4 10 c3")
+
+    if mutation == "bypass-kill":
+        emit(0x40, "74 02 31 c0 c3")
+    elif mutation == "no-kill":
+        emit(0x40, "c3")
+    else:
+        cursor = emit_call(0x40, nested)
+        emit(cursor, "c3")
+        emit(
+            0x60,
+            "50 59 31 c0 c3"
+            if mutation == "nested-observation"
+            else "31 c0 c3",
+        )
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        store_address,
+        reload_address,
+        callee,
+    )
+
+
+def partial_register_mask_kill_image(tmp_path, *, full_width_read=False):
+    """Overwrite a low byte before reading it, then kill the residual bits."""
+    program = bytes.fromhex(
+        "b0 07 "
+        + ("83 c0 01 " if full_width_read else "04 01 ")
+        + "31 c0 c3"
+    )
+    return load_large_cfg_program(tmp_path, program), 0x00401080
+
+
+def partial_register_across_preserving_call_image(
+    tmp_path,
+    *,
+    callee_reads_register=False,
+    callee_noreturn=False,
+    post_call_full_read=False,
+):
+    """Keep one partial-only callee-saved value live across an exact call."""
+    base = 0x00401080
+    callee = base + 0x40
+    restore = base + 0x80
+    context = 0x00403000
+    program = bytearray(b"\x90" * 0xC0)
+    program[:4] = bytes.fromhex("8b 5c 24 04")
+    program[4:6] = bytes.fromhex("84 db")
+    program[6] = 0xE8
+    program[7:11] = (callee - (base + 11)).to_bytes(
+        4,
+        "little",
+        signed=True,
+    )
+    program[11:17] = bytes.fromhex(
+        "85 db 31 db c3 90"
+        if post_call_full_read
+        else "84 db 31 db c3 90"
+    )
+    if callee_noreturn:
+        callee_body = (
+            "6a 01 "
+            f"68 {context.to_bytes(4, 'little').hex()} "
+            "e8 00 00 00 00 c3"
+        )
+    else:
+        callee_body = (
+            "53 31 db 58 c3"
+            if callee_reads_register
+            else "53 31 db 5b c3"
+        )
+    encoded = bytes.fromhex(callee_body)
+    program[0x40 : 0x40 + len(encoded)] = encoded
+    if callee_noreturn:
+        restore_call = base + 0x40 + 7
+        program[0x48:0x4C] = (restore - (restore_call + 5)).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        restore_body = bytes.fromhex(
+            "59 5a 58 "
+            "8b 1a 8b 72 04 8b 7a 08 8b 62 0c 8b 6a 10 "
+            "09 c0 75 01 40 50 ff 72 14 c3"
+        )
+        program[0x80 : 0x80 + len(restore_body)] = restore_body
+    return load_large_cfg_program(tmp_path, program), base, base
+
+
+def signed_word_loop_private_stack_read_image(tmp_path, mutation=None):
+    """Read above one local spill through a positive signed-word loop."""
+    assert mutation in {
+        None,
+        "negative-initializer",
+        "decrement",
+        "unsigned-latch",
+        "overlap",
+        "add-eight-delayed",
+        "delayed-flag-clobber",
+        "negative-step",
+    }
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x60)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 20 89 44 24 04")
+    store_address = base + 3
+    cursor = emit(
+        cursor,
+        "bf ff ff ff ff"
+        if mutation == "negative-initializer"
+        else "bf 01 00 00 00",
+    )
+    cursor = emit(cursor, "66 39 7c 24 10")
+    preheader_branch = cursor
+    cursor = emit(cursor, "7e 00")
+    body_address = base + cursor
+    cursor = emit(cursor, "0f bf c7")
+    displacement = 0 if mutation == "overlap" else 0x14
+    cursor = emit(cursor, f"8b 4c 84 {displacement:02x}")
+    cursor = emit(
+        cursor,
+        "4f"
+        if mutation == "decrement"
+        else "83 c7 f8"
+        if mutation == "negative-step"
+        else "83 c7 08"
+        if mutation in {"add-eight-delayed", "delayed-flag-clobber"}
+        else "47",
+    )
+    cursor = emit(
+        cursor,
+        "66 81 ff f7 7f"
+        if mutation in {"add-eight-delayed", "delayed-flag-clobber"}
+        else "66 3b 7c 24 10",
+    )
+    if mutation in {"add-eight-delayed", "delayed-flag-clobber"}:
+        cursor = emit(
+            cursor,
+            "85 c0" if mutation == "delayed-flag-clobber" else "89 c0",
+        )
+    latch_branch = cursor
+    cursor = emit(
+        cursor,
+        ("72" if mutation == "unsigned-latch" else "7c") + " 00",
+    )
+    exit_address = base + cursor
+    cursor = emit(cursor, "80 7c 24 04 00 83 c4 20 c3")
+    program[preheader_branch + 1] = exit_address - (
+        base + preheader_branch + 2
+    )
+    program[latch_branch + 1] = (
+        body_address - (base + latch_branch + 2)
+    ) & 0xFF
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def guarded_local_counter_private_stack_read_image(tmp_path, mutation=None):
+    """Read a local table through a clamped producer and countdown index."""
+    assert mutation in {
+        None,
+        "missing-zero",
+        "wrong-guard-slot",
+        "inverted-guard",
+        "missing-table-write",
+        "increment-before-write",
+        "extra-increment",
+        "countdown-increment",
+        "unsigned-countdown",
+        "countdown-flag-clobber",
+    }
+    base = 0x00401080
+    slot = 0x00403020
+    program = bytearray(b"\x90" * 0xC0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_branch(offset, opcode):
+        program[offset] = opcode
+        program[offset + 1] = 0
+        return offset + 2
+
+    cursor = emit(0, "55 81 ec 00 01 00 00")
+    cursor = emit(
+        cursor,
+        "bd 01 00 00 00" if mutation == "missing-zero" else "31 ed",
+    )
+    producer = cursor
+    cursor = emit(cursor, f"0f bf 05 {slot.to_bytes(4, 'little').hex()}")
+    cursor = emit(cursor, "48")
+    cursor = emit(cursor, "39 fd" if mutation == "wrong-guard-slot" else "39 c5")
+    guard = cursor
+    cursor = emit_branch(cursor, 0x7C if mutation == "inverted-guard" else 0x7D)
+    if mutation == "increment-before-write":
+        cursor = emit(cursor, "45")
+    table_write = cursor
+    cursor = emit(
+        cursor,
+        "90 90 90" if mutation == "missing-table-write" else "88 0c 2c",
+    )
+    if mutation != "increment-before-write":
+        cursor = emit(cursor, "45")
+    if mutation == "extra-increment":
+        cursor = emit(cursor, "45")
+    cursor = emit(cursor, "eb 00")
+    program[cursor - 1] = (producer - cursor) & 0xFF
+    countdown_guard = cursor
+    program[guard + 1] = (countdown_guard - (guard + 2)) & 0xFF
+    cursor = emit(cursor, "85 ed")
+    exit_branch = cursor
+    cursor = emit_branch(cursor, 0x7E)
+    body = cursor
+    cursor = emit(
+        cursor,
+        "45" if mutation == "countdown-increment" else "4d",
+    )
+    use_address = base + cursor
+    cursor = emit(cursor, "8b 04 2c")
+    cursor = emit(cursor, "85 ed")
+    if mutation == "countdown-flag-clobber":
+        cursor = emit(cursor, "85 c0")
+    backedge = cursor
+    cursor = emit_branch(
+        cursor,
+        0x77 if mutation == "unsigned-countdown" else 0x7F,
+    )
+    program[backedge + 1] = (body - (backedge + 2)) & 0xFF
+    exit_offset = cursor
+    program[exit_branch + 1] = (exit_offset - (exit_branch + 2)) & 0xFF
+    emit(cursor, "81 c4 00 01 00 00 5d c3")
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        use_address,
+        table_write + base,
+        slot,
+    )
+
+
+def two_phase_signed_word_private_stack_read_image(tmp_path, mutation=None):
+    """Read above one spill through an unrolled loop and its scalar tail."""
+    assert mutation in {
+        None,
+        "negative-initializer",
+        "detached-unrolled-bound",
+        "negative-unrolled-step",
+        "tail-decrement",
+        "unsigned-tail-latch",
+        "detached-tail-bound",
+    }
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x100)
+    labels = {}
+    branches = []
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def branch(offset, opcode, label):
+        program[offset : offset + 2] = bytes.fromhex(opcode)
+        branches.append((offset + 2, offset + 6, label))
+        return offset + 6
+
+    cursor = emit(0, "83 ec 40 89 44 24 04")
+    store_address = base + 3
+    cursor = emit(
+        cursor,
+        "bf f9 ff ff ff"
+        if mutation == "negative-initializer"
+        else "bf 01 00 00 00",
+    )
+    cursor = emit(cursor, "66 39 7c 24 10")
+    cursor = branch(cursor, "0f 8e", "exit")
+    cursor = emit(cursor, "8b 44 24 10 8b 54 24 10 48")
+    cursor = emit(
+        cursor,
+        "ba 00 00 00 00"
+        if mutation == "detached-unrolled-bound"
+        else "83 ea 08",
+    )
+    cursor = emit(cursor, "66 83 f8 08")
+    cursor = branch(cursor, "0f 8e", "tail_check")
+    labels["unrolled"] = cursor
+    cursor = emit(cursor, "0f bf cf 8b 5c 8c 20")
+    cursor = emit(
+        cursor,
+        "83 ef 08"
+        if mutation == "negative-unrolled-step"
+        else "83 c7 08",
+    )
+    cursor = emit(cursor, "66 3b fa 89 c0")
+    cursor = branch(cursor, "0f 8c", "unrolled")
+    labels["tail_check"] = cursor
+    cursor = emit(
+        cursor,
+        "66 3b 7c 24 14"
+        if mutation == "detached-tail-bound"
+        else "66 3b 7c 24 10",
+    )
+    cursor = branch(cursor, "0f 8d", "exit")
+    labels["tail"] = cursor
+    cursor = emit(cursor, "0f bf f7")
+    cursor = emit(
+        cursor,
+        "4f" if mutation == "tail-decrement" else "47",
+    )
+    cursor = emit(cursor, "8b 5c b4 20 66 3b 7c 24 10")
+    cursor = branch(
+        cursor,
+        "0f 82" if mutation == "unsigned-tail-latch" else "0f 8c",
+        "tail",
+    )
+    labels["exit"] = cursor
+    emit(cursor, "80 7c 24 04 00 83 c4 40 c3")
+    for displacement, following, label in branches:
+        program[displacement : displacement + 4] = (
+            base + labels[label] - (base + following)
+        ).to_bytes(4, "little", signed=True)
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def dynamic_full_overwrite_byte_predicate_image(tmp_path, mutation=None):
+    """Overwrite or miss one local spill at an exact dword stride."""
+    assert mutation in {
+        None,
+        "partial-write",
+        "read-modify-write",
+        "misaligned",
+        "half-stride",
+    }
+    destination = {
+        None: "89 54 8c 04",
+        "partial-write": "66 89 54 8c 04",
+        "read-modify-write": "01 54 8c 04",
+        "misaligned": "89 54 8c 05",
+        "half-stride": "89 54 4c 04",
+    }[mutation]
+    program = bytes.fromhex(
+        "83 ec 10 "
+        "89 44 24 04 "
+        f"{destination} "
+        "80 7c 24 04 00 "
+        "83 c4 10 c3"
+    )
+    return (
+        load_large_cfg_program(tmp_path, program),
+        0x00401080,
+        0x00401083,
+    )
+
+
+def guarded_byte_index_private_stack_call_image(tmp_path, mutation=None):
+    """Bound a callee-local dynamic index with an unsigned byte guard."""
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0xA0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        call_address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (target - (call_address + 5)).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    call_address = base + cursor
+    cursor = emit_call(cursor, callee)
+    emit(cursor, "83 c4 10 c3")
+
+    cursor = emit(0x40, "83 ec 40 8a 08 88 4c 24 10")
+    bound = (
+        8
+        if mutation == "equality-overlap"
+        else 0
+        if mutation in {"equality-guard", "equality-inverted"}
+        else 9
+        if mutation == "wide-bound"
+        else 4
+    )
+    equality = mutation in {
+        "equality-guard",
+        "equality-overlap",
+        "equality-inverted",
+    }
+    if mutation == "register-guard":
+        cursor = emit(cursor, f"8a 54 24 10 80 fa {bound:02x}")
+    else:
+        cursor = emit(cursor, f"80 7c 24 10 {bound:02x}")
+    branch_address = cursor
+    cursor = emit(
+        cursor,
+        "74 00"
+        if mutation == "equality-inverted"
+        else "75 00"
+        if equality
+        else "72 00"
+        if mutation == "inverted-branch"
+        else "73 00",
+    )
+    if mutation == "preload-add":
+        cursor = emit(cursor, "80 44 24 10 08")
+    cursor = emit(cursor, "8a 4c 24 10")
+    if mutation == "source-clobber":
+        cursor = emit(cursor, "b1 08")
+    cursor = emit(cursor, "fe 44 24 10 0f b6 c1 88 54 04 40")
+    exit_offset = cursor
+    cursor = emit(cursor, "83 c4 40 c3")
+    displacement = exit_offset - (branch_address + 2)
+    assert 0 <= displacement <= 0x7F
+    program[branch_address + 1] = displacement
+    return load_large_cfg_program(tmp_path, program), base, call_address
+
+
+def callback_byte_quotient_private_stack_call_image(tmp_path, mutation=None):
+    """Index a private local with a selected signed-byte callback result."""
+    base = 0x00401080
+    engine = base + 0x40
+    callback = base + 0x90
+    signed_case = base + 0xC0
+    unsafe_case = base + 0xE0
+    default_case = base + 0xF0
+    table = base + 0xF8
+    program = bytearray(b"\x90" * 0x180)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        call_address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (target - (call_address + 5)).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    call_address = base + cursor
+    cursor = emit_call(cursor, engine)
+    emit(cursor, "83 c4 10 c3")
+
+    cursor = emit(0x40, "83 ec 60")
+    store_address = base + cursor
+    cursor = emit(cursor, "89 44 24 58")
+    cursor = emit(cursor, "6a 01" if mutation == "unsafe-selector" else "6a 00")
+    cursor = emit(cursor, "52" if mutation == "unsafe-selector" else "6a 00")
+    cursor = emit(cursor, "68 00 30 40 00")
+    if mutation == "selector-overwrite":
+        cursor = emit(cursor, "c7 44 24 08 01 00 00 00")
+    callback_call = base + cursor
+    cursor = emit_call(cursor, callback)
+    cursor = emit(cursor, "83 c4 0c 89 c3 89 d9")
+    cursor = emit(
+        cursor,
+        "85 d2 74 04 90 c1 f9 03"
+        if mutation == "bypass-shift"
+        else "90 90 90"
+        if mutation == "unshifted"
+        else "c1 f9 03",
+    )
+    displacement = 0x60 if mutation == "overlap" else 0x48
+    cursor = emit(cursor, f"0f b6 44 0c {displacement:02x}")
+    cursor = emit(cursor, "80 7c 24 58 00 83 c4 60 c3")
+
+    cursor = emit(0x90, "8b 4c 24 0c 53 89 c8 8b 5c 24 08")
+    if mutation == "zero-diversion":
+        diversion = cursor
+        cursor = emit(cursor, "85 c0 74 00")
+        program[diversion + 3] = (
+            unsafe_case - (base + diversion + 4)
+        )
+    cursor = emit(cursor, "83 f8 01")
+    default_branch = cursor
+    cursor = emit(cursor, "77 00")
+    program[default_branch + 1] = (
+        default_case - (base + default_branch + 2)
+    )
+    emit(cursor, f"ff 24 85 {table.to_bytes(4, 'little').hex()}")
+
+    cursor = emit(signed_case - base, "8b 03 8a 10 84 d2 74 05")
+    cursor = emit(
+        cursor,
+        "89 d0 90"
+        if mutation == "full-return"
+        else "88 d0 90"
+        if mutation == "partial-return"
+        else "0f be c2",
+    )
+    cursor = emit(cursor, "5b c3 b8 ff ff ff ff 5b c3")
+    emit(unsafe_case - base, "8b 44 24 0c 5b c3")
+    emit(default_case - base, "31 c0 5b c3")
+    struct.pack_into("<II", program, table - base, signed_case, unsafe_case)
+
+    image = load_large_cfg_program(tmp_path, program)
+    return image, base, call_address, engine, callback_call, store_address
+
+
+def scalar_carry_private_stack_store_image(tmp_path, mutation=None):
+    """Spill a scalar word after a full-width scalar carry adjustment."""
+    assert mutation in {
+        None,
+        "bypass-carry-definition",
+        "nonzero-addend",
+        "partial-carry-definition",
+        "protected-carry-source",
+    }
+    base = 0x00401080
+    protected_slot = 0x00403000
+    program = bytearray(b"\x90" * 0x80)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 10 8b 44 24 14")
+    cursor = emit(
+        cursor,
+        "ba 00 30 40 00"
+        if mutation == "protected-carry-source"
+        else "8b 54 24 18",
+    )
+    if mutation == "bypass-carry-definition":
+        cursor = emit(cursor, "85 c9 74 02")
+    cursor = emit(
+        cursor,
+        "f6 da" if mutation == "partial-carry-definition" else "f7 da",
+    )
+    cursor = emit(
+        cursor,
+        "83 d0 01" if mutation == "nonzero-addend" else "83 d0 00",
+    )
+    store_address = base + cursor
+    emit(cursor, "89 44 24 0c 83 c4 10 c3")
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        store_address,
+        protected_slot,
+    )
+
+
+def signed_byte_index_private_stack_call_image(tmp_path, mutation=None):
+    """Index one callee-local byte through an exact signed-byte quotient."""
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x80)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 10 89 44 24 04")
+    call_address = base + cursor
+    displacement = callee - (call_address + 5)
+    cursor = emit(cursor, "e8 " + displacement.to_bytes(4, "little", signed=True).hex())
+    emit(cursor, "83 c4 10 c3")
+
+    source = "0f bf 10" if mutation == "word-source" else "0f be 10"
+    shift = "90 90 90" if mutation == "unshifted" else "c1 ff 03"
+    stack_offset = 0x30 if mutation == "overlap" else 0x10
+    tail = (
+        "85 d2 74 05 0f be 10 eb ee 83 c4 20 c3"
+        if mutation == "loop-reset"
+        else "83 c4 20 c3"
+    )
+    emit(
+        0x40,
+        "83 ec 20 "
+        f"{source} "
+        "89 d7 "
+        f"{shift} "
+        f"08 5c 3c {stack_offset:02x} "
+        f"{tail}",
+    )
+    return load_large_cfg_program(tmp_path, program), base, call_address
+
+
+def immutable_format_parser_private_stack_image(
+    *,
+    character_class=False,
+    duplicate_case=False,
+    writable_format=False,
+):
+    """Call a parser whose indexed stack arm is selected only by ``[``."""
+    text_va = 0x00401000
+    rdata_va = 0x00402000
+    outer = text_va
+    engine = text_va + 0x40
+    parser = text_va + 0x80
+    character_class_arm = text_va + 0xB0
+    default_arm = text_va + 0xC0
+    format_address = rdata_va
+    table_address = rdata_va + 0x20
+    data = bytearray(0x300)
+    text = memoryview(data)[:0x200]
+
+    def emit_call(offset, target):
+        call_address = text_va + offset
+        text[offset] = 0xE8
+        text[offset + 1 : offset + 5] = (
+            target - (call_address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    # One closed outer caller supplies engine argument two as an immutable
+    # loader-backed format pointer.
+    text[0:5] = b"\x68" + format_address.to_bytes(4, "little")
+    text[5:9] = bytes.fromhex("6a 00 6a 00")
+    cursor = emit_call(9, engine)
+    text[cursor : cursor + 4] = bytes.fromhex("83 c4 0c c3")
+
+    # The engine retains one scalar local while forwarding its format cursor
+    # to the parser.  The two structural-audit predicates are monkeypatched in
+    # the test so this compact image can exercise the generic call seam.
+    text[0x40:0x4B] = bytes.fromhex(
+        "83 ec 10 89 44 24 04 8b 74 24 1c"
+    )
+    text[0x4B] = 0x56
+    parser_call = text_va + 0x4C
+    cursor = emit_call(0x4C, parser)
+    text[cursor : cursor + 7] = bytes.fromhex("83 c4 04 83 c4 10 c3")
+
+    # selector = current character - 'E'; '[' is table index 22.  Only that
+    # unique case can reach the unresolved indexed stack write.
+    text[0x80:0x83] = bytes.fromhex("0f be 18")
+    text[0x83:0x86] = bytes.fromhex("83 ec 20")
+    text[0x86:0x89] = bytes.fromhex("8d 4b bb")
+    text[0x89:0x8C] = bytes.fromhex("83 f9 16")
+    text[0x8C:0x8E] = bytes.fromhex("77 32")
+    text[0x8E:0x95] = bytes.fromhex("ff 24 8d 20 20 40 00")
+    text[0xB0:0xB4] = bytes.fromhex("08 5c 3c 10")
+    text[0xB4:0xB8] = bytes.fromhex("83 c4 20 c3")
+    text[0xC0:0xC4] = bytes.fromhex("83 c4 20 c3")
+
+    payload = b"%[a]\0" if character_class else b"%ld\0"
+    data[0x200 : 0x200 + len(payload)] = payload
+    for index in range(23):
+        target = (
+            character_class_arm
+            if index == 22 or (duplicate_case and index == 21)
+            else default_arm
+        )
+        struct.pack_into("<I", data, 0x220 + index * 4, target)
+
+    relocations = (
+        pe_mod.Relocation(parser + 0x11, 3),
+        *(pe_mod.Relocation(table_address + index * 4, 3) for index in range(23)),
+    )
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=outer,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0x200,
+                0x200,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".rdata",
+                rdata_va,
+                0x200,
+                0x100,
+                0x100,
+                0xC0000040 if writable_format else 0x40000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(relocations),
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+    return image, (outer, engine, parser), engine, parser_call
+
+
+def private_stack_memory_argument_image(
+    tmp_path,
+    *,
+    outside_frame=False,
+    slot_escape=False,
+    reverse_string_direction=False,
+):
+    """Pass one stack-stored private pointer through a direct call."""
+    base = 0x00401080
+    callee = base + 0x60
+    clobber = base + 0x78
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        call_address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (target - (call_address + 5)).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    adjustment = 0x40 if outside_frame else 8
+    cursor = emit(
+        0,
+        "83 ec 20 8d 44 24 04 89 04 24 "
+        f"83 04 24 {adjustment:02x}",
+    )
+    if slot_escape:
+        cursor = emit(cursor, "8d 0c 24 51")
+        cursor = emit_call(cursor, clobber)
+        cursor = emit(cursor, "83 c4 04")
+    cursor = emit(cursor, "ff 34 24")
+    call_address = base + cursor
+    cursor = emit_call(cursor, callee)
+    emit(cursor, "83 c4 24 c3")
+    string_direction = "fd " if reverse_string_direction else ""
+    emit(
+        0x60,
+        "8b 44 24 04 8d 78 fb be 00 30 40 00 "
+        f"{string_direction}a5 a4 c3",
+    )
+    emit(0x78, "8b 44 24 04 c7 00 00 00 00 00 c3")
+    return load_large_cfg_program(tmp_path, program), base, call_address
+
+
+def private_stack_address_store_image(tmp_path, *, mutation=None):
+    """Store one exact frame address or one closely related hostile value."""
+    assert mutation in {None, "copy", "outside-frame", "incoming", "partial"}
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x40)
+    cursor = 0
+
+    def emit(encoded):
+        nonlocal cursor
+        encoded = bytes.fromhex(encoded)
+        program[cursor : cursor + len(encoded)] = encoded
+        cursor += len(encoded)
+
+    emit("83 ec 10")
+    if mutation == "incoming":
+        emit("8b 44 24 14")
+    else:
+        displacement = 0x20 if mutation == "outside-frame" else 0x04
+        emit(f"8d 44 24 {displacement:02x}")
+    if mutation == "partial":
+        emit("30 c0")
+    if mutation == "copy":
+        emit("89 c1")
+        source = "89 0c 24"
+    else:
+        source = "89 04 24"
+    store_address = base + cursor
+    emit(source)
+    emit("83 c4 10 c3")
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def private_stack_decrement_store_image(tmp_path, *, partial_decrement=False):
+    """Store through one exact decremented incoming private pointer."""
+    base = 0x00401080
+    decrement = "66 4e" if partial_decrement else "4e 90"
+    program = bytes.fromhex(
+        "8b 74 24 04 "
+        f"{decrement} "
+        "c6 06 00 c3"
+    )
+    return load_large_cfg_program(tmp_path, program), base, base + 6
+
+
+def closed_read_only_argument_image(tmp_path, *, pointer_escape=False):
+    """Pass one pointer to a closed byte reader or a pointer-storing hostile."""
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "8b 3d 00 30 40 00")
+    push_address = base + cursor
+    cursor = emit(cursor, "57 e8 00 00 00 00 83 c4 04 c3")
+    call_address = push_address + 1
+    displacement = callee - (call_address + 5)
+    program[call_address - base + 1 : call_address - base + 5] = (
+        displacement.to_bytes(4, "little", signed=True)
+    )
+    if pointer_escape:
+        emit(0x40, "8b 44 24 04 a3 10 30 40 00 31 c0 c3")
+    else:
+        emit(
+            0x40,
+            "8b 44 24 04 89 c1 8a 08 88 0d 10 30 40 00 31 c0 c3",
+        )
+    return load_large_cfg_program(tmp_path, program), base, push_address, callee
+
+
+def closed_reused_read_only_argument_image(tmp_path, *, mutation=None):
+    """Keep one saved pointer below two closed call-argument frames."""
+    assert mutation in {
+        None,
+        "first-write",
+        "second-write",
+        "escape-between",
+        "branch-between",
+        "unresolved-second",
+        "over-cleanup",
+        "lower-argument",
+        "lower-register-argument",
+        "oversized-stack-adjustment",
+    }
+    base = 0x00401080
+    first_callee = base + 0x80
+    second_callee = base + 0xA0
+    program = bytearray(b"\x90" * 0xC0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        program[offset] = 0xE8
+        displacement = target - (base + offset + 5)
+        program[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    cursor = emit(0, "8b 3d 00 30 40 00")
+    if mutation in {"lower-argument", "lower-register-argument"}:
+        cursor = emit(
+            cursor,
+            "6a 09" if mutation == "lower-argument" else "53 90",
+        )
+    push_address = base + cursor
+    cursor = emit(cursor, "57 6a 03 6a 02 6a 01")
+    first_call = base + cursor
+    cursor = emit_call(cursor, first_callee)
+    if mutation == "escape-between":
+        cursor = emit(cursor, "8b 04 24 a3 10 30 40 00")
+    elif mutation == "branch-between":
+        cursor = emit(cursor, "eb 01 90")
+    elif mutation == "oversized-stack-adjustment":
+        cursor = emit(cursor, "81 ec 04 10 00 00 81 c4 04 10 00 00")
+    cursor = emit(cursor, "6a 06 6a 05 6a 04")
+    second_call = base + cursor
+    cursor = emit_call(cursor, second_callee)
+    cursor = emit(
+        cursor,
+        (
+            "83 c4 14 c3"
+            if mutation
+            in {
+                "over-cleanup",
+                "lower-argument",
+                "lower-register-argument",
+            }
+            else "83 c4 10 c3"
+        ),
+    )
+
+    first_access = "c6 00 00" if mutation == "first-write" else "8a 00"
+    emit(0x80, f"8b 44 24 10 {first_access} 31 c0 c2 0c 00")
+    if mutation == "unresolved-second":
+        emit(0xA0, "8b 44 24 10 50 ff d1 59 c3")
+    else:
+        second_access = (
+            "c6 00 00" if mutation == "second-write" else "8a 00"
+        )
+        emit(0xA0, f"8b 44 24 10 {second_access} 31 c0 c3")
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        push_address,
+        first_call,
+        second_call,
+    )
+
+
+def closed_spilled_read_only_argument_image(tmp_path, *, mutation=None):
+    """Spill and advance one source pointer before a closed nested read."""
+    assert mutation in {
+        None,
+        "global-spill",
+        "spill-address-escape",
+        "write-through-reload",
+        "writable-reader",
+        "return-alias",
+        "unresolved-reader",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    reader = base + 0x90
+    program = bytearray(b"\x90" * 0xB0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        program[offset] = 0xE8
+        displacement = target - (base + offset + 5)
+        program[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    cursor = emit(0, "8b 3d 00 30 40 00")
+    push_address = base + cursor
+    cursor = emit(cursor, "57")
+    cursor = emit_call(cursor, callee)
+    emit(cursor, "83 c4 04 c3")
+
+    cursor = emit(0x40, "83 ec 08 8b 44 24 0c")
+    cursor = emit(
+        cursor,
+        "a3 10 30 40 00" if mutation == "global-spill" else "89 04 24",
+    )
+    cursor = emit(cursor, "c7 44 24 04 01 00 00 00")
+    if mutation == "spill-address-escape":
+        cursor = emit(cursor, "8d 0c 24 51")
+        cursor = emit_call(cursor, reader)
+        cursor = emit(cursor, "83 c4 04")
+    cursor = emit(
+        cursor,
+        "8b 04 24 03 44 24 04 "
+        "89 c1 2b 0c 24 89 4c 24 04 8d 4c 24 04 31 c9 "
+        "89 04 24 8b 04 24",
+    )
+    if mutation == "write-through-reload":
+        cursor = emit(cursor, "c6 00 00")
+    else:
+        cursor = emit(cursor, "50")
+        if mutation == "unresolved-reader":
+            cursor = emit(cursor, "ff d2")
+        else:
+            cursor = emit_call(cursor, reader)
+        cursor = emit(cursor, "83 c4 04")
+    if mutation == "return-alias":
+        cursor = emit(cursor, "8b 04 24 83 c4 08 c3")
+    else:
+        emit(cursor, "83 c4 08 31 c0 c3")
+
+    reader_access = "c6 00 00" if mutation == "writable-reader" else "8a 00"
+    emit(0x90, f"8b 44 24 04 {reader_access} 31 c0 c3")
+    return load_large_cfg_program(tmp_path, program), base, push_address, callee
+
+
+def closed_bulk_copy_argument_image(tmp_path):
+    """Read an unknown-length source while writing a distinct destination."""
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x40)
+    encoded = bytes.fromhex(
+        "57 56 "
+        "8b 7c 24 0c "
+        "8b 74 24 10 "
+        "8b 4c 24 14 "
+        "f3 a4 "
+        "5e 5f c3"
+    )
+    program[: len(encoded)] = encoded
+    return load_large_cfg_program(tmp_path, program), base
+
+
+def closed_scalar_argument_image(tmp_path, *, mutation=None):
+    """Transform one argument as a scalar without losing capability taint."""
+    assert mutation in {
+        None,
+        "masked-write-through",
+        "store-derived",
+        "return-derived",
+        "forward-writable",
+    }
+    base = 0x00401080
+    writer = base + 0x40
+    program = bytearray(b"\x90" * 0x60)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(
+        0,
+        "8b 44 24 04 b9 01 00 00 00 8d 04 08 83 e0 03 d1 e8",
+    )
+    if mutation == "masked-write-through":
+        emit(cursor, "c6 00 00 31 c0 c3")
+    elif mutation == "store-derived":
+        emit(cursor, "a3 10 30 40 00 31 c0 c3")
+    elif mutation == "return-derived":
+        emit(cursor, "c3")
+    elif mutation == "forward-writable":
+        cursor = emit(cursor, "50 e8 00 00 00 00 83 c4 04 31 c0 c3")
+        call_address = base + cursor - 11
+        displacement = writer - (call_address + 5)
+        program[call_address - base + 1 : call_address - base + 5] = (
+            displacement.to_bytes(4, "little", signed=True)
+        )
+    else:
+        emit(cursor, "85 c0 31 c0 c3")
+    emit(0x40, "8b 44 24 04 c6 00 00 31 c0 c3")
+    return load_large_cfg_program(tmp_path, program), base
+
+
+def audited_format_size_argument_image(tmp_path, *, mutation=None):
+    """Pass a capability-shaped count only to an audited bounded writer."""
+    assert mutation in {None, "writer-body", "copy-direction"}
+    base = 0x00401080
+    callback = base + 0x40
+    copy = base + 0xC0
+    program = bytearray(b"\x90" * 0x100)
+
+    caller = bytes.fromhex(
+        "8b 1d 00 30 40 00 53 68 00 20 40 00 68 10 30 40 00 "
+        "e8 00 00 00 00 83 c4 0c 31 c0 c3"
+    )
+    program[: len(caller)] = caller
+    push_address = base + 6
+    call_address = base + 17
+    displacement = callback - (call_address + 5)
+    program[call_address - base + 1 : call_address - base + 5] = (
+        displacement.to_bytes(4, "little", signed=True)
+    )
+
+    callback_bytes = bytearray.fromhex(
+        "538b5c24088b542410568b7308558b6b048d043239e8770889d5eb06"
+        "9090909029f58b038b4c241401f0555150e80000000083c40c016b08"
+        "5d5e5bc3"
+    )
+    if mutation == "writer-body":
+        callback_bytes[0x35] = 0x29
+    copy_call = callback + 0x2D
+    displacement = copy - (copy_call + 5)
+    callback_bytes[0x2E:0x32] = displacement.to_bytes(
+        4,
+        "little",
+        signed=True,
+    )
+    program[0x40 : 0x40 + len(callback_bytes)] = callback_bytes
+
+    copy_bytes = bytearray.fromhex(
+        "8b54240456578b4424148b74241089d731c93d100000007c1e29f9"
+        "81e103000000740429c8f3a489c12503000000c1e902f3a585c07404"
+        "89c1f3a489d05f5ec3"
+    )
+    if mutation == "copy-direction":
+        copy_bytes[0x25:0x27] = bytes.fromhex("fd a4")
+    program[0xC0 : 0xC0 + len(copy_bytes)] = copy_bytes
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        push_address,
+        callback,
+    )
+
+
+def closed_popped_read_only_argument_image(tmp_path, *, mutation=None):
+    """Pop a consumed pointer only into an unobserved closed suffix."""
+    assert mutation in {
+        None,
+        "memory-use",
+        "push-use",
+        "store-use",
+        "copy-use",
+        "unresolved-jump",
+        "return-eax",
+        "full-kill",
+        "closed-call-kill",
+        "call-read",
+        "unresolved-call",
+        "same-register-restore",
+        "same-register-store",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x70)
+    program[:7] = bytes.fromhex("8b 3d 00 30 40 00 57")
+    push_address = base + 6
+    call_address = base + 7
+    program[7] = 0xE8
+    displacement = callee - (call_address + 5)
+    program[8:12] = displacement.to_bytes(4, "little", signed=True)
+    tail = {
+        None: "59 89 c0 eb fe",
+        "memory-use": "59 8a 01 eb fe",
+        "push-use": "59 51 59 eb fe",
+        "store-use": "59 89 0d 10 30 40 00 eb fe",
+        "copy-use": "59 89 c8 eb fe",
+        "unresolved-jump": "59 ff e1",
+        "return-eax": "58 c3",
+        "full-kill": "59 31 c9 c3",
+        "closed-call-kill": "59 e8 00 00 00 00 c3",
+        "call-read": "59 e8 00 00 00 00 c3",
+        "unresolved-call": "59 ff d2 c3",
+        "same-register-restore": "5f 57 5f c3",
+        "same-register-store": "5f 89 3d 10 30 40 00 c3",
+    }[mutation]
+    encoded_tail = bytes.fromhex(tail)
+    program[12 : 12 + len(encoded_tail)] = encoded_tail
+    program[0x40 : 0x4A] = bytes.fromhex(
+        "8b 44 24 04 8a 00 31 c0 c3 90"
+    )
+    if mutation in {"closed-call-kill", "call-read"}:
+        target = base + 0x50
+        call_address = base + 13
+        displacement = target - (call_address + 5)
+        program[14:18] = displacement.to_bytes(4, "little", signed=True)
+        target_body = (
+            "31 c9 31 c0 c3"
+            if mutation == "closed-call-kill"
+            else "89 0d 10 30 40 00 31 c9 31 c0 c3"
+        )
+        encoded_target = bytes.fromhex(target_body)
+        program[0x50 : 0x50 + len(encoded_target)] = encoded_target
+    return load_large_cfg_program(tmp_path, program), base, push_address
+
+
+def closed_narrow_scalar_argument_image(tmp_path, *, mutation=None):
+    assert mutation in {
+        None,
+        "full-read",
+        "word-read",
+        "upper-byte-read",
+        "overlapping-read",
+        "address-take",
+        "slot-write",
+        "no-read",
+        "unresolved-jump",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    program = bytearray(b"\x90" * 0x60)
+    program[:14] = bytes.fromhex(
+        "b9 00 30 40 00 51 e8 00 00 00 00 59 31 c0"
+    )
+    program[14] = 0xC3
+    displacement = callee - (base + 11)
+    program[7:11] = displacement.to_bytes(4, "little", signed=True)
+    tail = {
+        None: "8a 44 24 04 a2 10 30 40 00 c3",
+        "full-read": "8b 44 24 04 a3 10 30 40 00 31 c0 c3",
+        "word-read": "66 8b 44 24 04 31 c0 c3",
+        "upper-byte-read": "8a 44 24 05 31 c0 c3",
+        "overlapping-read": "66 8b 44 24 03 31 c0 c3",
+        "address-take": "8d 44 24 04 a3 10 30 40 00 31 c0 c3",
+        "slot-write": "c6 44 24 04 00 31 c0 c3",
+        "no-read": "31 c0 c3",
+        "unresolved-jump": "ff e0",
+    }[mutation]
+    encoded_tail = bytes.fromhex(tail)
+    program[0x40 : 0x40 + len(encoded_tail)] = encoded_tail
+    return load_large_cfg_program(tmp_path, program), base, base + 5
+
+
+def closed_narrow_scalar_cleanup_image(tmp_path, *, mutation=None):
+    """Restore a narrow call argument only into a scalar-observed suffix."""
+    assert mutation in {
+        None,
+        "full-read",
+        "address-use",
+        "push-use",
+        "store-use",
+        "return-eax",
+        "unresolved-jump",
+        "repeated",
+    }
+    base = 0x00401080
+    callee = base + 0x60
+    program = bytearray(b"\x90" * 0x90)
+    prefix = bytes.fromhex(
+        "a1 04 30 40 00 50 e8 00 00 00 00"
+    )
+    program[: len(prefix)] = prefix
+    push_address = base + 5
+    call_address = base + 6
+    program[7:11] = (callee - (call_address + 5)).to_bytes(
+        4,
+        "little",
+        signed=True,
+    )
+    tail = {
+        None: "59 8a 0d 00 20 40 00 84 c9 0f be d1 31 c0 c3",
+        "full-read": "59 85 c9 31 c0 c3",
+        "address-use": "59 8a 01 31 c0 c3",
+        "push-use": "59 51 59 31 c0 c3",
+        "store-use": "59 89 0d 00 20 40 00 31 c0 c3",
+        "return-eax": "58 c3",
+        "unresolved-jump": "59 ff e1",
+        "repeated": (
+            "59 8a 0d 00 20 40 00 51 e8 00 00 00 00 "
+            "80 3d 01 20 40 00 00 59 31 c0 c3"
+        ),
+    }[mutation]
+    encoded_tail = bytearray.fromhex(tail)
+    if mutation == "repeated":
+        repeated_call = base + 11 + 8
+        encoded_tail[9:13] = (callee - (repeated_call + 5)).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+    program[11 : 11 + len(encoded_tail)] = encoded_tail
+    callee_body = bytes.fromhex(
+        "8a 44 24 04 a2 10 30 40 00 31 c0 c3"
+    )
+    program[0x60 : 0x60 + len(callee_body)] = callee_body
+    return load_large_cfg_program(tmp_path, program), base, push_address
+
+
+def closed_multi_target_argument_image(tmp_path, *, protected_write=False):
+    """Resolve one indirect call to two closed consumers of its argument."""
+    base = 0x00401080
+    first_callee = base + 0x40
+    second_callee = base + 0x70
+    program = bytearray(b"\x90" * 0xA0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "8b 3d 00 30 40 00")
+    push_address = base + cursor
+    cursor = emit(
+        cursor,
+        "57 b8 " + first_callee.to_bytes(4, "little").hex() + " ff d0 83 c4 04 c3",
+    )
+    call_address = push_address + 6
+    displacement = 4 if protected_write else 0x20
+    cursor = emit(0x40, f"8b 44 24 04 c6 40 {displacement:02x} 00 50")
+    nested_call = base + cursor
+    cursor = emit(cursor, "e8 00 00 00 00 83 c4 04 c3")
+    nested_displacement = second_callee - (nested_call + 5)
+    program[nested_call - base + 1 : nested_call - base + 5] = (
+        nested_displacement.to_bytes(4, "little", signed=True)
+    )
+    emit(0x70, "8b 44 24 04 8a 08 31 c0 c3")
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        push_address,
+        call_address,
+        first_callee,
+        second_callee,
+    )
+
+
+def scan_count_scalar_image(tmp_path, *, mixes_scan_pointer=False):
+    """Derive a pushed byte count from REPNE SCASB, optionally tainted by EDI."""
+    base = 0x00401080
+    mix = "01 f8" if mixes_scan_pointer else "90 90"
+    program = bytes.fromhex(
+        "b9 ff ff ff ff "
+        "8b 7c 24 04 "
+        "31 c0 "
+        "f2 ae "
+        "b8 fe ff ff ff "
+        "29 c8 "
+        f"{mix} "
+        "50 58 c3"
+    )
+    return load_large_cfg_program(tmp_path, program), base, base + 0x16
+
+
+def bounded_external_message_trim_image(tmp_path, *, mutation=None):
+    """Trim CRLF inside one typed bounded external-message buffer."""
+    assert mutation in {
+        None,
+        "wrong-import",
+        "zero-capacity",
+        "unterminated-fallback",
+        "wrong-scan-seed",
+        "wrong-affine-base",
+    }
+    base = 0x00401080
+    source = 0x00402300
+    buffer = 0x00402340
+    iat = 0x00402160
+    capacity = 0 if mutation == "zero-capacity" else 0x40
+    program = bytearray(b"\x90" * 0x140)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "85 d2")
+    copy_branch = cursor
+    cursor = emit(cursor, "74 00")
+    for value in (0, capacity, buffer, 0):
+        cursor = emit(cursor, f"68 {value.to_bytes(4, 'little').hex()}")
+    cursor = emit(cursor, "52")
+    cursor = emit(cursor, "6a 00 68 00 10 00 00")
+    cursor = emit(cursor, f"ff 15 {iat.to_bytes(4, 'little').hex()}")
+    join_jump = cursor
+    cursor = emit(cursor, "eb 00")
+
+    copy = cursor
+    cursor = emit(cursor, "b9 07 00 00 00")
+    cursor = emit(cursor, f"be {source.to_bytes(4, 'little').hex()}")
+    cursor = emit(cursor, f"bf {buffer.to_bytes(4, 'little').hex()}")
+    cursor = emit(cursor, "f3 a5 66 a5 a4")
+
+    scan = cursor
+    scan_seed = 0xFFFF_FFFE if mutation == "wrong-scan-seed" else 0xFFFF_FFFF
+    cursor = emit(cursor, f"b9 {scan_seed.to_bytes(4, 'little').hex()}")
+    cursor = emit(cursor, f"bf {buffer.to_bytes(4, 'little').hex()}")
+    cursor = emit(cursor, "31 c0 f2 ae b8 fe ff ff ff 29 c8")
+    affine_base = buffer + (4 if mutation == "wrong-affine-base" else 0)
+    cursor = emit(cursor, f"05 {affine_base.to_bytes(4, 'little').hex()}")
+    cursor = emit(cursor, "05 fe ff ff ff")
+    cursor = emit(cursor, f"3d {buffer.to_bytes(4, 'little').hex()}")
+    exit_branches = []
+    exit_branches.append(cursor)
+    cursor = emit(cursor, "76 00 80 38 0d")
+    exit_branches.append(cursor)
+    cursor = emit(cursor, "75 00 80 78 01 0a")
+    exit_branches.append(cursor)
+    cursor = emit(cursor, "75 00")
+    store_address = base + cursor
+    cursor = emit(cursor, "c6 00 00")
+    exit_offset = cursor
+    emit(cursor, "c3")
+
+    for branch, target in (
+        (copy_branch, copy),
+        (join_jump, scan),
+        *((branch, exit_offset) for branch in exit_branches),
+    ):
+        displacement = target - (branch + 2)
+        assert -0x80 <= displacement <= 0x7F
+        program[branch + 1] = displacement & 0xFF
+
+    image = load_large_cfg_program(tmp_path, program)
+    data = bytearray(image.data)
+    rdata = next(section for section in image.sections if section.name == ".rdata")
+    source_offset = rdata.raw_offset + source - rdata.va
+    payload = bytearray(b"Unknown process spawning error\0")
+    assert len(payload) == 31
+    if mutation == "unterminated-fallback":
+        payload[-1] = ord("!")
+    data[source_offset : source_offset + len(payload)] = payload
+    return (
+        replace(
+            image,
+            data=bytes(data),
+            sha256=hashlib.sha256(data).hexdigest(),
+            imports=(
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name=(
+                        "GetLastError"
+                        if mutation == "wrong-import"
+                        else "FormatMessageA"
+                    ),
+                    ordinal=None,
+                    hint=0,
+                    iat_va=iat,
+                ),
+            ),
+        ),
+        base,
+        store_address,
+        buffer,
+        capacity,
+    )
+
+
+def bounded_string_subpath_return_image(tmp_path, *, mutation=None):
+    """Return only subpointers of one closed private-stack string."""
+    assert mutation in {
+        None,
+        "unaudited-search",
+        "wrong-scan-base",
+        "wrong-return-source",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    search = base + 0xC0
+    unaudited = base + 0xE8
+    program = bytearray(b"\x90" * 0x100)
+    caller = bytearray(bytes.fromhex("83 ec 20 8d 04 24 50 e8 00 00 00 00 83 c4 24 c3"))
+    caller[8:12] = (callee - (base + 12)).to_bytes(
+        4,
+        "little",
+        signed=True,
+    )
+    program[: len(caller)] = caller
+
+    body = bytearray(
+        bytes.fromhex(
+            "56 8b 74 24 08 8a 0e 57 80 f9 5c 75 33 "
+            "80 7e 01 5c 75 2d 8d 46 02 6a 5c 50 "
+            "e8 00 00 00 00 85 c0 59 59 75 14 "
+            "b9 ff ff ff ff 89 f7 31 c0 f2 ae "
+            "b8 fe ff ff ff 29 c8 01 f0 5f 5e c2 04 00 90 90 90 "
+            "0f b6 d1 0f b6 82 00 22 40 00 25 c0 00 00 00 "
+            "74 0f 80 7e 01 3a 75 09 5f 8d 46 02 5e c2 04 00 "
+            "90 80 f9 5c 75 0b 5f 89 f0 5e c2 04 00 "
+            "90 90 90 90 89 f0 5f 5e c2 04 00"
+        )
+    )
+    call_offset = 0x19
+    search_target = unaudited if mutation == "unaudited-search" else search
+    body[call_offset + 1 : call_offset + 5] = (
+        search_target - (callee + call_offset + 5)
+    ).to_bytes(4, "little", signed=True)
+    if mutation == "wrong-scan-base":
+        marker = body.index(bytes.fromhex("29 c8 01 f0"))
+        body[marker + 3] = 0xF8
+    elif mutation == "wrong-return-source":
+        marker = body.rindex(bytes.fromhex("89 f0"))
+        body[marker + 1] = 0xD0
+    program[0x40 : 0x40 + len(body)] = body
+
+    search_body = bytes.fromhex(
+        "31 d2 56 8b 74 24 08 8b 4c 24 0c 89 c0 8d 40 00 "
+        "ac 38 c8 74 06 84 c0 75 f7 eb 05 8d 56 ff 89 d0 5e c3"
+    )
+    program[0xC0 : 0xC0 + len(search_body)] = search_body
+    program[0xE8 : 0xEB] = bytes.fromhex("31 c0 c3")
+    return load_large_cfg_program(tmp_path, program), callee
+
+
+def private_heap_rep_stos_image(tmp_path, *, mutation=None):
+    """Zero exactly one private-allocation request after a nonnull guard."""
+    assert mutation in {None, "wrong-count", "partial-pointer", "missing-guard"}
+    base = 0x00401080
+    allocator = base + 0x60
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "55 57 8b 6c 24 0c 55")
+    call_address = base + cursor
+    cursor = emit(cursor, "e8 00 00 00 00")
+    displacement = allocator - (call_address + 5)
+    program[call_address - base + 1 : call_address - base + 5] = (
+        displacement.to_bytes(4, "little", signed=True)
+    )
+    cursor = emit(cursor, "89 c2 59 85 d2")
+    branch = cursor
+    cursor = emit(cursor, "90 90" if mutation == "missing-guard" else "74 00")
+    cursor = emit(cursor, "31 c0")
+    cursor = emit(
+        cursor,
+        "66 89 d7" if mutation == "partial-pointer" else "89 d7",
+    )
+    cursor = emit(
+        cursor,
+        "b9 02 00 00 00" if mutation == "wrong-count" else "89 e9",
+    )
+    write_address = base + cursor
+    cursor = emit(cursor, "f3 aa")
+    success = cursor
+    emit(cursor, "89 d0 5f 5d c3")
+    if mutation != "missing-guard":
+        program[branch + 1] = success - (branch + 2)
+    emit(0x60, "31 c0 c3")
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        call_address,
+        write_address,
+        allocator,
+    )
+
+
+def fresh_allocation_rep_stos_image(tmp_path, *, mutation=None):
+    """Zero exactly the byte extent requested from a typed allocator."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {
+        None,
+        "wrong-import",
+        "wrong-size-argument",
+        "wrong-count",
+        "wrong-result-store",
+        "missing-guard",
+    }
+    base = 0x00401080
+    alloc_iat = 0x00403020
+    error_iat = 0x00403024
+    program = bytearray(b"\x90" * 0x80)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "57 55 8b 6c 24 0c 8b 7c 24 10")
+    cursor = emit(
+        cursor,
+        "57" if mutation == "wrong-size-argument" else "55",
+    )
+    cursor = emit(cursor, "6a 00")
+    allocation_call = base + cursor
+    cursor = emit(cursor, f"ff 15 {alloc_iat.to_bytes(4, 'little').hex()}")
+    cursor = emit(
+        cursor,
+        "89 2f" if mutation == "wrong-result-store" else "89 07",
+    )
+    cursor = emit(cursor, "89 6f 04 8b 3f")
+    cursor = emit(
+        cursor,
+        "90 90 90 90" if mutation == "missing-guard" else "85 ff 75 00",
+    )
+    branch = cursor - 2
+    cursor = emit(cursor, f"ff 15 {error_iat.to_bytes(4, 'little').hex()}")
+    cursor = emit(cursor, "5d 5f c2 08 00")
+    success = cursor
+    cursor = emit(cursor, "31 c0")
+    cursor = emit(cursor, "89 f9" if mutation == "wrong-count" else "89 e9")
+    store_address = base + cursor
+    cursor = emit(cursor, "f3 aa 31 c0 5d 5f c2 08 00")
+    if mutation != "missing-guard":
+        program[branch + 1] = success - (branch + 2)
+
+    image = load_large_cfg_program(tmp_path, program)
+    return (
+        replace(
+            image,
+            imports=(
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name=(
+                        "GlobalFree"
+                        if mutation == "wrong-import"
+                        else "GlobalAlloc"
+                    ),
+                    ordinal=None,
+                    hint=0,
+                    iat_va=alloc_iat,
+                ),
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name="GetLastError",
+                    ordinal=None,
+                    hint=0,
+                    iat_va=error_iat,
+                ),
+            ),
+        ),
+        base,
+        allocation_call,
+        store_address,
+    )
+
+
+def fresh_allocation_table_roundtrip_rep_movs_image(
+    tmp_path,
+    *,
+    mutation=None,
+):
+    """Copy only one requested extent after an exact table round-trip."""
+    assert mutation in {
+        None,
+        "different-index",
+        "different-table",
+        "non-fresh-result",
+        "undersized-allocation",
+        "wrong-count",
+        "wrong-result-source",
+        "wrong-direction",
+    }
+    base = 0x00401080
+    allocator = base + 0x100
+    index_slot = 0x00403010
+    other_index_slot = index_slot + 2
+    table = 0x00403020
+    program = bytearray(b"\x90" * 0x120)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "56 57 55 53 83 ec 60")
+    cursor = emit(
+        cursor,
+        "6a 5c" if mutation == "undersized-allocation" else "6a 60",
+    )
+    allocation_call = base + cursor
+    cursor = emit(cursor, "e8 00 00 00 00")
+    program[allocation_call - base + 1 : allocation_call - base + 5] = (
+        (allocator - (allocation_call + 5)).to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+    )
+    cursor = emit(
+        cursor,
+        f"66 ff 05 {index_slot.to_bytes(4, 'little').hex()} 59",
+    )
+    cursor = emit(
+        cursor,
+        f"0f bf 2d {index_slot.to_bytes(4, 'little').hex()}",
+    )
+    cursor = emit(
+        cursor,
+        "b9 19 00 00 00" if mutation == "wrong-count" else "b9 18 00 00 00",
+    )
+    cursor = emit(cursor, "8d 34 24")
+    cursor = emit(
+        cursor,
+        (
+            f"89 1c ad {table.to_bytes(4, 'little').hex()}"
+            if mutation == "wrong-result-source"
+            else f"89 04 ad {table.to_bytes(4, 'little').hex()}"
+        ),
+    )
+    reload_index = (
+        other_index_slot if mutation == "different-index" else index_slot
+    )
+    cursor = emit(
+        cursor,
+        f"0f bf 1d {reload_index.to_bytes(4, 'little').hex()}",
+    )
+    reload_table = table + 4 if mutation == "different-table" else table
+    cursor = emit(
+        cursor,
+        f"8b 04 9d {reload_table.to_bytes(4, 'little').hex()} 8d 38",
+    )
+    if mutation == "wrong-direction":
+        cursor = emit(cursor, "fd")
+    write_address = base + cursor
+    cursor = emit(cursor, "f3 a5")
+    if mutation == "wrong-direction":
+        cursor = emit(cursor, "fc")
+    emit(cursor, "83 c4 60 5b 5d 5f 5e c3")
+    program[allocator - base] = 0xC3
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        allocation_call,
+        write_address,
+        allocator,
+    )
+
+
+def symbolic_zero_rep_stos_image(tmp_path, *, mutation=None):
+    """Cancel two opaque scalars before one otherwise unsafe byte fill."""
+    assert mutation in {
+        None,
+        "balanced-branch",
+        "branch-clobber",
+        "different-stack-slot",
+        "partial-subtract",
+        "partial-stack-clobber",
+        "retained-header",
+        "stack-clobber",
+        "stack-copy-escape",
+        "stack-escape",
+    }
+    base = 0x00401080
+    callee = base + 0x80
+    protected = 0x00403000
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "53 55 83 ec 08")
+    cursor = emit(cursor, "8b 44 24 14 89 04 24")
+    cursor = emit(cursor, "8b 6c 24 18 8b 1c 24 01 eb")
+    call_address = base + cursor
+    cursor = emit(cursor, "e8 00 00 00 00")
+    program[call_address - base + 1 : call_address - base + 5] = (
+        callee - (call_address + 5)
+    ).to_bytes(4, "little", signed=True)
+    if mutation in {"balanced-branch", "branch-clobber"}:
+        cursor = emit(cursor, "85 c0")
+        branch = cursor
+        cursor = emit(cursor, "74 00")
+        cursor = emit(
+            cursor,
+            "89 2c 24" if mutation == "branch-clobber" else "90",
+        )
+        program[branch + 1] = cursor - (branch + 2)
+    elif mutation == "stack-clobber":
+        cursor = emit(cursor, "89 2c 24")
+    elif mutation == "partial-stack-clobber":
+        cursor = emit(cursor, "66 89 2c 24")
+    elif mutation == "stack-copy-escape":
+        cursor = emit(cursor, "89 e0 a3 04 30 40 00")
+    elif mutation == "stack-escape":
+        cursor = emit(cursor, "8d 04 24 a3 04 30 40 00")
+    cursor = emit(
+        cursor,
+        "66 29 eb" if mutation == "partial-subtract" else "29 eb",
+    )
+    if mutation == "retained-header":
+        cursor = emit(cursor, "90 90 90")
+    elif mutation == "different-stack-slot":
+        cursor = emit(cursor, "2b 5c 24 04")
+    else:
+        cursor = emit(cursor, "2b 1c 24")
+    cursor = emit(cursor, "89 d9")
+    cursor = emit(cursor, f"bf {protected.to_bytes(4, 'little').hex()}")
+    cursor = emit(cursor, "31 c0")
+    write_address = base + cursor
+    cursor = emit(cursor, "f3 aa 83 c4 08 5d 5b c3")
+    emit(0x80, "31 c0 c3")
+    return load_large_cfg_program(tmp_path, program), base, write_address
+
+
+def callback_table_contextual_literal_image(tmp_path, *, mutation=None):
+    """Bind one callback's byte-zero discriminator to exact table slots."""
+    assert mutation in {
+        None,
+        "different-object",
+        "extra-incoming",
+        "extra-index",
+        "missing-first-assignment",
+        "partial-second-assignment",
+        "wrong-first-compare",
+        "wrong-second-compare",
+    }
+    path = write_synthetic_dispatch_pe(
+        tmp_path,
+        entry_count=16,
+        mode="signed-byte-domain-exact-spill",
+    )
+    data = bytearray(path.read_bytes())
+    callback = 0x00401090
+    dummy = 0x004010D0
+    first_literal = 0x00402380
+    second_literal = 0x00402384
+    program = bytearray.fromhex(
+        "56 8b 44 24 08 "
+        "80 38 05 75 07 "
+        "be 80 23 40 00 eb 0c "
+        "80 38 06 75 07 "
+        "be 84 23 40 00 eb 00 "
+        "56 58 5e c3 5e c3"
+    )
+    if mutation == "wrong-first-compare":
+        program[6] = 0x39
+    elif mutation == "wrong-second-compare":
+        program[19] = 0x07
+    elif mutation == "missing-first-assignment":
+        program[10:15] = b"\x90" * 5
+    elif mutation == "partial-second-assignment":
+        program[22:27] = bytes.fromhex("66 be 84 23 90")
+    data[0x290 : 0x290 + len(program)] = program
+
+    # Keep the callback address-taken only.  The other table target owns the
+    # fixture export so incoming-domain closure does not rely on an export.
+    struct.pack_into("<I", data, 0x430, dummy - 0x00400000)
+    data[0x2D0] = 0xC3
+    if mutation == "extra-incoming":
+        displacement = callback - (dummy + 5)
+        data[0x2D0:0x2D6] = b"\xE8" + struct.pack("<i", displacement) + b"\xC3"
+    for index in range(16):
+        target = callback if index in {5, 6} else dummy
+        if mutation == "extra-index" and index == 7:
+            target = callback
+        struct.pack_into("<I", data, 0x700 + index * 4, target)
+    if mutation == "different-object":
+        # The final argument-zero PUSH no longer forwards dispatcher arg0.
+        data[0x211] = 0x50
+    data[0x780:0x788] = b"one\0two\0"
+    path.write_bytes(data)
+    image = pe.load(
+        path,
+        expected_sha256=hashlib.sha256(data).hexdigest(),
+        require_pe32_i386=True,
+    )
+    return (
+        image,
+        callback,
+        callback + 0x1D,
+        frozenset({first_literal, second_literal}),
+    )
+
+
+def narrow_private_stack_scalar_image(tmp_path, *, mutation=None):
+    """Confine one pointer-derived word to narrow scalar observations."""
+    assert mutation in {
+        None,
+        "full-address",
+        "partial-address",
+        "same-slot-redefinition",
+        "partial-redefinition-address",
+        "stack-address-escape",
+        "wide-output",
+    }
+    base = 0x00401080
+    protected = 0x00403000
+    program = bytearray(b"\x90" * 0x50)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 08")
+    cursor = emit(cursor, f"ba {protected.to_bytes(4, 'little').hex()}")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 14 24")
+    if mutation == "full-address":
+        cursor = emit(cursor, "8b 04 24 c6 00 00")
+    elif mutation == "partial-address":
+        cursor = emit(cursor, "66 8b 04 24 c6 00 00")
+    elif mutation == "stack-address-escape":
+        cursor = emit(cursor, "8b 4c 24 0c 8d 04 24 89 01")
+        cursor = emit(cursor, "8a 14 24 88 11")
+    elif mutation == "wide-output":
+        cursor = emit(cursor, "8b 44 24 0c 8b 14 24 89 10")
+    elif mutation in {
+        "same-slot-redefinition",
+        "partial-redefinition-address",
+    }:
+        cursor = emit(
+            cursor,
+            "66 89 54 24 01"
+            if mutation == "partial-redefinition-address"
+            else "66 89 14 24",
+        )
+        cursor = emit(
+            cursor,
+            "8b 04 24 c6 00 00"
+            if mutation == "partial-redefinition-address"
+            else "8b 44 24 0c 8a 14 24 88 10",
+        )
+    else:
+        cursor = emit(cursor, "8b 44 24 0c")
+        cursor = emit(cursor, "0f bf 14 24 81 c2 00 30 40 00 c6 02 00")
+    emit(cursor, "83 c4 08 c3")
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def x87_private_stack_scalar_image(
+    tmp_path,
+    *,
+    tainted_external_store=False,
+    control_store=False,
+):
+    """Store an x87 value disjointly, or export one loaded from the spill."""
+    base = 0x00401080
+    source = 0x00403000
+    destination = 0x00403010
+    program = bytearray(b"\x90" * 0x50)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 10")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 54 24 0c")
+    if tainted_external_store:
+        cursor = emit(cursor, "dd 44 24 08")
+        cursor = emit(cursor, f"dd 1d {destination.to_bytes(4, 'little').hex()}")
+    else:
+        cursor = emit(cursor, f"dd 05 {source.to_bytes(4, 'little').hex()}")
+        cursor = emit(cursor, "dd 1c 24")
+    if control_store:
+        cursor = emit(cursor, "d9 7c 24 08")
+    cursor = emit(cursor, "0f bf 44 24 0c")
+    emit(cursor, "83 c4 10 c3")
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def signed_stack_arithmetic_scalar_image(tmp_path, *, malformed=False):
+    """Allocate a scalar frame with ADD ESP and a negative immediate."""
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x30)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 c4 f4" if malformed else "83 c4 f0")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 54 24 04")
+    cursor = emit(cursor, "0f bf 44 24 04")
+    emit(cursor, "83 c4 10 c3")
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def nested_private_stack_scalar_image(tmp_path, *, reads_tainted_slot=False):
+    """Carry one local scalar over a leaf that reads another ancestor slot."""
+    base = 0x00401080
+    callee = base + 0x40
+    leaf = base + 0x80
+    program = bytearray(b"\x90" * 0xA0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 08")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 54 24 04")
+    cursor = emit_call(cursor, callee)
+    cursor = emit(cursor, "0f bf 44 24 04")
+    emit(cursor, "83 c4 08 c3")
+
+    cursor = emit_call(0x40, leaf)
+    emit(cursor, "c3")
+    emit(0x80, "8b 44 24 0c c3" if reads_tainted_slot else "8b 44 24 04 c3")
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def private_stack_scalar_stdcall_image(
+    tmp_path,
+    *,
+    import_kind="global-alloc",
+    reads_protected=False,
+    aliases_protected=False,
+):
+    """Carry one narrow scalar across an exact unresolved stdcall import."""
+    assert import_kind in {"global-alloc", "sync-enter"}
+    assert not (reads_protected and aliases_protected)
+    base = 0x00401080
+    callee = base + 0x40
+    iat = 0x00403020
+    program = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 08")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 54 24 04")
+    cursor = emit_call(cursor, callee)
+    cursor = emit(cursor, "0f bf 44 24 04")
+    emit(cursor, "83 c4 08 c3")
+
+    if import_kind == "global-alloc":
+        cursor = emit(0x40, "6a 20 6a 00")
+    elif aliases_protected:
+        cursor = emit(0x40, "8d 44 24 08 50")
+    else:
+        cursor = emit(0x40, "68 00 30 40 00")
+    call_address = base + cursor
+    cursor = emit(cursor, f"ff 15 {iat.to_bytes(4, 'little').hex()}")
+    if reads_protected:
+        cursor = emit(cursor, "8b 44 24 08")
+    emit(cursor, "c3")
+
+    image = load_large_cfg_program(tmp_path, program)
+    return (
+        replace(
+            image,
+            imports=(
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name=(
+                        "GlobalAlloc"
+                        if import_kind == "global-alloc"
+                        else "EnterCriticalSection"
+                    ),
+                    ordinal=None,
+                    hint=0,
+                    iat_va=iat,
+                ),
+            ),
+        ),
+        base,
+        store_address,
+        call_address,
+    )
+
+
+def finite_indirect_private_stack_scalar_image(tmp_path, *, hostile_target=False):
+    """Carry one narrow scalar through an exact two-target call domain."""
+    base = 0x00401080
+    first_callee = base + 0x40
+    second_callee = base + 0x70
+    program = bytearray(b"\x90" * 0xA0)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "83 ec 08")
+    store_address = base + cursor
+    cursor = emit(cursor, "66 89 54 24 04")
+    cursor = emit(cursor, f"b8 {first_callee.to_bytes(4, 'little').hex()}")
+    call_address = base + cursor
+    cursor = emit(cursor, "ff d0")
+    cursor = emit(cursor, "0f bf 44 24 04")
+    emit(cursor, "83 c4 08 c3")
+
+    cursor = emit_call(0x40, second_callee)
+    emit(cursor, "c3")
+    emit(0x70, "8b 44 24 08 c3" if hostile_target else "31 c0 c3")
+    return (
+        load_large_cfg_program(tmp_path, program),
+        base,
+        store_address,
+        call_address,
+        first_callee,
+        second_callee,
+    )
+
+
+def private_stack_system_time_field_image(tmp_path, *, mutation=None):
+    """Pass one initialized private-stack SYSTEMTIME to the typed API."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {
+        None,
+        "wrong-import",
+        "wrong-offset",
+        "wrong-argument",
+        "wide-store",
+    }
+    base = 0x00401080
+    iat = 0x00403020
+    program = bytearray(b"\x90" * 0x50)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "83 ec 10 8d 04 24 51")
+    cursor = emit(cursor, "57" if mutation == "wrong-argument" else "50")
+    store_address = base + cursor
+    cursor = emit(
+        cursor,
+        "89 7c 24 0c"
+        if mutation == "wide-store"
+        else "66 89 7c 24 18"
+        if mutation == "wrong-offset"
+        else "66 89 7c 24 0e",
+    )
+    call_address = base + cursor
+    cursor = emit(cursor, f"ff 15 {iat.to_bytes(4, 'little').hex()}")
+    emit(cursor, "83 c4 10 c3")
+    image = load_large_cfg_program(tmp_path, program)
+    return (
+        replace(
+            image,
+            imports=(
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name=(
+                        "FileTimeToSystemTime"
+                        if mutation == "wrong-import"
+                        else "SystemTimeToFileTime"
+                    ),
+                    ordinal=None,
+                    hint=0,
+                    iat_va=iat,
+                ),
+            ),
+        ),
+        base,
+        store_address,
+        call_address,
+    )
+
+
+def partial_register_linked_argument_image(tmp_path, *, mutation=None):
+    """Feed one closed list payload through a low-byte register overwrite."""
+    assert mutation in {
+        None,
+        "sentinel",
+        "payload-before-link",
+        "protected-prefix",
+        "unknown-payload",
+        "publish-before-payload",
+        "wrong-link",
+        "extra-head-writer",
+        "different-pushed-argument",
+        "static-sentinel",
+        "static-protected-prefix",
+        "static-missing-table-writer",
+        "static-mismatched-bound",
+        "untyped-fresh-wrapper",
+        "untyped-unknown-wrapper",
+    }
+    base = 0x00401080
+    callee = base + 0x40
+    reader = base + 0x80
+    publisher = base + 0xC0
+    payload_allocator = base + 0x140
+    node_allocator = base + 0x150
+    head_slot = 0x00402300
+    scalar_slot = 0x00402310
+    protected_slot = 0x00403078
+    program = bytearray(b"\x90" * 0x170)
+    relocation_offsets = []
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    def emit_short_branch(offset, opcode, target_offset):
+        program[offset] = opcode
+        displacement = target_offset - (offset + 2)
+        assert -0x80 <= displacement <= 0x7F
+        program[offset + 1] = displacement & 0xFF
+        return offset + 2
+
+    def emit_absolute(offset, opcode, value, immediate_offset):
+        start = offset
+        encoded = bytes.fromhex(opcode) + value.to_bytes(4, "little")
+        program[offset : offset + len(encoded)] = encoded
+        relocation_offsets.append(start + immediate_offset)
+        return offset + len(encoded)
+
+    cursor = 0
+    if mutation == "extra-head-writer":
+        cursor = emit_absolute(cursor, "89 0d", head_slot, 2)
+    cursor = emit_call(cursor, publisher)
+    cursor = emit_call(cursor, reader)
+    emit(cursor, "c3")
+
+    cursor = emit(0x40, "83 ec 04")
+    cursor = emit_absolute(cursor, "a0", scalar_slot, 1)
+    store_address = base + cursor
+    cursor = emit(cursor, "89 04 24 83 c4 04 c2 04 00")
+
+    cursor = emit(0x80, "53")
+    cursor = emit_absolute(cursor, "8b 1d", head_slot, 2)
+    cursor = emit(cursor, "85 db 74 0f 8b 43 04")
+    cursor = emit(cursor, "51" if mutation == "different-pushed-argument" else "50")
+    call_address = base + cursor
+    cursor = emit_call(cursor, callee)
+    cursor = emit(cursor, "8b 1b 85 db 75 ed 5b c3")
+
+    cursor = emit(0xC0, "53 57")
+    if mutation is not None and mutation.startswith("static-"):
+        base_slot = 0x00402320
+        table_slot = 0x00402324
+        cursor = emit(cursor, "56 31 d2")
+        cursor = emit_absolute(cursor, "8b 0d", base_slot, 2)
+        cursor = emit_absolute(cursor, "8b 3d", table_slot, 2)
+        builder_start = cursor
+        cursor = emit(cursor, "8b 1e 8d 04 0b")
+        cursor = emit(
+            cursor,
+            "90 90" if mutation == "static-missing-table-writer" else "89 07",
+        )
+        cursor = emit(cursor, "42 83 c6 04 83 c7 04")
+        cursor = emit(
+            cursor,
+            "83 fa 03"
+            if mutation == "static-mismatched-bound"
+            else "83 fa 02",
+        )
+        cursor = emit_short_branch(cursor, 0x7C, builder_start)
+        cursor = emit(cursor, "31 c9")
+        initializer_start = cursor
+        cursor = emit_absolute(cursor, "a1", table_slot, 1)
+        cursor = emit(cursor, "8b 34 88 89 f3 85 db")
+        skip_inner_branch = cursor
+        cursor += 2
+        inner_start = cursor
+        sentinel = (
+            0x00403000
+            if mutation == "static-protected-prefix"
+            else 0xFFFF_FFFF
+        )
+        cursor = emit(
+            cursor,
+            "c7 43 04 " + sentinel.to_bytes(4, "little").hex(),
+        )
+        cursor = emit(cursor, "8b 1b 85 db")
+        cursor = emit_short_branch(cursor, 0x75, inner_start)
+        outer_step = cursor
+        program[skip_inner_branch : skip_inner_branch + 2] = bytes(
+            (0x74, (outer_step - (skip_inner_branch + 2)) & 0xFF)
+        )
+        cursor = emit(cursor, "41 83 f9 02")
+        cursor = emit_short_branch(cursor, 0x7C, initializer_start)
+        cursor = emit_absolute(cursor, "a1", base_slot, 1)
+        cursor = emit(cursor, "8b 48 5c 01 c8")
+        cursor = emit_absolute(cursor, "a3", head_slot, 1)
+        emit(cursor, "5e 5f 5b c3")
+        return (
+            load_large_cfg_program(
+                tmp_path,
+                program,
+                relocation_offsets=relocation_offsets,
+            ),
+            callee,
+            store_address,
+            call_address,
+            {},
+            frozenset({protected_slot}),
+        )
+
+    payload_call = base + cursor
+    cursor = emit_call(cursor, payload_allocator)
+    if mutation == "sentinel":
+        cursor = emit(cursor, "bf ff ff ff ff")
+    elif mutation == "protected-prefix":
+        cursor = emit(cursor, "bf 00 30 40 00")
+    else:
+        cursor = emit(cursor, "89 c7")
+    node_call = base + cursor
+    cursor = emit_call(cursor, node_allocator)
+    cursor = emit_absolute(cursor, "8b 1d", head_slot, 2)
+    payload_store = (
+        "89 48 04" if mutation == "unknown-payload" else "89 78 04"
+    )
+    if mutation == "payload-before-link":
+        cursor = emit(cursor, payload_store)
+        cursor = emit(cursor, "89 18")
+        cursor = emit_absolute(cursor, "a3", head_slot, 1)
+    else:
+        cursor = emit(
+            cursor,
+            "89 58 08" if mutation == "wrong-link" else "89 18",
+        )
+    if mutation == "publish-before-payload":
+        cursor = emit_absolute(cursor, "a3", head_slot, 1)
+        cursor = emit(cursor, payload_store)
+    elif mutation != "payload-before-link":
+        cursor = emit(cursor, payload_store)
+        cursor = emit_absolute(cursor, "a3", head_slot, 1)
+    emit(cursor, "5f 5b c3")
+    if mutation in {"untyped-fresh-wrapper", "untyped-unknown-wrapper"}:
+        inner_payload_call = base + 0x140
+        inner_end = emit_call(0x140, node_allocator)
+        emit(inner_end, "c3")
+    else:
+        inner_payload_call = None
+        emit(0x140, "c3")
+    emit(0x150, "c3")
+    domains = {
+        node_call: ("fresh-allocation", frozenset()),
+    }
+    if mutation not in {"untyped-fresh-wrapper", "untyped-unknown-wrapper"}:
+        domains[payload_call] = ("fresh-allocation", frozenset())
+    if mutation == "untyped-fresh-wrapper":
+        assert inner_payload_call is not None
+        domains[inner_payload_call] = ("fresh-allocation", frozenset())
+
+    return (
+        load_large_cfg_program(
+            tmp_path,
+            program,
+            relocation_offsets=relocation_offsets,
+        ),
+        callee,
+        store_address,
+        call_address,
+        domains,
+        frozenset({protected_slot}),
+    )
+
+
+def partial_register_finite_low_slice_image(tmp_path, *, mutation=None):
+    """Store a full register after one finite low-byte stack reload."""
+    assert mutation in {None, "protected-low-byte", "unknown-low-byte"}
+    base = 0x00401080
+    program = bytearray(b"\x90" * 0x30)
+    cursor = 0
+
+    def emit(encoded):
+        nonlocal cursor
+        raw = bytes.fromhex(encoded)
+        program[cursor : cursor + len(raw)] = raw
+        cursor += len(raw)
+
+    emit("83 ec 08")
+    if mutation == "unknown-low-byte":
+        emit("88 0c 24")
+    else:
+        emit("c6 04 24 04" if mutation == "protected-low-byte" else "c6 04 24 00")
+    emit("8a 04 24")
+    store_address = base + cursor
+    emit("89 44 24 04 83 c4 08 c3")
+    return load_large_cfg_program(tmp_path, program), base, store_address
+
+
+def typed_narrow_import_argument_image(tmp_path, *, mutation=None):
+    """Pass only one loaded byte through a full x86 argument slot."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {
+        None,
+        "wrong-import",
+        "full-load",
+        "wrong-byte-lane",
+        "wrong-argument",
+    }
+    base = 0x00401080
+    iat = 0x00403020
+    program = bytearray(b"\x90" * 0x30)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    cursor = emit(0, "8b 4c 24 04")
+    cursor = emit(
+        cursor,
+        "8b 01"
+        if mutation == "full-load"
+        else "8a 21"
+        if mutation == "wrong-byte-lane"
+        else "8a 01",
+    )
+    if mutation == "wrong-argument":
+        cursor = emit(cursor, "50 51")
+    else:
+        cursor = emit(cursor, "50")
+    push_address = base + cursor - (2 if mutation == "wrong-argument" else 1)
+    call_address = base + cursor
+    cursor = emit(cursor, f"ff 15 {iat.to_bytes(4, 'little').hex()}")
+    emit(cursor, "c2 04 00")
+    image = load_large_cfg_program(tmp_path, program)
+    return (
+        replace(
+            image,
+            imports=(
+                pe_mod.Import(
+                    dll="KERNEL32.dll",
+                    name=(
+                        "IsDBCSLeadByteEx"
+                        if mutation == "wrong-import"
+                        else "IsDBCSLeadByte"
+                    ),
+                    ordinal=None,
+                    hint=0,
+                    iat_va=iat,
+                ),
+            ),
+        ),
+        base,
+        push_address,
+        call_address,
+    )
 
 
 def intrusive_list_count_image(tmp_path, *, mutation=None):
@@ -2405,6 +9292,59 @@ def test_strict_cw_exception_parser_accepts_packed_unaligned_fields():
     assert metadata.action_kinds == (1, 10, 16)
     assert metadata.direct_callbacks == (0x00401050, 0x00401060)
     assert metadata.continuation_targets == ((16, 0x00401070),)
+
+
+@pytest.mark.parametrize("open_data_reference", (False, True))
+def test_closed_call_result_ignores_only_exact_exception_range_reference(
+    open_data_reference,
+):
+    image = cw_exception_image()
+    data = bytearray(image.data)
+    caller = 0x00401080
+    call_address = caller
+    displacement = image.entrypoint - (call_address + 5)
+    data[caller - 0x00401000 : caller - 0x00401000 + 11] = (
+        b"\xe8"
+        + displacement.to_bytes(4, "little", signed=True)
+        + b"\xb8\0\0\0\0\xc3"
+    )
+    relocations = image.relocations
+    if open_data_reference:
+        data[0x180:0x184] = image.entrypoint.to_bytes(4, "little")
+        relocations = (*relocations, pe.Relocation(0x00402080, 3))
+    image = replace(
+        image,
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        relocations=relocations,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, (audit_anchor(image, caller),)),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery.cw_exception_metadata is not None
+    assert recovery.cw_exception_metadata.range_table == (
+        (image.entrypoint, 0x00402000),
+    )
+    assert recovery._raw_direct_call_sites(image.entrypoint) == {
+        call_address
+    }
+    assert set(
+        recovery.direct_call_sources_by_target.get(image.entrypoint, ())
+    ) == {call_address}
+    assert recovery._direct_call_domain_is_closed(image.entrypoint) is (
+        not open_data_reference
+    )
+    assert recovery._least_reachable_incoming_call_domain_is_closed(
+        image.entrypoint
+    ) is (not open_data_reference)
+    assert recovery._closed_direct_call_result_is_unused(
+        image.entrypoint,
+        "eax",
+    ) is (not open_data_reference)
 
 
 @pytest.mark.parametrize(
@@ -8195,6 +15135,9 @@ _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
         "push-after-esp-cursor-reassignment",
         "push-after-esp-remaining-reassignment",
         "canonical-frame-write",
+        "canonical-frame-write-after-long-block",
+        "canonical-frame-movsd-write",
+        "canonical-frame-movsd-protected-pivot",
         "private-stack-push",
         "descending-rep-stosd",
         "descending-rep-movsd",
@@ -8251,10 +15194,103 @@ _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
         "seal-external-owned-cross-block-partial-capability-escape",
         "seal-external-owned-xor-mask-capability-return",
         "seal-external-owned-xor-mask-disjoint-return",
+        "seal-closed-caller-unused-capability-return",
+        "seal-closed-caller-read-capability-return",
+        "seal-closed-caller-partial-read-capability-return",
+        "seal-closed-caller-branch-read-capability-return",
+        "seal-closed-caller-indirect-capability-return",
+        "seal-open-caller-unused-capability-return",
+        "seal-closed-multi-caller-unused-capability-return",
+        "seal-closed-multi-caller-read-capability-return",
+        "seal-closed-caller-fresh-callee-return",
+        "seal-closed-caller-derived-callee-return",
+        "seal-closed-caller-partial-derived-callee-return",
+        "seal-closed-caller-preserved-callee-return",
+        "seal-closed-caller-safe-preserved-return",
+        "seal-closed-caller-external-callee-arm",
+        "seal-closed-caller-masked-return",
+        "seal-closed-caller-partial-mask-return",
+        "seal-closed-caller-wide-mask-return",
+        "seal-closed-caller-byte-swapped-capability-return",
+        "seal-closed-caller-byte-reassembled-capability-return",
+        "seal-closed-caller-partial-byte-copy-return",
+        "seal-closed-caller-full-byte-copy-return",
+        "seal-closed-caller-byte-predicate-capability-return",
+        "seal-closed-caller-byte-predicate-local-word-copy",
+        "seal-closed-caller-byte-predicate-local-word-overwrite",
+        "seal-closed-caller-byte-predicate-full-read",
+        "seal-closed-multi-caller-byte-predicate-return",
+        "seal-closed-multi-caller-byte-predicate-full-read",
+        "seal-closed-private-stack-argument-copy",
+        "seal-closed-aligned-private-stack-argument-copy",
+        "seal-closed-masked-private-stack-argument-copy",
+        "seal-closed-unknown-argument-copy",
+        "seal-open-private-stack-argument-copy",
+        "seal-reachable-private-stack-reverse-copy",
+        "seal-reachable-private-stack-reverse-copy-protected-destination",
+        "seal-reachable-private-stack-reverse-copy-unbounded-count",
+        "seal-reachable-private-stack-reverse-copy-df-leak",
+        "seal-reachable-private-stack-zero-fill",
+        "seal-reachable-private-stack-zero-fill-protected-destination",
+        "seal-reachable-private-stack-zero-fill-unbounded-count",
+        "seal-reachable-private-stack-zero-fill-df-leak",
+        "seal-forward-fresh-loop",
+        "seal-forward-fresh-loop-byte-copy",
+        "seal-forward-fresh-loop-partial-mask",
+        "seal-forward-fresh-loop-partial-pivot",
         "seal-external-owned-capability-stack-spill-escape",
+        "seal-external-owned-capability-stack-spill-byte-predicate",
+        "seal-external-owned-capability-stack-spill-byte-repack",
+        "seal-external-owned-capability-stack-spill-byte-extract",
+        "seal-external-owned-capability-stack-spill-byte-widen",
+        "seal-external-owned-capability-stack-spill-byte-overwrite",
+        "seal-external-owned-capability-stack-spill-scalar-repack",
+        "seal-external-owned-capability-stack-spill-scalar-self-lea",
+        "seal-external-owned-capability-stack-spill-scalar-cross-lea-escape",
+        "seal-external-owned-capability-stack-spill-scalar-call-kill",
+        "seal-external-owned-capability-stack-spill-scalar-call-observe",
+        "seal-external-owned-capability-stack-spill-scalar-leaf-byte-output",
+        "seal-external-owned-capability-stack-spill-scalar-leaf-full-escape",
+        "seal-external-owned-capability-stack-spill-scalar-escape",
+        "seal-external-owned-capability-stack-spill-address-escape",
+        "seal-external-owned-capability-aligned-stack-spill-call",
+        "seal-external-owned-capability-aligned-stack-spill-callee-alias",
         "seal-external-owned-disjoint-stack-spill",
         "seal-external-owned-unknown-join-capability-destination",
         "seal-external-owned-xor-mask-disjoint-destination",
+        "seal-external-owned-disjoint-linked-writer",
+        "seal-external-owned-protected-linked-writer",
+        "seal-external-owned-byte-pack-late-x87",
+        "seal-external-owned-scalar-extend-late-x87",
+        "seal-external-owned-word-pack-after-x87",
+        "seal-external-owned-full-dword-byte-pack",
+        "seal-external-owned-register-extended-offset",
+        "seal-external-owned-wide-byte-pack",
+        "seal-external-owned-partial-word-mask-store",
+        "seal-external-owned-partial-shift-extract",
+        "seal-external-owned-partial-shift-full-store",
+        "seal-external-owned-partial-copy-scalar",
+        "seal-external-owned-partial-copy-protected",
+        "seal-external-owned-disjoint-immediate-push",
+        "seal-external-owned-disjoint-word-push",
+        "seal-external-owned-protected-word-push",
+        "seal-external-owned-unknown-word-push",
+        "seal-external-owned-private-stack-string-tail",
+        "seal-external-owned-private-stack-string-tail-overflow",
+        "seal-external-owned-private-stack-stos-tail",
+        "seal-external-owned-private-stack-stos-tail-overflow",
+        "seal-external-owned-reverse-scan-difference",
+        "seal-external-owned-reverse-scan-difference-wrong-base",
+        "seal-external-owned-reverse-scan-difference-wrong-return",
+        "seal-external-owned-protected-free-divide",
+        "seal-external-owned-protected-dividend",
+        "seal-external-owned-protected-divisor",
+        "seal-external-owned-protected-free-signed-divide",
+        "seal-external-owned-protected-signed-dividend",
+        "seal-external-owned-protected-signed-divisor",
+        "seal-external-owned-protected-signed-high-half",
+        "seal-external-owned-partial-signed-divide",
+        "seal-external-owned-memory-signed-divisor",
         "seal-grow-forbidden-callback-write",
         "seal-allocator-sibling-descriptor-write",
         "seal-session-reset",
@@ -8266,6 +15302,8 @@ _RETURN_PATH_PUBLICATION_MUTATIONS = frozenset(
         "seal-descriptor-rebuild-extra-write",
         "seal-descriptor-rebuild-wrong-loop",
         "seal-sibling-descriptor-allocator",
+        "seal-sibling-descriptor-allocation-copy",
+        "seal-sibling-descriptor-allocation-copy-wrong-remaining",
         "seal-sibling-descriptor-initializer",
     }
 )
@@ -8594,6 +15632,230 @@ def return_path_publication_lifecycle_image(
         elif mutation == "transaction-reconverging-unresolved-jump":
             cursor = emit(cursor, "31 c0 ff e0")
             patch_short(transaction_bad_branch, cursor)
+    closed_caller_return_mutations = {
+        "seal-closed-caller-unused-capability-return",
+        "seal-closed-caller-read-capability-return",
+        "seal-closed-caller-partial-read-capability-return",
+        "seal-closed-caller-branch-read-capability-return",
+        "seal-closed-caller-indirect-capability-return",
+        "seal-open-caller-unused-capability-return",
+        "seal-closed-multi-caller-unused-capability-return",
+        "seal-closed-multi-caller-read-capability-return",
+        "seal-closed-caller-fresh-callee-return",
+        "seal-closed-caller-derived-callee-return",
+        "seal-closed-caller-partial-derived-callee-return",
+        "seal-closed-caller-preserved-callee-return",
+        "seal-closed-caller-safe-preserved-return",
+        "seal-closed-caller-external-callee-arm",
+        "seal-closed-caller-masked-return",
+        "seal-closed-caller-partial-mask-return",
+        "seal-closed-caller-wide-mask-return",
+        "seal-closed-caller-byte-swapped-capability-return",
+        "seal-closed-caller-byte-reassembled-capability-return",
+        "seal-closed-caller-partial-byte-copy-return",
+        "seal-closed-caller-full-byte-copy-return",
+        "seal-closed-caller-byte-predicate-capability-return",
+        "seal-closed-caller-byte-predicate-local-word-copy",
+        "seal-closed-caller-byte-predicate-local-word-overwrite",
+        "seal-closed-caller-byte-predicate-full-read",
+        "seal-closed-multi-caller-byte-predicate-return",
+        "seal-closed-multi-caller-byte-predicate-full-read",
+    }
+    closed_argument_copy_mutations = {
+        "seal-closed-private-stack-argument-copy",
+        "seal-closed-aligned-private-stack-argument-copy",
+        "seal-closed-masked-private-stack-argument-copy",
+        "seal-closed-unknown-argument-copy",
+        "seal-open-private-stack-argument-copy",
+    }
+    private_stack_chain_copy_mutations = {
+        "seal-reachable-private-stack-reverse-copy",
+        "seal-reachable-private-stack-reverse-copy-protected-destination",
+        "seal-reachable-private-stack-reverse-copy-unbounded-count",
+        "seal-reachable-private-stack-reverse-copy-df-leak",
+    }
+    private_stack_zero_fill_mutations = {
+        "seal-reachable-private-stack-zero-fill",
+        "seal-reachable-private-stack-zero-fill-protected-destination",
+        "seal-reachable-private-stack-zero-fill-unbounded-count",
+        "seal-reachable-private-stack-zero-fill-df-leak",
+    }
+    private_stack_string_tail_mutations = {
+        "seal-external-owned-private-stack-string-tail",
+        "seal-external-owned-private-stack-string-tail-overflow",
+        "seal-external-owned-private-stack-stos-tail",
+        "seal-external-owned-private-stack-stos-tail-overflow",
+    }
+    partial_shift_extract_mutations = {
+        "seal-external-owned-partial-shift-extract",
+        "seal-external-owned-partial-shift-full-store",
+    }
+    partial_register_copy_mutations = {
+        "seal-external-owned-partial-copy-scalar",
+        "seal-external-owned-partial-copy-protected",
+    }
+    disjoint_immediate_push_mutations = {
+        "seal-external-owned-disjoint-immediate-push",
+    }
+    partial_word_push_mutations = {
+        "seal-external-owned-disjoint-word-push",
+        "seal-external-owned-protected-word-push",
+        "seal-external-owned-unknown-word-push",
+    }
+    if mutation in closed_caller_return_mutations:
+        if mutation == "seal-closed-caller-safe-preserved-return":
+            cursor = emit(cursor, "31 c0")
+        cursor = emit_call(cursor, transaction_untrusted_helper)
+        if mutation == "seal-closed-caller-read-capability-return":
+            cursor = emit(cursor, "85 c0")
+        elif mutation == "seal-closed-caller-partial-read-capability-return":
+            cursor = emit(cursor, "b0 00 85 c0")
+        elif mutation == "seal-closed-caller-branch-read-capability-return":
+            cursor = emit_abs(cursor, "83 3d", branch_flag, "00")
+            skip_read = cursor
+            cursor = emit(cursor, "74 00 85 c0")
+            patch_short(skip_read, cursor)
+        elif mutation == "seal-closed-caller-indirect-capability-return":
+            cursor = emit(cursor, "ff e0")
+        elif mutation == "seal-closed-caller-safe-preserved-return":
+            cursor = emit(cursor, "85 c0")
+        elif mutation in {
+            "seal-closed-caller-fresh-callee-return",
+            "seal-closed-caller-derived-callee-return",
+            "seal-closed-caller-partial-derived-callee-return",
+            "seal-closed-caller-preserved-callee-return",
+            "seal-closed-caller-external-callee-arm",
+        }:
+            cursor = emit_call(cursor, second_session_helper)
+            cursor = emit(cursor, "50 58")
+        elif mutation in {
+            "seal-closed-caller-masked-return",
+            "seal-closed-caller-partial-mask-return",
+            "seal-closed-caller-wide-mask-return",
+        }:
+            cursor = emit(cursor, "85 c0")
+        elif mutation in {
+            "seal-closed-caller-byte-swapped-capability-return",
+            "seal-closed-caller-byte-reassembled-capability-return",
+        }:
+            cursor = emit(
+                cursor,
+                (
+                    "89 c1 89 c2 89 c6 25 ff 00 00 00 81 e1 00 ff 00 00 "
+                    "81 e2 00 00 ff 00 81 e6 00 00 00 ff c1 e0 18 c1 e1 08 "
+                    "c1 ea 08 c1 ee 18 09 c1 09 d1 09 f1"
+                    if mutation.endswith("swapped-capability-return")
+                    else
+                    "89 c1 89 c2 89 c6 25 ff 00 00 00 81 e1 00 ff 00 00 "
+                    "81 e2 00 00 ff 00 81 e6 00 00 00 ff 09 c1 09 d1 09 f1"
+                ),
+            )
+            cursor = emit_abs(cursor, "89 0d", unrelated_write_slot + 4)
+        elif mutation in {
+            "seal-closed-caller-partial-byte-copy-return",
+            "seal-closed-caller-full-byte-copy-return",
+        }:
+            cursor = emit(
+                cursor,
+                "88 c1 84 c9"
+                if mutation.endswith("partial-byte-copy-return")
+                else "89 c1 84 c9",
+            )
+        elif mutation in {
+            "seal-closed-caller-byte-predicate-capability-return",
+            "seal-closed-caller-byte-predicate-local-word-copy",
+            "seal-closed-caller-byte-predicate-local-word-overwrite",
+            "seal-closed-caller-byte-predicate-full-read",
+            "seal-closed-multi-caller-byte-predicate-return",
+            "seal-closed-multi-caller-byte-predicate-full-read",
+        }:
+            cursor = emit(cursor, "84 c0")
+            if mutation == (
+                "seal-closed-caller-byte-predicate-local-word-overwrite"
+            ):
+                cursor = emit(cursor, "66 b8 02 00 66 83 f8 02")
+            elif mutation == (
+                "seal-closed-caller-byte-predicate-local-word-copy"
+            ):
+                cursor = emit(cursor, "66 89 c8 66 83 f8 02")
+            elif mutation.endswith("full-read"):
+                cursor = emit(cursor, "85 c0")
+        cursor = emit(cursor, "b8 00 00 00 00")
+        if mutation.startswith("seal-closed-multi-caller-"):
+            cursor = emit_call(cursor, second_session_helper)
+            cursor = emit(cursor, "b8 00 00 00 00")
+    if mutation in closed_argument_copy_mutations:
+        if mutation == "seal-closed-unknown-argument-copy":
+            cursor = emit(cursor, "51")
+        elif mutation in {
+            "seal-closed-aligned-private-stack-argument-copy",
+            "seal-closed-masked-private-stack-argument-copy",
+        }:
+            cursor = emit(cursor, "55 89 e5")
+            cursor = emit(
+                cursor,
+                (
+                    "83 e4 f8"
+                    if mutation
+                    == "seal-closed-aligned-private-stack-argument-copy"
+                    else "81 e4 04 30 40 00"
+                ),
+            )
+            cursor = emit(cursor, "83 ec 04 8d 04 24 50")
+        else:
+            cursor = emit(cursor, "83 ec 04 8d 04 24 50")
+        cursor = emit_call(cursor, transaction_untrusted_helper)
+        if mutation == "seal-closed-unknown-argument-copy":
+            cursor = emit(cursor, "59")
+        elif mutation in {
+            "seal-closed-aligned-private-stack-argument-copy",
+            "seal-closed-masked-private-stack-argument-copy",
+        }:
+            cursor = emit(cursor, "83 c4 08 89 ec 5d")
+        else:
+            cursor = emit(cursor, "83 c4 08")
+    if mutation in {
+        "seal-forward-fresh-loop",
+        "seal-forward-fresh-loop-byte-copy",
+        "seal-forward-fresh-loop-partial-mask",
+        "seal-forward-fresh-loop-partial-pivot",
+    }:
+        cursor = emit_call(cursor, transaction_untrusted_helper)
+        cursor = emit(cursor, "89 c7")
+        if mutation == "seal-forward-fresh-loop-partial-pivot":
+            cursor = emit(cursor, "66 bf 04 30")
+        elif mutation == "seal-forward-fresh-loop-partial-mask":
+            cursor = emit(cursor, "66 81 e7 ff ff")
+        cursor = emit(cursor, "b9 02 00 00 00")
+        loop_store = cursor
+        cursor = emit(
+            cursor,
+            (
+                "8a 06 88 07 47 49 75 00"
+                if mutation == "seal-forward-fresh-loop-byte-copy"
+                else "c6 07 00 47 49 75 00"
+            ),
+        )
+        patch_short(cursor - 2, loop_store)
+    if mutation in {
+        "seal-sibling-descriptor-allocation-copy",
+        "seal-sibling-descriptor-allocation-copy-wrong-remaining",
+    }:
+        cursor = emit(cursor, "6a 08")
+        cursor = emit_call(cursor, transaction_untrusted_helper)
+        cursor = emit(cursor, "59 89 c7")
+        cursor = emit_abs(cursor, "be", unrelated_write_slot)
+        cursor = emit(cursor, "b9 02 00 00 00 f3 a5")
+    if mutation in private_stack_string_tail_mutations:
+        cursor = emit_call(cursor, transaction_untrusted_helper)
+    if mutation in partial_shift_extract_mutations:
+        cursor = emit_call(cursor, transaction_untrusted_helper)
+    if mutation in partial_register_copy_mutations:
+        cursor = emit_call(cursor, transaction_untrusted_helper)
+    if mutation in disjoint_immediate_push_mutations:
+        cursor = emit_call(cursor, transaction_untrusted_helper)
+    if mutation in partial_word_push_mutations:
+        cursor = emit_call(cursor, transaction_untrusted_helper)
     if mutation in {"callback-slot-overwrite"}:
         start = cursor
         cursor = emit_abs(cursor, "c7 05", callback_slot)
@@ -8652,11 +15914,26 @@ def return_path_publication_lifecycle_image(
         cursor = emit(cursor, "89 e2")
         cursor = emit_abs(cursor, "bc", push_stack_target + 4)
         cursor = emit(cursor, "50 89 d4")
-    if mutation == "canonical-frame-write":
+    if mutation in {
+        "canonical-frame-write",
+        "canonical-frame-write-after-long-block",
+    }:
         cursor = emit(
             cursor,
-            "55 89 e5 83 ec 04 c7 45 fc 00 00 00 00 89 ec 5d",
+            "55 89 e5 83 ec 04",
         )
+        if mutation == "canonical-frame-write-after-long-block":
+            for _ in range(65):
+                cursor = emit(cursor, "90")
+        cursor = emit(cursor, "c7 45 fc 00 00 00 00 89 ec 5d")
+    if mutation in {
+        "canonical-frame-movsd-write",
+        "canonical-frame-movsd-protected-pivot",
+    }:
+        cursor = emit(cursor, "55 89 e5 83 ec 0c 8d 75 f4 8d 7d f8 a5")
+        if mutation == "canonical-frame-movsd-protected-pivot":
+            cursor = emit_abs(cursor, "bf", callback_slot)
+        cursor = emit(cursor, "a5 89 ec 5d")
     if mutation == "private-stack-push":
         cursor = emit(cursor, "50 58")
     if mutation in {"descending-rep-stosd", "descending-rep-movsd"}:
@@ -8701,6 +15978,22 @@ def return_path_publication_lifecycle_image(
         cursor = emit(cursor, "fd")
         cursor = emit_call(cursor, second_session_helper)
         cursor = emit(cursor, "fc")
+    if mutation in private_stack_zero_fill_mutations:
+        cursor = emit(cursor, "83 ec 60 8d 04 24")
+        cursor = emit(
+            cursor,
+            (
+                "ff 74 24 64"
+                if mutation.endswith("unbounded-count")
+                else "6a 5c"
+            ),
+        )
+        if mutation.endswith("protected-destination"):
+            cursor = emit_abs(cursor, "68", callback_slot)
+        else:
+            cursor = emit(cursor, "50")
+        cursor = emit_call(cursor, transaction_untrusted_helper)
+        cursor = emit(cursor, "83 c4 68")
     if mutation != "lifecycle-root-outside-backend":
         cursor = emit_call(cursor, incoming_owners[0])
     if mutation not in {"incoming-owner-outside-backend", "split-backend-union"}:
@@ -8887,12 +16180,149 @@ def return_path_publication_lifecycle_image(
             + " c3",
         )
     elif mutation in {
+        "seal-forward-fresh-loop",
+        "seal-forward-fresh-loop-byte-copy",
+        "seal-forward-fresh-loop-partial-mask",
+        "seal-forward-fresh-loop-partial-pivot",
+    }:
+        emit(transaction_untrusted_helper, "31 c0 c3")
+    elif mutation in closed_caller_return_mutations:
+        if mutation == "seal-closed-caller-safe-preserved-return":
+            emit(transaction_untrusted_helper, "b0 00 c3")
+        elif mutation in {
+            "seal-closed-caller-partial-byte-copy-return",
+            "seal-closed-caller-full-byte-copy-return",
+        }:
+            left = 0x6A09_E667
+            cursor = emit(
+                transaction_untrusted_helper,
+                "b8 "
+                + left.to_bytes(4, "little").hex()
+                + " 35 "
+                + (left ^ callback_slot).to_bytes(4, "little").hex(),
+            )
+            emit(
+                cursor,
+                "b0 " + bytes((callback_slot & 0xFF,)).hex() + " c3",
+            )
+        elif mutation in {
+            "seal-closed-caller-masked-return",
+            "seal-closed-caller-partial-mask-return",
+            "seal-closed-caller-wide-mask-return",
+        }:
+            cursor = emit_abs(
+                transaction_untrusted_helper,
+                "b8",
+                callback_slot,
+            )
+            cursor = emit(cursor, "85 c9 75 03 31 c0 c3 66 8b 00")
+            if mutation == "seal-closed-caller-masked-return":
+                cursor = emit(cursor, "25 ff 00 00 00")
+            elif mutation == "seal-closed-caller-partial-mask-return":
+                cursor = emit(cursor, "24 ff")
+            else:
+                cursor = emit(cursor, "25 ff ff ff ff")
+            emit(cursor, "c3")
+        else:
+            left = 0x6A09_E667
+            cursor = emit(
+                transaction_untrusted_helper,
+                "b8 "
+                + left.to_bytes(4, "little").hex()
+                + " 35 "
+                + (left ^ callback_slot).to_bytes(4, "little").hex(),
+            )
+            emit(cursor, "c3")
+    elif mutation in closed_argument_copy_mutations:
+        cursor = emit(
+            transaction_untrusted_helper,
+            "56 57 83 ec 10 c7 04 24 00 00 00 00 "
+            "8b 74 24 1c 8d 3e 8d 34 24 a5 40 a5 a5 a5 "
+            "83 c4 10 5f 5e c3",
+        )
+        assert cursor == transaction_untrusted_helper + 0x20
+    elif mutation in private_stack_chain_copy_mutations:
+        private_stack_forwarder = transaction_untrusted_helper + 0x40
+        private_stack_copy = transaction_untrusted_helper + 0x80
+        cursor = emit(transaction_untrusted_helper, "8b 44 24 04 50")
+        cursor = emit_call(cursor, private_stack_forwarder)
+        emit(cursor, "83 c4 04 c3")
+
+        cursor = emit(private_stack_forwarder, "53 56 8b 74 24 0c")
+        cursor = emit(
+            cursor,
+            "8b 1e"
+            if mutation.endswith("unbounded-count")
+            else "0f b6 1e",
+        )
+        cursor = emit(cursor, "8d 46 01 53 50 56")
+        cursor = emit_call(cursor, private_stack_copy)
+        emit(cursor, "83 c4 0c 5e 5b c3")
+
+        cursor = emit(
+            private_stack_copy,
+            "8b 7c 24 04 8b 74 24 08 8b 4c 24 0c fd f3 a4",
+        )
+        emit(cursor, "c3" if mutation.endswith("df-leak") else "fc c3")
+
+        # Deliberate dead residue: raw E8 bytes are not an owned call and must
+        # not erase the exact returning-closure argument proof.
+        cursor = emit(0x004014D0, "90 90")
+        cursor = emit_call(cursor, private_stack_copy)
+        emit(cursor, "90")
+    elif mutation in private_stack_zero_fill_mutations:
+        cursor = emit(
+            transaction_untrusted_helper,
+            "31 c0 57 8b 4c 24 0c 8b 7c 24 08",
+        )
+        if mutation.endswith("df-leak"):
+            cursor = emit(cursor, "fd")
+        cursor = emit(cursor, "f3 aa 5f c3")
+
+        # This dead raw E8 keeps the helper's image-wide incoming domain
+        # deliberately open.  Only the selected backend invocation may
+        # supply contextual private-stack authority.
+        cursor = emit(0x004014D0, "90 90")
+        cursor = emit_call(cursor, transaction_untrusted_helper)
+        emit(cursor, "90")
+    elif mutation in {
         "seal-external-owned-capability-stack-spill-escape",
+        "seal-external-owned-capability-stack-spill-byte-predicate",
+        "seal-external-owned-capability-stack-spill-byte-repack",
+        "seal-external-owned-capability-stack-spill-byte-extract",
+        "seal-external-owned-capability-stack-spill-byte-widen",
+        "seal-external-owned-capability-stack-spill-byte-overwrite",
+        "seal-external-owned-capability-stack-spill-scalar-repack",
+        "seal-external-owned-capability-stack-spill-scalar-self-lea",
+        "seal-external-owned-capability-stack-spill-scalar-cross-lea-escape",
+        "seal-external-owned-capability-stack-spill-scalar-call-kill",
+        "seal-external-owned-capability-stack-spill-scalar-call-observe",
+        "seal-external-owned-capability-stack-spill-scalar-leaf-byte-output",
+        "seal-external-owned-capability-stack-spill-scalar-leaf-full-escape",
+        "seal-external-owned-capability-stack-spill-scalar-escape",
+        "seal-external-owned-capability-stack-spill-address-escape",
         "seal-external-owned-disjoint-stack-spill",
     }:
         spilled = (
             callback_slot
-            if mutation == "seal-external-owned-capability-stack-spill-escape"
+            if mutation
+            in {
+                "seal-external-owned-capability-stack-spill-escape",
+                "seal-external-owned-capability-stack-spill-byte-predicate",
+                "seal-external-owned-capability-stack-spill-byte-repack",
+                "seal-external-owned-capability-stack-spill-byte-extract",
+                "seal-external-owned-capability-stack-spill-byte-widen",
+                "seal-external-owned-capability-stack-spill-byte-overwrite",
+                "seal-external-owned-capability-stack-spill-scalar-repack",
+                "seal-external-owned-capability-stack-spill-scalar-self-lea",
+                "seal-external-owned-capability-stack-spill-scalar-cross-lea-escape",
+                "seal-external-owned-capability-stack-spill-scalar-call-kill",
+                "seal-external-owned-capability-stack-spill-scalar-call-observe",
+                "seal-external-owned-capability-stack-spill-scalar-leaf-byte-output",
+                "seal-external-owned-capability-stack-spill-scalar-leaf-full-escape",
+                "seal-external-owned-capability-stack-spill-scalar-escape",
+                "seal-external-owned-capability-stack-spill-address-escape",
+            }
             else unrelated_write_slot
         )
         left = 0xBB67_AE85
@@ -8902,13 +16332,123 @@ def return_path_publication_lifecycle_image(
             + left.to_bytes(4, "little").hex()
             + " 35 "
             + (left ^ spilled).to_bytes(4, "little").hex()
+            + (
+                " b0 " + bytes((spilled & 0xFF,)).hex()
+                if mutation
+                not in {
+                    "seal-external-owned-disjoint-stack-spill",
+                    "seal-external-owned-capability-stack-spill-scalar-repack",
+                    "seal-external-owned-capability-stack-spill-scalar-self-lea",
+                    "seal-external-owned-capability-stack-spill-scalar-cross-lea-escape",
+                    "seal-external-owned-capability-stack-spill-scalar-call-kill",
+                    "seal-external-owned-capability-stack-spill-scalar-call-observe",
+                    "seal-external-owned-capability-stack-spill-scalar-leaf-byte-output",
+                    "seal-external-owned-capability-stack-spill-scalar-leaf-full-escape",
+                    "seal-external-owned-capability-stack-spill-scalar-escape",
+                }
+                else ""
+            )
             + " 83 ec 04 89 04 24",
         )
         if mutation == "seal-external-owned-capability-stack-spill-escape":
             cursor = emit(cursor, "8b 0c 24 51")
             cursor = emit_abs(cursor, "ff 15", unlisted_iat)
             cursor = emit(cursor, "83 c4 04")
+        elif mutation == "seal-external-owned-capability-stack-spill-byte-predicate":
+            cursor = emit(cursor, "80 3c 24 00")
+        elif mutation == "seal-external-owned-capability-stack-spill-byte-repack":
+            cursor = emit(
+                cursor,
+                "8a 04 24 83 ec 04 89 04 24 80 3c 24 00 83 c4 04",
+            )
+        elif mutation == "seal-external-owned-capability-stack-spill-byte-extract":
+            cursor = emit(cursor, "8b 04 24")
+            cursor = emit_abs(cursor, "a2", unrelated_write_slot)
+            cursor = emit(cursor, "31 c0")
+        elif mutation == "seal-external-owned-capability-stack-spill-byte-widen":
+            cursor = emit(cursor, "0f b6 0c 24 85 c9")
+        elif mutation == "seal-external-owned-capability-stack-spill-byte-overwrite":
+            cursor = emit(cursor, "c6 04 24 00 80 3c 24 00")
+        elif mutation == "seal-external-owned-capability-stack-spill-scalar-repack":
+            cursor = emit(
+                cursor,
+                "8b 0c 24 83 ec 04 89 0c 24 ff 0c 24 83 3c 24 00 "
+                "83 c4 04 31 c9",
+            )
+        elif mutation == "seal-external-owned-capability-stack-spill-scalar-self-lea":
+            cursor = emit(cursor, "8b 0c 24 8d 09 83 f9 00 31 c9")
+        elif mutation == "seal-external-owned-capability-stack-spill-scalar-cross-lea-escape":
+            cursor = emit(cursor, "8b 0c 24 8d 11 52")
+            cursor = emit_abs(cursor, "ff 15", unlisted_iat)
+            cursor = emit(cursor, "83 c4 04")
+        elif mutation in {
+            "seal-external-owned-capability-stack-spill-scalar-call-kill",
+            "seal-external-owned-capability-stack-spill-scalar-call-observe",
+        }:
+            leaf_helper = transaction_untrusted_helper + 0x80
+            cursor = emit(cursor, "8b 0c 24")
+            cursor = emit_call(cursor, leaf_helper)
+            cursor = emit(cursor, "31 c9")
+            leaf_cursor = leaf_helper
+            if mutation.endswith("call-observe"):
+                leaf_cursor = emit_abs(
+                    leaf_cursor,
+                    "89 0d",
+                    unrelated_write_slot,
+                )
+            emit(leaf_cursor, "31 c9 c3")
+        elif mutation in {
+            "seal-external-owned-capability-stack-spill-scalar-leaf-byte-output",
+            "seal-external-owned-capability-stack-spill-scalar-leaf-full-escape",
+        }:
+            leaf_helper = transaction_untrusted_helper + 0x80
+            cursor = emit(cursor, "ff 34 24")
+            cursor = emit_call(cursor, leaf_helper)
+            cursor = emit_abs(cursor, "a2", unrelated_write_slot)
+            cursor = emit(cursor, "31 c0")
+            leaf_cursor = emit(leaf_helper, "8b 44 24 04")
+            if mutation.endswith("full-escape"):
+                leaf_cursor = emit_abs(
+                    leaf_cursor,
+                    "a3",
+                    unrelated_write_slot,
+                )
+            emit(leaf_cursor, "f7 d8 c2 04 00")
+        elif mutation == "seal-external-owned-capability-stack-spill-scalar-escape":
+            cursor = emit(cursor, "8b 0c 24 51")
+            cursor = emit_abs(cursor, "ff 15", unlisted_iat)
+            cursor = emit(cursor, "83 c4 04")
+        elif mutation == "seal-external-owned-capability-stack-spill-address-escape":
+            cursor = emit(cursor, "8d 0c 24 51")
+            cursor = emit_abs(cursor, "ff 15", unlisted_iat)
+            cursor = emit(cursor, "83 c4 04")
         emit(cursor, "83 c4 04 31 c0 c3")
+    elif mutation in {
+        "seal-external-owned-capability-aligned-stack-spill-call",
+        "seal-external-owned-capability-aligned-stack-spill-callee-alias",
+    }:
+        leaf_helper = transaction_untrusted_helper + 0x80
+        left = 0xBB67_AE85
+        cursor = emit(
+            transaction_untrusted_helper,
+            "55 89 e5 83 ec 10 83 e4 f8 b8 "
+            + left.to_bytes(4, "little").hex()
+            + " 35 "
+            + (left ^ callback_slot).to_bytes(4, "little").hex()
+            + " b0 "
+            + bytes((callback_slot & 0xFF,)).hex()
+            + " 89 44 24 04 6a 00",
+        )
+        cursor = emit_call(cursor, leaf_helper)
+        emit(cursor, "80 7c 24 04 00 89 ec 5d 31 c0 c3")
+        emit(
+            leaf_helper,
+            (
+                "8b 44 24 0c c2 04 00"
+                if mutation.endswith("callee-alias")
+                else "8b 44 24 04 c2 04 00"
+            ),
+        )
     elif mutation == "seal-external-owned-unknown-join-capability-destination":
         cursor = emit_abs(
             transaction_untrusted_helper,
@@ -8942,6 +16482,245 @@ def return_path_publication_lifecycle_image(
             + (left ^ unrelated_write_slot).to_bytes(4, "little").hex(),
         )
         emit(cursor, "c7 00 00 00 00 00 c3")
+    elif mutation in {
+        "seal-external-owned-disjoint-linked-writer",
+        "seal-external-owned-protected-linked-writer",
+    }:
+        cursor = emit_abs(
+            transaction_untrusted_helper,
+            "83 3d",
+            branch_flag,
+            "00",
+        )
+        static_branch = cursor
+        cursor = emit(cursor, "74 00")
+        if mutation == "seal-external-owned-protected-linked-writer":
+            cursor = emit_abs(cursor, "b8", callback_slot)
+        else:
+            cursor = emit(cursor, "6a 54 6a 00")
+            cursor = emit_abs(cursor, "ff 15", iat_vas["GlobalAlloc"])
+            cursor = emit(cursor, "83 c4 08")
+        join_branch = cursor
+        cursor = emit(cursor, "eb 00")
+        patch_short(static_branch, cursor)
+        cursor = emit_abs(cursor, "a1", unrelated_write_slot)
+        patch_short(join_branch, cursor)
+        emit(cursor, "c7 40 04 00 00 00 00 c3")
+    elif mutation == "seal-external-owned-byte-pack-late-x87":
+        cursor = emit(transaction_untrusted_helper, "83 ec 04")
+        cursor = emit_abs(cursor, "a0", unrelated_write_slot)
+        cursor = emit(cursor, "c0 e0 04 88 c3")
+        cursor = emit_abs(cursor, "a0", unrelated_write_slot + 1)
+        emit(cursor, "24 0f 08 d8 88 04 24 d9 2c 24 83 c4 04 31 c0 c3")
+    elif mutation == "seal-external-owned-scalar-extend-late-x87":
+        cursor = emit(transaction_untrusted_helper, "83 ec 04")
+        cursor = emit_abs(cursor, "0f bf 05", unrelated_write_slot)
+        cursor = emit_abs(cursor, "0f b6 0d", unrelated_write_slot + 2)
+        cursor = emit(cursor, "ba 12 00 00 00 29 ca 29 d0 89 04 24")
+        emit(cursor, "d9 2c 24 83 c4 04 31 c0 c3")
+    elif mutation == "seal-external-owned-word-pack-after-x87":
+        cursor = emit(transaction_untrusted_helper, "83 ec 04 d9 2c 24")
+        cursor = emit_abs(cursor, "a0", unrelated_write_slot)
+        cursor = emit(cursor, "88 c4 c0 e8 04 66 25 0f 0f 66 0d 30 30")
+        cursor = emit_abs(cursor, "66 a3", unrelated_write_slot + 4)
+        emit(cursor, "83 c4 04 31 c0 c3")
+    elif mutation == "seal-external-owned-full-dword-byte-pack":
+        cursor = emit(transaction_untrusted_helper, "8b 44 24 04")
+        cursor = emit(
+            cursor,
+            "89 c1 89 c2 89 c6 25 ff 00 00 00 81 e1 00 ff 00 00 "
+            "81 e2 00 00 ff 00 81 e6 00 00 00 ff c1 e0 18 c1 e1 08 "
+            "c1 ea 08 c1 ee 18 09 c1 09 d1 09 f1",
+        )
+        cursor = emit_abs(cursor, "89 0d", unrelated_write_slot + 4)
+        emit(cursor, "31 c0 c3")
+    elif mutation == "seal-external-owned-register-extended-offset":
+        cursor = emit_abs(transaction_untrusted_helper, "66 8b 1d", unrelated_write_slot)
+        cursor = emit(cursor, "0f b7 c3")
+        cursor = emit_abs(cursor, "03 05", unrelated_write_slot + 4)
+        cursor = emit_abs(cursor, "a3", unrelated_write_slot + 8)
+        emit(cursor, "31 c0 c3")
+    elif mutation == "seal-external-owned-wide-byte-pack":
+        cursor = emit_abs(transaction_untrusted_helper, "0f b6 15", unrelated_write_slot)
+        cursor = emit_abs(cursor, "0f b6 0d", unrelated_write_slot + 1)
+        cursor = emit_abs(cursor, "0f b6 05", unrelated_write_slot + 2)
+        cursor = emit(cursor, "c1 e2 08 c1 e1 10 09 ca 09 c2")
+        cursor = emit_abs(cursor, "89 15", unrelated_write_slot + 4)
+        emit(cursor, "31 c0 c3")
+    elif mutation == "seal-external-owned-partial-word-mask-store":
+        cursor = emit(
+            transaction_untrusted_helper,
+            "8d 44 24 04 66 8b 00 25 fd ff ff ff",
+        )
+        cursor = emit_abs(cursor, "66 a3", unrelated_write_slot + 4)
+        emit(cursor, "31 c0 c3")
+    elif mutation in partial_shift_extract_mutations:
+        cursor = emit(transaction_untrusted_helper, "83 ec 04")
+        cursor = emit_abs(cursor, "a1", callback_slot)
+        cursor = emit(cursor, "c1 f8 10 24 ff")
+        cursor = emit(
+            cursor,
+            "89 04 24"
+            if mutation.endswith("full-store")
+            else "88 04 24",
+        )
+        emit(cursor, "31 c0 83 c4 04 c3")
+    elif mutation in partial_register_copy_mutations:
+        cursor = emit_abs(
+            transaction_untrusted_helper,
+            "a1",
+            (
+                callback_slot
+                if mutation.endswith("protected")
+                else unrelated_write_slot
+            ),
+        )
+        cursor = emit(cursor, "88 c1 80 e1 ff")
+        cursor = emit_abs(cursor, "88 0d", unrelated_write_slot + 8)
+        emit(cursor, "31 c0 c3")
+    elif mutation in disjoint_immediate_push_mutations:
+        cursor = emit_abs(
+            transaction_untrusted_helper,
+            "68",
+            unrelated_write_slot,
+        )
+        emit(cursor, "58 31 c0 c3")
+    elif mutation in partial_word_push_mutations:
+        cursor = transaction_untrusted_helper
+        if mutation == "seal-external-owned-unknown-word-push":
+            cursor = emit_abs(
+                cursor,
+                "66 89 0d",
+                unrelated_write_slot,
+            )
+        cursor = emit_abs(
+            cursor,
+            "66 8b 15",
+            unrelated_write_slot,
+        )
+        emit(cursor, "52 5a 31 c0 c3")
+    elif mutation in {
+        "seal-external-owned-private-stack-string-tail",
+        "seal-external-owned-private-stack-string-tail-overflow",
+    }:
+        destination_offset = (
+            0x47
+            if mutation.endswith("overflow")
+            else 0x20
+        )
+        copy_count = 1 if mutation.endswith("overflow") else 3
+        cursor = emit(
+            transaction_untrusted_helper,
+            "53 56 57 83 ec 40 8d 74 24 10 8d 7c 24 "
+            + bytes((destination_offset,)).hex()
+            + " b9 "
+            + copy_count.to_bytes(4, "little").hex()
+            + " f3 a5 53 66 a5 5b 83 c4 40 5f 5e 5b 31 c0 c3",
+        )
+    elif mutation in {
+        "seal-external-owned-private-stack-stos-tail",
+        "seal-external-owned-private-stack-stos-tail-overflow",
+    }:
+        destination_offset = (
+            0x17
+            if mutation.endswith("overflow")
+            else 0
+        )
+        cursor = emit(
+            transaction_untrusted_helper,
+            "53 57 83 ec 10 8d 7c 24 "
+            + bytes((destination_offset,)).hex()
+            + " 31 c0 ab ab ab 66 ab 83 c4 10 5f 5b 31 c0 c3",
+        )
+    elif mutation in {
+        "seal-external-owned-reverse-scan-difference",
+        "seal-external-owned-reverse-scan-difference-wrong-base",
+        "seal-external-owned-reverse-scan-difference-wrong-return",
+    }:
+        leaf_helper = transaction_untrusted_helper + 0x80
+        cursor = emit(transaction_untrusted_helper, "83 ec 08")
+        cursor = emit_abs(cursor, "a1", unrelated_write_slot)
+        cursor = emit(cursor, "89 04 24 6a 04 6a 0a ff 74 24 08")
+        cursor = emit_call(cursor, leaf_helper)
+        cursor = emit(cursor, "89 c6 83 c4 0c 85 f6")
+        zero_branch = cursor
+        cursor = emit(cursor, "74 00 40")
+        cursor = emit(
+            cursor,
+            (
+                "2b 44 24 04"
+                if mutation.endswith("wrong-base")
+                else "2b 04 24"
+            ),
+        )
+        cursor = emit(cursor, "89 44 24 04")
+        patch_short(zero_branch, cursor)
+        emit(cursor, "83 c4 08 31 c0 c3")
+
+        cursor = emit(
+            leaf_helper,
+            "31 d2 57 8b 7c 24 08 8b 44 24 0c 8b 4c 24 10 "
+            "8d 7c 0f ff fd f2 ae fc 75 03",
+        )
+        cursor = emit(
+            cursor,
+            (
+                "8d 57 02"
+                if mutation.endswith("wrong-return")
+                else "8d 57 01"
+            ),
+        )
+        emit(cursor, "89 d0 5f c3")
+    elif mutation in {
+        "seal-external-owned-protected-free-divide",
+        "seal-external-owned-protected-dividend",
+        "seal-external-owned-protected-divisor",
+    }:
+        if mutation == "seal-external-owned-protected-dividend":
+            cursor = emit_abs(transaction_untrusted_helper, "b8", callback_slot)
+        else:
+            cursor = emit_abs(transaction_untrusted_helper, "a1", unrelated_write_slot)
+        cursor = emit(cursor, "31 d2")
+        cursor = emit_abs(
+            cursor,
+            "b9",
+            (
+                callback_slot
+                if mutation == "seal-external-owned-protected-divisor"
+                else unrelated_write_slot + 8
+            ),
+        )
+        emit(cursor, "f7 f1 c3")
+    elif mutation in {
+        "seal-external-owned-protected-free-signed-divide",
+        "seal-external-owned-protected-signed-dividend",
+        "seal-external-owned-protected-signed-divisor",
+        "seal-external-owned-protected-signed-high-half",
+        "seal-external-owned-partial-signed-divide",
+        "seal-external-owned-memory-signed-divisor",
+    }:
+        if mutation == "seal-external-owned-protected-signed-dividend":
+            cursor = emit_abs(transaction_untrusted_helper, "b8", callback_slot)
+        else:
+            cursor = emit_abs(transaction_untrusted_helper, "a1", unrelated_write_slot)
+        if mutation == "seal-external-owned-protected-signed-high-half":
+            cursor = emit_abs(cursor, "8b 15", callback_slot)
+        else:
+            cursor = emit(cursor, "99")
+        cursor = emit_abs(
+            cursor,
+            "b9",
+            (
+                callback_slot
+                if mutation == "seal-external-owned-protected-signed-divisor"
+                else unrelated_write_slot + 8
+            ),
+        )
+        divide = {
+            "seal-external-owned-partial-signed-divide": "66 f7 f9",
+            "seal-external-owned-memory-signed-divisor": "f7 3c 24",
+        }.get(mutation, "f7 f9")
+        emit(cursor, f"{divide} c3")
     elif mutation == "backend-helper-transitive-df-leak":
         emit(transaction_untrusted_helper, "fd c3")
     elif mutation in {
@@ -8980,20 +16759,30 @@ def return_path_publication_lifecycle_image(
         emit(cursor, "c3")
         patch_short(rebuild_empty, cursor)
         patch_short(rebuild_back, rebuild_loop)
-    elif mutation == "seal-sibling-descriptor-allocator":
+    elif mutation in {
+        "seal-sibling-descriptor-allocator",
+        "seal-sibling-descriptor-allocation-copy",
+        "seal-sibling-descriptor-allocation-copy-wrong-remaining",
+    }:
         descriptor = second_heap_descriptor
+        remaining_offset = (
+            20
+            if mutation
+            == "seal-sibling-descriptor-allocation-copy-wrong-remaining"
+            else 16
+        )
         cursor = emit(
             transaction_untrusted_helper,
             "53 8b 5c 24 08 81 e3 f8 ff ff ff 83 c3 08",
         )
-        cursor = emit_abs(cursor, "39 1d", descriptor + 16)
+        cursor = emit_abs(cursor, "39 1d", descriptor + remaining_offset)
         enough_space = cursor
         cursor = emit(cursor, "7d 00 53")
         cursor = emit_abs(cursor, "68", descriptor)
         cursor = emit_call(cursor, grow_target)
         cursor = emit(cursor, "59 59")
         allocation = cursor
-        cursor = emit_abs(cursor, "29 1d", descriptor + 16)
+        cursor = emit_abs(cursor, "29 1d", descriptor + remaining_offset)
         cursor = emit_abs(cursor, "a1", descriptor + 12)
         cursor = emit_abs(cursor, "01 1d", descriptor + 12)
         emit(cursor, "5b c3")
@@ -9129,7 +16918,20 @@ def return_path_publication_lifecycle_image(
     # The helper receives the scalar loaded from root+0x16. It copies that
     # opaque value to an unrelated global and exercises the exact import set.
     cursor = helper_target
-    if mutation == "flags-query-prologue-save":
+    if mutation in private_stack_chain_copy_mutations:
+        if mutation.endswith("protected-destination"):
+            cursor = emit_abs(cursor, "68", callback_slot)
+        else:
+            cursor = emit(cursor, "83 ec 80 8d 04 24 50")
+        cursor = emit_call(cursor, transaction_untrusted_helper)
+        cursor = emit(
+            cursor,
+            "83 c4 04"
+            if mutation.endswith("protected-destination")
+            else "83 c4 84",
+        )
+        cursor = emit(cursor, "8b 44 24 04")
+    elif mutation == "flags-query-prologue-save":
         cursor = emit(cursor, "53 8b 44 24 08")
     elif mutation == "returning-unresolved-indirect":
         cursor = emit(cursor, "8b 44 24 04 ff d0")
@@ -9468,6 +17270,53 @@ def return_path_publication_lifecycle_image(
     elif mutation == "backend-df-set-before-helper-write":
         cursor = emit_abs(second_session_helper, "bf", callback_slot + 4)
         emit(cursor, "b9 02 00 00 00 f3 ab c3")
+    elif mutation == "seal-closed-caller-fresh-callee-return":
+        emit(second_session_helper, "b8 00 00 00 00 c3")
+    elif mutation in {
+        "seal-closed-caller-derived-callee-return",
+        "seal-closed-caller-partial-derived-callee-return",
+    }:
+        cursor = emit_abs(
+            second_session_helper,
+            (
+                "a1"
+                if mutation == "seal-closed-caller-derived-callee-return"
+                else "a0"
+            ),
+            unrelated_write_slot,
+        )
+        emit(cursor, "05 0a 00 00 00 c3")
+    elif mutation == "seal-closed-caller-external-callee-arm":
+        cursor = emit_abs(
+            second_session_helper,
+            "83 3d",
+            branch_flag,
+            "00",
+        )
+        external_branch = cursor
+        cursor = emit(cursor, "75 00")
+        patch_short(external_branch, session_helper)
+        emit(cursor, "b8 00 00 00 00 c3")
+    elif mutation in {
+        "seal-closed-multi-caller-unused-capability-return",
+        "seal-closed-multi-caller-read-capability-return",
+        "seal-closed-multi-caller-byte-predicate-return",
+        "seal-closed-multi-caller-byte-predicate-full-read",
+    }:
+        cursor = emit_call(
+            second_session_helper,
+            transaction_untrusted_helper,
+        )
+        if mutation == "seal-closed-multi-caller-read-capability-return":
+            cursor = emit(cursor, "85 c0")
+        elif mutation in {
+            "seal-closed-multi-caller-byte-predicate-return",
+            "seal-closed-multi-caller-byte-predicate-full-read",
+        }:
+            cursor = emit(cursor, "84 c0")
+            if mutation.endswith("full-read"):
+                cursor = emit(cursor, "85 c0")
+        emit(cursor, "b8 00 00 00 00 c3")
     else:
         emit(second_session_helper, "c3")
 
@@ -9478,6 +17327,48 @@ def return_path_publication_lifecycle_image(
         cursor = emit(cursor, default_callback.to_bytes(4, "little").hex())
         cursor = emit_abs(cursor, "c7 05", callback_slot)
         emit(cursor, "00 00 00 00 c3")
+    if mutation == "seal-open-caller-unused-capability-return":
+        struct.pack_into(
+            "<I",
+            data,
+            0xC00 + unrelated_write_slot - data_va,
+            transaction_untrusted_helper,
+        )
+        relocation_vas.add(unrelated_write_slot)
+    if mutation == "seal-open-private-stack-argument-copy":
+        struct.pack_into(
+            "<I",
+            data,
+            0xC00 + unrelated_write_slot - data_va,
+            transaction_untrusted_helper,
+        )
+        relocation_vas.add(unrelated_write_slot)
+    if mutation == "seal-external-owned-protected-word-push":
+        struct.pack_into(
+            "<H",
+            data,
+            0xC00 + unrelated_write_slot - data_va,
+            callback_slot & 0xFFFF,
+        )
+    if mutation in {
+        "seal-external-owned-disjoint-linked-writer",
+        "seal-external-owned-protected-linked-writer",
+    }:
+        first_node = data_va + 0x500
+        second_node = data_va + 0x600
+        struct.pack_into(
+            "<I",
+            data,
+            0xC00 + unrelated_write_slot - data_va,
+            first_node,
+        )
+        struct.pack_into(
+            "<I",
+            data,
+            0xC00 + first_node + 0x50 - data_va,
+            second_node,
+        )
+        relocation_vas.update({unrelated_write_slot, first_node + 0x50})
 
     if mutation == "unowned-raw-incoming-call":
         emit_call(0x00401700, publishing_consumer)
@@ -9619,14 +17510,63 @@ def return_path_publication_lifecycle_image(
                     "seal-external-owned-xor-mask-capability-return",
                     "seal-external-owned-xor-mask-disjoint-return",
                     "seal-external-owned-capability-stack-spill-escape",
+                    "seal-external-owned-capability-stack-spill-byte-predicate",
+                    "seal-external-owned-capability-stack-spill-byte-repack",
+                    "seal-external-owned-capability-stack-spill-byte-extract",
+                    "seal-external-owned-capability-stack-spill-byte-widen",
+                    "seal-external-owned-capability-stack-spill-byte-overwrite",
+                    "seal-external-owned-capability-stack-spill-scalar-repack",
+                    "seal-external-owned-capability-stack-spill-scalar-self-lea",
+                    "seal-external-owned-capability-stack-spill-scalar-cross-lea-escape",
+                    "seal-external-owned-capability-stack-spill-scalar-call-kill",
+                    "seal-external-owned-capability-stack-spill-scalar-call-observe",
+                    "seal-external-owned-capability-stack-spill-scalar-leaf-byte-output",
+                    "seal-external-owned-capability-stack-spill-scalar-leaf-full-escape",
+                    "seal-external-owned-capability-stack-spill-scalar-escape",
+                    "seal-external-owned-capability-stack-spill-address-escape",
+                    "seal-external-owned-capability-aligned-stack-spill-call",
+                    "seal-external-owned-capability-aligned-stack-spill-callee-alias",
                     "seal-external-owned-disjoint-stack-spill",
                     "seal-external-owned-unknown-join-capability-destination",
                     "seal-external-owned-xor-mask-disjoint-destination",
+                    "seal-external-owned-disjoint-linked-writer",
+                    "seal-external-owned-protected-linked-writer",
+                    "seal-external-owned-byte-pack-late-x87",
+                    "seal-external-owned-scalar-extend-late-x87",
+                    "seal-external-owned-word-pack-after-x87",
+                    "seal-external-owned-full-dword-byte-pack",
+                    "seal-external-owned-register-extended-offset",
+                    "seal-external-owned-wide-byte-pack",
+                    "seal-external-owned-partial-word-mask-store",
+                    "seal-external-owned-partial-shift-extract",
+                    "seal-external-owned-partial-shift-full-store",
+                    "seal-external-owned-partial-copy-scalar",
+                    "seal-external-owned-partial-copy-protected",
+                    "seal-external-owned-disjoint-immediate-push",
+                    "seal-external-owned-disjoint-word-push",
+                    "seal-external-owned-protected-word-push",
+                    "seal-external-owned-unknown-word-push",
+                    "seal-external-owned-private-stack-string-tail",
+                    "seal-external-owned-private-stack-string-tail-overflow",
+                    "seal-external-owned-reverse-scan-difference",
+                    "seal-external-owned-reverse-scan-difference-wrong-base",
+                    "seal-external-owned-reverse-scan-difference-wrong-return",
+                    "seal-external-owned-protected-free-divide",
+                    "seal-external-owned-protected-dividend",
+                    "seal-external-owned-protected-divisor",
+                    "seal-external-owned-protected-free-signed-divide",
+                    "seal-external-owned-protected-signed-dividend",
+                    "seal-external-owned-protected-signed-divisor",
+                    "seal-external-owned-protected-signed-high-half",
+                    "seal-external-owned-partial-signed-divide",
+                    "seal-external-owned-memory-signed-divisor",
                     "seal-descriptor-rebuild",
                     "seal-descriptor-rebuild-wrong-source",
                     "seal-descriptor-rebuild-extra-write",
                     "seal-descriptor-rebuild-wrong-loop",
                     "seal-sibling-descriptor-allocator",
+                    "seal-sibling-descriptor-allocation-copy",
+                    "seal-sibling-descriptor-allocation-copy-wrong-remaining",
                     "seal-sibling-descriptor-initializer",
                 }
                 else []
@@ -15289,6 +23229,7 @@ def test_allocator_session_evidence_is_not_totality():
         "push-after-esp-remaining-reassignment",
         "descending-rep-stosd",
         "descending-rep-movsd",
+        "canonical-frame-movsd-protected-pivot",
         "wrapping-rep-stosd",
         "system-allocator-callback-return",
         "system-allocator-cursor-return",
@@ -15327,6 +23268,8 @@ def test_return_path_publication_failure_callback_requires_bound_session(
         "cmpxchg-unrelated-slot",
         "stosd-unrelated-slot",
         "canonical-frame-write",
+        "canonical-frame-write-after-long-block",
+        "canonical-frame-movsd-write",
         "private-stack-push",
         "clear-restored-rep-stosd",
         "session-finite-helper-benign",
@@ -15356,6 +23299,36 @@ def test_return_path_publication_accepts_disjoint_semantic_backend_write(
         cfg.jump_table_at(transfer).guard_operator
         for transfer in fixture.transfers
     } == {"movzx-lifecycle-domain"}
+
+
+def test_capability_seal_accepts_long_block_private_stack_write():
+    """A summary cap cannot turn an exact private frame into image state."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="canonical-frame-write-after-long-block"
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+    recovery = result.recovery
+    stores = tuple(
+        address
+        for address in recovery._function_instruction_addresses(
+            fixture.backend_root
+        )
+        if (
+            decoded := recovery._owned_decoded(address)
+        ).mnemonic == "mov"
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].size == 4
+        and decoded.operands[0].mem.base == capstone.x86.X86_REG_EBP
+        and decoded.operands[0].mem.disp == -4
+    )
+    assert len(stores) == 1
+    assert recovery._semantic_register_has_private_stack_identity(
+        stores[0], "ebp", fixture.backend_root
+    )
+
+    assert result.certificate is not None
 
 
 def test_backend_bridge_binds_finite_indirect_semantic_scope():
@@ -31219,7 +39192,14 @@ def test_session_capability_seal_accepts_untrusted_call_without_capability():
         "seal-external-owned-cross-block-partial-capability-escape",
         "seal-external-owned-xor-mask-capability-return",
         "seal-external-owned-capability-stack-spill-escape",
+        "seal-external-owned-capability-stack-spill-address-escape",
+        "seal-external-owned-capability-stack-spill-scalar-escape",
+        "seal-external-owned-capability-stack-spill-scalar-cross-lea-escape",
+        "seal-external-owned-capability-stack-spill-scalar-call-observe",
+        "seal-external-owned-capability-stack-spill-scalar-leaf-full-escape",
+        "seal-external-owned-capability-aligned-stack-spill-callee-alias",
         "seal-external-owned-unknown-join-capability-destination",
+        "seal-external-owned-protected-linked-writer",
     ),
 )
 def test_session_capability_seal_rejects_external_owned_protected_writer(
@@ -31244,6 +39224,794 @@ def test_session_capability_seal_accepts_disjoint_synthesized_destination():
     assert result.certificate is not None
 
 
+def test_session_capability_seal_accepts_disjoint_linked_destination():
+    """A sealed nonprotected link cannot acquire allocator-slot authority."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-external-owned-disjoint-linked-writer"
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-external-owned-disjoint-linked-writer", True),
+        ("seal-external-owned-protected-linked-writer", False),
+    ),
+)
+def test_register_capability_free_distinguishes_protected_slot_lineage(
+    mutation,
+    expected,
+):
+    """A protected-specific proof keeps safe image pointers ordinary."""
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    result = _direct_return_path_publication_certificate(fixture)
+    recovery = result.recovery
+    function_entry = 0x00401400
+    writes = tuple(
+        address
+        for address in recovery._function_instruction_addresses(
+            function_entry
+        )
+        if (
+            decoded := recovery._owned_decoded(address)
+        ).mnemonic == "mov"
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].mem.base == capstone.x86.X86_REG_EAX
+        and decoded.operands[0].mem.disp == 4
+    )
+    assert len(writes) == 1
+    call_return_domains = {
+        address: ("fresh-allocation", frozenset())
+        for address in recovery._function_instruction_addresses(
+            function_entry
+        )
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_CALL)
+    }
+
+    assert recovery._register_is_proven_image_capability_free_before(
+        writes[0],
+        "eax",
+        function_entry,
+        call_return_domains=call_return_domains,
+        protected_slots=frozenset({fixture.callback_slot}),
+        protected_only=True,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("sentinel", True),
+        ("payload-before-link", True),
+        ("protected-prefix", False),
+        ("unknown-payload", False),
+        ("publish-before-payload", False),
+        ("wrong-link", False),
+        ("extra-head-writer", False),
+        ("different-pushed-argument", False),
+        ("static-sentinel", True),
+        ("static-protected-prefix", False),
+        ("static-missing-table-writer", False),
+        ("static-mismatched-bound", False),
+        ("untyped-fresh-wrapper", True),
+        ("untyped-unknown-wrapper", False),
+    ),
+)
+def test_partial_register_linked_argument_closes_protected_prefix(
+    tmp_path,
+    mutation,
+    expected,
+):
+    (
+        image,
+        function_entry,
+        store_address,
+        call_address,
+        call_return_domains,
+        protected_slots,
+    ) = partial_register_linked_argument_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery.direct_call_targets_by_source[call_address] == function_entry
+    store = recovery._owned_decoded(store_address)
+    assert store.bytes == b"\x89\x04\x24"
+    assert recovery._partial_register_linked_argument_is_protected_prefix_free_before(
+        store_address,
+        "eax",
+        function_entry,
+        call_return_domains=call_return_domains,
+        protected_slots=protected_slots,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("protected-low-byte", False),
+        ("unknown-low-byte", False),
+    ),
+)
+def test_partial_register_finite_low_slice_excludes_protected_prefix(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, store_address = (
+        partial_register_finite_low_slice_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._partial_register_finite_low_slice_is_protected_free_before(
+        store_address,
+        "eax",
+        function_entry,
+        frozenset({0x00403004}),
+    ) is expected
+
+
+def test_partial_register_scalar_proof_stops_at_observation():
+    """A later unsupported x87 operation cannot taint an earlier byte."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-external-owned-byte-pack-late-x87"
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+    recovery = result.recovery
+    function_entry = 0x00401400
+    stores = tuple(
+        address
+        for address in recovery._function_instruction_addresses(
+            function_entry
+        )
+        if (
+            decoded := recovery._owned_decoded(address)
+        ).mnemonic == "mov"
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].size == 1
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].reg == capstone.x86.X86_REG_AL
+    )
+    assert len(stores) == 1
+    store = recovery._owned_decoded(stores[0])
+
+    assert recovery._partial_register_load_is_scalar_before(
+        store.address,
+        store.operands[1],
+        function_entry,
+    )
+
+
+def test_protected_capability_proof_accepts_extended_input_scalar():
+    """Narrow input scalars remain slot-disjoint through full arithmetic."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-external-owned-scalar-extend-late-x87"
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+    recovery = result.recovery
+    function_entry = 0x00401400
+    stores = tuple(
+        address
+        for address in recovery._function_instruction_addresses(
+            function_entry
+        )
+        if (
+            decoded := recovery._owned_decoded(address)
+        ).mnemonic == "mov"
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].size == 4
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].reg == capstone.x86.X86_REG_EAX
+    )
+    assert len(stores) == 1
+
+    assert recovery._register_is_proven_image_capability_free_before(
+        stores[0],
+        "eax",
+        function_entry,
+        call_return_domains={},
+        protected_slots=frozenset({fixture.callback_slot}),
+        protected_only=True,
+    )
+def test_partial_register_scalar_proof_preserves_gprs_across_x87_setup():
+    """An x87-only setup instruction cannot invalidate a packed word."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-external-owned-word-pack-after-x87"
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+    recovery = result.recovery
+    function_entry = 0x00401400
+    stores = tuple(
+        address
+        for address in recovery._function_instruction_addresses(
+            function_entry
+        )
+        if (
+            decoded := recovery._owned_decoded(address)
+        ).mnemonic == "mov"
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].size == 2
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].reg == capstone.x86.X86_REG_AX
+    )
+    assert len(stores) == 1
+    store = recovery._owned_decoded(stores[0])
+
+    assert recovery._partial_register_load_is_scalar_before(
+        store.address,
+        store.operands[1],
+        function_entry,
+    )
+
+
+def test_protected_capability_proof_tracks_full_dword_byte_pack():
+    """A scalar payload remains protected-free through a byte permutation."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-external-owned-full-dword-byte-pack"
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+    recovery = result.recovery
+    function_entry = 0x00401400
+    stores = tuple(
+        address
+        for address in recovery._function_instruction_addresses(
+            function_entry
+        )
+        if (
+            decoded := recovery._owned_decoded(address)
+        ).mnemonic == "mov"
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].size == 4
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].reg == capstone.x86.X86_REG_ECX
+    )
+    assert len(stores) == 1
+
+    assert result.certificate is not None
+    assert recovery._register_is_proven_image_capability_free_before(
+        stores[0],
+        "ecx",
+        function_entry,
+        call_return_domains={},
+        protected_slots=frozenset({fixture.callback_slot}),
+        protected_only=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-closed-caller-byte-swapped-capability-return", True),
+        ("seal-closed-caller-byte-reassembled-capability-return", False),
+    ),
+)
+def test_capability_seal_proves_call_result_byte_permutation(
+    mutation,
+    expected,
+):
+    """Only a permutation disjoint from every sealed slot is harmless."""
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    result = _direct_return_path_publication_certificate(fixture)
+    recovery = result.recovery
+    stores = tuple(
+        address
+        for address in recovery._function_instruction_addresses(
+            fixture.backend_root
+        )
+        if (
+            decoded := recovery._owned_decoded(address)
+        ).id == capstone.x86.X86_INS_MOV
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].size == 4
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].reg == capstone.x86.X86_REG_ECX
+    )
+
+    assert len(stores) == 1
+    assert recovery._register_bit_permutation_is_disjoint_from_slots_before(
+        stores[0],
+        "ecx",
+        fixture.backend_root,
+        frozenset({fixture.callback_slot}),
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-closed-caller-partial-byte-copy-return", True),
+        ("seal-closed-caller-full-byte-copy-return", False),
+    ),
+)
+def test_capability_seal_tracks_partial_scalar_return_copy(
+    mutation,
+    expected,
+):
+    """A scalar AL result may be copied, but residual EAX may not be."""
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.recovery._function_return_slice_is_independently_scalar(
+        0x00401400,
+        capstone.x86.X86_REG_AL,
+        1,
+    )
+    assert not result.recovery._function_return_slice_is_independently_scalar(
+        0x00401400,
+        capstone.x86.X86_REG_AX,
+        2,
+    )
+    assert (result.certificate is not None) is expected
+
+
+def test_protected_capability_proof_tracks_register_extended_offset():
+    """A narrowed register scalar can offset an ordinary payload pointer."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-external-owned-register-extended-offset"
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+    recovery = result.recovery
+    function_entry = 0x00401400
+    stores = tuple(
+        address
+        for address in recovery._function_instruction_addresses(
+            function_entry
+        )
+        if (
+            decoded := recovery._owned_decoded(address)
+        ).mnemonic == "mov"
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].size == 4
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].reg == capstone.x86.X86_REG_EAX
+    )
+    assert len(stores) == 1
+
+    assert result.certificate is not None
+    assert recovery._register_is_proven_image_capability_free_before(
+        stores[0],
+        "eax",
+        function_entry,
+        call_return_domains={},
+        protected_slots=frozenset({fixture.callback_slot}),
+        protected_only=True,
+    )
+    assert not recovery._register_is_proven_image_capability_free_before(
+        stores[0],
+        "eax",
+        function_entry,
+        call_return_domains={},
+        protected_slots=frozenset({0x1234}),
+        protected_only=True,
+    )
+
+
+def test_capability_seal_bounds_wide_byte_pack_enumeration():
+    """Optional exact enumeration may cap before a scalar taint proof."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-external-owned-wide-byte-pack"
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+
+
+def test_partial_register_scalar_proof_tracks_full_width_mask():
+    """A full-width mask preserves a narrow scalar register slice."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-external-owned-partial-word-mask-store"
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+    recovery = result.recovery
+    function_entry = 0x00401400
+    stores = tuple(
+        address
+        for address in recovery._function_instruction_addresses(
+            function_entry
+        )
+        if (
+            decoded := recovery._owned_decoded(address)
+        ).mnemonic == "mov"
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].size == 2
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].reg == capstone.x86.X86_REG_AX
+    )
+    assert len(stores) == 1
+    store = recovery._owned_decoded(stores[0])
+
+    assert result.certificate is not None
+    recovery.partial_register_scalar_state_cache[
+        (
+            function_entry,
+            store.address,
+            len(recovery.instructions),
+            recovery.control_flow_revision,
+        )
+    ] = None
+    assert recovery._partial_register_load_is_scalar_before(
+        store.address,
+        store.operands[1],
+        function_entry,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-external-owned-private-stack-string-tail", True),
+        ("seal-external-owned-private-stack-string-tail-overflow", False),
+    ),
+)
+def test_capability_seal_bounds_private_stack_string_tail(
+    mutation,
+    expected,
+):
+    """Implicit string increments cannot leave the allocated frame."""
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert (result.certificate is not None) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-external-owned-private-stack-stos-tail", True),
+        ("seal-external-owned-private-stack-stos-tail-overflow", False),
+    ),
+)
+def test_capability_seal_bounds_private_stack_stos_tail(
+    mutation,
+    expected,
+):
+    """Implicit STOS increments must remain inside one allocated frame."""
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert (result.certificate is not None) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-external-owned-partial-shift-extract", True),
+        ("seal-external-owned-partial-shift-full-store", False),
+    ),
+)
+def test_capability_seal_tracks_partial_shift_extraction(
+    mutation,
+    expected,
+):
+    """A shifted byte is scalar, but the whole register remains tainted."""
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert (result.certificate is not None) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-external-owned-partial-copy-scalar", True),
+        ("seal-external-owned-partial-copy-protected", False),
+    ),
+)
+def test_capability_seal_tracks_partial_register_copy(
+    mutation,
+    expected,
+):
+    """A copied byte inherits only its exact source-slice authority."""
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert (result.certificate is not None) is expected
+
+
+def test_capability_seal_skips_recursive_reader_for_disjoint_immediate(
+    monkeypatch,
+):
+    """An exact disjoint value must not enter the recursive reader proof."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-external-owned-disjoint-immediate-push"
+    )
+    original = (
+        _DirectCfgRecovery._closed_read_only_direct_call_argument_for_push
+    )
+
+    def reject_disjoint_probe(self, push_address, *args, **kwargs):
+        decoded = self._owned_decoded(push_address)
+        if (
+            decoded.mnemonic == "push"
+            and len(decoded.operands) == 1
+            and decoded.operands[0].type == capstone.x86.X86_OP_IMM
+            and decoded.operands[0].imm & 0xFFFF_FFFF == 0x004030D0
+        ):
+            raise AssertionError("disjoint immediate entered reader proof")
+        return original(self, push_address, *args, **kwargs)
+
+    monkeypatch.setattr(
+        _DirectCfgRecovery,
+        "_closed_read_only_direct_call_argument_for_push",
+        reject_disjoint_probe,
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert any(
+        result.recovery._owned_decoded(address).bytes == b"\x68\xd0\x30\x40\x00"
+        for address in result.recovery._function_instruction_addresses(
+            0x00401400
+        )
+    )
+    assert result.certificate is not None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-external-owned-disjoint-word-push", True),
+        ("seal-external-owned-protected-word-push", False),
+        ("seal-external-owned-unknown-word-push", False),
+    ),
+)
+def test_capability_seal_bounds_partial_word_push_prefix(
+    mutation,
+    expected,
+):
+    """A closed low word must be disjoint for every retained high word."""
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    result = _direct_return_path_publication_certificate(fixture)
+    function_entry = 0x00401400
+    pushes = tuple(
+        address
+        for address in result.recovery._function_instruction_addresses(
+            function_entry
+        )
+        if (
+            decoded := result.recovery._owned_decoded(address)
+        ).id
+        == capstone.x86.X86_INS_PUSH
+        and len(decoded.operands) == 1
+        and decoded.operands[0].type == capstone.x86.X86_OP_REG
+        and result.recovery._register_family(decoded.operands[0].reg)
+        == "edx"
+    )
+
+    assert len(pushes) == 1
+    assert result.recovery._partial_register_absolute_word_push_is_protected_free_before(
+        pushes[0],
+        function_entry,
+        frozenset({fixture.callback_slot}),
+    ) is expected
+    assert (result.certificate is not None) is expected
+
+
+def test_private_stack_coordinates_reuse_exact_call_stack_state(monkeypatch):
+    """A known stack transition can close a call-cleanup precision gap."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-external-owned-private-stack-string-tail"
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+    recovery = result.recovery
+    function_entry = fixture.backend_root
+    stack_states = recovery._function_stack_states(function_entry)
+    assert stack_states is not None
+    calls = tuple(recovery._function_direct_calls(function_entry))
+    call = next(
+        row
+        for row in calls
+        if recovery._closed_call_stack_cleanup(row.address) is not None
+        and row.address + recovery._owned_decoded(row.address).size
+        in stack_states
+    )
+    original_cleanup = recovery._closed_call_stack_cleanup
+
+    def cleanup_with_one_precision_gap(address):
+        return (
+            None
+            if address == call.address
+            else original_cleanup(address)
+        )
+
+    monkeypatch.setattr(
+        recovery,
+        "_closed_call_stack_cleanup",
+        cleanup_with_one_precision_gap,
+    )
+    recovery.private_stack_coordinate_state_cache.clear()
+
+    assert recovery._function_private_stack_coordinate_states(
+        function_entry
+    ) is not None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-external-owned-reverse-scan-difference", True),
+        ("seal-external-owned-reverse-scan-difference-wrong-base", False),
+        ("seal-external-owned-reverse-scan-difference-wrong-return", False),
+    ),
+)
+def test_reverse_scan_pointer_difference_scalar_proof(mutation, expected):
+    """Only a same-base, exact reverse-scan pointer difference is scalar."""
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    recovery = _direct_return_path_publication_certificate(fixture).recovery
+    function_entry = 0x00401400
+    stores = tuple(
+        address
+        for address in recovery._function_instruction_addresses(
+            function_entry
+        )
+        if (
+            decoded := recovery._owned_decoded(address)
+        ).mnemonic == "mov"
+        and len(decoded.operands) == 2
+        and decoded.operands[0].type == capstone.x86.X86_OP_MEM
+        and decoded.operands[0].size == 4
+        and decoded.operands[0].mem.disp == 4
+        and decoded.operands[1].type == capstone.x86.X86_OP_REG
+        and decoded.operands[1].reg == capstone.x86.X86_REG_EAX
+    )
+    assert len(stores) == 1
+    store = recovery._owned_decoded(stores[0])
+
+    assert recovery._register_reverse_scan_difference_is_scalar_before(
+        store.address,
+        store.operands[1],
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    (
+        ("scalar-memory", True),
+        ("protected-literal", False),
+        ("incoming", False),
+    ),
+)
+def test_protected_capability_proof_tracks_full_width_negation(
+    tmp_path,
+    source,
+    expected,
+):
+    """NEG preserves a scalar origin without cleansing protected lineage."""
+    image, function_entry, return_address = (
+        protected_capability_negation_image(
+            tmp_path,
+            source=source,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._owned_decoded(return_address).bytes == b"\xc3"
+    assert recovery._register_is_proven_image_capability_free_before(
+        return_address,
+        "eax",
+        function_entry,
+        call_return_domains={},
+        protected_slots=frozenset({0x00403000}),
+        protected_only=True,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-external-owned-protected-free-divide", True),
+        ("seal-external-owned-protected-dividend", False),
+        ("seal-external-owned-protected-divisor", False),
+    ),
+)
+def test_protected_capability_proof_tracks_full_width_division(
+    mutation,
+    expected,
+):
+    """DIV is protected-free only when dividend and divisor all are."""
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    recovery = _direct_return_path_publication_certificate(fixture).recovery
+    function_entry = 0x00401400
+    returns = tuple(
+        address
+        for address in recovery._function_instruction_addresses(
+            function_entry
+        )
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_RET)
+    )
+    assert len(returns) == 1
+
+    assert recovery._register_is_proven_image_capability_free_before(
+        returns[0],
+        "eax",
+        function_entry,
+        call_return_domains={},
+        protected_slots=frozenset({fixture.callback_slot}),
+        protected_only=True,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-external-owned-protected-free-signed-divide", True),
+        ("seal-external-owned-protected-signed-dividend", False),
+        ("seal-external-owned-protected-signed-divisor", False),
+        ("seal-external-owned-protected-signed-high-half", False),
+        ("seal-external-owned-partial-signed-divide", False),
+        ("seal-external-owned-memory-signed-divisor", False),
+    ),
+)
+@pytest.mark.parametrize("family", ("eax", "edx"))
+def test_protected_capability_proof_tracks_full_width_signed_division(
+    mutation,
+    expected,
+    family,
+):
+    """CDQ/IDIV is protected-free only for exact full-width scalar inputs."""
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    recovery = _direct_return_path_publication_certificate(fixture).recovery
+    function_entry = 0x00401400
+    returns = tuple(
+        address
+        for address in recovery._function_instruction_addresses(
+            function_entry
+        )
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_RET)
+    )
+    assert len(returns) == 1
+
+    assert recovery._register_is_proven_image_capability_free_before(
+        returns[0],
+        family,
+        function_entry,
+        call_return_domains={},
+        protected_slots=frozenset({fixture.callback_slot}),
+        protected_only=True,
+    ) is expected
+
+
 @pytest.mark.parametrize(
     "mutation",
     (
@@ -31260,6 +40028,6606 @@ def test_session_capability_seal_accepts_disjoint_synthesized_transport(
     result = _direct_return_path_publication_certificate(fixture)
 
     assert result.certificate is not None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("copy", True),
+        ("outside-frame", False),
+        ("incoming", False),
+        ("partial", False),
+    ),
+)
+def test_session_capability_seal_bounds_stored_private_stack_address(
+    tmp_path,
+    mutation,
+    expected,
+):
+    """Only an intact pointer into the allocated frame is globally disjoint."""
+    image, function_entry, store_address = private_stack_address_store_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    store = recovery._owned_decoded(store_address)
+
+    assert store.mnemonic == "mov"
+    assert store.operands[0].type == capstone.x86.X86_OP_MEM
+    assert store.operands[1].type == capstone.x86.X86_OP_REG
+    assert recovery._register_is_exact_allocated_private_stack_address_before(
+        store_address,
+        store.operands[1],
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "seal-external-owned-capability-stack-spill-byte-predicate",
+        "seal-external-owned-capability-stack-spill-byte-repack",
+        "seal-external-owned-capability-stack-spill-byte-extract",
+        "seal-external-owned-capability-stack-spill-byte-widen",
+        "seal-external-owned-capability-stack-spill-byte-overwrite",
+        "seal-external-owned-capability-stack-spill-scalar-repack",
+        "seal-external-owned-capability-stack-spill-scalar-self-lea",
+        "seal-external-owned-capability-stack-spill-scalar-call-kill",
+        "seal-external-owned-capability-stack-spill-scalar-leaf-byte-output",
+        "seal-external-owned-capability-aligned-stack-spill-call",
+    ),
+)
+def test_session_capability_seal_accepts_byte_tested_private_stack_spill(
+    mutation,
+):
+    """A capability-shaped dword is harmless when only its low byte is tested."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation=mutation
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.recovery._registrar_function_entry(0x00401400) == 0x00401400
+    assert result.certificate is not None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-closed-caller-unused-capability-return", True),
+        ("seal-closed-caller-read-capability-return", False),
+        ("seal-closed-caller-partial-read-capability-return", False),
+        ("seal-closed-caller-branch-read-capability-return", False),
+        ("seal-closed-caller-indirect-capability-return", False),
+        ("seal-open-caller-unused-capability-return", False),
+        ("seal-closed-multi-caller-unused-capability-return", True),
+        ("seal-closed-multi-caller-read-capability-return", False),
+        ("seal-closed-caller-fresh-callee-return", True),
+        ("seal-closed-caller-derived-callee-return", True),
+        ("seal-closed-caller-partial-derived-callee-return", False),
+        ("seal-closed-caller-preserved-callee-return", False),
+        ("seal-closed-caller-external-callee-arm", False),
+    ),
+)
+def test_session_capability_seal_proves_closed_callers_discard_return(
+    mutation,
+    expected,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    capability_helper = 0x00401400
+    decoded_calls = set(
+        recovery.direct_call_sources_by_target.get(capability_helper, ())
+    )
+    raw_calls = recovery._raw_direct_call_sites(capability_helper)
+
+    expected_call_count = (
+        2 if mutation.startswith("seal-closed-multi-caller-") else 1
+    )
+    assert len(decoded_calls) == expected_call_count
+    assert raw_calls == decoded_calls
+    assert recovery._direct_call_domain_is_closed(capability_helper) is (
+        mutation != "seal-open-caller-unused-capability-return"
+    )
+    assert recovery._closed_direct_call_result_is_unused(
+        capability_helper,
+        "eax",
+    ) is expected
+
+
+def test_session_capability_seal_accepts_unused_closed_caller_return():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-closed-caller-unused-capability-return"
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+    assert (
+        result.certificate.backend_bridges[0]
+        .allocator_certificate.capability_seal
+        is not None
+    )
+
+
+def test_session_capability_seal_accepts_safe_preserved_partial_return():
+    """A partial callee return is safe when its exact caller seeds zero."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-closed-caller-safe-preserved-return"
+    )
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+    assert (
+        result.certificate.backend_bridges[0]
+        .allocator_certificate.capability_seal
+        is not None
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (
+            "seal-closed-caller-byte-predicate-local-word-overwrite",
+            True,
+        ),
+        ("seal-closed-caller-byte-predicate-local-word-copy", False),
+    ),
+)
+def test_session_capability_seal_tracks_caller_local_partial_overwrite(
+    mutation,
+    expected,
+):
+    """A later scalar AX definition cannot revive residual return authority."""
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert (result.certificate is not None) is expected
+    if expected:
+        assert (
+            result.certificate.backend_bridges[0]
+            .allocator_certificate.capability_seal
+            is not None
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-closed-caller-byte-predicate-capability-return", True),
+        ("seal-closed-caller-byte-predicate-full-read", False),
+        ("seal-closed-multi-caller-byte-predicate-return", True),
+        ("seal-closed-multi-caller-byte-predicate-full-read", False),
+    ),
+)
+def test_session_capability_seal_proves_closed_partial_predicate_consumers(
+    mutation,
+    expected,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    capability_helper = 0x00401400
+    calls = tuple(
+        sorted(
+            recovery.direct_call_sources_by_target.get(
+                capability_helper,
+                (),
+            )
+        )
+    )
+
+    assert len(calls) == (2 if "multi-caller" in mutation else 1)
+    assert recovery._raw_direct_call_sites(capability_helper) == set(calls)
+    assert recovery._direct_call_domain_is_closed(capability_helper)
+    assert all(
+        any(
+            recovery._owned_decoded(address).bytes == b"\x84\xc0"
+            for address in recovery._function_instruction_addresses(
+                recovery._registrar_function_entry(call)
+            )
+            if address > call
+        )
+        for call in calls
+    )
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        capability_helper,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("full-read", False),
+        ("missing-scalar-return", False),
+        ("partial-store", True),
+        ("full-store", False),
+        ("no-return-arm", True),
+        ("partial-zero-return", True),
+        ("setcc-return", True),
+        ("movzx-return", True),
+        ("identity-lea", True),
+        ("offset-lea", False),
+    ),
+)
+def test_partial_predicate_consumers_close_transitive_scalar_return(
+    tmp_path,
+    mutation,
+    expected,
+):
+    """Upper bits may cross a caller only behind a fresh scalar slice."""
+    image, capability_helper = transitive_partial_return_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._direct_call_domain_is_closed(capability_helper)
+    if mutation == "setcc-return":
+        assert recovery._function_return_slice_is_independently_scalar(
+            capability_helper - 0x30,
+            capstone.x86.X86_REG_AL,
+            1,
+        )
+        assert recovery._function_return_register_is_entry_independent(
+            capability_helper - 0x30,
+            "eax",
+        )
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        capability_helper,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("word", True),
+        ("other-destination", False),
+        ("other-destination-overwritten", True),
+        ("other-source", False),
+        ("partial-copy", False),
+    ),
+)
+def test_partial_result_consumer_counts_full_zero_extension(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, callee = partial_return_zero_extension_caller_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._least_reachable_incoming_call_domain_is_closed(callee)
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        callee,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("incoming", False),
+        ("pointer-store", False),
+        ("pointer-return", False),
+        ("pointer-return-killed", True),
+        ("independent-return-used", True),
+    ),
+)
+def test_private_stack_argument_crosses_only_closed_direct_call(
+    tmp_path,
+    monkeypatch,
+    mutation,
+    expected,
+):
+    image, caller, callee, push_address = (
+        private_stack_direct_argument_image(tmp_path, mutation=mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    push = recovery._owned_decoded(push_address)
+
+    assert recovery._register_is_exact_allocated_private_stack_address_before(
+        push_address,
+        push.operands[0],
+        caller,
+    ) is (mutation != "incoming")
+    if mutation == "independent-return-used":
+        leaf = callee + 0x40
+        assert recovery._function_argument_does_not_escape_closed_scc(
+            leaf,
+            0,
+        )
+        original_offsets = recovery._function_argument_return_offsets
+
+        def unknown_leaf_offsets(function_entry, argument_index):
+            if (function_entry, argument_index) == (leaf, 0):
+                return None
+            return original_offsets(function_entry, argument_index)
+
+        monkeypatch.setattr(
+            recovery,
+            "_function_argument_return_offsets",
+            unknown_leaf_offsets,
+        )
+        original_call_use = recovery._call_return_is_not_used_as_pointer
+
+        def unknown_leaf_return_use(call_address, function_entry):
+            if (call_address, function_entry) == (callee + 5, callee):
+                return False
+            return original_call_use(call_address, function_entry)
+
+        monkeypatch.setattr(
+            recovery,
+            "_call_return_is_not_used_as_pointer",
+            unknown_leaf_return_use,
+        )
+        assert recovery._function_argument_does_not_escape_closed_scc(
+            callee,
+            0,
+        )
+    assert recovery._closed_private_stack_direct_call_argument_for_push(
+        push_address,
+        caller,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("unresolved", False),
+        ("forged", False),
+        ("pointer-store", False),
+    ),
+)
+def test_private_stack_argument_crosses_only_exact_finite_indirect_call(
+    mutation,
+    expected,
+):
+    (
+        image,
+        caller,
+        wrapper,
+        target,
+        push_address,
+        callback_call,
+    ) = private_stack_finite_indirect_argument_image(mutation=mutation)
+    anchors = tuple(
+        audit_anchor(image, address)
+        for address in (caller, wrapper, target)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, anchors),
+        generous_limits(image),
+    )
+    recovery.recover()
+    if mutation == "forged":
+        recovery._add_edge(
+            callback_call,
+            target,
+            "indirect-call-finite-value",
+        )
+
+    targets = recovery.call_targets_by_source.get(callback_call, set())
+    assert targets == (
+        {target} if mutation in {None, "pointer-store", "forged"} else set()
+    )
+    assert recovery._exact_finite_indirect_call_targets(callback_call) == (
+        frozenset({target})
+        if mutation in {None, "pointer-store"}
+        else None
+    )
+    assert recovery._closed_private_stack_direct_call_argument_for_push(
+        push_address,
+        caller,
+    ) is expected
+
+
+@pytest.mark.parametrize("killed_return", (True, False))
+def test_private_stack_argument_closes_exact_memcpy_return(
+    tmp_path,
+    killed_return,
+):
+    image, caller, callee, push_address = (
+        private_stack_memcpy_argument_image(
+            tmp_path,
+            killed_return=killed_return,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._overlap_safe_copy_function(callee), tuple(
+        (
+            hex(address),
+            recovery._owned_decoded(address).mnemonic,
+            recovery._owned_decoded(address).op_str,
+        )
+        for address in recovery._function_instruction_addresses(callee)
+    )
+    assert recovery._closed_private_stack_direct_call_argument_for_push(
+        push_address,
+        caller,
+    ) is killed_return
+
+
+@pytest.mark.parametrize(
+    ("mask", "partial", "expected"),
+    (
+        (0x00000000, False, True),
+        (0x000000FF, False, True),
+        (0x00FFFFFF, False, False),
+        (0xFFFFFFFF, False, False),
+        (0x000000FF, True, False),
+    ),
+)
+def test_protected_capability_mask_requires_full_disjoint_output(
+    tmp_path,
+    mask,
+    partial,
+    expected,
+):
+    image, function_entry, observation = protected_capability_mask_image(
+        tmp_path,
+        mask=mask,
+        partial=partial,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._register_is_proven_image_capability_free_before(
+        observation,
+        "edx",
+        function_entry,
+        call_return_domains={},
+        protected_slots=frozenset({0x00403000}),
+        protected_only=True,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("incoming-dividend", False),
+        ("incoming-high-half", False),
+        ("incoming-divisor", False),
+        ("partial-divide", False),
+        ("memory-divisor", False),
+        ("signed-divide", False),
+    ),
+)
+def test_partial_result_consumer_accepts_fresh_full_division(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, divider, partial = partial_return_full_division_caller_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_return_register_is_entry_independent(
+        divider,
+        "eax",
+    ) is expected
+    assert recovery._function_return_register_is_entry_independent(
+        divider,
+        "edx",
+    ) is expected
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        partial,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("call-register", False),
+        ("call-memory-register", False),
+        ("argument-register", False),
+        ("missing-callback", False),
+        ("direct-renewed-call", True),
+        ("direct-preserving-call", False),
+        ("direct-observing-call", False),
+        ("full-compare", True),
+        ("mixed-full-compare", False),
+        ("mixed-full-test", False),
+        ("full-test-address-use", False),
+    ),
+)
+def test_partial_result_consumer_retains_taint_through_unrelated_call(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, partial = partial_return_call_passthrough_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._least_reachable_incoming_call_domain_is_closed(partial)
+    if mutation is not None and mutation.startswith("direct-"):
+        assert recovery._function_return_register_is_replaced_before_return(
+            0x00401140,
+            "eax",
+        ) is (mutation == "direct-renewed-call")
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        partial,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("partial-replacement", False),
+        ("read-before-replacement", False),
+    ),
+)
+def test_partial_result_consumer_stops_at_closed_full_replacement(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, partial, replacement = partial_return_full_replacement_store_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._least_reachable_incoming_call_domain_is_closed(partial)
+    assert recovery._function_return_register_is_replaced_before_return(
+        replacement,
+        "eax",
+    ) is expected
+    assert recovery._function_entry_register_is_unobserved_until_kill(
+        replacement,
+        "eax",
+    ) is expected
+    returns = tuple(
+        address
+        for address in recovery._function_instruction_addresses(replacement)
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_RET)
+    )
+    protected_slots = frozenset({0x00403084})
+    protected_free = bool(returns) and all(
+        recovery._register_is_proven_image_capability_free_before(
+            address,
+            "eax",
+            replacement,
+            call_return_domains={},
+            protected_slots=protected_slots,
+            protected_only=True,
+        )
+        for address in returns
+    )
+    assert protected_free is (mutation != "partial-replacement")
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        partial,
+        "eax",
+        _protected_slots=protected_slots,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("word-mask", False),
+        ("sparse-mask", False),
+        ("partial-mask", False),
+    ),
+)
+def test_partial_result_consumer_retains_path_local_scalar_mask(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, partial = partial_return_scalarizing_mask_store_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    mask_address = 0x00401087
+    mask = recovery._owned_decoded(mask_address)
+
+    assert recovery._function_return_slice_is_independently_scalar(
+        partial,
+        capstone.x86.X86_REG_AL,
+        1,
+    )
+    scalar_state = dict(
+        recovery._partial_register_scalar_states(
+            0x00401080,
+            stop_address=mask_address,
+        )[mask_address]
+    )
+    assert scalar_state.get("gpr:a") == 0xFF
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        partial,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, frozenset({0})),
+        ("wrong-byte", None),
+        ("partial-move", None),
+        ("join-bypass", None),
+        ("word-store", None),
+    ),
+)
+def test_straight_line_partial_transfer_values_require_exact_slice_kill(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, store_address = straight_line_partial_zero_store_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    store = recovery._owned_decoded(store_address)
+
+    assert store.mnemonic == "mov"
+    assert store.operands[0].type == capstone.x86.X86_OP_MEM
+    assert store.operands[1].type == capstone.x86.X86_OP_REG
+    assert recovery._straight_line_register_slice_values_before(
+        store_address,
+        store.operands[1],
+        function_entry,
+    ) == expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "scalar", "expected_domain", "preloaded_index_domain"),
+    (
+        (None, True, ("private-stack", frozenset(), 1), False),
+        pytest.param(
+            None,
+            True,
+            ("private-stack", frozenset(), 1),
+            True,
+            id="coarse-index-address-domain",
+        ),
+        pytest.param(
+            "retail-seed-order",
+            True,
+            ("private-stack", frozenset(), 1),
+            True,
+            id="retail-seed-order-with-coarse-domain",
+        ),
+        pytest.param(
+            "retail-result-before-scan",
+            True,
+            ("private-stack", frozenset(), 1),
+            True,
+            id="retail-result-seed-before-scan",
+        ),
+        pytest.param(
+            "retail-result-pointer-mix",
+            False,
+            None,
+            False,
+            id="retail-result-seed-pointer-mix",
+        ),
+        ("wrong-count-seed", False, None, False),
+        ("wrong-result-seed", False, None, False),
+        ("partial-subtract", False, None, False),
+        ("nonstack-base", True, None, False),
+        ("direction-set", False, None, False),
+    ),
+)
+def test_private_stack_destination_accepts_exact_scan_scalar_index(
+    tmp_path,
+    mutation,
+    scalar,
+    expected_domain,
+    preloaded_index_domain,
+):
+    image, function_entry, store_address = private_stack_scan_index_store_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    store = recovery._owned_decoded(store_address)
+    writes = recovery._instruction_value_flow(store).memory_writes
+
+    assert len(writes) == 1
+    assert recovery._register_scan_count_family_is_scalar_before(
+        store_address,
+        "edx",
+        function_entry,
+    ) is scalar
+    assert recovery._semantic_write_destination_domain(
+        store,
+        writes[0],
+        function_entry,
+        call_return_domains={},
+        argument_domains={},
+        register_domains=(
+            {"edx": ("finite", frozenset({0x1234}))}
+            if preloaded_index_domain
+            else None
+        ),
+    ) == expected_domain
+
+
+def test_scan_count_scalar_exact_local_proof_is_global_state_independent(
+    tmp_path,
+):
+    image, function_entry, store_address = private_stack_scan_index_store_image(
+        tmp_path,
+        mutation="retail-seed-order",
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery._partial_register_scalar_states = lambda *args, **kwargs: None
+
+    assert recovery._register_scan_count_family_is_scalar_before(
+        store_address,
+        "edx",
+        function_entry,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("missing-overwrite", False),
+        ("wrong-register", False),
+        ("late-overwrite", False),
+        ("full-compare", False),
+        ("joined-bypass", False),
+    ),
+)
+def test_partial_result_consumer_accepts_path_local_scalar_overwrite(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, wrapper, leaf = transitive_partial_return_scalar_overwrite_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    compare = next(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(0x00401080)
+        if recovery._owned_decoded(address).mnemonic == "cmp"
+    )
+
+    assert not recovery._function_return_slice_is_independently_scalar(
+        wrapper,
+        capstone.x86.X86_REG_AL,
+        1,
+    )
+    assert recovery._partial_register_load_is_scalar_before(
+        compare.address,
+        compare.operands[0],
+        0x00401080,
+    ) is (mutation is None)
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        leaf,
+        "eax",
+    ) is expected
+
+
+def test_partial_return_closure_memoizes_completed_revision(
+    tmp_path,
+    monkeypatch,
+):
+    image, _divider, partial = partial_return_full_division_caller_image(
+        tmp_path,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    decoded = recovery._owned_decoded(partial)
+
+    recovery.instruction_value_flow_cache.clear()
+    flow_calls = []
+    original_flow = recovery._instruction_value_flow_uncached
+
+    def count_flow(candidate):
+        flow_calls.append(candidate.address)
+        return original_flow(candidate)
+
+    monkeypatch.setattr(
+        recovery,
+        "_instruction_value_flow_uncached",
+        count_flow,
+    )
+    first_flow = recovery._instruction_value_flow(decoded)
+    assert recovery._instruction_value_flow(decoded) is first_flow
+    assert flow_calls == [partial]
+
+    recovery.function_return_slice_scalar_cache.clear()
+    summary_calls = []
+    original_summary = (
+        recovery._function_return_slice_is_independently_scalar_uncached
+    )
+
+    def count_summary(
+        function_entry,
+        register,
+        width,
+        *,
+        _visited=frozenset(),
+        **kwargs,
+    ):
+        summary_calls.append(
+            (function_entry, register, width, _visited)
+        )
+        return original_summary(
+            function_entry,
+            register,
+            width,
+            _visited=_visited,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        recovery,
+        "_function_return_slice_is_independently_scalar_uncached",
+        count_summary,
+    )
+    query = (partial, capstone.x86.X86_REG_AL, 1)
+    assert recovery._function_return_slice_is_independently_scalar(*query)
+    assert recovery._function_return_slice_is_independently_scalar(*query)
+    assert summary_calls == [(*query, frozenset())]
+
+    recovery.control_flow_revision += 1
+    assert recovery._function_return_slice_is_independently_scalar(*query)
+    assert summary_calls == [
+        (*query, frozenset()),
+        (*query, frozenset()),
+    ]
+
+    recovery.function_return_slice_scalar_cache.clear()
+    summary_calls.clear()
+    blocked_query = (partial, capstone.x86.X86_REG_AX, 2)
+    assert not recovery._function_return_slice_is_independently_scalar(
+        *blocked_query
+    )
+    assert not recovery._function_return_slice_is_independently_scalar(
+        *blocked_query
+    )
+    assert summary_calls == [(*blocked_query, frozenset())]
+
+    recovery.function_return_slice_scalar_cache.clear()
+    summary_calls.clear()
+    unrelated_cut = frozenset(
+        {(partial + 0x1000, capstone.x86.X86_REG_AL, 1)}
+    )
+    assert recovery._function_return_slice_is_independently_scalar(
+        *query,
+        _visited=unrelated_cut,
+    )
+    assert recovery._function_return_slice_is_independently_scalar(*query)
+    assert summary_calls == [(*query, unrelated_cut)]
+
+    recovery.function_return_slice_scalar_cache.clear()
+    summary_calls.clear()
+    active_cut = frozenset({query})
+    assert not recovery._function_return_slice_is_independently_scalar(
+        *query,
+        _visited=active_cut,
+    )
+    assert not recovery._function_return_slice_is_independently_scalar(
+        *query,
+        _visited=active_cut,
+    )
+    stricter_cut = active_cut | unrelated_cut
+    assert not recovery._function_return_slice_is_independently_scalar(
+        *query,
+        _visited=stricter_cut,
+    )
+    assert not recovery.function_return_slice_scalar_cache
+    assert recovery._function_return_slice_is_independently_scalar(*query)
+    assert summary_calls == [
+        (*query, active_cut),
+        (*query, frozenset()),
+    ]
+
+    recovery.closed_partial_call_result_cache.clear()
+    closure_calls = []
+    original_closure = (
+        recovery._closed_direct_call_result_is_used_only_by_partial_test_uncached
+    )
+
+    def count_closure(
+        function_entry,
+        register_family,
+        *,
+        _visited=frozenset(),
+        _path_local_partial_only=False,
+        _full_result_predicate_allowed=False,
+        _protected_slots=frozenset(),
+    ):
+        closure_calls.append(
+            (
+                function_entry,
+                register_family,
+                _visited,
+                _path_local_partial_only,
+                _full_result_predicate_allowed,
+                _protected_slots,
+            )
+        )
+        return original_closure(
+            function_entry,
+            register_family,
+            _visited=_visited,
+            _path_local_partial_only=_path_local_partial_only,
+            _full_result_predicate_allowed=(
+                _full_result_predicate_allowed
+            ),
+            _protected_slots=_protected_slots,
+        )
+
+    monkeypatch.setattr(
+        recovery,
+        "_closed_direct_call_result_is_used_only_by_partial_test_uncached",
+        count_closure,
+    )
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        partial,
+        "eax",
+    )
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        partial,
+        "eax",
+    )
+    assert closure_calls == [
+        (partial, "eax", frozenset(), False, False, frozenset())
+    ]
+
+    recovery.control_flow_revision += 1
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        partial,
+        "eax",
+    )
+    assert closure_calls == [
+        (partial, "eax", frozenset(), False, False, frozenset()),
+        (partial, "eax", frozenset(), False, False, frozenset()),
+    ]
+
+
+def test_partial_return_scalar_fixed_point_visits_dense_scc_linearly(
+    tmp_path,
+    monkeypatch,
+):
+    image, entries = cyclic_partial_return_graph_image(tmp_path)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    calls = []
+    original = recovery._function_return_slice_is_independently_scalar_uncached
+
+    def count_query(function_entry, register, width, **kwargs):
+        calls.append((function_entry, register, width, kwargs))
+        return original(function_entry, register, width, **kwargs)
+
+    monkeypatch.setattr(
+        recovery,
+        "_function_return_slice_is_independently_scalar_uncached",
+        count_query,
+    )
+
+    assert not recovery._function_return_slice_is_independently_scalar(
+        entries[0],
+        capstone.x86.X86_REG_AL,
+        1,
+    )
+    assert {row[0] for row in calls} == set(entries)
+    assert len(calls) <= len(entries) * 2
+
+
+@pytest.mark.parametrize(
+    ("full_read", "expected"),
+    ((False, True), (True, False)),
+)
+def test_partial_result_consumer_closes_transitive_unused_chain(
+    tmp_path,
+    full_read,
+    expected,
+):
+    image, leaf = transitive_unused_partial_return_image(
+        tmp_path,
+        full_read=full_read,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._least_reachable_incoming_call_domain_is_closed(leaf)
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        leaf,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("outer-full-read", False),
+        ("recursive-full-read", False),
+    ),
+)
+def test_partial_result_consumer_closes_recursive_unused_chain(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, leaf, recursive = recursive_partial_result_sink_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert not recovery._function_return_slice_is_independently_scalar(
+        recursive,
+        capstone.x86.X86_REG_AX,
+        2,
+    )
+    assert not recovery._function_return_slice_is_independently_scalar(
+        recursive,
+        capstone.x86.X86_REG_AL,
+        1,
+    )
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        leaf,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("full-reload", False),
+        ("address-escape", False),
+        ("wide-read", False),
+        ("nonstack-store", False),
+    ),
+)
+def test_partial_result_consumer_accepts_quarantined_full_spill(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, caller, leaf, store_address = (
+        partial_result_quarantined_full_spill_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._least_reachable_incoming_call_domain_is_closed(leaf)
+    assert recovery._private_stack_store_is_byte_predicate_quarantined(
+        store_address,
+        caller,
+    ) is expected
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        leaf,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("address-use", False),
+        ("x87-roundtrip-address", False),
+    ),
+)
+def test_partial_result_consumer_accepts_quarantined_x87_scalar(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, caller, leaf, store_address = (
+        partial_result_quarantined_x87_scalar_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    protected_slots = frozenset({0x00403000})
+
+    assert recovery._least_reachable_incoming_call_domain_is_closed(leaf)
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        caller,
+    ) is expected
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        leaf,
+        "eax",
+        _protected_slots=protected_slots,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("retained-mask", False),
+        ("partial-mask", False),
+        ("bypass-mask", False),
+        ("later-clobber", False),
+    ),
+)
+def test_partial_register_mask_requires_protected_prefix_exclusion(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, store_address, protected = (
+        masked_partial_register_store_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._register_known_zero_bits_exclude_protected_before(
+        store_address,
+        "eax",
+        function_entry,
+        frozenset({protected}),
+    ) is expected
+    assert recovery._register_is_proven_image_capability_free_before(
+        store_address,
+        "eax",
+        function_entry,
+        call_return_domains={},
+        protected_slots=frozenset({protected}),
+        protected_only=True,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    ((None, True), ("ordinary-callee", False), ("value-as-context", False)),
+)
+def test_partial_result_consumer_accepts_context_restore_status(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, leaf, restore = partial_return_context_restore_sink_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._longjmp_like_context_restore(restore) is (
+        mutation != "ordinary-callee"
+    )
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        leaf,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("import_name", "expected"),
+    (
+        ("GetLastError", True),
+        ("GetTickCount", True),
+        ("Sleep", False),
+    ),
+)
+def test_imported_scalar_return_freshly_defines_wrapper_eax(
+    tmp_path,
+    import_name,
+    expected,
+):
+    image = imported_return_wrapper_image(tmp_path, import_name)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    call = recovery._owned_decoded(0x00401080)
+    assert recovery._external_call_has_scalar_return(call) is expected
+    assert recovery._function_return_register_is_entry_independent(
+        0x00401080,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("import_name", "expected"),
+    (
+        ("GetTickCount", True),
+        ("GetLastError", True),
+        ("GlobalAlloc", False),
+        ("Sleep", False),
+    ),
+)
+def test_protected_capability_proof_tracks_scalar_import_wrapper_subtraction(
+    tmp_path,
+    import_name,
+    expected,
+):
+    image, function_entry, wrapper, store_address = (
+        scalar_import_subtraction_image(tmp_path, import_name)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._registrar_function_entry(wrapper) == wrapper
+    assert recovery._external_call_has_scalar_return(
+        recovery._owned_decoded(wrapper)
+    ) is expected
+    assert recovery._function_returns_only_external_scalar(wrapper) is expected
+    assert recovery._register_is_proven_image_capability_free_before(
+        store_address,
+        "eax",
+        function_entry,
+        call_return_domains={},
+        protected_slots=frozenset({0x00403000}),
+        protected_only=True,
+    ) is expected
+
+
+def test_scalar_import_wrapper_proof_is_revision_cached(tmp_path, monkeypatch):
+    image, _function_entry, wrapper, _store_address = (
+        scalar_import_subtraction_image(tmp_path, "GetTickCount")
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    original = recovery._function_returns_only_external_scalar_uncached
+    calls = []
+
+    def counted(function_entry):
+        calls.append(function_entry)
+        return original(function_entry)
+
+    monkeypatch.setattr(
+        recovery,
+        "_function_returns_only_external_scalar_uncached",
+        counted,
+    )
+
+    assert recovery._function_returns_only_external_scalar(wrapper)
+    assert recovery._function_returns_only_external_scalar(wrapper)
+    assert calls == [wrapper]
+
+    recovery.control_flow_revision += 1
+    assert recovery._function_returns_only_external_scalar(wrapper)
+    assert calls == [wrapper, wrapper]
+
+
+@pytest.mark.parametrize("wrong_destination", (False, True))
+def test_partial_setcc_store_is_scalar_only_for_exact_destination(
+    tmp_path,
+    monkeypatch,
+    wrong_destination,
+):
+    image, store_address = partial_setcc_store_image(
+        tmp_path,
+        wrong_destination=wrong_destination,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    store = recovery._owned_decoded(store_address)
+
+    assert store.mnemonic == "mov"
+    assert store.operands[0].type == capstone.x86.X86_OP_MEM
+    assert store.operands[1].reg == capstone.x86.X86_REG_AL
+    monkeypatch.setattr(
+        recovery,
+        "_partial_register_scalar_states",
+        lambda *args, **kwargs: None,
+    )
+    assert recovery._partial_register_load_is_scalar_before(
+        store_address,
+        store.operands[1],
+        0x00401080,
+    ) is (not wrong_destination)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    ((None, True), ("full-read", False), ("unresolved", False)),
+)
+def test_partial_result_consumers_close_finite_indirect_call_domain(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image = finite_indirect_partial_result_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    target = 0x004010A0
+    incoming = {
+        source
+        for source, kind in recovery.incoming_edges.get(target, ())
+        if kind == "indirect-call-finite-value"
+    }
+
+    assert incoming == ({0x00401009} if mutation != "unresolved" else set())
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        target,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize("full_read", (False, True))
+def test_partial_result_closure_crosses_finite_indirect_return_layer(
+    tmp_path,
+    full_read,
+):
+    image = finite_indirect_transitive_return_image(
+        tmp_path,
+        full_read=full_read,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery.direct_call_targets_by_source[0x00401040] == 0x00401000
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        0x004010A0,
+        "eax",
+    ) is (not full_read)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    ((None, True), ("partial-target", False), ("unresolved", False)),
+)
+def test_entry_independent_return_consumes_exact_finite_indirect_domain(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image = finite_indirect_full_return_image(tmp_path, mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    targets = recovery.call_targets_by_source.get(0x00401009, set())
+
+    assert targets == (
+        set() if mutation == "unresolved" else {0x00401090}
+    )
+    assert all(
+        (0x00401009, "indirect-call-finite-value")
+        in recovery.incoming_edges.get(target, ())
+        for target in targets
+    )
+    assert recovery._function_return_register_is_entry_independent(
+        0x00401000,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize("partial_target", (False, True))
+def test_partial_result_consumer_accepts_exact_finite_result_replacement(
+    tmp_path,
+    partial_target,
+):
+    image = finite_indirect_result_replacement_image(
+        tmp_path,
+        partial_target=partial_target,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery.call_targets_by_source.get(0x0040109A) == {
+        0x004010A0
+    }
+    assert (
+        0x0040109A,
+        "indirect-call-finite-value",
+    ) in recovery.incoming_edges.get(0x004010A0, ())
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        0x004010D0,
+        "eax",
+    ) is (not partial_target)
+
+
+@pytest.mark.parametrize("full_read", (False, True))
+def test_partial_result_closure_allows_discard_after_local_test(
+    tmp_path,
+    full_read,
+):
+    image = finite_indirect_transitive_return_image(
+        tmp_path,
+        full_read=full_read,
+        discard_caller=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery.direct_call_targets_by_source[0x00401040] == 0x00401000
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        0x004010A0,
+        "eax",
+    ) is (not full_read)
+
+
+def test_session_capability_seal_accepts_closed_partial_predicate_return():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-closed-multi-caller-byte-predicate-return"
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+    assert (
+        result.certificate.backend_bridges[0]
+        .allocator_certificate.capability_seal
+        is not None
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (
+            "seal-closed-private-stack-argument-copy",
+            ("private-stack", frozenset()),
+        ),
+        (
+            "seal-closed-aligned-private-stack-argument-copy",
+            ("private-stack", frozenset()),
+        ),
+        ("seal-closed-masked-private-stack-argument-copy", None),
+        ("seal-closed-unknown-argument-copy", None),
+        ("seal-open-private-stack-argument-copy", None),
+    ),
+)
+def test_session_capability_seal_proves_closed_private_stack_argument(
+    mutation,
+    expected,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    helper = 0x00401400
+    copies = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(helper)
+        if recovery._owned_decoded(address).mnemonic == "movsd"
+    )
+
+    assert len(copies) == 4
+    assert all(
+        recovery._register_argument_origin_indices_for_address(
+            copy.address,
+            "edi",
+            helper,
+        )
+        == frozenset({0})
+        for copy in copies
+    )
+    assert recovery._closed_direct_call_argument_domain(
+        helper,
+        0,
+        call_return_domains={},
+    ) == expected
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "seal-closed-private-stack-argument-copy",
+        "seal-closed-aligned-private-stack-argument-copy",
+    ),
+)
+def test_session_capability_seal_accepts_closed_private_stack_argument_copy(
+    mutation,
+):
+    fixture = return_path_publication_lifecycle_image(
+        mutation=mutation
+    )
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+    assert (
+        result.certificate.backend_bridges[0]
+        .allocator_certificate.capability_seal
+        is not None
+    )
+
+
+def test_session_capability_seal_uses_reachable_private_stack_argument_chain():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-reachable-private-stack-reverse-copy"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    outer = 0x00401400
+    forwarder = 0x00401440
+    copy = 0x00401480
+    residue_call = 0x004014D2
+    closure = frozenset(
+        {fixture.helper_target, outer, forwarder, copy}
+    )
+
+    domains = recovery._semantic_closed_argument_domains(
+        fixture.helper_target,
+        closure,
+        call_return_domains={},
+    )
+    decoded_calls = recovery.direct_call_sources_by_target.get(copy, set())
+    raw_calls = recovery._raw_direct_call_sites(copy)
+
+    assert domains[copy][0] == ("private-stack", frozenset())
+    assert domains[copy][1] == ("private-stack", frozenset())
+    assert domains[copy][2] == ("finite", frozenset(range(0x100)))
+    assert raw_calls - decoded_calls == {residue_call}
+    assert recovery.byte_owners.get(residue_call) is None
+    assert not recovery._direct_call_domain_is_closed(copy)
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+    assert (
+        result.certificate.backend_bridges[0]
+        .allocator_certificate.capability_seal
+        is not None
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "seal-reachable-private-stack-reverse-copy-protected-destination",
+        "seal-reachable-private-stack-reverse-copy-unbounded-count",
+        "seal-reachable-private-stack-reverse-copy-df-leak",
+    ),
+)
+def test_session_capability_seal_rejects_unbounded_reachable_reverse_copy(
+    mutation,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is None
+
+
+def test_session_capability_seal_uses_selected_private_stack_zero_fill():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-reachable-private-stack-zero-fill"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    helper = 0x00401400
+    selected_calls = tuple(
+        call.address
+        for call in recovery._function_direct_calls(fixture.backend_root)
+        if call.target == helper
+    )
+    assert len(selected_calls) == 1
+    assert not recovery._direct_call_domain_is_closed(helper)
+
+    domains = recovery._semantic_closed_argument_domains_from_roots(
+        frozenset({fixture.backend_root}),
+        frozenset({fixture.backend_root, helper}),
+        call_return_domains={},
+        allowed_call_sites=frozenset(selected_calls),
+    )
+    write_address = next(
+        address
+        for address in recovery._function_instruction_addresses(helper)
+        if recovery._owned_decoded(address).mnemonic == "rep stosb"
+    )
+    decoded = recovery._owned_decoded(write_address)
+    writes = recovery._instruction_value_flow(decoded).memory_writes
+
+    assert domains[helper] == {
+        0: ("private-stack", frozenset()),
+        1: ("finite", frozenset({0x5C})),
+    }
+    assert len(writes) == 1
+    assert recovery._semantic_write_destination_domain(
+        decoded,
+        writes[0],
+        helper,
+        call_return_domains={},
+        argument_domains=domains[helper],
+    ) == ("private-stack", frozenset(), 0x5C)
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is not None
+    assert (
+        result.certificate.backend_bridges[0]
+        .allocator_certificate.capability_seal
+        is not None
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "seal-reachable-private-stack-zero-fill-protected-destination",
+        "seal-reachable-private-stack-zero-fill-unbounded-count",
+        "seal-reachable-private-stack-zero-fill-df-leak",
+    ),
+)
+def test_session_capability_seal_rejects_hostile_selected_zero_fill(
+    mutation,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "seal-closed-unknown-argument-copy",
+        "seal-open-private-stack-argument-copy",
+        "seal-closed-masked-private-stack-argument-copy",
+    ),
+)
+def test_session_capability_seal_rejects_unproved_copy_argument(mutation):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    result = _direct_return_path_publication_certificate(fixture)
+
+    assert result.certificate is None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-closed-aligned-private-stack-argument-copy", True),
+        ("seal-closed-masked-private-stack-argument-copy", False),
+    ),
+)
+def test_semantic_stack_identity_accepts_only_bounded_alignment_mask(
+    mutation,
+    expected,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    backend = fixture.backend_root
+    mask = next(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(backend)
+        if recovery._owned_decoded(address).mnemonic == "and"
+        and any(
+            operand.type == capstone.x86.X86_OP_REG
+            and recovery._register_family(operand.reg) == "esp"
+            for operand in recovery._owned_decoded(address).operands
+        )
+    )
+    stack_lea = next(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(backend)
+        if recovery._owned_decoded(address).bytes == b"\x8d\x04\x24"
+    )
+    states = recovery._semantic_stack_identity_states(backend)
+
+    assert mask.operands[0].size == 4
+    assert states[stack_lea.address][0] is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-closed-caller-masked-return", True),
+        ("seal-closed-caller-partial-mask-return", False),
+        ("seal-closed-caller-wide-mask-return", False),
+    ),
+)
+def test_session_capability_seal_proves_only_bounded_return_mask(
+    mutation,
+    expected,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    masks = tuple(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(0x00401400)
+        if recovery._owned_decoded(address).mnemonic == "and"
+    )
+
+    assert len(masks) == 1
+    assert masks[0].operands[0].size == (
+        1 if mutation == "seal-closed-caller-partial-mask-return" else 4
+    )
+    assert recovery._function_return_register_is_disjoint_from_slots(
+        0x00401400,
+        "eax",
+        frozenset({0x00403004}),
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-forward-fresh-loop", ("fresh-allocation", frozenset())),
+        (
+            "seal-forward-fresh-loop-partial-mask",
+            ("fresh-allocation", frozenset()),
+        ),
+        ("seal-forward-fresh-loop-partial-pivot", None),
+    ),
+)
+def test_image_capability_taint_tracks_fresh_loop_pointer(
+    mutation,
+    expected,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    allocator_call = next(
+        address
+        for address in recovery.direct_call_sources_by_target[0x00401400]
+        if recovery._registrar_function_entry(address) == 0x00401300
+    )
+    store = next(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(0x00401300)
+        if recovery._owned_decoded(address).bytes == b"\xc6\x07\x00"
+    )
+    result = recovery._register_is_proven_image_capability_free_before(
+        store.address,
+        "edi",
+        0x00401300,
+        call_return_domains={
+            allocator_call: ("fresh-allocation", frozenset())
+        },
+        protected_slots=frozenset({0x00403004}),
+    )
+
+    assert result is (expected is not None)
+
+
+def test_capability_seal_treats_partial_memory_load_as_scalar_payload():
+    fixture = return_path_publication_lifecycle_image(
+        mutation="seal-forward-fresh-loop-byte-copy"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    store = next(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(0x00401300)
+        if recovery._owned_decoded(address).bytes == b"\x88\x07"
+    )
+
+    assert recovery._partial_register_load_is_scalar_before(
+        store.address,
+        store.operands[1],
+        0x00401300,
+    )
+
+
+@pytest.mark.parametrize(
+    ("full_load_arm", "expected"),
+    (
+        (False, True),
+        (True, False),
+    ),
+)
+def test_capability_seal_requires_scalar_partial_rmw_on_every_path(
+    tmp_path,
+    full_load_arm,
+    expected,
+):
+    image, function_entry, store_address = partial_scalar_rmw_image(
+        tmp_path,
+        full_load_arm=full_load_arm,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    store = recovery._owned_decoded(store_address)
+
+    assert store.bytes == b"\x88\x0f"
+    assert recovery._partial_register_load_is_scalar_before(
+        store.address,
+        store.operands[1],
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("full-source-load", False),
+        ("missing-source-load", False),
+        ("unknown-second-byte", False),
+        ("wrong-reload-slot", False),
+        ("wide-output-store", False),
+    ),
+)
+def test_partial_scalar_join_tracks_private_stack_byte_permutation(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, store_address = (
+        joined_stack_word_permutation_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    store = recovery._owned_decoded(store_address)
+
+    assert recovery._partial_register_load_is_scalar_before(
+        store.address,
+        store.operands[1],
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("scalar_entry", "full_source_load", "expected"),
+    (
+        (True, False, True),
+        (False, False, False),
+        (True, True, False),
+    ),
+)
+def test_partial_scalar_call_preserves_only_proven_scalar_entry_bits(
+    tmp_path,
+    scalar_entry,
+    full_source_load,
+    expected,
+):
+    image, caller, helper, call_address, observation = (
+        scalar_entry_partial_return_image(
+            tmp_path,
+            scalar_entry=scalar_entry,
+            full_source_load=full_source_load,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    states = recovery._partial_register_scalar_states(
+        caller,
+        stop_address=observation,
+    )
+    scalar_mask = (
+        0
+        if states is None
+        else dict(states.get(observation, ())).get("gpr:a", 0)
+    )
+
+    assert recovery.direct_call_targets_by_source[call_address] == helper
+    assert (scalar_mask == 0xFFFF_FFFF) is expected
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        helper,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("full_argument_read", "protected_slot", "expected"),
+    (
+        (False, 0x00403000, True),
+        (True, 0x00403000, False),
+        (False, 0x00000080, False),
+    ),
+)
+def test_partial_scalar_return_allows_only_closed_low_byte_call_argument(
+    tmp_path,
+    full_argument_read,
+    protected_slot,
+    expected,
+):
+    (
+        image,
+        _caller,
+        helper,
+        consumer,
+        _helper_call,
+        consumer_call,
+        narrow_push,
+    ) = narrow_scalar_call_argument_image(
+        tmp_path,
+        full_argument_read=full_argument_read,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    pushed = recovery._pushed_call_argument(consumer_call, 2)
+
+    assert pushed is not None
+    assert pushed[0].address == narrow_push
+    assert recovery.direct_call_targets_by_source[consumer_call] == consumer
+    assert recovery._function_argument_is_narrow_scalar(
+        consumer,
+        2,
+        width=1,
+    ) is (not full_argument_read)
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        helper,
+        "eax",
+        _protected_slots=frozenset({protected_slot}),
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("branch_import", "expected"),
+    (("ExitProcess", True), ("GetCurrentProcess", False)),
+)
+def test_narrow_scalar_argument_prunes_only_proven_noreturn_arm(
+    tmp_path,
+    branch_import,
+    expected,
+):
+    (
+        image,
+        _caller,
+        _helper,
+        consumer,
+        _helper_call,
+        _consumer_call,
+        _narrow_push,
+    ) = narrow_scalar_call_argument_image(
+        tmp_path,
+        branch_import=branch_import,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_argument_is_narrow_scalar(
+        consumer,
+        2,
+        width=1,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("protected_slot", "expected"),
+    ((0x00403000, True), (0x00004000, False)),
+)
+def test_partial_scalar_return_allows_closed_low_word_call_argument(
+    tmp_path,
+    protected_slot,
+    expected,
+):
+    (
+        image,
+        _caller,
+        helper,
+        consumer,
+        _helper_call,
+        _consumer_call,
+        _narrow_push,
+    ) = narrow_scalar_call_argument_image(
+        tmp_path,
+        indirect_argument_width=2,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_argument_is_narrow_scalar(
+        consumer,
+        2,
+        width=2,
+    )
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        helper,
+        "eax",
+        _protected_slots=frozenset({protected_slot}),
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("split_argument_read", "expected"),
+    (("low-word", True), ("third-byte", False)),
+)
+def test_narrow_scalar_argument_allows_split_reads_only_within_low_word(
+    tmp_path,
+    split_argument_read,
+    expected,
+):
+    (
+        image,
+        _caller,
+        helper,
+        consumer,
+        _helper_call,
+        _consumer_call,
+        _narrow_push,
+    ) = narrow_scalar_call_argument_image(
+        tmp_path,
+        split_argument_read=split_argument_read,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_argument_is_narrow_scalar(
+        consumer,
+        2,
+        width=2,
+    ) is expected
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        helper,
+        "eax",
+        _protected_slots=frozenset({0x00403000}),
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("pointer_use", "expected"),
+    ((False, True), (True, False)),
+)
+def test_partial_result_allows_only_scalar_return_transport(
+    tmp_path,
+    pointer_use,
+    expected,
+):
+    image, leaf, transformer = scalar_transport_call_argument_image(
+        tmp_path,
+        pointer_use=pointer_use,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_return_register_is_replaced_before_return(
+        transformer,
+        "eax",
+    )
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        leaf,
+        "eax",
+        _protected_slots=frozenset({0x00403000}),
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "width", "expected"),
+    (
+        (None, 2, True),
+        ("full-read", 2, False),
+        ("high-byte", 1, False),
+        ("return-live", 2, False),
+    ),
+)
+def test_full_argument_load_is_confined_to_exact_low_slice(
+    tmp_path,
+    mutation,
+    width,
+    expected,
+):
+    (
+        image,
+        caller,
+        consumer,
+        consumer_call,
+        narrow_push,
+        load_address,
+    ) = indirect_narrow_scalar_call_argument_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    load = recovery._owned_decoded(load_address)
+
+    assert load.mnemonic == "mov"
+    assert load.operands[0].size == 4
+    assert load.operands[1].size == 4
+    assert recovery.direct_call_targets_by_source[consumer_call] == consumer
+    assert recovery._function_argument_is_narrow_scalar(
+        consumer,
+        2,
+        width=width,
+    ) is expected
+    assert recovery._closed_read_only_direct_call_argument_for_push(
+        narrow_push,
+        caller,
+        frozenset({0x00403000}),
+        required_narrow_scalar_width=width,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("unbounded_replacement", "expected"),
+    ((False, True), (True, False)),
+)
+def test_partial_scalar_return_stops_only_at_protected_free_replacement(
+    tmp_path,
+    unbounded_replacement,
+    expected,
+):
+    (
+        image,
+        _caller,
+        helper,
+        replacement,
+        _helper_call,
+        _replacement_call,
+        _observation,
+    ) = partial_return_replaced_by_bounded_call_image(
+        tmp_path,
+        unbounded_replacement=unbounded_replacement,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    protected_slots = frozenset({0x00403000})
+    returns = tuple(
+        address
+        for address in recovery._function_instruction_addresses(replacement)
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_RET)
+    )
+
+    assert recovery._function_return_register_is_replaced_before_return(
+        replacement,
+        "eax",
+    )
+    assert not recovery._function_return_register_is_entry_independent(
+        replacement,
+        "eax",
+    )
+    assert bool(returns)
+    assert all(
+        recovery._register_is_proven_image_capability_free_before(
+            address,
+            "eax",
+            replacement,
+            call_return_domains={},
+            protected_slots=protected_slots,
+            protected_only=True,
+        )
+        for address in returns
+    ) is expected
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        helper,
+        "eax",
+        _protected_slots=protected_slots,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("writes_through_argument", "expected"),
+    ((False, True), (True, False)),
+)
+def test_partial_result_allows_only_closed_read_only_call_argument(
+    tmp_path,
+    writes_through_argument,
+    expected,
+):
+    (
+        image,
+        caller,
+        helper,
+        replacement,
+        consumer,
+        result_push,
+    ) = partial_return_replaced_by_read_only_consumer_image(
+        tmp_path,
+        writes_through_argument=writes_through_argument,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    protected_slots = frozenset({0x00403000})
+    returns = tuple(
+        address
+        for address in recovery._function_instruction_addresses(replacement)
+        if recovery._owned_decoded(address).group(capstone.CS_GRP_RET)
+    )
+
+    assert recovery._function_return_register_is_replaced_before_return(
+        replacement,
+        "eax",
+    )
+    assert not recovery._function_return_register_is_entry_independent(
+        replacement,
+        "eax",
+    )
+    assert bool(returns)
+    assert not any(
+        recovery._register_is_proven_image_capability_free_before(
+            address,
+            "eax",
+            replacement,
+            call_return_domains={},
+            protected_slots=protected_slots,
+            protected_only=True,
+        )
+        for address in returns
+    )
+    assert recovery._function_argument_is_read_only(consumer, 0) is expected
+    assert recovery._closed_read_only_direct_call_argument_for_push(
+        result_push,
+        caller,
+        protected_slots,
+    ) is expected
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        helper,
+        "eax",
+        _protected_slots=protected_slots,
+    ) is expected
+
+
+@pytest.mark.parametrize("full_mask", (False, True))
+def test_partial_scalar_proof_accepts_only_bounded_bitfield_join(
+    tmp_path,
+    full_mask,
+):
+    image, function_entry, store_address = (
+        partial_bounded_bitfield_store_image(
+            tmp_path,
+            full_mask=full_mask,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    store = recovery._owned_decoded(store_address)
+
+    assert store.bytes == b"\x88\x06"
+    assert recovery._partial_register_load_is_scalar_before(
+        store.address,
+        store.operands[1],
+        function_entry,
+    ) is (not full_mask)
+
+
+@pytest.mark.parametrize(
+    (
+        "full_load",
+        "unbounded_argument",
+        "protected_slot",
+        "expected",
+    ),
+    (
+        (False, False, 0x00403000, True),
+        (True, False, 0x00403000, False),
+        (False, True, 0x00403000, False),
+        (False, False, 0x00003000, False),
+    ),
+)
+def test_partial_scalar_join_requires_closed_narrow_argument_and_load(
+    tmp_path,
+    full_load,
+    unbounded_argument,
+    protected_slot,
+    expected,
+):
+    image, function_entry, store_address = (
+        partial_argument_word_join_store_image(
+            tmp_path,
+            full_load=full_load,
+            unbounded_argument=unbounded_argument,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    store = recovery._owned_decoded(store_address)
+
+    assert store.bytes == b"\x66\x89\x33"
+    assert recovery._partial_register_joined_scalar_origins_before(
+        store_address,
+        store.operands[1],
+        function_entry,
+        frozenset({protected_slot}),
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("unbounded_rhs", "protected_slot", "expected"),
+    (
+        (False, 0x00403000, True),
+        (False, 0x00000005, False),
+        (True, 0x00403000, False),
+    ),
+)
+def test_return_domain_bounds_finite_byte_difference(
+    tmp_path,
+    unbounded_rhs,
+    protected_slot,
+    expected,
+):
+    image, function_entry = byte_difference_return_image(
+        tmp_path,
+        unbounded_rhs=unbounded_rhs,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_return_register_is_disjoint_from_slots(
+        function_entry,
+        "eax",
+        frozenset({protected_slot}),
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    (
+        ("zero", True),
+        ("protected-predecessor", False),
+        ("argument", False),
+    ),
+)
+def test_return_domain_bounds_incremented_scalar(
+    tmp_path,
+    source,
+    expected,
+):
+    image, function_entry = incremented_scalar_return_image(
+        tmp_path,
+        source=source,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_return_register_is_disjoint_from_slots(
+        function_entry,
+        "eax",
+        frozenset({0x00403000}),
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (
+        (0x6F, True),
+        (0x00403000, False),
+        (0x00403003, False),
+        (0x00403004, True),
+    ),
+)
+def test_return_domain_bounds_full_width_immediate(
+    tmp_path,
+    value,
+    expected,
+):
+    image, function_entry = immediate_scalar_return_image(
+        tmp_path,
+        value=value,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_return_register_is_disjoint_from_slots(
+        function_entry,
+        "eax",
+        frozenset({0x00403000}),
+    ) is expected
+
+
+@pytest.mark.parametrize("unproven_increment", (False, True))
+def test_partial_result_consumer_requires_scalar_full_increment_input(
+    tmp_path,
+    unproven_increment,
+):
+    image, function_entry = joined_partial_boolean_return_image(
+        tmp_path,
+        unproven_increment=unproven_increment,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    expected = not unproven_increment
+
+    assert recovery._function_return_slice_is_independently_scalar(
+        function_entry,
+        capstone.x86.X86_REG_AL,
+        1,
+    ) is expected
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        function_entry,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    ((0, True), (1, True), (2, False), (0x00403000, False)),
+)
+def test_partial_return_slice_accepts_only_full_boolean_literal(
+    tmp_path,
+    value,
+    expected,
+):
+    image, function_entry = full_boolean_to_partial_return_image(
+        tmp_path,
+        value=value,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_return_slice_is_independently_scalar(
+        function_entry,
+        capstone.x86.X86_REG_AL,
+        1,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, 16),
+        ("file-attributes", 4),
+        ("file-time", 16),
+        ("create-file", 28),
+        ("set-file-pointer", 16),
+        ("set-file-pointer-delayed-frame", 16),
+        ("set-file-pointer-delayed-missing-restore", None),
+        ("close-handle", 4),
+        ("file-time-to-system-time", 8),
+        ("exit-process", 4),
+        ("get-file-size", 8),
+        ("set-file-attributes", 8),
+        ("create-directory", 8),
+        ("format-message", 28),
+        ("get-tick-count", 0),
+        ("get-time-zone-information", 4),
+        ("delete-file", 4),
+        ("remove-directory", 4),
+        ("current-directory", 8),
+        ("tls-get-value", 4),
+        ("tls-free", 4),
+        ("tls-set-value", 8),
+        ("get-std-handle", 4),
+        ("get-last-error", 0),
+        ("is-dbcs-lead-byte", 4),
+        ("global-alloc", 8),
+        ("global-realloc", 12),
+        ("global-realloc-framed", 12),
+        ("global-free", 4),
+        ("delete-critical-section", 4),
+        ("write-file", 20),
+        ("read-file", 20),
+        ("wrong-dll", None),
+        ("wrong-name", None),
+        ("missing-arg", None),
+        ("extra-arg", None),
+    ),
+)
+def test_private_stack_cleanup_requires_exact_named_stdcall_import(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, call_address = exact_stdcall_import_cleanup_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._exact_named_stdcall_import_arity(
+        call_address,
+    ) == (None if expected is None else expected // 4)
+    assert recovery._exact_import_call_stack_cleanup(
+        call_address,
+        function_entry,
+    ) == expected
+    tracked = recovery._function_private_stack_coordinate_states(
+        function_entry
+    )
+    assert (tracked is not None) is (expected is not None)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("alias-protected", False),
+        ("sync-enter", True),
+        ("sync-alias-protected", False),
+        ("wrong-import", False),
+    ),
+)
+def test_private_stack_preservation_audits_named_stdcall_arguments(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, call_address = (
+        exact_stdcall_private_stack_preservation_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        call_address,
+        function_entry,
+        (0, -4),
+        4,
+    ) is expected
+
+
+def test_private_stack_origin_uses_current_coordinate_after_stdcall(tmp_path):
+    image, function_entry, lea_address, push_address = (
+        private_stack_origin_after_stdcall_image(tmp_path)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    lea = recovery._owned_decoded(lea_address)
+    push = recovery._owned_decoded(push_address)
+
+    assert recovery._function_stack_states(function_entry) is not None
+    assert recovery._function_stack_states(function_entry).get(lea_address) is None
+    assert recovery._private_stack_operand_coordinate(
+        lea_address,
+        lea.operands[1],
+        function_entry,
+    ) == (0, -4)
+    assert recovery._stack_address_origin_before(
+        push_address,
+        push.operands[0],
+        function_entry,
+        frozenset(),
+    ) == (-4, lea_address)
+
+
+def test_partial_function_stack_states_are_not_cached_across_open_call(
+    tmp_path,
+):
+    image, function_entry, lea_address, _push_address = (
+        private_stack_origin_after_stdcall_image(tmp_path)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    first = recovery._function_stack_states(function_entry)
+    second = recovery._function_stack_states(function_entry)
+
+    assert first is not None
+    assert first.get(lea_address) is None
+    assert second == first
+    assert second is not first
+    recovery.control_flow_revision += 1
+    third = recovery._function_stack_states(function_entry)
+    assert third == first
+    assert third is not first
+
+
+def test_private_stack_identity_stops_at_call_clobbered_register(tmp_path):
+    image, function_entry, eax_use, ebx_use = (
+        private_stack_identity_after_call_clobber_image(tmp_path)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_private_stack_coordinate_states(
+        function_entry
+    ) is not None
+    assert recovery._straight_line_register_has_private_stack_identity(
+        eax_use,
+        "eax",
+        function_entry,
+    ) is False
+    assert recovery._straight_line_register_has_private_stack_identity(
+        ebx_use,
+        "ebx",
+        function_entry,
+    ) is True
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("reads-protected", False),
+        ("returning-import", False),
+    ),
+)
+def test_private_stack_preservation_audits_noreturn_branch(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, call_address = private_stack_noreturn_branch_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        call_address,
+        function_entry,
+        (0, -12),
+        4,
+    ) is expected
+
+
+@pytest.mark.parametrize("returning_import", (False, True))
+def test_private_stack_scalar_flow_closes_only_audited_noreturn_arm(
+    tmp_path,
+    returning_import,
+):
+    image, function_entry, store_address, call_address = (
+        private_stack_scalar_noreturn_branch_image(
+            tmp_path,
+            returning_import=returning_import,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    call = recovery._owned_decoded(call_address)
+
+    assert recovery._call_is_proven_no_return(
+        call,
+        frozenset(),
+    ) is (not returning_import)
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is (not returning_import)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("reads-protected", False),
+        ("malformed-restore", False),
+    ),
+)
+def test_private_stack_preservation_closes_exact_context_restore(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, call_address, restore = (
+        private_stack_context_restore_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._longjmp_like_context_restore(restore) is (
+        mutation != "malformed-restore"
+    )
+    callee = recovery._direct_target(
+        recovery._owned_decoded(call_address)
+    )
+    restore_calls = tuple(
+        call
+        for call in recovery._function_direct_calls(callee)
+        if call.target == restore
+    )
+    assert len(restore_calls) == 1
+    assert recovery._call_is_proven_no_return(
+        recovery._owned_decoded(restore_calls[0].address),
+        frozenset(),
+    ) is (mutation != "malformed-restore")
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        call_address,
+        function_entry,
+        (0, -12),
+        4,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    ((None, True), ("malformed-restore", False)),
+)
+def test_context_restore_classification_is_revision_cached(
+    tmp_path,
+    monkeypatch,
+    mutation,
+    expected,
+):
+    image, _function_entry, _call_address, restore = (
+        private_stack_context_restore_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    following_queries = []
+    original_following = recovery._following_function_entry
+
+    def following(function_entry):
+        following_queries.append(function_entry)
+        return original_following(function_entry)
+
+    monkeypatch.setattr(recovery, "_following_function_entry", following)
+
+    assert recovery._longjmp_like_context_restore(restore) is expected
+    original_addresses = recovery._function_instruction_addresses
+    monkeypatch.setattr(
+        recovery,
+        "_function_instruction_addresses",
+        lambda _entry: pytest.fail("cached restore proof rescanned its body"),
+    )
+    assert recovery._longjmp_like_context_restore(restore) is expected
+    assert following_queries == [restore]
+    monkeypatch.setattr(
+        recovery,
+        "_function_instruction_addresses",
+        original_addresses,
+    )
+    recovery.control_flow_revision += 1
+    assert recovery._longjmp_like_context_restore(restore) is expected
+    assert following_queries == [restore, restore]
+
+
+def test_private_stack_memory_freeze_reuses_immutable_snapshot():
+    immutable = frozenset({(0, -4), (0, -3), (0, -2), (0, -1)})
+    mutable = set(immutable)
+
+    assert x86_cfg_module._freeze_private_stack_memory(immutable) is immutable
+    frozen = x86_cfg_module._freeze_private_stack_memory(mutable)
+    assert frozen == immutable
+    assert isinstance(frozen, frozenset)
+    assert frozen is not mutable
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("protected-pointer", False),
+        ("reads-protected", False),
+    ),
+)
+def test_private_stack_preservation_prunes_only_disjoint_restore_callback(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, call_address, callback = (
+        private_stack_context_restore_side_call_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    limits = replace(generous_limits(image), max_summary_iterations=64)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        limits,
+    )
+    recovery.recover()
+
+    assert recovery._callback_nonreturns_via_context_restore(
+        callback,
+        0x00403000,
+    ) == 0x00401130
+    try:
+        preserved = recovery._closed_leaf_call_preserves_private_stack_coordinate(
+            call_address,
+            function_entry,
+            (0, -12),
+            4,
+        )
+    except AnalysisLimitError as error:
+        pytest.fail(f"paired restore callback expanded its side tree: {error}")
+
+    assert preserved is expected
+
+
+def test_callback_context_restore_classification_is_revision_cached(
+    tmp_path,
+    monkeypatch,
+):
+    image, _function_entry, _call_address, callback = (
+        private_stack_context_restore_side_call_image(tmp_path)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    expected = recovery._callback_nonreturns_via_context_restore(
+        callback,
+        0x00403000,
+    )
+    assert expected is not None
+    monkeypatch.setattr(
+        recovery,
+        "_pushed_call_argument",
+        lambda *_args: pytest.fail("cached callback restore was rescanned"),
+    )
+
+    assert (
+        recovery._callback_nonreturns_via_context_restore(
+            callback,
+            0x00403000,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("wrapped-restore", True),
+        ("missing-guard", False),
+        ("malformed-restore", False),
+    ),
+)
+def test_guarded_context_restore_callback_is_noreturn(
+    tmp_path,
+    mutation,
+    expected,
+):
+    (
+        image,
+        _function_entry,
+        call_address,
+        callback,
+        restore,
+        slot,
+        context,
+    ) = guarded_context_restore_callback_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    call = recovery._owned_decoded(call_address)
+
+    finite = recovery._finite_operand_values_before(
+        call_address,
+        call.operands[0],
+        _function_entry,
+        frozenset(),
+    )
+    assert finite is not None
+    assert finite[0] == frozenset({0, callback})
+    assert recovery.call_targets_by_source.get(call_address) == {callback}
+    assert recovery.direct_call_targets_by_source.get(call_address) is None
+    assert (
+        call_address,
+        "indirect-call-global-slot",
+    ) in recovery.incoming_edges.get(callback, ())
+    callback_calls = tuple(recovery._function_direct_calls(callback))
+    assert len(callback_calls) == 1
+    restore_calls = (
+        tuple(recovery._function_direct_calls(callback_calls[0].target))
+        if mutation == "wrapped-restore"
+        else callback_calls
+    )
+    assert tuple(row.target for row in restore_calls) == (restore,)
+    pushed_context = recovery._pushed_call_argument(
+        restore_calls[0].address,
+        0,
+    )
+    assert pushed_context is not None
+    assert pushed_context[2] == (
+        callback_calls[0].target
+        if mutation == "wrapped-restore"
+        else callback
+    )
+    assert pushed_context[1].type == capstone.x86_const.X86_OP_IMM
+    assert pushed_context[1].imm & 0xFFFF_FFFF == context
+    direct_restore = recovery._callback_nonreturns_via_context_restore(
+        callback,
+        context,
+    )
+    assert direct_restore == (
+        restore
+        if mutation not in {"malformed-restore", "wrapped-restore"}
+        else None
+    )
+    guard = recovery._absolute_slot_nonzero_call_guard(
+        _function_entry,
+        recovery._following_function_entry(_function_entry),
+        call_address,
+        slot,
+    )
+    assert (guard is not None) is (mutation != "missing-guard")
+    if mutation == "wrapped-restore":
+        following = recovery._following_function_entry(_function_entry)
+        recovery.summary_successors_cache[
+            (
+                call_address,
+                _function_entry,
+                following,
+                recovery._summary_fact_signature(),
+                recovery.control_flow_revision,
+                False,
+            )
+        ] = (call_address + call.size,)
+        wrapped_call = recovery._owned_decoded(
+            callback_calls[0].address
+        )
+        recovery.summary_successors_cache[
+            (
+                wrapped_call.address,
+                callback,
+                recovery._following_function_entry(callback),
+                recovery._summary_fact_signature(),
+                recovery.control_flow_revision,
+                False,
+            )
+        ] = (wrapped_call.address + wrapped_call.size,)
+        assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+            call_address,
+            _function_entry,
+            (0, 8),
+            4,
+        )
+    assert recovery._call_is_proven_no_return(
+        call,
+        frozenset(),
+    ) is expected
+
+
+def test_proven_noreturn_call_remains_current_during_recursive_replay(
+    tmp_path,
+    monkeypatch,
+):
+    (
+        image,
+        function_entry,
+        call_address,
+        _callback,
+        _restore,
+        _slot,
+        _context,
+    ) = guarded_context_restore_callback_image(tmp_path)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    call = recovery._owned_decoded(call_address)
+
+    assert recovery._call_is_proven_no_return(call, frozenset()) is True
+    assert (call.address, bytes(call.bytes)) in recovery.proven_no_return_calls
+    monkeypatch.setattr(
+        recovery,
+        "_guarded_context_restore_callback_call_is_proven_no_return",
+        lambda _decoded: False,
+    )
+
+    assert recovery._call_is_proven_no_return(call, frozenset()) is True
+    assert recovery._summary_successors(
+        call_address,
+        function_entry,
+        recovery._following_function_entry(function_entry),
+    ) == ()
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("protected-pointer", False),
+        ("reads-protected", False),
+    ),
+)
+def test_private_stack_scalar_quarantine_prunes_disjoint_restore_callback(
+    tmp_path,
+    monkeypatch,
+    mutation,
+    expected,
+):
+    """A dying callback arm cannot expose a scalar-spill capability."""
+    image, function_entry, _call_address, _callback = (
+        private_stack_context_restore_side_call_image(
+            tmp_path,
+            mutation=mutation,
+            scalar_split=True,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        replace(generous_limits(image), max_summary_iterations=64),
+    )
+    recovery.recover()
+    assert recovery._function_private_stack_coordinate_states(
+        function_entry
+    ) is not None
+    original_noreturn = recovery._call_is_proven_no_return
+    noreturn_queries = []
+
+    def call_is_noreturn(decoded, active):
+        noreturn_queries.append(decoded.address)
+        return (
+            False
+            if decoded.address == _call_address
+            else original_noreturn(decoded, active)
+        )
+
+    monkeypatch.setattr(
+        recovery,
+        "_call_is_proven_no_return",
+        call_is_noreturn,
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_private_stack_store_is_scalar_quarantined_uncached",
+        lambda *_args: False,
+    )
+
+    try:
+        result = recovery._private_stack_store_is_scalar_quarantined(
+            function_entry + 3,
+            function_entry,
+        )
+    except AnalysisLimitError as error:
+        pytest.fail(f"paired restore callback expanded its side tree: {error}")
+
+    assert _call_address in noreturn_queries
+    assert result is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("dynamic-read", False),
+        ("exact-address", False),
+        ("dynamic-address", False),
+    ),
+)
+def test_private_stack_scalar_quarantine_allows_only_nested_write_clobber(
+    tmp_path,
+    monkeypatch,
+    mutation,
+    expected,
+):
+    """Unknown writes may kill a spill; reads and addresses cannot escape it."""
+    image, function_entry, store_address = private_stack_scalar_nested_clobber_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    monkeypatch.setattr(
+        recovery,
+        "_private_stack_store_is_scalar_quarantined_uncached",
+        lambda *_args: False,
+    )
+
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("bounded-read", True),
+        ("wide-read", False),
+        ("unbounded-read", False),
+    ),
+)
+def test_private_stack_scalar_quarantine_bounds_nested_indexed_read(
+    tmp_path,
+    monkeypatch,
+    mutation,
+    expected,
+):
+    """Every indexed read coordinate must be finite and spill-disjoint."""
+    image, function_entry, store_address = private_stack_scalar_nested_clobber_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    monkeypatch.setattr(
+        recovery,
+        "_private_stack_store_is_scalar_quarantined_uncached",
+        lambda *_args: False,
+    )
+
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("jecxz-read", True),
+        ("jecxz-wide-read", False),
+        ("jecxz-unbounded-read", False),
+    ),
+)
+def test_private_stack_scalar_quarantine_bounds_jecxz_indexed_read(
+    tmp_path,
+    monkeypatch,
+    mutation,
+    expected,
+):
+    """JECXZ must close the exact finite read domain before admitting it."""
+    image, function_entry, store_address = private_stack_scalar_nested_clobber_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    monkeypatch.setattr(
+        recovery,
+        "_private_stack_store_is_scalar_quarantined_uncached",
+        lambda *_args: False,
+    )
+
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("reads-protected", False),
+        ("addresses-protected", False),
+    ),
+)
+def test_private_stack_scalar_quarantine_shortcuts_only_disjoint_call(
+    tmp_path,
+    monkeypatch,
+    mutation,
+    expected,
+):
+    """A strict preservation proof may skip an otherwise opaque call body."""
+    image, function_entry, store_address = (
+        private_stack_scalar_disjoint_context_save_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    monkeypatch.setattr(
+        recovery,
+        "_private_stack_store_is_scalar_quarantined_uncached",
+        lambda *_args: False,
+    )
+
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("malformed-restore", False),
+        ("protected-context", False),
+    ),
+)
+def test_private_stack_preservation_closes_direct_context_restore(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, call_address, restore = (
+        private_stack_direct_context_restore_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._longjmp_like_context_restore(restore) is (
+        mutation != "malformed-restore"
+    )
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        call_address,
+        function_entry,
+        (0, -12),
+        4,
+    ) is expected
+
+
+def test_private_stack_scalar_flow_propagates_nested_context_termination(
+    tmp_path,
+):
+    image, function_entry, store_address = (
+        private_stack_nested_context_restore_scalar_image(tmp_path)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is True
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("delayed-pop", True),
+        ("no-arguments", True),
+        ("protected-pointer", False),
+        ("missing-cleanup", False),
+    ),
+)
+def test_private_stack_preservation_allows_unrelated_unresolved_call(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, call_address = private_stack_unresolved_call_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        call_address,
+        function_entry,
+        (0, -12),
+        4,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    ((None, True), ("protected-pointer", False), ("missing-cleanup", False)),
+)
+def test_private_stack_scalar_flow_allows_unrelated_unresolved_call(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, store_address = (
+        private_stack_scalar_unresolved_call_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_arity", "expected"),
+    (
+        (None, 2, True),
+        ("wrong-restore", None, False),
+        ("missing-restore", None, False),
+        ("nonadjacent-arguments", None, False),
+        ("near-return-cleanup", 2, True),
+        ("unaligned-return", None, False),
+        ("far-return", None, False),
+        ("protected-pointer", 2, False),
+    ),
+)
+def test_private_stack_scalar_flow_allows_exact_callee_cleaned_unresolved_call(
+    tmp_path,
+    mutation,
+    expected_arity,
+    expected,
+):
+    image, function_entry, callee, store_address, call_address = (
+        private_stack_scalar_callee_cleaned_unresolved_call_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._exact_callee_cleaned_unresolved_call_arity(
+        call_address,
+        callee,
+    ) == expected_arity
+    assert (recovery._function_private_stack_coordinate_states(callee) is not None) is (
+        expected_arity is not None
+    )
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_arity", "expected"),
+    (
+        (None, 2, True),
+        ("nonadjacent-arguments", 2, True),
+        ("missing-local-restore", None, False),
+        ("partial-local-restore", None, False),
+        ("extra-post-call-push", None, False),
+        ("wrong-saved-restore", None, False),
+        ("pop-esp", None, False),
+        ("near-return-cleanup", 2, False),
+        ("far-return", None, False),
+    ),
+)
+def test_private_stack_scalar_flow_allows_delayed_callee_cleanup(
+    tmp_path,
+    mutation,
+    expected_arity,
+    expected,
+):
+    image, function_entry, callee, store_address, call_address = (
+        private_stack_scalar_delayed_callee_cleanup_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._exact_callee_cleaned_unresolved_call_arity(
+        call_address,
+        callee,
+    ) == expected_arity
+    assert (recovery._function_private_stack_coordinate_states(callee) is not None) is (
+        expected_arity is not None
+    )
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, 3),
+        ("swapped-restores", None),
+        ("missing-second-restore", None),
+        ("far-return", None),
+    ),
+)
+def test_private_stack_coordinates_allow_multiple_saved_restores_after_callback(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, call_address = (
+        private_stack_multiple_restore_callee_cleanup_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._exact_callee_cleaned_unresolved_call_arity(
+        call_address,
+        function_entry,
+    ) == expected
+    assert (recovery._function_private_stack_coordinate_states(function_entry) is not None) is (
+        expected is not None
+    )
+
+
+@pytest.mark.parametrize("reads_protected", (False, True))
+def test_private_stack_preservation_bounds_shifted_recursive_coordinate(
+    tmp_path,
+    reads_protected,
+):
+    image, function_entry, call_address = private_stack_recursive_call_image(
+        tmp_path,
+        reads_protected=reads_protected,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        call_address,
+        function_entry,
+        (0, -12),
+        4,
+    ) is (not reads_protected)
+
+
+@pytest.mark.parametrize(
+    ("reads_protected", "carries_protected", "expected"),
+    (
+        (False, False, True),
+        (True, False, False),
+        (False, True, False),
+    ),
+)
+def test_private_stack_scalar_flow_bounds_recursive_coordinate(
+    tmp_path,
+    reads_protected,
+    carries_protected,
+    expected,
+):
+    image, function_entry, store_address = private_stack_recursive_scalar_image(
+        tmp_path,
+        reads_protected=reads_protected,
+        carries_protected=carries_protected,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("full-return", False),
+        ("wrong-slice", False),
+        ("clobber-copy", False),
+        ("caller-saved-copy", False),
+    ),
+)
+def test_partial_scalar_lattice_carries_exact_call_slice_to_preserved_copy(
+    tmp_path,
+    mutation,
+    expected,
+):
+    """Only the exact scalar AL slice survives a copy and ABI-safe calls."""
+    image, function_entry, callee, store_address = (
+        partial_call_result_copy_store_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    store = recovery._owned_decoded(store_address)
+
+    assert recovery._function_return_slice_is_independently_scalar(
+        callee,
+        capstone.x86.X86_REG_AL,
+        1,
+    ) is (mutation != "full-return")
+    assert recovery._partial_register_load_is_scalar_before(
+        store_address,
+        store.operands[1],
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("terminal", "expected"),
+    (
+        ("plain", True),
+        ("near-cleanup", True),
+        ("far-cleanup", False),
+        ("iret", False),
+    ),
+)
+def test_partial_return_slice_accepts_only_exact_near_return_cleanup(
+    tmp_path,
+    terminal,
+    expected,
+):
+    image, function_entry = partial_boolean_return_cleanup_image(
+        tmp_path,
+        terminal=terminal,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_return_slice_is_independently_scalar(
+        function_entry,
+        capstone.x86.X86_REG_AL,
+        1,
+    ) is expected
+
+
+def test_partial_result_consumer_accepts_exact_near_return_cleanup(tmp_path):
+    image, function_entry = partial_boolean_return_cleanup_image(
+        tmp_path,
+        terminal="near-cleanup",
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        function_entry,
+        "eax",
+    )
+
+
+@pytest.mark.parametrize("overwrite", (False, True))
+def test_partial_return_slice_requires_exact_forwarding_wrapper(
+    tmp_path,
+    overwrite,
+):
+    image, wrapper, callee = forwarded_partial_boolean_return_image(
+        tmp_path,
+        overwrite=overwrite,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    expected = not overwrite
+
+    assert recovery._function_return_slice_is_independently_scalar(
+        callee,
+        capstone.x86.X86_REG_AL,
+        1,
+    )
+    assert recovery._function_return_slice_is_independently_scalar(
+        wrapper,
+        capstone.x86.X86_REG_AL,
+        1,
+    ) is expected
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        callee,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize("full_compare", (False, True))
+def test_partial_result_consumer_requires_narrow_immediate_compare(
+    tmp_path,
+    full_compare,
+):
+    image, wrapper, _callee = forwarded_partial_boolean_return_image(
+        tmp_path,
+        full_compare=full_compare,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        wrapper,
+        "eax",
+    ) is (not full_compare)
+
+
+def test_partial_result_consumer_accepts_wider_nonescaping_compare(tmp_path):
+    """A wider partial compare observes but cannot transport residual bits."""
+    image, wrapper, callee = forwarded_partial_boolean_return_image(
+        tmp_path,
+        wider_partial_compare=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_return_slice_is_independently_scalar(
+        callee,
+        capstone.x86.X86_REG_AL,
+        1,
+    )
+    assert not recovery._function_return_slice_is_independently_scalar(
+        wrapper,
+        capstone.x86.X86_REG_AX,
+        2,
+    )
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        wrapper,
+        "eax",
+    )
+
+
+def test_partial_result_consumer_accepts_fresh_wider_compare(tmp_path):
+    """A closed fresh return may be observed through a narrower compare."""
+    image, wrapper, _callee = forwarded_partial_boolean_return_image(
+        tmp_path,
+        wider_partial_compare=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        wrapper,
+        "eax",
+        _path_local_partial_only=True,
+        _full_result_predicate_allowed=True,
+    )
+
+
+def test_partial_result_consumer_accepts_fresh_wider_self_test(tmp_path):
+    """A fresh result may be tested narrowly after residual taint is gone."""
+    image, wrapper, _callee = forwarded_partial_boolean_return_image(
+        tmp_path,
+        wider_partial_test=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert not recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        wrapper,
+        "eax",
+        _path_local_partial_only=True,
+    )
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        wrapper,
+        "eax",
+        _path_local_partial_only=True,
+        _full_result_predicate_allowed=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("full-read", False),
+        ("owned-interior", True),
+        ("address-taken", False),
+    ),
+)
+def test_partial_result_consumer_retains_provisional_raw_residue(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, callee, live_call, raw_site, wrapper = (
+        partial_word_return_with_raw_residue_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    cfg = recovery.recover()
+    decoded = frozenset(
+        recovery.direct_call_sources_by_target.get(callee, ())
+    )
+    raw = recovery._raw_direct_call_sites(callee)
+
+    assert decoded == frozenset({live_call})
+    assert raw == {live_call, raw_site}
+    assert recovery._function_return_slice_is_independently_scalar(
+        callee,
+        capstone.x86.X86_REG_AX,
+        2,
+    )
+    assert not recovery._function_return_slice_is_independently_scalar(
+        wrapper,
+        capstone.x86.X86_REG_AX,
+        2,
+    )
+    assert recovery._closed_direct_call_result_is_unused(wrapper, "eax")
+    assert not recovery._direct_call_domain_is_closed(callee)
+    assert recovery._least_reachable_incoming_call_domain_is_closed(
+        callee
+    ) is (mutation != "address-taken")
+    if mutation in {None, "full-read"}:
+        assert recovery.byte_owners.get(raw_site) is None
+        assert recovery.provisional_unowned_raw_callers_by_target[callee] == (
+            frozenset({raw_site})
+        )
+        candidate = next(
+            row
+            for row in cfg.raw_e8_candidates
+            if row.address == raw_site and row.target == callee
+        )
+        assert candidate.classification == "unreachable-executable-residue"
+        recovery._record_provisional_unowned_raw_caller_diagnostics(
+            cfg.raw_e8_candidates
+        )
+    elif mutation == "owned-interior":
+        assert recovery.byte_owners.get(raw_site) is not None
+        assert not recovery.provisional_unowned_raw_callers_by_target.get(
+            callee
+        )
+        candidate = next(
+            row
+            for row in cfg.raw_e8_candidates
+            if row.address == raw_site and row.target == callee
+        )
+        assert candidate.classification == "owned-instruction-bytes"
+    else:
+        assert any(row.va == callee for row in image.exports)
+        assert not recovery.provisional_unowned_raw_callers_by_target.get(
+            callee
+        )
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        callee,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("unbounded-counter", False),
+        ("full-compare", False),
+    ),
+)
+def test_partial_result_consumer_accepts_scalar_register_compare_after_noreturn(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, caller, callee, compare_address = (
+        partial_word_register_compare_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    compare = recovery._owned_decoded(compare_address)
+
+    assert recovery._partial_register_load_is_scalar_before(
+        compare_address,
+        compare.operands[0],
+        caller,
+    ) is (mutation is None)
+    assert recovery._closed_direct_call_result_is_used_only_by_partial_test(
+        callee,
+        "eax",
+    ) is expected
+
+
+def test_unused_result_retains_provisional_raw_residue(tmp_path):
+    image, _callee, _live_call, _callee_raw, wrapper = (
+        partial_word_return_with_raw_residue_image(
+            tmp_path,
+            wrapper_residue=True,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    cfg = recovery.recover()
+    raw_site = 0x004010B0
+    decoded = frozenset(
+        recovery.direct_call_sources_by_target.get(wrapper, ())
+    )
+    raw = recovery._raw_direct_call_sites(wrapper)
+
+    assert decoded == frozenset({0x00401080})
+    assert raw == {0x00401080, raw_site}
+    assert not recovery._direct_call_domain_is_closed(wrapper)
+    assert recovery._least_reachable_incoming_call_domain_is_closed(wrapper)
+    assert recovery.provisional_unowned_raw_callers_by_target[wrapper] == (
+        frozenset({raw_site})
+    )
+    candidate = next(
+        row
+        for row in cfg.raw_e8_candidates
+        if row.address == raw_site and row.target == wrapper
+    )
+    assert candidate.classification == "unreachable-executable-residue"
+    recovery._record_provisional_unowned_raw_caller_diagnostics(
+        cfg.raw_e8_candidates
+    )
+    assert recovery._closed_direct_call_result_is_unused(wrapper, "eax")
+
+
+@pytest.mark.parametrize(
+    ("aliases_protected", "expected"),
+    (
+        (False, True),
+        (True, False),
+    ),
+)
+def test_private_stack_coordinate_survives_only_disjoint_nested_calls(
+    tmp_path,
+    aliases_protected,
+    expected,
+):
+    image, function_entry, call_address = nested_private_stack_call_image(
+        tmp_path,
+        aliases_protected=aliases_protected,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        call_address,
+        function_entry,
+        (0, -12),
+        4,
+    ) is expected
+
+
+def test_private_stack_preservation_skips_irrelevant_index_enumeration(
+    tmp_path,
+):
+    image, function_entry, call_address = (
+        irrelevant_index_private_stack_call_image(tmp_path)
+    )
+    limits = replace(generous_limits(image), max_finite_values=16)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        limits,
+    )
+    recovery.recover()
+
+    try:
+        preserved = recovery._closed_leaf_call_preserves_private_stack_coordinate(
+            call_address,
+            function_entry,
+            (0, -12),
+            4,
+        )
+    except AnalysisLimitError as error:
+        pytest.fail(
+            "register-only LEA consumed the finite-value budget: "
+            f"{error}"
+        )
+
+    assert preserved
+
+
+def test_private_stack_preservation_rejects_unbounded_index_recurrence_early(
+    tmp_path,
+):
+    image, function_entry, call_address = (
+        unbounded_index_private_stack_call_image(tmp_path)
+    )
+    limits = replace(generous_limits(image), max_summary_iterations=64)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        limits,
+    )
+    recovery.recover()
+
+    try:
+        preserved = recovery._closed_leaf_call_preserves_private_stack_coordinate(
+            call_address,
+            function_entry,
+            (0, -12),
+            4,
+        )
+    except AnalysisLimitError as error:
+        pytest.fail(f"unbounded index recurrence exhausted the work cap: {error}")
+
+    assert not preserved
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("missing-guard", False),
+        ("overlap-bound", False),
+    ),
+)
+def test_private_stack_preservation_bounds_guarded_counter_recurrence(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, call_address = (
+        guarded_counter_private_stack_call_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        call_address,
+        function_entry,
+        (0, -12),
+        4,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_domain", "expected"),
+    (
+        (None, True, True),
+        ("signed-bound", False, False),
+        ("wide-bound", False, False),
+        ("missing-zero-guard", False, False),
+        ("wrong-compare", False, False),
+        ("decrement", False, False),
+        ("overlap-displacement", True, False),
+    ),
+)
+def test_private_stack_preservation_bounds_guarded_narrow_counter(
+    tmp_path,
+    mutation,
+    expected_domain,
+    expected,
+):
+    image, function_entry, call_address, callee, use_address = (
+        guarded_narrow_counter_private_stack_call_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    values = recovery._private_stack_guarded_narrow_counter_index_values(
+        use_address,
+        "ecx",
+        callee,
+    )
+    assert (values is not None) is expected_domain
+    if values is not None:
+        assert values == frozenset(range(1, 0x100))
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        call_address,
+        function_entry,
+        (0, -12),
+        4,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_domain", "expected"),
+    (
+        (None, True, True),
+        ("missing-collection-bound", False, True),
+        ("wrong-spill-slot", False, False),
+        ("missing-nonnegative-guard", False, False),
+        ("index-clobber", False, True),
+        ("overlap-table", True, False),
+        ("register-entry-guard", True, True),
+        ("register-entry-wrong-source", False, False),
+        ("register-entry-missing-decrement", False, False),
+        ("register-entry-inverted", False, False),
+    ),
+)
+def test_private_stack_preservation_bounds_reverse_initialized_table_index(
+    tmp_path,
+    mutation,
+    expected_domain,
+    expected,
+):
+    image, function_entry, call_address, callee, use_address = (
+        reverse_initialized_table_private_stack_call_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    values = recovery._private_stack_reverse_table_index_values(
+        use_address,
+        "eax",
+        callee,
+    )
+    assert (values is not None) is expected_domain
+    if values is not None:
+        assert values == frozenset(range(0x10))
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        call_address,
+        function_entry,
+        (0, -12),
+        4,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("missing-zero-guard", False),
+        ("increment-before-store", False),
+        ("wrong-read-table", False),
+        ("index-clobber", False),
+        ("tainted-store", False),
+    ),
+)
+def test_private_stack_scalar_flow_proves_initialized_indexed_table(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry = initialized_indexed_private_stack_table_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_scalar_flow_quarantined(
+        function_entry,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("missing-initial-write", False),
+        ("inverted-reverse-guard", False),
+        ("wrong-reverse-test", False),
+        ("wrong-read-table", False),
+        ("index-clobber", False),
+        ("tainted-store", False),
+    ),
+)
+def test_private_stack_scalar_flow_proves_direct_reverse_initialized_table(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry = direct_reverse_initialized_private_stack_table_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_scalar_flow_quarantined(
+        function_entry,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("missing-counter-init", False),
+        ("partial-counter-init", False),
+        ("wrong-write-table", False),
+        ("increment-before-write", False),
+        ("wrong-read-bound", False),
+        ("missing-initial-guard", False),
+        ("writer-index-clobber", False),
+        ("extra-counter-increment", False),
+    ),
+)
+def test_private_stack_scalar_flow_proves_incremental_initialized_table(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry = incremental_initialized_private_stack_table_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_scalar_flow_quarantined(
+        function_entry,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("missing-chunk-guard", False),
+        ("wrong-chunk-step", False),
+        ("wrong-counter-minus", False),
+        ("extra-chunk-read", False),
+        ("flag-clobber", False),
+        ("partial-zero-reset", False),
+        ("nonzero-reset", False),
+        ("zero-reset-to-chunk", False),
+    ),
+)
+def test_private_stack_scalar_flow_proves_incremental_chunk_table(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, batch_reads = (
+        incremental_chunk_initialized_private_stack_table_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    safe_keys = recovery._private_stack_incremental_table_read_keys(
+        function_entry
+    )
+    assert all(((address, 1) in safe_keys) is expected for address in batch_reads)
+    assert recovery._private_stack_store_is_scalar_flow_quarantined(
+        function_entry,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_domain", "expected"),
+    (
+        (None, True, True),
+        ("missing-upper-guard", False, False),
+        ("wrong-upper-slot", False, False),
+        ("counter-clobber", False, False),
+        ("missing-positive-guard", False, False),
+        ("countdown-increment", False, False),
+        ("unsigned-backedge", False, False),
+        ("flag-clobber", False, False),
+        ("overlap-root", True, False),
+    ),
+)
+def test_private_stack_scalar_flow_bounds_signed_word_countdown(
+    tmp_path,
+    mutation,
+    expected_domain,
+    expected,
+):
+    image, function_entry, store_address, use_address = (
+        bounded_signed_word_countdown_private_stack_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    method = getattr(
+        recovery,
+        "_private_stack_positive_signed_word_countdown_index_values",
+        None,
+    )
+    values = (
+        None
+        if method is None
+        else method(use_address, "edx", function_entry)
+    )
+    assert (values is not None) is expected_domain
+    if values is not None:
+        assert values == frozenset(range(1, 0x10))
+    assert recovery._private_stack_store_is_scalar_flow_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("signed-source", False),
+        ("wide-quotient", False),
+        ("missing-shift", False),
+    ),
+)
+def test_private_stack_scalar_flow_bounds_narrowed_bitset_index(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry = narrow_quotient_private_stack_bitset_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_scalar_flow_quarantined(
+        function_entry,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("missing-guard", False),
+        ("overlap-bound", False),
+        ("index-clobber", False),
+        ("malformed-scan", False),
+    ),
+)
+def test_private_stack_scalar_flow_bounds_guarded_scan_index(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry = guarded_scan_private_stack_index_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_scalar_flow_quarantined(
+        function_entry,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("owned-address-escape", True),
+        ("caller-overlap", False),
+        ("outside-frame", False),
+        ("caller-address-escape", False),
+    ),
+)
+def test_private_stack_preservation_accepts_only_owned_aligned_frames(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, call_address = aligned_private_stack_call_image(
+        tmp_path,
+        mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        call_address,
+        function_entry,
+        (0, -12),
+        4,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("aliases_candidate", "expected"),
+    ((False, True), (True, False)),
+)
+def test_private_stack_preservation_retains_aligned_offset_interval(
+    tmp_path,
+    aliases_candidate,
+    expected,
+):
+    image, function_entry, call_address = (
+        aligned_nested_private_stack_call_image(
+            tmp_path,
+            aliases_candidate=aliases_candidate,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        call_address,
+        function_entry,
+        (0, -12),
+        4,
+    ) is expected
+
+
+@pytest.mark.parametrize("aliases_candidate", (False, True))
+def test_private_stack_scalar_flow_retains_aligned_offset_interval(
+    tmp_path,
+    aliases_candidate,
+):
+    image, function_entry, store_address = (
+        aligned_nested_private_stack_scalar_image(
+            tmp_path,
+            aliases_candidate=aliases_candidate,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is (not aliases_candidate)
+
+
+def test_semantic_stack_identity_states_are_revision_cached(tmp_path):
+    image, function_entry, _call_address = aligned_private_stack_call_image(
+        tmp_path,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    first = recovery._semantic_stack_identity_states(function_entry)
+    second = recovery._semantic_stack_identity_states(function_entry)
+
+    assert first is second
+    recovery.control_flow_revision += 1
+    third = recovery._semantic_stack_identity_states(function_entry)
+    assert third == first
+    assert third is not first
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("same-store", True),
+        ("distinct-store", True),
+        ("read-modify-write", False),
+        ("shifted-store", False),
+        ("full-reload", False),
+    ),
+)
+def test_private_stack_byte_predicate_ends_only_at_exact_full_redefinition(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, store_address = (
+        loop_redefined_byte_predicate_stack_image(tmp_path, mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_byte_predicate_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("protected-pointer", False),
+        ("disjoint-pointer", False),
+        ("no-arguments", True),
+        ("indirect-call", False),
+        ("missing-cleanup", False),
+    ),
+)
+def test_private_stack_byte_predicate_allows_only_unrelated_direct_call(
+    tmp_path,
+    monkeypatch,
+    mutation,
+    expected,
+):
+    image, function_entry, store_address, call_address = (
+        byte_predicate_unrelated_direct_call_image(tmp_path, mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    monkeypatch.setattr(
+        recovery,
+        "_closed_leaf_call_preserves_private_stack_coordinate",
+        lambda *_args: False,
+    )
+
+    assert recovery.direct_call_targets_by_source.get(call_address) == (
+        0x004010C0 if mutation != "indirect-call" else None
+    )
+    assert recovery._private_stack_store_is_byte_predicate_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+    if expected:
+        dependencies = set()
+        recovery.producer_dependency_collectors.append(dependencies)
+        try:
+            assert recovery._closed_call_receives_no_private_stack_coordinate(
+                call_address,
+                function_entry,
+                (0, -12),
+            )
+        finally:
+            assert recovery.producer_dependency_collectors.pop() is dependencies
+        assert dependencies == {("function", 0x004010C0)}
+
+
+@pytest.mark.parametrize("nonzero_callback", (False, True))
+def test_private_stack_byte_predicate_prunes_only_exact_zero_callback(
+    tmp_path,
+    nonzero_callback,
+):
+    (
+        image,
+        function_entry,
+        store_address,
+        call_address,
+        callback_value,
+    ) = byte_predicate_exact_zero_callback_image(
+        tmp_path,
+        nonzero_callback=nonzero_callback,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    call = recovery._owned_decoded(call_address)
+
+    assert call.bytes == b"\xff\xd3"
+    assert recovery._registrar_function_entry(call_address) == function_entry
+    assert recovery._closed_direct_call_result_is_unused(
+        function_entry,
+        "eax",
+    )
+    assert (
+        recovery._finite_zero_control_is_unreachable(
+            call_address,
+            call.operands[0],
+            function_entry,
+            frozenset(),
+        )
+        is not None
+    ) is (not nonzero_callback)
+    if nonzero_callback:
+        assert callback_value == 1
+        assert not recovery.call_targets_by_source.get(call_address)
+    dependencies = set()
+    recovery.producer_dependency_collectors.append(dependencies)
+    try:
+        quarantined = (
+            recovery._private_stack_store_is_byte_predicate_quarantined(
+                store_address,
+                function_entry,
+            )
+        )
+    finally:
+        assert recovery.producer_dependency_collectors.pop() is dependencies
+    assert quarantined is (not nonzero_callback)
+    if not nonzero_callback:
+        assert dependencies == {
+            ("function", function_entry - 0x40),
+            ("function", function_entry),
+        }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("nested-observation", False),
+        ("bypass-kill", False),
+        ("no-kill", False),
+    ),
+)
+def test_private_stack_partial_reload_requires_closed_direct_kill(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, store_address, reload_address, callee = (
+        partial_reload_direct_kill_image(tmp_path, mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_entry_register_is_unobserved_until_kill(
+        callee,
+        "eax",
+    ) is expected
+    assert recovery._register_definition_is_used_only_partially_before_kill(
+        reload_address,
+        "eax",
+        function_entry,
+    ) is expected
+    assert recovery._private_stack_store_is_byte_predicate_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+    if expected:
+        dependencies = set()
+        recovery.producer_dependency_collectors.append(dependencies)
+        try:
+            assert recovery._function_entry_register_is_unobserved_until_kill(
+                callee,
+                "eax",
+            )
+        finally:
+            assert recovery.producer_dependency_collectors.pop() is dependencies
+        assert dependencies == {("function", callee + 0x20)}
+
+
+@pytest.mark.parametrize(
+    ("full_width_read", "expected"),
+    ((False, True), (True, False)),
+)
+def test_entry_register_kill_tracks_partial_write_masks(
+    tmp_path,
+    full_width_read,
+    expected,
+):
+    image, function_entry = partial_register_mask_kill_image(
+        tmp_path,
+        full_width_read=full_width_read,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_entry_register_is_unobserved_until_kill(
+        function_entry,
+        "eax",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    (
+        "callee_reads_register",
+        "callee_noreturn",
+        "post_call_full_read",
+        "expected",
+    ),
+    (
+        (False, False, False, True),
+        (True, False, False, False),
+        (False, False, True, False),
+        (False, True, True, True),
+    ),
+)
+def test_partial_register_use_crosses_only_nonobserving_direct_call(
+    tmp_path,
+    callee_reads_register,
+    callee_noreturn,
+    post_call_full_read,
+    expected,
+):
+    image, function_entry, definition_address = (
+        partial_register_across_preserving_call_image(
+            tmp_path,
+            callee_reads_register=callee_reads_register,
+            callee_noreturn=callee_noreturn,
+            post_call_full_read=post_call_full_read,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    if not callee_noreturn:
+        callee = function_entry + 0x40
+        assert recovery._private_stack_store_is_scalar_flow_quarantined(
+            callee,
+            callee,
+        ) is (not callee_reads_register)
+    assert recovery._register_definition_is_used_only_partially_before_kill(
+        definition_address,
+        "ebx",
+        function_entry,
+        maximum_partial_width=1,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("negative-initializer", False),
+        ("decrement", False),
+        ("unsigned-latch", False),
+        ("overlap", False),
+        ("add-eight-delayed", True),
+        ("delayed-flag-clobber", False),
+        ("negative-step", False),
+    ),
+)
+def test_private_stack_byte_predicate_bounds_signed_word_loop_index(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, store_address = (
+        signed_word_loop_private_stack_read_image(tmp_path, mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_byte_predicate_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, frozenset(range(0x100))),
+        ("missing-zero", None),
+        ("wrong-guard-slot", None),
+        ("inverted-guard", None),
+        ("missing-table-write", None),
+        ("increment-before-write", None),
+        ("extra-increment", None),
+        ("countdown-increment", None),
+        ("unsigned-countdown", None),
+        ("countdown-flag-clobber", None),
+    ),
+)
+def test_private_stack_scalar_flow_bounds_guarded_local_counter(
+    tmp_path,
+    monkeypatch,
+    mutation,
+    expected,
+):
+    image, function_entry, use_address, table_write, slot = (
+        guarded_local_counter_private_stack_read_image(tmp_path, mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    monkeypatch.setattr(
+        recovery,
+        "_upper_bounded_signed_word_global_slot",
+        lambda candidate: (
+            (-0x8000, 0x100, f"closed-upper={candidate:#x}")
+            if candidate == slot
+            else None
+        ),
+    )
+    method = getattr(
+        recovery,
+        "_private_stack_guarded_local_counter_index_values",
+        lambda *_args: None,
+    )
+
+    result = method(use_address, "ebp", function_entry)
+
+    assert result == expected
+    if expected is not None:
+        assert recovery._owned_decoded(table_write).mnemonic == "mov"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("negative-initializer", False),
+        ("detached-unrolled-bound", False),
+        ("negative-unrolled-step", False),
+        ("tail-decrement", False),
+        ("unsigned-tail-latch", False),
+        ("detached-tail-bound", False),
+    ),
+)
+def test_private_stack_byte_predicate_bounds_two_phase_signed_word_loop(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, store_address = (
+        two_phase_signed_word_private_stack_read_image(tmp_path, mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_byte_predicate_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("partial-write", False),
+        ("read-modify-write", False),
+        ("misaligned", False),
+        ("half-stride", False),
+    ),
+)
+def test_private_stack_byte_predicate_allows_only_aligned_full_overwrite(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, store_address = (
+        dynamic_full_overwrite_byte_predicate_image(tmp_path, mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_byte_predicate_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("register-guard", True),
+        ("equality-guard", True),
+        ("wide-bound", False),
+        ("inverted-branch", False),
+        ("equality-overlap", False),
+        ("equality-inverted", False),
+        ("preload-add", False),
+        ("source-clobber", False),
+    ),
+)
+def test_private_stack_dynamic_byte_index_requires_retained_unsigned_guard(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, call_address = (
+        guarded_byte_index_private_stack_call_image(tmp_path, mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        call_address,
+        function_entry,
+        (0, -12),
+        4,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("unsafe-selector", False),
+        ("selector-overwrite", False),
+        ("full-return", False),
+        ("partial-return", False),
+        ("unshifted", False),
+        ("bypass-shift", False),
+        ("zero-diversion", False),
+        ("overlap", False),
+    ),
+)
+def test_private_stack_callback_index_requires_selected_signed_byte_quotient(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, call_address, engine, callback_call, store_address = (
+        callback_byte_quotient_private_stack_call_image(tmp_path, mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery.call_targets_by_source[callback_call] == {0x00401110}
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        call_address,
+        function_entry,
+        (0, -12),
+        4,
+    ) is expected
+    assert recovery._private_stack_store_is_byte_predicate_quarantined(
+        store_address,
+        engine,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("protected-carry-source", False),
+        ("bypass-carry-definition", False),
+        ("partial-carry-definition", False),
+        ("nonzero-addend", False),
+    ),
+)
+def test_protected_capability_scalar_carry_requires_exact_full_definition(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, store_address, protected_slot = (
+        scalar_carry_private_stack_store_image(tmp_path, mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    store = recovery._owned_decoded(store_address)
+
+    assert store.mnemonic == "mov"
+    assert store.operands[1].reg == capstone.x86.X86_REG_EAX
+    assert recovery._register_is_proven_image_capability_free_before(
+        store_address,
+        "eax",
+        function_entry,
+        call_return_domains={},
+        protected_slots=frozenset({protected_slot}),
+        protected_only=True,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("loop-reset", True),
+        ("word-source", False),
+        ("unshifted", False),
+        ("overlap", False),
+    ),
+)
+def test_private_stack_index_bounds_exact_signed_byte_quotient(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, call_address = (
+        signed_byte_index_private_stack_call_image(tmp_path, mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        call_address,
+        function_entry,
+        (0, -12),
+        4,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    (
+        "character_class",
+        "duplicate_case",
+        "writable_format",
+        "expected",
+    ),
+    (
+        (False, False, False, True),
+        (True, False, False, False),
+        (False, True, False, False),
+        (False, False, True, False),
+    ),
+)
+def test_private_stack_parser_skips_only_infeasible_immutable_character_class(
+    monkeypatch,
+    character_class,
+    duplicate_case,
+    writable_format,
+    expected,
+):
+    image, seeds, engine, parser_call = (
+        immutable_format_parser_private_stack_image(
+            character_class=character_class,
+            duplicate_case=duplicate_case,
+            writable_format=writable_format,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        x86_cfg_module._explicit_seed_inventory(image, seeds),
+        generous_limits(image),
+    )
+    recovery.recover()
+    monkeypatch.setattr(
+        recovery,
+        "_audited_private_stack_format_engine",
+        lambda function_entry, call_address, target: (
+            function_entry == engine
+            and call_address == parser_call
+            and target == 0x00401080
+        ),
+    )
+    parser = 0x00401080
+    monkeypatch.setattr(
+        recovery,
+        "_audited_private_stack_format_parser",
+        lambda function_entry: function_entry == parser,
+    )
+
+    assert recovery._closed_leaf_call_preserves_private_stack_coordinate(
+        parser_call,
+        engine,
+        (0, -12),
+        4,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("outside_frame", "slot_escape", "expected"),
+    (
+        (False, False, ("private-stack", frozenset())),
+        (True, False, None),
+        (False, True, None),
+    ),
+)
+def test_closed_call_memory_argument_requires_allocated_private_pointer(
+    tmp_path,
+    outside_frame,
+    slot_escape,
+    expected,
+):
+    image, function_entry, call_address = private_stack_memory_argument_image(
+        tmp_path,
+        outside_frame=outside_frame,
+        slot_escape=slot_escape,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._semantic_call_argument_domain(
+        call_address,
+        0,
+        function_entry,
+        {},
+        call_return_domains={},
+    ) == expected
+    assert recovery._register_argument_dependency_indices_for_address(
+        function_entry + 0x67,
+        "edi",
+        function_entry + 0x60,
+    ) == frozenset({0})
+
+
+@pytest.mark.parametrize(
+    ("reverse_string_direction", "expected"),
+    (
+        (False, ("private-stack", frozenset(), 1)),
+        (True, None),
+    ),
+)
+def test_private_stack_argument_survives_only_forward_string_increment(
+    tmp_path,
+    reverse_string_direction,
+    expected,
+):
+    image, function_entry, _call_address = private_stack_memory_argument_image(
+        tmp_path,
+        reverse_string_direction=reverse_string_direction,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    callee = function_entry + 0x60
+    copy = next(
+        recovery._owned_decoded(address)
+        for address in recovery._function_instruction_addresses(callee)
+        if recovery._owned_decoded(address).mnemonic == "movsb"
+    )
+    write = recovery._instruction_value_flow(copy).memory_writes[0]
+    direction_clear = (
+        frozenset({copy.address})
+        if not reverse_string_direction
+        else frozenset()
+    )
+
+    assert recovery._register_argument_dependency_indices_for_address(
+        copy.address,
+        "edi",
+        callee,
+    ) == (frozenset({0}) if expected is not None else frozenset())
+    assert recovery._semantic_write_destination_domain(
+        copy,
+        write,
+        callee,
+        call_return_domains={},
+        argument_domains={0: ("private-stack", frozenset())},
+        direction_clear_addresses=direction_clear,
+    ) == expected
+
+
+def test_local_direction_states_are_reused_for_one_recovery(
+    tmp_path,
+    monkeypatch,
+):
+    image, function_entry, _call_address = private_stack_memory_argument_image(
+        tmp_path,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    callee = function_entry + 0x60
+    first = recovery._local_direction_flag_clear_states(
+        callee,
+        entry_clear=True,
+    )
+    assert first is not None
+
+    def unexpected_recompute(*_args, **_kwargs):
+        raise AssertionError("cached direction states were recomputed")
+
+    monkeypatch.setattr(
+        recovery,
+        "_summary_successors",
+        unexpected_recompute,
+    )
+    assert recovery._local_direction_flag_clear_states(
+        callee,
+        entry_clear=True,
+    ) == first
+
+
+@pytest.mark.parametrize(
+    ("partial_decrement", "expected"),
+    (
+        (False, ("private-stack", frozenset(), 1)),
+        (True, None),
+    ),
+)
+def test_private_stack_argument_requires_full_width_pointer_decrement(
+    tmp_path,
+    partial_decrement,
+    expected,
+):
+    image, function_entry, store_address = private_stack_decrement_store_image(
+        tmp_path,
+        partial_decrement=partial_decrement,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    store = recovery._owned_decoded(store_address)
+    write = recovery._instruction_value_flow(store).memory_writes[0]
+
+    assert recovery._register_argument_dependency_indices_for_address(
+        store.address,
+        "esi",
+        function_entry,
+    ) == (frozenset({0}) if expected is not None else frozenset())
+    assert recovery._semantic_write_destination_domain(
+        store,
+        write,
+        function_entry,
+        call_return_domains={},
+        argument_domains={0: ("private-stack", frozenset())},
+    ) == expected
+
+
+@pytest.mark.parametrize(
+    ("pointer_escape", "expected"),
+    (
+        (False, True),
+        (True, False),
+    ),
+)
+def test_closed_argument_byte_payload_is_not_a_pointer_escape(
+    tmp_path,
+    pointer_escape,
+    expected,
+):
+    image, _caller, _push_address, callee = closed_read_only_argument_image(
+        tmp_path,
+        pointer_escape=pointer_escape,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_argument_does_not_escape(callee, 0) is expected
+
+
+@pytest.mark.parametrize(
+    ("pointer_escape", "expected"),
+    (
+        (False, True),
+        (True, False),
+    ),
+)
+def test_capability_push_requires_one_closed_read_only_argument(
+    tmp_path,
+    pointer_escape,
+    expected,
+):
+    image, caller, push_address, _callee = closed_read_only_argument_image(
+        tmp_path,
+        pointer_escape=pointer_escape,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._closed_read_only_direct_call_argument_for_push(
+        push_address,
+        caller,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("first-write", False),
+        ("second-write", False),
+        ("escape-between", False),
+        ("branch-between", False),
+        ("unresolved-second", False),
+        ("over-cleanup", False),
+        ("lower-argument", True),
+        ("lower-register-argument", True),
+        ("oversized-stack-adjustment", False),
+    ),
+)
+def test_capability_push_tracks_every_closed_read_only_stack_consumer(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, caller, push_address, first_call, second_call = (
+        closed_reused_read_only_argument_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._pushed_call_argument(first_call, 3)[0].address == (
+        push_address
+    )
+    if mutation != "branch-between":
+        assert recovery._pushed_call_argument(
+            second_call,
+            3,
+        )[0].address == push_address
+    assert recovery._closed_read_only_direct_call_argument_for_push(
+        push_address,
+        caller,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("global-spill", False),
+        ("spill-address-escape", False),
+        ("write-through-reload", False),
+        ("writable-reader", False),
+        ("return-alias", False),
+        ("unresolved-reader", False),
+    ),
+)
+def test_closed_read_only_argument_tracks_private_stack_pointer_spills(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, caller, push_address, callee = (
+        closed_spilled_read_only_argument_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_argument_is_read_only(callee, 0) is expected
+    assert recovery._closed_read_only_direct_call_argument_for_push(
+        push_address,
+        caller,
+    ) is expected
+
+
+def test_closed_read_only_argument_distinguishes_bulk_copy_source(
+    tmp_path,
+):
+    image, function = closed_bulk_copy_argument_image(tmp_path)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_argument_is_read_only(function, 1)
+    assert not recovery._function_argument_is_read_only(function, 0)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("masked-write-through", False),
+        ("store-derived", False),
+        ("return-derived", False),
+        ("forward-writable", False),
+    ),
+)
+def test_closed_read_only_argument_retains_scalar_transform_taint(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function = closed_scalar_argument_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_argument_is_read_only(function, 0) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("writer-body", False),
+        ("copy-direction", False),
+    ),
+)
+def test_capability_push_accepts_only_audited_format_size_argument(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, caller, push_address, callback = (
+        audited_format_size_argument_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._audited_format_writer_callback(callback) is expected
+    assert recovery._closed_read_only_direct_call_argument_for_push(
+        push_address,
+        caller,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("memory-use", False),
+        ("push-use", False),
+        ("store-use", False),
+        ("copy-use", False),
+        ("unresolved-jump", False),
+        ("return-eax", False),
+        ("full-kill", True),
+        ("closed-call-kill", True),
+        ("call-read", False),
+        ("unresolved-call", False),
+        ("same-register-restore", True),
+        ("same-register-store", False),
+    ),
+)
+def test_capability_push_requires_closed_unobserved_pop_suffix(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, caller, push_address = closed_popped_read_only_argument_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._closed_read_only_direct_call_argument_for_push(
+        push_address,
+        caller,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("full-read", False),
+        ("address-use", False),
+        ("push-use", False),
+        ("store-use", False),
+        ("return-eax", False),
+        ("unresolved-jump", False),
+        ("repeated", True),
+    ),
+)
+def test_narrow_capability_argument_cleanup_has_scalar_only_suffix(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, caller, push_address = closed_narrow_scalar_cleanup_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    protected_slots = frozenset({0x00403000, 0x00403004})
+
+    assert recovery._closed_read_only_direct_call_argument_for_push(
+        push_address,
+        caller,
+        protected_slots,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("full-read", False),
+        ("word-read", False),
+        ("upper-byte-read", False),
+        ("overlapping-read", False),
+        ("address-take", False),
+        ("slot-write", False),
+        ("no-read", False),
+        ("unresolved-jump", False),
+    ),
+)
+def test_capability_push_accepts_only_closed_narrow_scalar_consumers(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, caller, _push_address = closed_narrow_scalar_argument_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    proof = getattr(
+        recovery,
+        "_function_argument_is_narrow_scalar",
+        None,
+    )
+    assert (
+        False
+        if proof is None
+        else proof(caller + 0x40, 0, width=1)
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("protected_write", "expected"),
+    (
+        (False, True),
+        (True, False),
+    ),
+)
+def test_capability_push_checks_every_resolved_target_and_protected_offset(
+    tmp_path,
+    protected_write,
+    expected,
+):
+    (
+        image,
+        caller,
+        push_address,
+        call_address,
+        first_callee,
+        second_callee,
+    ) = closed_multi_target_argument_image(
+        tmp_path,
+        protected_write=protected_write,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    assert {first_callee, second_callee} <= set(recovery.function_addresses)
+    recovery.call_targets_by_source[call_address] = {
+        first_callee,
+        second_callee,
+    }
+
+    assert recovery._closed_read_only_direct_call_argument_for_push(
+        push_address,
+        caller,
+        frozenset({0x00403000, 0x00403004}),
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mixes_scan_pointer", "expected"),
+    (
+        (False, True),
+        (True, False),
+    ),
+)
+def test_scan_count_is_scalar_only_without_pointer_mixing(
+    tmp_path,
+    mixes_scan_pointer,
+    expected,
+):
+    image, function_entry, push_address = scan_count_scalar_image(
+        tmp_path,
+        mixes_scan_pointer=mixes_scan_pointer,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    push = recovery._owned_decoded(push_address)
+
+    assert recovery._register_scan_count_is_scalar_before(
+        push.address,
+        push.operands[0],
+        function_entry,
+    ) is expected
+    assert not recovery._register_scan_count_is_scalar_before(
+        push.address,
+        recovery._owned_decoded(function_entry + 5).operands[0],
+        function_entry,
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("wrong-import", False),
+        ("zero-capacity", False),
+        ("unterminated-fallback", False),
+        ("wrong-scan-seed", False),
+        ("wrong-affine-base", False),
+    ),
+)
+def test_semantic_write_domain_bounds_external_message_trim(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, store_address, buffer, capacity = (
+        bounded_external_message_trim_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    store = recovery._owned_decoded(store_address)
+    write = recovery._instruction_value_flow(store).memory_writes[0]
+    domain = recovery._semantic_write_destination_domain(
+        store,
+        write,
+        function_entry,
+        call_return_domains={},
+        argument_domains={},
+        protected_slots=frozenset({0x00403000}),
+    )
+
+    assert (domain is not None) is expected
+    if domain is not None:
+        kind, values, width = domain
+        assert kind == "finite"
+        assert width == 1
+        assert values == frozenset(range(buffer, buffer + capacity))
+        assert all(value + width <= 0x00403000 for value in values)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("unaudited-search", False),
+        ("wrong-scan-base", False),
+        ("wrong-return-source", False),
+    ),
+)
+def test_closed_bounded_string_subpath_return_requires_exact_role(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry = bounded_string_subpath_return_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    domain = recovery._closed_bounded_string_subpath_return_domain(
+        function_entry,
+        call_return_domains={},
+    )
+
+    assert (domain is not None) is expected
+    if domain is not None:
+        assert domain == ("private-stack", frozenset())
+
+
+@pytest.mark.parametrize(
+    ("mutation", "current_invariant", "expected"),
+    (
+        (None, True, True),
+        ("wrong-count", True, False),
+        ("partial-pointer", True, False),
+        ("missing-guard", True, False),
+        (None, False, False),
+    ),
+)
+def test_private_heap_rep_stos_requires_one_current_correlated_allocation(
+    tmp_path,
+    monkeypatch,
+    mutation,
+    current_invariant,
+    expected,
+):
+    image, function_entry, _call, write_address, allocator = (
+        private_heap_rep_stos_image(tmp_path, mutation=mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    contract = SimpleNamespace(root=allocator)
+    invariant = SimpleNamespace(allocator_root=allocator)
+    monkeypatch.setattr(
+        recovery,
+        "_private_heap_allocator_contract",
+        lambda target, _slots: contract if target == allocator else None,
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_current_private_page_arena_invariant_for_contract",
+        lambda candidate: (
+            invariant
+            if current_invariant and candidate is contract
+            else None
+        ),
+        raising=False,
+    )
+
+    assert recovery._private_heap_rep_stos_is_bounded(
+        write_address,
+        function_entry,
+        frozenset({0x00403000, 0x00403004}),
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("wrong-import", False),
+        ("wrong-size-argument", False),
+        ("wrong-count", False),
+        ("wrong-result-store", False),
+        ("missing-guard", False),
+    ),
+)
+def test_fresh_allocation_rep_stos_requires_exact_extent_correlation(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, allocation_call, write_address = (
+        fresh_allocation_rep_stos_image(tmp_path, mutation=mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    imported = recovery._import_for_call(
+        recovery._owned_decoded(allocation_call)
+    )
+
+    assert imported is not None
+    assert recovery._fresh_allocation_rep_stos_is_bounded(
+        write_address,
+        function_entry,
+        frozenset({0x00403000}),
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("different-index", False),
+        ("different-table", False),
+        ("non-fresh-result", False),
+        ("undersized-allocation", False),
+        ("wrong-count", False),
+        ("wrong-result-source", False),
+        ("wrong-direction", False),
+    ),
+)
+def test_fresh_allocation_rep_movs_requires_exact_table_roundtrip(
+    tmp_path,
+    monkeypatch,
+    mutation,
+    expected,
+):
+    image, function_entry, allocation_call, write_address, allocator = (
+        fresh_allocation_table_roundtrip_rep_movs_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    monkeypatch.setattr(
+        recovery,
+        "_owned_fixed_bump_allocator_size_argument",
+        lambda target: 0 if target == allocator else None,
+    )
+    call_return_domains = (
+        {}
+        if mutation == "non-fresh-result"
+        else {allocation_call: ("fresh-allocation", frozenset())}
+    )
+    proof = getattr(
+        recovery,
+        "_fresh_allocation_rep_movs_is_bounded",
+        lambda *_args, **_kwargs: False,
+    )
+
+    assert proof(
+        write_address,
+        function_entry,
+        frozenset({0x00403000}),
+        call_return_domains=call_return_domains,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("balanced-branch", True),
+        ("branch-clobber", False),
+        ("different-stack-slot", False),
+        ("partial-subtract", False),
+        ("partial-stack-clobber", False),
+        ("retained-header", False),
+        ("stack-clobber", False),
+        ("stack-copy-escape", False),
+        ("stack-escape", False),
+    ),
+)
+def test_rep_stos_zero_count_requires_exact_symbolic_cancellation(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, write_address = symbolic_zero_rep_stos_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    proof = getattr(
+        recovery,
+        "_rep_stos_count_is_exactly_zero",
+        lambda _address, _function_entry: False,
+    )
+    assert proof(write_address, function_entry) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, frozenset({0x00402380, 0x00402384})),
+        ("different-object", None),
+        ("extra-incoming", None),
+        ("extra-index", None),
+        ("missing-first-assignment", None),
+        ("partial-second-assignment", None),
+        ("wrong-first-compare", None),
+        ("wrong-second-compare", None),
+    ),
+)
+def test_callback_table_context_proves_only_correlated_literal_registers(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, use_address, literals = (
+        callback_table_contextual_literal_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    table = recovery.jump_tables[0x0040101B]
+
+    assert table.flow_kind == "call"
+    assert table.index_min == 0
+    assert table.index_max == 15
+    assert function_entry in table.targets
+    proof = getattr(
+        recovery,
+        "_callback_table_literal_register_values_before",
+        lambda _address, _family, _function: None,
+    )
+    result = proof(use_address, "esi", function_entry)
+    assert literals == frozenset({0x00402380, 0x00402384})
+    assert result == expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("full-address", False),
+        ("partial-address", False),
+        ("same-slot-redefinition", True),
+        ("partial-redefinition-address", False),
+        ("stack-address-escape", False),
+        ("wide-output", False),
+    ),
+)
+def test_narrow_private_stack_scalar_requires_closed_data_only_flow(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, store_address = narrow_private_stack_scalar_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    store = recovery._owned_decoded(store_address)
+
+    assert store.mnemonic == "mov"
+    assert store.operands[0].size == store.operands[1].size == 2
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize("tainted_external_store", (False, True))
+def test_private_stack_scalar_flow_tracks_x87_memory_values(
+    tmp_path,
+    tainted_external_store,
+):
+    image, function_entry, store_address = x87_private_stack_scalar_image(
+        tmp_path,
+        tainted_external_store=tainted_external_store,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is (not tainted_external_store)
+
+
+def test_private_stack_scalar_flow_tracks_x87_control_store(tmp_path):
+    image, function_entry, store_address = x87_private_stack_scalar_image(
+        tmp_path,
+        control_store=True,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is True
+
+
+@pytest.mark.parametrize("malformed", (False, True))
+def test_private_stack_scalar_flow_tracks_signed_stack_arithmetic(
+    tmp_path,
+    malformed,
+):
+    image, function_entry, store_address = (
+        signed_stack_arithmetic_scalar_image(
+            tmp_path,
+            malformed=malformed,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    tracked = recovery._function_private_stack_coordinate_states(
+        function_entry
+    )
+    assert tracked is not None
+    return_address = max(recovery._function_instruction_addresses(function_entry))
+    assert tracked[0][return_address][0] == (
+        (0, 0) if not malformed else (0, 4)
+    )
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is (not malformed)
+
+
+@pytest.mark.parametrize("reads_tainted_slot", (False, True))
+def test_nested_private_stack_scalar_protects_exact_tainted_span(
+    tmp_path,
+    reads_tainted_slot,
+):
+    image, function_entry, store_address = nested_private_stack_scalar_image(
+        tmp_path,
+        reads_tainted_slot=reads_tainted_slot,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is (not reads_tainted_slot)
+
+
+@pytest.mark.parametrize(
+    ("import_kind", "reads_protected", "aliases_protected", "expected"),
+    (
+        ("global-alloc", False, False, True),
+        ("global-alloc", True, False, False),
+        ("sync-enter", False, False, True),
+        ("sync-enter", False, True, False),
+    ),
+)
+def test_private_stack_scalar_flow_uses_exact_stdcall_import_contract(
+    tmp_path,
+    import_kind,
+    reads_protected,
+    aliases_protected,
+    expected,
+):
+    image, function_entry, store_address, call_address = (
+        private_stack_scalar_stdcall_image(
+            tmp_path,
+            import_kind=import_kind,
+            reads_protected=reads_protected,
+            aliases_protected=aliases_protected,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    exact_arity = recovery._exact_named_stdcall_import_arity(call_address)
+    publication_contract = recovery._publication_import_contract_and_arity(
+        call_address
+    )
+    assert exact_arity == (2 if import_kind == "global-alloc" else None)
+    assert publication_contract is not None
+    assert publication_contract[1] == (2 if import_kind == "global-alloc" else 1)
+    assert recovery._function_private_stack_coordinate_states(
+        function_entry + 0x40
+    ) is not None
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize("import_kind", ("global-alloc", "sync-enter"))
+def test_private_stack_import_contracts_are_revision_cached(
+    tmp_path,
+    monkeypatch,
+    import_kind,
+):
+    image, _function_entry, _store_address, call_address = (
+        private_stack_scalar_stdcall_image(
+            tmp_path,
+            import_kind=import_kind,
+            reads_protected=False,
+            aliases_protected=False,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    exact = recovery._exact_named_stdcall_import_arity(call_address)
+    publication = recovery._publication_import_contract_and_arity(
+        call_address
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_import_for_call",
+        lambda _decoded: pytest.fail("cached import contract was rescanned"),
+    )
+
+    assert recovery._exact_named_stdcall_import_arity(call_address) == exact
+    assert (
+        recovery._publication_import_contract_and_arity(call_address)
+        == publication
+    )
+
+
+@pytest.mark.parametrize("hostile_target", (False, True))
+def test_private_stack_scalar_flow_checks_every_finite_indirect_target(
+    tmp_path,
+    hostile_target,
+):
+    (
+        image,
+        function_entry,
+        store_address,
+        call_address,
+        first_callee,
+        second_callee,
+    ) = finite_indirect_private_stack_scalar_image(
+        tmp_path,
+        hostile_target=hostile_target,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    assert {first_callee, second_callee} <= set(recovery.function_addresses)
+    recovery.call_targets_by_source[call_address] = {
+        first_callee,
+        second_callee,
+    }
+
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        function_entry,
+    ) is (not hostile_target)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("wrong-import", False),
+        ("wrong-offset", False),
+        ("wrong-argument", False),
+        ("wide-store", False),
+    ),
+)
+def test_private_stack_system_time_field_requires_typed_scalar_consumer(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, store_address, call_address = (
+        private_stack_system_time_field_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._import_for_call(
+        recovery._owned_decoded(call_address)
+    ) is not None
+    assert recovery._private_stack_system_time_field_is_quarantined(
+        store_address,
+        function_entry,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("wrong-import", False),
+        ("full-load", False),
+        ("wrong-byte-lane", False),
+        ("wrong-argument", False),
+    ),
+)
+def test_typed_narrow_import_argument_requires_exact_consumed_byte(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, function_entry, push_address, call_address = (
+        typed_narrow_import_argument_image(
+            tmp_path,
+            mutation=mutation,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._import_for_call(
+        recovery._owned_decoded(call_address)
+    ) is not None
+    assert recovery._typed_narrow_import_argument_for_push(
+        push_address,
+        function_entry,
+    ) is expected
 
 
 def test_session_capability_seal_rejects_allocator_sibling_descriptor_write():
@@ -31411,6 +46779,63 @@ def test_session_capability_seal_accepts_sibling_descriptor_allocator_role():
     } >= {
         (fixture.allocator, fixture.heap_cursor - 12),
         (0x00401400, 0x00403050),
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("seal-sibling-descriptor-allocation-copy", True),
+        (
+            "seal-sibling-descriptor-allocation-copy-wrong-remaining",
+            False,
+        ),
+    ),
+)
+def test_session_capability_seal_types_only_certified_sibling_allocator_calls(
+    mutation,
+    expected,
+):
+    fixture = return_path_publication_lifecycle_image(mutation=mutation)
+
+    result = _direct_return_path_publication_certificate(fixture)
+    sibling_allocator = 0x00401400
+    sibling_fact = result.recovery._owned_fixed_bump_allocator_fact(
+        sibling_allocator
+    )
+    sibling_calls = tuple(
+        call
+        for call in result.recovery._function_direct_calls(
+            fixture.backend_root
+        )
+        if call.target == sibling_allocator
+    )
+    copies = tuple(
+        result.recovery._owned_decoded(address)
+        for address in result.recovery._function_instruction_addresses(
+            fixture.backend_root
+        )
+        if result.recovery._owned_decoded(address).mnemonic == "rep movsd"
+    )
+
+    assert sibling_fact is not None
+    assert sibling_fact.descriptor == 0x00403050
+    assert sibling_fact.remaining_slot == (
+        0x00403060 if expected else 0x00403064
+    )
+    assert len(sibling_calls) == 1
+    assert len(copies) == 1
+    assert (result.certificate is not None) is expected
+    if not expected:
+        return
+    seal = (
+        result.certificate.backend_bridges[0]
+        .allocator_certificate.capability_seal
+    )
+    assert seal is not None
+    assert (sibling_allocator, 0x00403050) in {
+        (role.function_entry, role.descriptor)
+        for role in seal.descriptor_allocator_roles
     }
 
 
@@ -31592,6 +47017,156 @@ def test_return_path_publication_backend_bridge_binds_exact_session_and_callers(
     )
     assert "no-escape" not in result.certificate.provenance
     assert "does-not-escape" not in result.certificate.provenance
+    cache_entry = next(
+        row
+        for row in result.recovery.allocator_totality_cache.values()
+        if row is not None
+        and row.result == bridge.allocator_certificate
+    )
+    assert bridge.allocator_certificate.capability_seal is not None
+    assert (
+        bridge.allocator_certificate.capability_seal.session_relevant_functions
+        <= {
+            identifier
+            for kind, identifier, _fingerprint in cache_entry.dependencies
+            if kind == "function"
+        }
+    )
+
+
+def test_task8_publication_seal_reuses_only_equivalent_bridge_context(
+    monkeypatch,
+):
+    recovery = object.__new__(_DirectCfgRecovery)
+    session = object()
+    incoming_calls = (object(),)
+    backend_bodies = (object(),)
+
+    def bridge(allocation_caller, *, incoming=incoming_calls):
+        return SimpleNamespace(
+            consumer_entry=0x1000,
+            incoming_calls=incoming,
+            allocator=0x2000,
+            allocation_caller=allocation_caller,
+            allocator_session=session,
+            backend_root=0x3000,
+            backend_bodies=backend_bodies,
+        )
+
+    calls = []
+    seal = SimpleNamespace(
+        session_relevant_functions=frozenset({0x4100, 0x4200})
+    )
+
+    def prove(candidate, closure):
+        calls.append((candidate, closure))
+        return seal
+
+    monkeypatch.setattr(recovery, "_session_state_capability_seal", prove)
+    closure = object()
+    reusable = []
+    first = bridge(0x4100)
+    equivalent = bridge(0x4200)
+    outside_audit = bridge(0x4300)
+    changed_incoming = bridge(0x4200, incoming=(object(),))
+
+    assert (
+        recovery._session_state_capability_seal_with_query_reuse(
+            first,
+            closure,
+            reusable,
+        )
+        is seal
+    )
+    assert (
+        recovery._session_state_capability_seal_with_query_reuse(
+            equivalent,
+            closure,
+            reusable,
+        )
+        is seal
+    )
+    assert len(calls) == 1
+
+    assert (
+        recovery._session_state_capability_seal_with_query_reuse(
+            outside_audit,
+            closure,
+            reusable,
+        )
+        is seal
+    )
+    assert (
+        recovery._session_state_capability_seal_with_query_reuse(
+            changed_incoming,
+            closure,
+            reusable,
+        )
+        is seal
+    )
+    assert len(calls) == 3
+
+    for field, value in (
+        ("consumer_entry", 0x1001),
+        ("allocator", 0x2001),
+        ("allocator_session", object()),
+        ("backend_root", 0x3001),
+        ("backend_bodies", (object(),)),
+    ):
+        changed = SimpleNamespace(
+            **{
+                **vars(equivalent),
+                field: value,
+            }
+        )
+        assert (
+            recovery._session_state_capability_seal_with_query_reuse(
+                changed,
+                closure,
+                reusable,
+            )
+            is seal
+        )
+    assert len(calls) == 8
+    assert (
+        recovery._session_state_capability_seal_with_query_reuse(
+            equivalent,
+            object(),
+            reusable,
+        )
+        is seal
+    )
+    assert len(calls) == 9
+
+    failed_calls = []
+
+    def fail_then_pass(candidate, candidate_closure):
+        failed_calls.append((candidate, candidate_closure))
+        return None if len(failed_calls) == 1 else seal
+
+    monkeypatch.setattr(
+        recovery,
+        "_session_state_capability_seal",
+        fail_then_pass,
+    )
+    reusable = []
+    assert (
+        recovery._session_state_capability_seal_with_query_reuse(
+            first,
+            closure,
+            reusable,
+        )
+        is None
+    )
+    assert (
+        recovery._session_state_capability_seal_with_query_reuse(
+            equivalent,
+            closure,
+            reusable,
+        )
+        is seal
+    )
+    assert len(failed_calls) == 2
 
 
 def test_capability_seal_rejects_exported_prior_callback_writer():
@@ -32213,6 +47788,35 @@ def test_return_path_publication_accepts_flags_query_after_prologue_save():
     )
 
     assert cfg.publication_noninterference_certificates[0].imports
+
+
+def test_private_stack_coordinates_close_exact_import_caller_cleanup():
+    """An adjacent caller pop leaves an exact import call stack-neutral."""
+    fixture = return_path_publication_lifecycle_image(
+        mutation="flags-query-prologue-save"
+    )
+    recovery = _DirectCfgRecovery(
+        fixture.image,
+        build_seed_inventory(fixture.image, ()),
+        generous_limits(fixture.image),
+    )
+    recovery.recover()
+    call_address = next(
+        edge.source
+        for edge in recovery.terminal_external_edges
+        if edge.name == "GlobalFlags"
+    )
+    function_entry = recovery._registrar_function_entry(call_address)
+    assert function_entry is not None
+    assert recovery._closed_call_stack_cleanup(call_address) is None
+
+    states = recovery._function_private_stack_coordinate_states(
+        function_entry
+    )
+
+    assert states is not None
+    continuation = call_address + recovery._owned_decoded(call_address).size
+    assert states[0][call_address] == states[0][continuation]
 
 
 def test_publication_import_accepts_finite_global_alloc_size_after_prologue_save():
@@ -41370,6 +56974,113 @@ def incoming_ecx_use_image(*, clear_first):
     )
 
 
+def incoming_ecx_partial_definition_image(*, full_read=False, high_write=False):
+    """Replace one ECX byte, then read either that byte or wider state."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    data = bytes.fromhex(
+        ("b5 00" if high_write else "b1 00")
+        + ("85 c9" if full_read else "84 c9")
+        + "c3"
+    )
+    return pe_mod.Image(
+        data=data,
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                len(data),
+                len(data),
+                0x60000020,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=(),
+        executable_ranges=((text_va, text_va + len(data)),),
+    )
+
+
+def returned_argument_field_preservation_image(*, mutate_after_return=False):
+    """Forward one fresh pointer through a returned formal before its use."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    text_va = 0x00401000
+    forwarder = text_va + 0x40
+    observer = text_va + 0x60
+    allocator = text_va + 0x80
+    data = bytearray(b"\x90" * 0x90)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        data[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        data[offset] = 0xE8
+        displacement = target - (text_va + offset + 5)
+        data[offset + 1 : offset + 5] = displacement.to_bytes(
+            4,
+            "little",
+            signed=True,
+        )
+        return offset + 5
+
+    allocation_call = text_va
+    cursor = emit_call(0, allocator)
+    cursor = emit(cursor, "89 c3 53")
+    cursor = emit_call(cursor, forwarder)
+    cursor = emit(cursor, "59 89 c3 53")
+    cursor = emit_call(cursor, observer)
+    emit(cursor, "59 31 c0 c3")
+    emit(0x40, "8b 44 24 04 c3")
+    emit(
+        0x60,
+        (
+            "8b 44 24 04 c6 40 10 00 31 c0 c3"
+            if mutate_after_return
+            else "8b 44 24 04 80 78 10 00 31 c0 c3"
+        ),
+    )
+    emit(0x80, "31 c0 c3")
+    return (
+        pe_mod.Image(
+            data=bytes(data),
+            sha256=hashlib.sha256(data).hexdigest(),
+            machine=0x14C,
+            optional_magic=0x10B,
+            image_base=0x00400000,
+            size_of_headers=0,
+            entrypoint=text_va,
+            directories=(),
+            sections=(
+                pe_mod.Section(
+                    ".text",
+                    text_va,
+                    0,
+                    len(data),
+                    len(data),
+                    0x60000020,
+                ),
+            ),
+            imports=(),
+            exports=(),
+            relocations=(),
+            executable_ranges=((text_va, text_va + len(data)),),
+        ),
+        allocation_call,
+    )
+
+
 def scoped_global_stack_pointer_publication_image(
     *,
     mutation=None,
@@ -43267,6 +58978,93 @@ def test_incoming_register_read_observes_real_use_before_definition():
         image.entrypoint,
         "ecx",
     )
+
+
+@pytest.mark.parametrize(
+    ("full_read", "high_write", "expected"),
+    (
+        (False, False, False),
+        (True, False, True),
+        (False, True, True),
+    ),
+)
+def test_incoming_register_read_tracks_partial_definition_masks(
+    full_read,
+    high_write,
+    expected,
+):
+    image = incoming_ecx_partial_definition_image(
+        full_read=full_read,
+        high_write=high_write,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._function_reads_incoming_register(
+        image.entrypoint,
+        "ecx",
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutate_after_return", "expected"),
+    ((False, True), (True, False)),
+)
+def test_pointer_field_preservation_follows_returned_argument_alias(
+    mutate_after_return,
+    expected,
+):
+    image, allocation_call = returned_argument_field_preservation_image(
+        mutate_after_return=mutate_after_return,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._pointer_definition_preserves_field_without_escape(
+        None,
+        image.entrypoint,
+        0x10,
+        root_call=allocation_call,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutate_after_return", "expected"),
+    ((False, True), (True, False)),
+)
+def test_pointer_field_preservation_uses_exact_empty_callee_effect(
+    monkeypatch,
+    mutate_after_return,
+    expected,
+):
+    image, _allocation_call = returned_argument_field_preservation_image(
+        mutate_after_return=mutate_after_return,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    monkeypatch.setattr(
+        recovery,
+        "_function_argument_preserves_field",
+        lambda *_args, **_kwargs: False,
+    )
+
+    assert recovery._callee_argument_preserves_field_effect(
+        image.entrypoint + 0x60,
+        0,
+        0x10,
+    ) is expected
 
 
 def test_global_slot_save_restore_allows_dead_partial_register_alias():
@@ -45840,6 +61638,11 @@ def test_closed_call_result_identity_uses_function_instruction_index(
         generous_limits(image),
     )
     recovery.recover()
+    monkeypatch.setattr(
+        recovery,
+        "_call_is_proven_no_return",
+        lambda _decoded, _visited: False,
+    )
     calls = []
     original = recovery._function_instruction_addresses
 
@@ -46969,6 +62772,274 @@ def bounded_global_signed_word_image(*, mutation=None):
     return image, load_address, slot
 
 
+def upper_bounded_clamped_global_word_image(*, mutation=None):
+    """Clamp an unknown signed word and later restore one exact snapshot."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {
+        None,
+        "missing-cap-write",
+        "partial-cap-write",
+        "wrong-compare-slot",
+        "wrong-snapshot-slot",
+        "clobbered-snapshot",
+        "wrong-restore-register",
+        "address-escape",
+    }
+    text_va = 0x00401000
+    data_va = 0x00403000
+    slot = data_va + 0x20
+    other_slot = data_va + 0x24
+    data = bytearray(0x400)
+    text = memoryview(data)[:0x200]
+    relocations = []
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_absolute(offset, prefix, absolute, suffix=""):
+        prefix = bytes.fromhex(prefix)
+        suffix = bytes.fromhex(suffix)
+        text[offset : offset + len(prefix)] = prefix
+        relocation_offset = offset + len(prefix)
+        text[relocation_offset : relocation_offset + 4] = absolute.to_bytes(
+            4,
+            "little",
+        )
+        text[
+            relocation_offset + 4 : relocation_offset + 4 + len(suffix)
+        ] = suffix
+        relocations.append(pe_mod.Relocation(text_va + relocation_offset, 3))
+        return relocation_offset + 4 + len(suffix)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        text[offset + 1 : offset + 5] = (
+            text_va + target_offset - (text_va + offset + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit_call(0, 0x40)
+    cursor = emit_call(cursor, 0xA0)
+    if mutation == "address-escape":
+        cursor = emit(cursor, "68")
+        text[cursor : cursor + 4] = slot.to_bytes(4, "little")
+        relocations.append(pe_mod.Relocation(text_va + cursor, 3))
+        cursor += 4
+        cursor = emit(cursor, "59")
+    load_address = text_va + cursor
+    cursor = emit_absolute(cursor, "0f bf 05", slot)
+    emit(cursor, "c3")
+
+    cursor = emit_absolute(0x40, "66 c7 05", slot, "50 00")
+    cursor = emit(cursor, "66 8b 44 24 04")
+    cursor = emit_absolute(cursor, "66 a3", slot)
+    cursor = emit_absolute(
+        cursor,
+        "66 81 3d",
+        other_slot if mutation == "wrong-compare-slot" else slot,
+        "00 01",
+    )
+    branch = cursor
+    cursor = emit(cursor, "7e 00")
+    if mutation == "missing-cap-write":
+        cursor = emit(cursor, "90 90 90 90 90 90 90 90 90")
+    elif mutation == "partial-cap-write":
+        cursor = emit_absolute(cursor, "c6 05", slot, "00")
+    else:
+        cursor = emit_absolute(cursor, "66 c7 05", slot, "00 01")
+    exit_offset = cursor
+    text[branch + 1] = (exit_offset - (branch + 2)) & 0xFF
+    emit(cursor, "c3")
+
+    snapshot_slot = other_slot if mutation == "wrong-snapshot-slot" else slot
+    cursor = emit(0xA0, "57")
+    cursor = emit_absolute(cursor, "66 8b 3d", snapshot_slot)
+    if mutation == "clobbered-snapshot":
+        cursor = emit(cursor, "31 ff")
+    cursor = emit_call(cursor, 0xE0)
+    cursor = emit_absolute(
+        cursor,
+        "66 89 35" if mutation == "wrong-restore-register" else "66 89 3d",
+        slot,
+    )
+    emit(cursor, "5f c3")
+    emit(0xE0, "c3")
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0x200,
+                0x200,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                0x200,
+                0x200,
+                0x200,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(relocations),
+        executable_ranges=((text_va, text_va + 0x200),),
+    )
+    return image, load_address, slot
+
+
+def bounded_global_record_cursor_image(*, mutation=None):
+    """Write through a cursor bounded by one closed global record count."""
+    from tools.mwcc_retro import pe as pe_mod
+
+    assert mutation in {
+        None,
+        "unguarded-increment",
+        "unguarded-decrement",
+        "unknown-writer",
+        "wrong-stride",
+    }
+    text_va = 0x00401000
+    data_va = 0x00403000
+    count_slot = data_va + 0x20
+    table_base = data_va + 0x80
+    data = bytearray(0x500)
+    text = memoryview(data)[:0x300]
+    relocations = []
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        text[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_absolute(offset, prefix, absolute, suffix=""):
+        prefix = bytes.fromhex(prefix)
+        suffix = bytes.fromhex(suffix)
+        text[offset : offset + len(prefix)] = prefix
+        relocation_offset = offset + len(prefix)
+        text[relocation_offset : relocation_offset + 4] = absolute.to_bytes(
+            4,
+            "little",
+        )
+        text[
+            relocation_offset + 4 : relocation_offset + 4 + len(suffix)
+        ] = suffix
+        relocations.append(
+            pe_mod.Relocation(text_va + relocation_offset, 3)
+        )
+        return relocation_offset + 4 + len(suffix)
+
+    def emit_call(offset, target_offset):
+        text[offset] = 0xE8
+        text[offset + 1 : offset + 5] = (
+            text_va + target_offset - (text_va + offset + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit_call(0, 0x40)
+    cursor = emit_call(cursor, 0x80)
+    cursor = emit_call(cursor, 0xC0)
+    cursor = emit_call(cursor, 0x100)
+    if mutation == "unknown-writer":
+        cursor = emit_call(cursor, 0x180)
+    emit(cursor, "c3")
+
+    cursor = emit(0x40, "31 d2")
+    cursor = emit_absolute(cursor, "89 15", count_slot)
+    emit(cursor, "c3")
+
+    cursor = emit_absolute(0x80, "83 3d", count_slot, "03")
+    if mutation == "unguarded-increment":
+        cursor = emit(cursor, "eb 02 eb fe")
+    else:
+        cursor = emit(cursor, "7c 02 eb fe")
+    cursor = emit_absolute(cursor, "ff 05", count_slot)
+    emit(cursor, "c3")
+
+    cursor = emit_absolute(0xC0, "83 3d", count_slot, "00")
+    if mutation == "unguarded-decrement":
+        cursor = emit(cursor, "eb 02 eb fe")
+    else:
+        cursor = emit(cursor, "7f 02 eb fe")
+    cursor = emit_absolute(cursor, "ff 0d", count_slot)
+    emit(cursor, "c3")
+
+    cursor = emit(0x100, "83 ec 04 c7 04 24 00 00 00 00")
+    cursor = emit(cursor, "6b 1c 24 0c")
+    cursor = emit_absolute(cursor, "81 c3", table_base)
+    jump_to_guard = cursor
+    cursor = emit(cursor, "eb 00")
+    body = cursor
+    write_address = text_va + cursor
+    cursor = emit(cursor, "66 81 4b fc 40 00")
+    cursor = emit(cursor, "ff 04 24")
+    cursor = emit(
+        cursor,
+        "83 c3 08" if mutation == "wrong-stride" else "83 c3 0c",
+    )
+    guard = cursor
+    cursor = emit(cursor, "8b 04 24")
+    cursor = emit_absolute(cursor, "3b 05", count_slot)
+    backedge = cursor
+    cursor = emit(cursor, "7c 00")
+    cursor = emit(cursor, "83 c4 04 c3")
+    text[jump_to_guard + 1] = guard - (jump_to_guard + 2)
+    text[backedge + 1] = (body - (backedge + 2)) & 0xFF
+
+    if mutation == "unknown-writer":
+        cursor = emit_absolute(0x180, "a3", count_slot)
+        emit(cursor, "c3")
+
+    image = pe_mod.Image(
+        data=bytes(data),
+        sha256=hashlib.sha256(data).hexdigest(),
+        machine=0x14C,
+        optional_magic=0x10B,
+        image_base=0x00400000,
+        size_of_headers=0,
+        entrypoint=text_va,
+        directories=(),
+        sections=(
+            pe_mod.Section(
+                ".text",
+                text_va,
+                0,
+                0x300,
+                0x300,
+                0x60000020,
+            ),
+            pe_mod.Section(
+                ".data",
+                data_va,
+                0x300,
+                0x200,
+                0x200,
+                0xC0000040,
+            ),
+        ),
+        imports=(),
+        exports=(),
+        relocations=tuple(relocations),
+        executable_ranges=((text_va, text_va + 0x300),),
+    )
+    return image, write_address, count_slot, table_base
+
+
 @pytest.mark.parametrize(
     ("allocation_size", "overlap", "escape", "expected"),
     (
@@ -47221,6 +63292,178 @@ def test_bounded_unsigned_interval_requires_exact_call_return_contract(
     else:
         assert result[:2] == expected
         assert "bounded-unsigned-interval" in result[2]
+
+
+@pytest.mark.parametrize(
+    ("format_bytes", "expected"),
+    (
+        (b"%u", (1, 10)),
+        (b".%u", (2, 11)),
+        (b" build %u", (8, 17)),
+        (b"%u%%-%u", (4, 22)),
+        (b"literal-only", None),
+        (b"%s", None),
+        (b"%08u", None),
+        (b"%lu", None),
+        (b"trailing%", None),
+    ),
+)
+def test_plain_unsigned_format_length_rejects_extended_grammar(
+    format_bytes,
+    expected,
+):
+    assert x86_cfg_module._bounded_plain_unsigned_format_length(
+        format_bytes
+    ) == expected
+
+
+@pytest.mark.parametrize(
+    (
+        "format_bytes",
+        "swapped_destination",
+        "protected_slot",
+        "expected",
+    ),
+    (
+        (b"%u", False, 0x00403020, True),
+        (b"%u", False, 0x00403010, False),
+        (b".%u", False, 0x00403020, True),
+        (b"%s", False, 0x00403020, False),
+        (b"%u", True, 0x00403020, False),
+    ),
+)
+def test_bounded_unsigned_format_push_stays_outside_protected_slots(
+    tmp_path,
+    monkeypatch,
+    format_bytes,
+    swapped_destination,
+    protected_slot,
+    expected,
+):
+    image, function_entry, formatter, push_address, destination = (
+        bounded_unsigned_format_pointer_image(
+            tmp_path,
+            format_bytes=format_bytes,
+            swapped_destination=swapped_destination,
+        )
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    monkeypatch.setattr(
+        recovery,
+        "_audited_unsigned_sprintf_function",
+        lambda target: target == formatter,
+    )
+    pushed = recovery._owned_decoded(push_address)
+
+    assert pushed.mnemonic == "push"
+    assert pushed.operands[0].type in {
+        capstone.x86.X86_OP_REG,
+        capstone.x86.X86_OP_IMM,
+    }
+    if not swapped_destination:
+        assert recovery._finite_register_values_before(
+            push_address,
+            "ebp",
+            function_entry,
+            frozenset(),
+        ) is None
+    assert recovery._closed_bounded_unsigned_format_call_argument_for_push(
+        push_address,
+        function_entry,
+        frozenset({protected_slot}),
+    ) is expected
+    if expected:
+        assert destination + 21 < protected_slot
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_interval", "expected_safe"),
+    (
+        (None, (0, 15), True),
+        ("one-extra-entry", (0, 16), False),
+        ("partial-compare", None, False),
+    ),
+)
+def test_bounded_affine_table_store_requires_exact_full_width_bound(
+    tmp_path,
+    mutation,
+    expected_interval,
+    expected_safe,
+):
+    """A finite table destination must retain its exact loop bound."""
+    image, function_entry, multiply_address, store_address = (
+        bounded_affine_table_store_image(tmp_path, mutation=mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    multiply = recovery._owned_decoded(multiply_address)
+    store = recovery._owned_decoded(store_address)
+    try:
+        interval = recovery._bounded_unsigned_operand_interval_before(
+            multiply_address,
+            multiply.operands[1],
+            function_entry,
+        )
+    except AnalysisLimitError:
+        interval = None
+    finite = recovery._finite_register_values_before(
+        store_address,
+        "ebx",
+        function_entry,
+        frozenset(),
+    )
+    destination = (
+        None
+        if finite is None
+        else recovery._semantic_write_destination_domain(
+            store,
+            recovery._instruction_value_flow(store).memory_writes[0],
+            function_entry,
+            call_return_domains={},
+            argument_domains={},
+            register_domains={"ebx": ("finite", finite[0])},
+        )
+    )
+    protected = 0x004030C0
+    safe = (
+        destination is not None
+        and destination[0] == "finite"
+        and all(
+            not (
+                value < protected + 4
+                and protected < value + destination[2]
+            )
+            for value in destination[1]
+        )
+    )
+
+    if expected_interval is None:
+        assert interval is None
+        assert finite is None
+        assert destination is None
+    else:
+        assert interval is not None
+        assert interval[:2] == expected_interval
+        assert finite is not None
+        assert finite[0] == frozenset(
+            12 * index
+            for index in range(expected_interval[1] + 1)
+        )
+        assert destination is not None
+        assert destination[1] == frozenset(
+            0x00403000 + 12 * index
+            for index in range(expected_interval[1] + 1)
+        )
+    assert safe is expected_safe
 
 
 @pytest.mark.parametrize(
@@ -47651,6 +63894,94 @@ def test_bounded_global_signed_word_closes_every_writer(mutation, expected):
             )
             != prior_fingerprint
         )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, 0x100),
+        ("missing-cap-write", None),
+        ("partial-cap-write", None),
+        ("wrong-compare-slot", None),
+        ("wrong-snapshot-slot", None),
+        ("clobbered-snapshot", None),
+        ("wrong-restore-register", None),
+        ("address-escape", None),
+    ),
+)
+def test_upper_bounded_global_word_closes_clamp_and_snapshot(
+    mutation,
+    expected,
+):
+    image, _load_address, slot = upper_bounded_clamped_global_word_image(
+        mutation=mutation
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    method = getattr(
+        recovery,
+        "_upper_bounded_signed_word_global_slot",
+        lambda _slot: None,
+    )
+    result = method(slot)
+
+    if expected is None:
+        assert result is None
+    else:
+        assert result is not None
+        assert result[:2] == (-0x8000, expected)
+        assert "signed-word-upper" in result[2]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        None,
+        "unguarded-increment",
+        "unguarded-decrement",
+        "unknown-writer",
+        "wrong-stride",
+    ),
+)
+def test_semantic_write_domain_closes_bounded_global_record_cursor(mutation):
+    image, write_address, count_slot, table_base = (
+        bounded_global_record_cursor_image(mutation=mutation)
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    decoded = recovery._owned_decoded(write_address)
+    writes = recovery._instruction_value_flow(decoded).memory_writes
+
+    assert len(writes) == 1
+    result = recovery._semantic_write_destination_domain(
+        decoded,
+        writes[0],
+        0x00401100,
+        call_return_domains={},
+        argument_domains={},
+    )
+    if mutation is None:
+        assert result == (
+            "finite",
+            frozenset(
+                table_base - 4 + index * 12 for index in range(3)
+            ),
+            2,
+        )
+        assert recovery._bounded_nonnegative_global_counter_slot(
+            count_slot
+        )[:2] == (0, 3)
+    else:
+        assert result is None
 
 
 def test_guarded_signed_word_keeps_tighter_global_upper_bound(
