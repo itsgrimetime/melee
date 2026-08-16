@@ -28,7 +28,7 @@
 - Consumes: `_DirectCfgRecovery._audited_format_buffer_end_count(call_source, engine, protocol, source_value) -> bool`
 - Produces: one recovered-CFG positive plus one-fact hostiles for literal-count buffer callbacks.
 
-- [ ] **Step 1: Add the synthetic fixture and parametrized test**
+- [x] **Step 1: Add the synthetic fixture and parametrized test**
 
 Add a `test_format_buffer_literal_count_accepts_only_bounded_helper_return`
 matrix adjacent to the dynamic helper-return test. Build the engine from this
@@ -52,7 +52,7 @@ engine = bytearray(
         "83 c4 0c c9 c3"
     )
 )
-helper_body = bytearray(bytes.fromhex("8b 44 24 04 83 e8 01 c3"))
+helper_body = bytearray(bytes.fromhex("8b 44 24 04 83 e8 04 c3"))
 ```
 
 Use literal expectations for these IDs:
@@ -69,15 +69,15 @@ Use literal expectations for these IDs:
 )
 ```
 
-Apply one change per hostile: `sub eax,1 -> add eax,1`; forwarded slot
-`[esp+0xc] -> [esp+0x8]`; `push 1 -> push 0`; `push 1 -> push 2`;
+Apply one change per hostile: `sub eax,4 -> add eax,4`; forwarded slot
+`[esp+0xc] -> [esp+0x8]`; `push 1 -> push 0`; `push 1 -> push 5`;
 `mov esi,eax -> mov esi,ecx`; or omit the recovered callback from
 `protocol.callback_calls`. Assert the helper target/argument, the indirect
 callback callsite and operand (including the absence of a direct target), the
 buffer coordinate, literal count operand, and mutation-specific bytes before
 asserting the auditor result.
 
-- [ ] **Step 2: Run the strict RED**
+- [x] **Step 2: Run the strict RED**
 
 Run:
 
@@ -104,7 +104,7 @@ current auditor requires a register count; all six hostile cases pass.
 - Produces: unchanged method signature and a `True` result for either the
   existing dynamic relation or an exact bounded literal relation.
 
-- [ ] **Step 1: Parse the two count-origin modes**
+- [x] **Step 1: Parse the two count-origin modes**
 
 Keep the source argument requirement unchanged. Replace the register-only count
 gate with:
@@ -126,14 +126,14 @@ Require `source_family` to remain callee-saved. When `count_family` is present,
 retain the existing distinct/callee-saved checks; the literal mode has no count
 register family.
 
-- [ ] **Step 2: Preserve the dynamic guard only for register counts**
+- [x] **Step 2: Preserve the dynamic guard only for register counts**
 
 For `count_family is not None`, retain the exact preceding `test`/`je` guard,
 fallthrough/skipped successor checks, and zero/nonzero fact split byte-for-byte.
 For literal mode, set `guard = None` and do not synthesize a branch or
 fallthrough fact.
 
-- [ ] **Step 3: Seed and transfer the literal fact**
+- [x] **Step 3: Seed and transfer the literal fact**
 
 Initialize the entry set as:
 
@@ -156,7 +156,7 @@ continues to audit `(source_family, count_family)`. Keep source transfer,
 immutable-format pruning, raw-successor equality, the 16-fact cap, iteration
 cap, and `_format_count_fact_covers_sources` unchanged.
 
-- [ ] **Step 4: Run GREEN and regression slices**
+- [x] **Step 4: Run GREEN and regression slices**
 
 Run:
 
@@ -168,15 +168,15 @@ uv run pytest tests/test_retro_x86_cfg.py \
 
 Expected: all selected tests pass.
 
-- [ ] **Step 5: Run static checks**
+- [x] **Step 5: Run static checks**
 
 Run:
 
 ```bash
 python -m py_compile tools/mwcc_retro/x86_cfg.py \
   tools/melee-agent/tests/test_retro_x86_cfg.py
-uvx ruff check tools/mwcc_retro/x86_cfg.py \
-  tools/melee-agent/tests/test_retro_x86_cfg.py
+(cd tools/melee-agent && uv run ruff check \
+  ../mwcc_retro/x86_cfg.py tests/test_retro_x86_cfg.py)
 git diff --check -- tools/mwcc_retro/x86_cfg.py \
   tools/melee-agent/tests/test_retro_x86_cfg.py
 ```
@@ -196,7 +196,7 @@ Expected: all commands exit zero.
 - Consumes: the local GREEN implementation.
 - Produces: authoritative detached retail result and the next Task 8 boundary.
 
-- [ ] **Step 1: Launch the retail call-slot replay detached**
+- [x] **Step 1: Launch the retail call-slot replay detached**
 
 From the worktree root, choose a fresh run directory and session name, then run:
 
@@ -226,16 +226,15 @@ python -m pytest -q tools/melee-agent/tests/test_retro_x86_cfg.py \
 python -m pytest -q tools/melee-agent/tests/test_retro_x86_cfg.py
 python -m py_compile tools/mwcc_retro/x86_cfg.py \
   tools/melee-agent/tests/test_retro_x86_cfg.py
-uvx ruff check tools/mwcc_retro/x86_cfg.py \
-  tools/melee-agent/tests/test_retro_x86_cfg.py
+(cd tools/melee-agent && uv run ruff check \
+  ../mwcc_retro/x86_cfg.py tests/test_retro_x86_cfg.py)
 git diff --check
 ```
 
-The first selector previously collected 684 of 3,633 cases; update the expected
-total to include the new seven-case matrix and require every literal-count ID to
-be present. Run commands expected to exceed ten minutes in a fresh detached
-tmux directory with stdout, stderr, `exit-code.txt`, elapsed time, RSS, and
-SHA-256 recorded.
+The first selector now collects exactly 691 of 3,640 cases across 209 unique
+test functions and includes all seven literal-count IDs. Run commands expected
+to exceed ten minutes in a fresh detached tmux directory with stdout, stderr,
+`exit-code.txt`, elapsed time, RSS, and SHA-256 recorded.
 
 - [ ] **Step 3: Record evidence and commit the implementation slice**
 

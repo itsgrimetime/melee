@@ -28,27 +28,28 @@
 
 **Interfaces:**
 - Consumes: existing `load_large_cfg_program`, `_DirectCfgRecovery`, `build_seed_inventory`, `generous_limits`, `_pushed_call_argument`, `_finite_register_values_before`, `_memcpy_like_function`, and `_closed_call_argument_slot_is_consumed`.
-- Produces: `counted_cstring_copy_bound_image(tmp_path, *, mutation: str | None)` and tests whose function names and parameter IDs all contain `counted_cstring_copy_bound`.
+- Produces: `counted_cstring_copy_bound_image(tmp_path, *, mutation: str | None, scratch: int = 0x403000, destination_displacement: int = -0x20, audited_reader: bool = False)` and tests whose function names and parameter IDs all contain `counted_cstring_copy_bound`.
 
-- [ ] **Step 1: Add one shared fixture with five core functions and two readers**
+- [x] **Step 1: Add one shared fixture with five core functions and two readers**
 
   Construct one address-independent synthetic image with:
 
   ```python
   caller = base
-  counted_writer = base + 0x100
-  guarded_copier = base + 0x180
-  memcpy = base + 0x280
-  protected_callee = base + 0x300
-  scratch = base + 0x500
-  source_record = base + 0x600
+  counted_writer = base + 0x50
+  guarded_copier = base + 0x80
+  memcpy = base + 0x100
+  protected_callee = base + 0x140
+  scratch = 0x403000
+  source_record = 0x403100
   ```
 
   The caller must allocate a private frame, call the counted writer as
   `(scratch, source_record)`, call the guarded copier as
-  `(scratch, private_destination)`, then push one protected private-stack
-  pointer into `protected_callee`, explicitly zero that argument word, clean
-  it, and return. The counted writer must use the retail semantic sequence:
+  `(scratch, private_destination)`, then make one retail-shaped three-argument
+  call into `protected_callee`, track scalar argument 1, explicitly zero that
+  argument word, clean all three arguments, and return. The counted writer
+  must use the retail semantic sequence:
 
   ```asm
   push ebx
@@ -79,7 +80,13 @@
   status. Each reader has a distinct recovered function entry and a closed
   read-only/no-escape body.
 
-- [ ] **Step 2: Add the exact mutation table**
+  The second positive changes both the scratch immediate and destination
+  coordinate and replaces the two trivial readers with one compact instance
+  of the existing address-independent `_audited_strchr_function` shape. This
+  exercises the exact retail interior-or-null reader seam without introducing
+  retail addresses or a second fixture family.
+
+- [x] **Step 2: Add the exact mutation table**
 
   Support these IDs without creating one fixture per case:
 
@@ -91,8 +98,14 @@
       ("producer-wrong-nul-index", "producer-wrong-nul-index", False),
       ("scratch-mismatch", "scratch-mismatch", False),
       ("producer-bypass", "producer-bypass", False),
+      ("caller-direction-set", "caller-direction-set", False),
       ("intervening-call", "intervening-call", False),
       ("intervening-write", "intervening-write", False),
+      ("reader-callee-saved-clobber", "reader-callee-saved-clobber", False),
+      ("reader-direction-leak", "reader-direction-leak", False),
+      ("scan-accumulator-family", "scan-accumulator-family", False),
+      ("scan-address-size", "scan-address-size", False),
+      ("scan-count-family", "scan-count-family", False),
       ("scan-count-seed", "scan-count-seed", False),
       ("scan-source", "scan-source", False),
       ("scan-length-sub", "scan-length-sub", False),
@@ -102,10 +115,14 @@
       ("copy-length", "copy-length", False),
       ("copy-source", "copy-source", False),
       ("copy-destination", "copy-destination", False),
+      ("consumer-stack-drift", "consumer-stack-drift", False),
+      ("consumer-wrong-restore", "consumer-wrong-restore", False),
       ("memcpy-body", "memcpy-body", False),
       ("producer-target", "producer-target", False),
       ("consumer-target", "consumer-target", False),
+      ("reader-return-pointer-use", "reader-return-pointer-use", False),
       ("pointer-publication", "pointer-publication", False),
+      ("destination-register-forwarding", "destination-register-forwarding", False),
       ("pointer-return", "pointer-return", False),
       ("source-top", "source-top", False),
       ("destination-top", "destination-top", False),
@@ -117,7 +134,7 @@
   `authority-leak`, add a second guarded-copier call with no matching producer
   and a distinct stack destination; do not mutate the valid first pair.
 
-- [ ] **Step 3: Add non-vacuous direct recognizer prerequisites**
+- [x] **Step 3: Add non-vacuous direct recognizer prerequisites**
 
   In `test_counted_cstring_copy_bound_requires_exact_protocol`, recover each
   case and assert:
@@ -136,14 +153,14 @@
   producer/consumer target mutations, assert the active call and both argument
   pushes remain owned and ordered.
 
-- [ ] **Step 4: Add the strict end-to-end oracle**
+- [x] **Step 4: Add the strict end-to-end oracle**
 
   Parameterize `test_counted_cstring_copy_bound_closes_only_certified_aliases`
   over the exact case table. Require both:
 
   ```python
   assert recovery._closed_call_argument_slot_is_consumed(
-      protected_call, 0, caller
+      protected_call, 1, caller
   ) is expected
   assert recovery._private_stack_store_is_scalar_quarantined(
       protected_store, protected_callee
@@ -155,7 +172,7 @@
   per candidate on each invocation. Add a second positive with a different
   scratch immediate and destination coordinate.
 
-- [ ] **Step 5: Capture strict RED before production changes**
+- [x] **Step 5: Capture strict RED before production changes**
 
   Run:
 
@@ -201,7 +218,7 @@
   `0x40` only when the exact caller-bound composition is proven; every decline
   returns `None`.
 
-- [ ] **Step 1: Implement `_counted_c_string_writer_bound`**
+- [x] **Step 1: Implement `_counted_c_string_writer_bound`**
 
   Enumerate only instructions reachable from `function_entry`; require every
   owned function instruction to belong to that reachable set. Match the exact
@@ -215,7 +232,7 @@
   argument ordering, exact raw and recovered successors, and
   `_memcpy_like_function(target)`. Return `0xff` only after all checks pass.
 
-- [ ] **Step 2: Run the producer-only slice**
+- [x] **Step 2: Run the producer-only slice**
 
   Run:
 
@@ -228,7 +245,7 @@
   Expected: producer positive/direct assertions pass; the complete end-to-end
   positive remains RED because no continuation consumes the recognizer yet.
 
-- [ ] **Step 3: Implement `_guarded_c_string_copy_bound`**
+- [x] **Step 3: Implement `_guarded_c_string_copy_bound`**
 
   Build a bounded semantic audit over the target's reachable CFG. Require one
   source argument-0 load, one destination argument-1 load, one forward
@@ -242,12 +259,13 @@
   returns, and every reachable return defines EAX from XOR-zero or an
   immediate. Reject every pointer-derived memory write except the certified
   `memcpy` destination. For any other call receiving the source pointer,
-  require an exact owned direct target, a closed raw call domain, an audited
-  read-only/no-escape argument, and a call-result suffix that cannot use a
-  returned pointer as an address, stored value, pushed capability, or visible
-  return. Return `0x40` only after the complete audit.
+  require an exact owned direct target, a closed raw call domain, and either an
+  audited read-only/no-escape argument or the existing address-independent
+  `_audited_strchr_function` shape. Any interior-or-null return must have a
+  call-result suffix that cannot use it as an address, stored value, pushed
+  capability, or visible return. Return `0x40` only after the complete audit.
 
-- [ ] **Step 4: Run the consumer-only slice**
+- [x] **Step 4: Run the consumer-only slice**
 
   Run:
 
@@ -260,7 +278,7 @@
   Expected: every direct consumer shape assertion matches its expected bound;
   the end-to-end positive remains RED until Task 3.
 
-- [ ] **Step 5: Implement the caller-bound composition**
+- [x] **Step 5: Implement the caller-bound composition**
 
   In `_caller_bound_counted_c_string_copy_bound`, require the consumer call to
   have an exact direct target whose guarded bound is `0x40`. Resolve consumer
@@ -278,7 +296,7 @@
   call, jump, RET/IRET, stack arithmetic, indirect edge, alternate predecessor,
   or extra producer. Return `min(0x40, 0xff + 1) == 0x40`.
 
-- [ ] **Step 6: Run all direct recognizer tests**
+- [x] **Step 6: Run all direct recognizer tests**
 
   Run the exact `counted_cstring_copy_bound` selection. Expected: all direct
   bound assertions pass; only the end-to-end alias-continuation positives
@@ -307,7 +325,7 @@
   ) -> tuple[bool, _PrivateStackAliasFact | None]: ...
   ```
 
-- [ ] **Step 1: Add fresh-query caches and the continuation**
+- [x] **Step 1: Add fresh-query caches and the continuation**
 
   Add only:
 
@@ -322,13 +340,14 @@
   destination from `(sp_basis, sp_offset + 4)`. Require `source == ()` and
   `destination is not None`.
 
-  Build the result from `caller_base`: set EAX to `()`, ECX and EDX to `None`,
-  preserve all other registers and the exact caller private-spill/escaped
-  tuples, then call `_project_private_stack_alias_escapes`. Return
+  Build the result from `caller_base`: set EAX and ECX to `()`, set EDX to the
+  exact destination alias left by the audited `memcpy` body, preserve all
+  other registers and the exact caller private-spill/escaped tuples, then call
+  `_project_private_stack_alias_escapes`. Return
   `(True, None)` on any recognized-but-invalid alias/projection fact and
   `(True, projected)` only on success. Do not clear destination spill bytes.
 
-- [ ] **Step 2: Insert dispatch before generic owned-callee descent**
+- [x] **Step 2: Insert dispatch before generic owned-callee descent**
 
   Invoke the continuation after the existing scalar-format continuation and
   before `memcpy_alias_continuation` / generic `exact_owned` descent. Require
@@ -338,7 +357,7 @@
   fields, enqueue it, and `continue`; never create a callee context for this
   summarized call.
 
-- [ ] **Step 3: Run strict GREEN**
+- [x] **Step 3: Run strict GREEN**
 
   Run:
 
@@ -351,7 +370,7 @@
   Expected: every exact node passes, including repeated-query and
   authority-leak cases. Record node count and duration.
 
-- [ ] **Step 4: Run adjacent alias/memcpy/formatter regressions**
+- [x] **Step 4: Run adjacent alias/memcpy/formatter regressions**
 
   Run:
 
@@ -365,7 +384,7 @@
   the existing unknown-length stack-source and stack-destination hostiles
   remain false.
 
-- [ ] **Step 5: Run static and scope checks**
+- [x] **Step 5: Run static and scope checks**
 
   Run:
 
@@ -399,7 +418,7 @@
 - Consumes: green focused/static gates and the unchanged authoritative call-slot command.
 - Produces: one durable implementation commit and the next exact Task 8 boundary.
 
-- [ ] **Step 1: Reconcile the diagnostic stop**
+- [x] **Step 1: Reconcile the diagnostic stop**
 
   When `issue1240_memcpy_context_stop` exits naturally, record its command,
   duration, max RSS, output/stderr hashes, exact rejected caller/context rows,

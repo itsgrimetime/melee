@@ -66,25 +66,34 @@ extra producers, unsupported instructions, or limit exhaustion reject.
 Recognize an address-independent guarded C-string copier whose reachable body:
 
 - loads source argument 0 into the scan cursor, seeds a full-width count of
-  `0xffffffff`, zeroes AL, and performs the exact forward `REPNE SCASB`;
+  `0xffffffff` in the instruction's implicit ECX counter, zeroes the implicit
+  AL byte through full-width EAX, and performs the exact 32-bit-address forward
+  `REPNE SCASB` through EDI;
 - derives the byte length as `0xfffffffe - remaining_count`;
 - admits the copy path only through a full-width comparison with 63 and the
   exact signed `JLE` arm;
 - increments that accepted length exactly once and forwards
   `(destination argument 1, source argument 0, length + 1)` to the existing
   audited `memcpy` body;
+- restores the exact prologue-saved source and cursor families on every
+  reachable return without return-slot drift;
 - performs no other write through either pointer and never stores or returns
   either pointer;
 - permits intervening source-reader calls only when their direct owned target,
-  pushed argument, return use, raw call domain, and reachable body jointly
-  prove read-only/no-escape behavior; and
+  pushed argument, return use, raw call domain, direction-flag restoration,
+  preservation of the live source/cursor register values, and reachable body
+  jointly prove read-only/no-escape behavior, including the existing
+  address-independent `_audited_strchr_function` shape when its
+  interior-or-null return is discarded as scalar status; and
 - returns only pointer-independent scalar status values on every reachable
   return.
 
 The producer's `0..255` NUL guarantee makes the scan result nonnegative and
 prevents the signed guard from admitting a wrapped high-bit length.  The guard
 then proves the copy width is in `1..64`.  The guarded-consumer proof is never
-issued without the matching producer proof.
+issued without the matching producer proof. The caller must enter both calls
+with the ABI direction flag clear, and the consumer's scan and copy must remain
+on must-clear paths.
 
 ### Alias continuation
 
@@ -94,10 +103,14 @@ destination may carry finite private-stack aliases; the certified consumer may
 write scalar bytes through it but cannot retain or publish the pointer.
 
 Return the caller base fact with callee-saved registers and existing private
-spills/escapes preserved, `EAX` set to scalar, and cdecl-clobbered `ECX` and
-`EDX` set to TOP.  Keeping destination spill contents unchanged is a
-conservative over-approximation: this continuation grants no must-overwrite
-authority.  Project the result through the existing escape demand.  If the
+spills/escapes preserved, `EAX` and `ECX` set to scalar, and `EDX` set to the
+exact destination alias left by the audited `memcpy` body.  This is an exact
+body effect rather than a generic cdecl assumption; a caller that forwards
+`EDX` into the later tracked argument slot must therefore remain rejectable.
+Keeping destination spill
+contents unchanged is a conservative over-approximation: this continuation
+grants no must-overwrite authority.  Project the result through the existing
+escape demand.  If the
 target body is recognized but any caller-bound producer, argument, bound,
 mapping, or projection fact is missing, decline the continuation and retain
 the ordinary fail-closed analysis.
@@ -134,11 +147,17 @@ The strict matrix includes one positive and one-fact hostiles for:
 - a full-width instead of byte-sized producer count;
 - a missing or displaced producer NUL store;
 - producer destination / consumer source mismatch;
-- a bypass path, intervening call, or intervening memory write;
-- malformed scan seed, source cursor, length subtraction, guard operand,
-  guard arm, increment, or copy argument;
+- a bypass path, caller direction-flag mutation, intervening call, or
+  intervening memory write;
+- a source reader that leaks the direction flag or clobbers a live
+  callee-saved source/count register;
+- malformed scan accumulator family, address width, implicit count family,
+  seed, source cursor, length subtraction, guard operand, guard arm, increment,
+  or copy argument;
+- a missing or wrong-family consumer stack restore on one return path;
 - mutated `memcpy`, producer, or consumer call target/body;
-- an extra pointer publication or pointer-valued return;
+- an extra pointer publication, forwarding of the returned destination in
+  `EDX` into the tracked argument slot, or pointer-valued return;
 - TOP/ambiguous source or destination aliases; and
 - a second unproduced consumer that would expose authority leakage across
   contexts or queries.

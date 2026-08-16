@@ -335,3 +335,160 @@ resolution, and final queue refresh.
 - Task 9 focused/broad adjacent suites: 366 / 829 passed.
 - Scoped Ruff, `py_compile`, and `git diff --check`: green for the touched
   Task 4-7 files.
+
+## 2026-08-15 replacement-root reconciliation
+
+The July task summaries above are historical checkpoints, not the current
+completion boundary.  Tasks 1--7 now provide the private-page arena evidence
+consumed by Task 8.  The active fail-closed gate is the first required Task 8
+retail root at `0x435620`; no positive root, promoted proof, or issue-resolution
+claim has been made.
+
+- The formatter-only proof first closed the path-local end-minus-source count
+  at callback `0x4039b0`, then isolated a distinct exact leading-prefix source
+  at callback `0x40395d`: `buffer_base - 1` with singleton count `1` and a
+  disjoint protected demand. Neither result changes a cap or introduces a
+  retail allowlist.
+- A strict one-positive/eight-hostile TDD cycle now issues that one-byte
+  envelope only under the existing audited cursor protocol. The focused and
+  adjacent classifier gates are green. The 49-minute detached call-slot replay
+  then exposed a distinct `0x40395d` context whose source register, pushed
+  source slot, and source value are TOP/`None` while the count and protocol
+  authority remain exact. The completed context diagnostic isolated generic
+  widening at the 65th reverse-helper return position; the existing independent
+  reverse-helper proof still certifies `("buffer",)`. A strict seven-case
+  literal-count RED/GREEN cycle reuses that path-sensitive proof without
+  changing the generic alias cap or TOP semantics.
+- The subsequent authoritative replay ran for 2 hours 19 minutes and advanced
+  to retail copy call `0x412278`, where both source and destination were exact
+  but the copy length was still unbounded. That boundary is now covered by a
+  caller-bound counted C-string proof: 35 hostile/positive protocol cases, a
+  second independent scratch/destination positive, and fresh-query cache
+  currentness are green. A manual soundness audit added strict implicit-register
+  hostiles for zeroing a non-EAX family, using a 16-bit scan address, and
+  tracking a non-ECX scan counter; all were false admissions before the generic
+  EAX/ECX/EDI and 32-bit-address binding, then closed without a retail special
+  case. A second manual audit added caller/reader direction-flag and
+  callee-saved live-register hostiles; all five intended semantic oracles were
+  false admissions before caller/consumer DF-state, transitive reader-DF, and
+  live-register preservation checks were added. Finally, two one-return-path
+  consumer restore hostiles proved that the existing role recognizer had not
+  bound its saved EBP/EDI stack lifetime; both now reject through the generic
+  prologue-save proof. The complete focused slice is 177 passed, the adjacent
+  slice is 317 passed, static checks are
+  green, and the post-repair exact-retail mini-query
+  returns writer `255`, consumer `64`, and caller composition `64`. The
+  pre-existing detached context diagnostic subsequently completed in 2 hours
+  49 minutes 45.76 seconds. It independently reproduced that exact
+  `0x412278` boundary: source and destination were scalar/exact, while both
+  finite and interval length remained `None`. Its diagnostic-only return
+  instrumentor then raised a `KeyError`; this happened after the semantic row
+  was durably written and does not contradict the isolated boundary. The
+  pre-hardening call-slot replay completed in 2 hours 46 minutes 57.06 seconds
+  with wrapper exit zero but the semantic row still `result=False`. Its inner
+  `0x412278` `memcpy` continuation actually succeeded because both endpoints
+  were proven non-stack; the empty fixed-point diagnostic rows came from an
+  ignored-harness probe replacement, so the earlier unbounded-length profile
+  was not itself the false return. The current recognizer remains `255/64/64`
+  with and without the owned-write scan cache. The corrected ignored harness
+  now records both the in-query caller-bound continuation and the exact
+  fixed-point false exit. A current hardened replay started detached at
+  2026-08-15 22:40:31 PDT in tmux session
+  `issue1240_counted_cstring_hardened_replay`; its in-process preflight is
+  `255/64/64`. It completed after 2 hours 59 minutes 42.62 seconds with the
+  semantic result still false, but the corrected probe now places the first
+  rejection at the root alias-context admission check before any residue state
+  or graph edge exists. The harness now emits the exact
+  `compute_alias_contexts_before` None-return locals and the in-query counted
+  continuation before its early diagnostic return. No positive call-slot or
+  arena root is claimed.
+- When the narrow replay is green, the required order is: run the complete
+  focused/full/static gates; replay `0x435620`; independently prove `0x435a8c`;
+  harden and review Task 8; refresh the tracked Task 8 ledger; commit and push;
+  generate/revalidate immutable run1/run2; then promote, merge, replay via the
+  installed CLI, resolve #1240, and refresh the issue queue.
+- The parent issue plan's Task 7 artifact tree is reusable checkpoint state,
+  not accepted output: its v6 producer checkpoint directory currently contains
+  5,618 files (44,404 KiB), but there is no `CURRENT`, generation/report,
+  run1/run2, or resolver marker. The tracked installed proof remains
+  `proof_ready=false` with empty opcode/operand/site rows, the hook manifest has
+  no sites, and `gc_125n.json` has no instrumentation proof IDs. Those files
+  must remain unpromoted until both roots, immutable generation equality, and
+  the parent Tasks 8--10 gates are positive.
+- The 12-hour scenario/outlook record is maintained separately at
+  `.superpowers/sdd/2026-07-12-retail-pcode-proof/outlook-ledger.md`; its latest
+  entry is `2026-08-16 06:15 PDT` and the next entry is due at `2026-08-16
+  18:15 PDT`.
+
+### Final-integration preservation baseline
+
+The canonical branch is a normal linked worktree and exactly matches its
+`origin` upstream at `9ab0725a9`. The main checkout is on `master`, but it and
+the issue branch have diverged from merge base `25aec205a`; final integration
+therefore requires a disposable rehearsal followed by a real merge, not a
+fast-forward. Main has no tracked dirt but owns two untracked artifacts that
+must survive byte-identically:
+
+- `.coverage`: 53,248 bytes, SHA-256
+  `d2f367fc03a666864589fa94a1d131d99982b014cbffe02acc0f6c1dc06d1362`;
+- `docs/superpowers/order-targets/`: one file, 409 bytes, sorted
+  relative-path/file-SHA256 stream digest
+  `9a7e9ab93d13c2a1a9679a2a13b9c13246339f210ba097517d3041a321098934`.
+
+The directory digest is reproduced from the main-checkout root with
+`find docs/superpowers/order-targets -type f -print0 | sort -z | xargs -0
+shasum -a 256 | shasum -a 256`; changing path or separator formatting produces
+a different stream hash and is not an artifact change. A fresh read-only check
+still reproduces both recorded fingerprints.
+
+Recompute and require both fingerprints before and after rehearsal and the real
+merge. Do not stash, delete, stage, or regenerate either artifact.
+
+A read-only three-way `git merge-tree --write-tree --name-only --messages`
+forecast currently reports 20 conflict paths: five add/add PCode-lineage JSON
+fixtures, five add/add proof/test/production modules, and ten content conflicts
+across the retro CLI, runtime/map/PCode/trace tests, hooks, trace assembler, and
+struct-map implementation. This forecast changes no branch or worktree. Resolve
+the conflicts only in a disposable rehearsal after Task 10 is complete, run the
+full branch gates there, record the exact resolutions, then replay those
+resolutions in the real main merge. Do not default wholesale to either side;
+the issue branch and main each contain independent later tooling work.
+
+The current conflict forecast was refreshed against merge base
+`25aec205a80889871e00e1d38b545c98bc518bf2` and still returns status 1 with
+those same 20 paths.  The two largest add/add production modules require a
+semantic union rather than side selection: branch
+`backend_instrumentation_proof.py` adds 18 top-level operand/state-schema
+definitions while main adds `_validate_operand_rules`, with seven shared
+top-level definitions changed on both sides; `backend_pcode_lineage.py` has 61
+shared top-level definitions, 12 changed on both sides, and main alone adds
+`_rule`.  These facts narrow the later rehearsal strategy but do not authorize
+a merge before the exact proof artifacts and Task 10 gates are complete.
+
+The five add/add lineage fixtures likewise encode two independently required
+schema advances. Main adds allocator/fixed-physical coverage categories (and,
+for the machine-register hostile, per-operand allocation requirements); the
+issue branch adds virtual/physical/non-allocator coverage plus raw register
+value/flags/payload lineage. The rehearsal must regenerate or hand-merge a
+fixture accepted by the combined validators and retain each fixture's intended
+hostile, rather than choosing either JSON blob wholesale.
+
+### 2026-08-16 Task 8 writer-copy certificate handoff
+
+- The alias-context replay completed in 11,381.30 seconds and localized the
+  root-prefix rejection to writer `0x405ff0` calling exact memcpy `0x404c30` at
+  `0x4061b0`; the outgoing source slot was TOP even though the surviving
+  formatter envelope and exact writer protocol independently certify a
+  516-byte private-buffer copy bound.
+- A strict 12-case RED/GREEN cycle now consumes that envelope only for the
+  same writer and only when its canonical finite nonwrapping buffer, including
+  one-past, is disjoint from a canonical protected demand. Generic TOP and a
+  malformed negative-basis demand remain closed. The focused gate is 12
+  passed; the adjacent formatter/counted-string/memcpy gate is 220 passed;
+  static checks are green. The final correctly invoked current-source replay
+  is detached in tmux session
+  `issue1240_format_buffer_source_final_current`; its in-process preflight is
+  exactly `writer:255;consumer:64;caller:64`.
+- Task 8 is still open. The next semantic gate is a fresh complete call-slot
+  replay, followed by roots `0x435620` and `0x435a8c`, broad/adversarial gates,
+  immutable run1/run2 artifacts, and the parent promotion/merge/issue closure.

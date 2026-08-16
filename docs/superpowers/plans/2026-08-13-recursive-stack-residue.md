@@ -14,7 +14,7 @@
 - The sole terminal boundary is the exact existing contract `("kernel32.dll", "ExitProcess", None, 1)` plus an empty recovered successor domain.
 - Unresolved, indirect, ordinary-import, or other unowned calls reject while any exact residue row or dense tail is live.
 - Dense tails, recurrence state, subscribers, and stack-alias state are query-local and are never serialized or reused as certificate authority.
-- Existing `max_summary_iterations`, `max_contexts_per_entry`, 64-row, finite-index, and `[-0x1000, 0x1000]` exact-coordinate bounds remain fail-closed; no retail-specific limit increase is permitted.
+- Existing `max_summary_iterations`, `max_contexts_per_entry`, 64-row, finite-index, and `[-0x1000, 0x1000]` exact-coordinate bounds remain fail-closed; no retail-specific limit increase is permitted. Charge `max_contexts_per_entry` per canonical semantic `(owner entry, start address)`, with the aggregate query still bounded by `max_summary_iterations`.
 - Scope is `tools/mwcc_retro/x86_cfg.py`, `tools/melee-agent/tests/test_retro_x86_cfg.py`, this plan/spec, and the existing Task 8 report/ledger only.
 - Do not stage `.agents/`, `.coverage`, `.pi/`, `tools/melee-agent/uv.lock`, or ignored diagnostics.
 - Do not run the full approximately 16-minute publication-root replay until the focused suite and exact `0x4439ae` mini-query are green.
@@ -31,7 +31,7 @@
 - Consumes: the existing row tuple `(offset, live_mask, correlations)`.
 - Produces: `_PrivateStackResidueFact`, `_normalize_private_stack_residue`, `_join_private_stack_residue`, `_translate_private_stack_residue`, `_overwrite_private_stack_residue`, `_push_private_stack_residue`, and `_pop_private_stack_residue`.
 
-- [ ] **Step 1: Add strict lattice REDs**
+- [x] **Step 1: Add strict lattice REDs**
 
   Import the new private interfaces from `tools.mwcc_retro.x86_cfg` and add these exact tests:
 
@@ -80,7 +80,7 @@
 
   Use half-open byte intervals in production/tests even though the comments above show inclusive endpoints conceptually. Add paired exact-row cases for a row at `-2` straddling PUSH/CALL and a row at `2` straddling POP/RET.
 
-- [ ] **Step 2: Run and record strict RED**
+- [x] **Step 2: Run and record strict RED**
 
   Run:
 
@@ -91,7 +91,7 @@
 
   Expected: collection errors only because the six new interfaces do not exist. Existing tests must still collect.
 
-- [ ] **Step 3: Add the immutable residue fact**
+- [x] **Step 3: Add the immutable residue fact**
 
   Add a module-level frozen/slotted dataclass:
 
@@ -110,13 +110,13 @@
 
   `_normalize_private_stack_residue` must merge masks by exact `(offset, correlations)`, reject offsets outside `[-0x1000, 0x1000]`, reject more than 64 exact rows, and remove rows/bytes subsumed by a tail. It must never turn an empty exact set plus a non-null tail into an empty fact.
 
-- [ ] **Step 4: Implement monotone joins and translations**
+- [x] **Step 4: Implement monotone joins and translations**
 
   `_join_private_stack_residue(left, right)` uses `max` for two tail bounds, preserves the non-null bound when only one side has a tail, ORs exact masks, unions correlation alternatives conservatively, and retains exact bytes above the tail. `_translate_private_stack_residue(fact, delta)` shifts every exact offset and `tail_upper` by the same signed delta and re-normalizes.
 
   `_overwrite_private_stack_residue(fact, half_open_intervals)` clears an exact byte only if every feasible interval covers it. It shrinks a tail only if every interval covers the current upper byte; the new upper is `max(start for start, _end in intervals) - 1`. A finite overwrite never returns `tail_upper=None`.
 
-- [ ] **Step 5: Implement implicit stack transfers**
+- [x] **Step 5: Implement implicit stack transfers**
 
   `_push_private_stack_residue` first removes exact bytes guaranteed overwritten in `[-4, 0)`, then translates by `+4`. Its tail transfer is exactly:
 
@@ -135,7 +135,7 @@
   the returned fact. RET uses the same observation check but may never waive
   overlap and translates safe facts by `-4-cleanup`.
 
-- [ ] **Step 6: Run focused GREEN and static checks**
+- [x] **Step 6: Run focused GREEN and static checks**
 
   Run the Step 2 command, then:
 
@@ -388,6 +388,121 @@
 
   Charge the worklist limit before adding a new state/subscriber/return fact. Raw successor domains must equal `_summary_successors` before any edge is enqueued.
 
+  Preserve raw caller/RET nodes for provenance, but canonicalize their exact
+  immutable mapping inputs before charging or taking the subscriber-by-return
+  product. The subscriber key contains the caller function/return cursor,
+  exact caller-base alias fact, transported escape demand, and active
+  formatter/stream authority. The return key contains the callee identity,
+  exact returned alias fact, and exact callee-entry alias fact. Connect and
+  charge each distinct key once. Never merge different bases, demands,
+  authorities, returned facts, or entry facts, and never truncate by count.
+
+- [ ] **Step 3a: Close exact pre-root ABI boundaries exposed by retail**
+
+  Add a strict RED using `cw_exception_image()` that requires `_function_is_proven_no_return(...)` to accept a function whose sole reachable exit is the already recovered registered `indirect-jump-cw-exception-continuation`, while the existing incomplete-context-restore mutation remains false. Implement one edge-kind-specific terminal predicate; do not accept arbitrary cross-function or unresolved indirect jumps.
+
+  Add a strict RED for a direct one-jump ordinal-import thunk with two closed callers that each push one exact argument and pop it after return. Require private stack coordinate recovery to remain exact. Add one-fact hostiles for a caller with missing/mixed cleanup and an extra raw reference. Infer zero callee cleanup only when the thunk is terminal, the raw direct-call domain is closed, and all callers prove the same exact caller-cleaned arity. This compatibility proof is entry-prefix authority only and must not weaken live-residue import rejection.
+
+  Extend that RED through the entry-prefix alias tabulator: one caller must invoke the certified thunk and then call a root whose protected inner argument is exactly overwritten. The positive remains true; a paired caller that passes a precomputed pointer to the future protected stack coordinate as the thunk argument remains false. At the certified boundary require every exact argument word to be non-alias, retain callee-saved aliases/private spills, set caller-clobbered `EAX`/`ECX`/`EDX` to TOP, and continue in the caller without entering the one-JMP thunk. Do not reuse this transfer after a protected residue becomes live.
+
+  Add a canonical-frame demand RED: ESP and a proven frame-valued EBP retain exact incoming-slot uses, while EBP overwritten from a scalar register before an indexed dereference contributes no caller-spill demand. Require the existing inherited-EBP all-path seal before applying this projection. An indexed access through a still-canonical ESP/EBP or a read of inherited EBP before replacement remains false.
+
+  Add duplicate-coordinate mapping REDs. Two aligned source spill rows mapping to the same callee coordinate must produce one key with the unioned finite value; more than 64 values at that key widens only that value to TOP. Enforce `len(unique_spill_coordinates) <= 64` after the merge, never the transient projected-row count.
+
+  Add a strict low-`max_summary_iterations` RED in which eight raw RET nodes
+  expose one identical semantic return effect under distinct private-stack
+  coordinates. The query must stay true without raising the limit. Pair it
+  with hostiles whose returned alias fact or caller mapping input differs, and
+  retain the existing return-alias publication hostiles, so canonicalization
+  cannot erase a distinct escape.
+
+  Add a low-`max_contexts_per_entry` RED that calls the exact audited forward
+  `memcpy` body three times with distinct stack source/destination coordinates
+  before the protected call. Summarize only its entry-prefix alias effect:
+  require the exact reachable body bytes (including callee-save operands and
+  return protocol), singleton edge/three stack arguments, finite-value or
+  bounded-unsigned scalar length, and finite aliases; return the destination
+  alias in `EAX`/`EDX`, preserve
+  callee-saved aliases/spills, and scalarize `ECX`. A one-fact body mutation
+  or callee-save operand mutation must still exhaust the deliberately low cap,
+  and publishing a destination
+  equal to the future protected word must reject. Decline the summary when a
+  cyclic 32-bit source range may contain a tracked alias-bearing private word;
+  once the exact body is recognized, reject instead of falling back to the
+  generic callee proof. Include a wraparound hostile that kills the original
+  source word after the copy so acceptance cannot come from stale-source
+  rejection. Do not use the summary after residue becomes live. Count the
+  classifier calls: one fresh query must classify each candidate target at
+  most once, with no cross-query cache. Add a register-held length=4 positive
+  and memoize its upper bound per call site only within that query.
+
+  Add a distinct caller-bound scalar-format continuation RED around the
+  existing audited `sprintf`/`vsnprintf` body chain. Exact retail diagnosis must
+  remain part of the RED record: the direct writer authority has no synchronous
+  stream authority and reaches the engine only from the bounded formatting
+  wrapper; it must not borrow the unrelated stream-wrapper format guard.
+
+  The positive fixture uses a private allocated output buffer, one immutable
+  format containing ordered plain `%d`, `%s`, and `%s` conversions, a finite
+  immutable domain for both string arguments, and a null-or-empty local select
+  whose complete branches rejoin before the push. Require an exact maximum
+  output including NUL that remains within the allocation. One-fact hostiles
+  cover `%n`, `%p`, `%ls`, flags/width/precision, reordered or missing pushes,
+  mutable/unterminated/unknown strings, an unguarded null string, open or extra
+  call targets, callback/body mutation, arithmetic wrap, nonallocated output,
+  exact-fit-plus-one, and a partial alias-bearing word at the output boundary.
+  Add a positive whose scalar output fully overwrites an alias-bearing local
+  word and assert that row is killed, plus a partial-overwrite case that retains
+  only demonstrably untouched bytes or rejects if the current alias fact cannot
+  represent the remainder exactly.
+
+  Implement the format parser and immutable-string measurement as pure bounded
+  helpers. At the exact direct call boundary, read every ordered conversion
+  argument from the current caller, require the already audited body/edge/return
+  chain, prove every stack destination alternative currently allocated, apply
+  the scalar overwrite to the alias fact, preserve callee-saved aliases and
+  spills outside the range, project escapes, and rejoin the exact caller
+  continuation. Set only the audited integer return in `EAX` to scalar;
+  `ECX` and `EDX` remain TOP under cdecl. Do not descend into the
+  formatter, relax generic `memcpy`, reuse the unrelated wrapper authority, or
+  use this summary after residue is live. Memoize only immutable per-call facts
+  inside the fresh query and require ordinary fail-closed fallback for every
+  declined case.
+
+  Add the next retail-exposed `%s` domain as a separate strict RED for a closed
+  registered-record table. Retail diagnosis established that the selected
+  pointer at the blocker is not loader-backed: it is the name field of one of
+  16 zero-filled, 12-byte records, and one owned registration helper writes the
+  name/key/payload triple. Prove the registration helper's bounded empty-slot
+  search, exact ordered triple write, nonzero finite key domain, complete
+  callsite inventory, and finite immutable name-argument domain. Separately
+  prove the reader's bounded index, exact stride, requested-key/selected-key
+  equality, nonzero key, and same-record name load. Reconcile complete
+  decoded/raw/provisional incoming writes for all three fields before issuing
+  the `%s` length domain. Hostiles change one writer field/source/order/width,
+  admit a zero key or mutable name, add a writer/callsite, detach the reader
+  key guard, change the counter bound/branch/stride, or load a different
+  record. A merely bounded index or an assumed immutable table is explicitly
+  insufficient authority.
+
+  Add a nested return-offset RED for a restored scalar counter whose exact DEC/TEST recurrence otherwise grows one relative-pointer value per iteration, plus hostiles that copy the counter to EAX, use it as a memory base, or pass it to an observing callee. Collapse that taint only after a complete owned-suffix audit proves scalar-only uses, exact nonobserving callees, and a kill before every reachable RET. Retain the existing decrement-after-collapsed-positive hostile unchanged.
+
+  Add a sealed context-save RED with one positive and one-fact interior-reference,
+  malformed-save, returning-restore, and wrong-residue-target hostiles. Admit the
+  continuation only when the exact 24-byte context has one current relocation
+  to the already audited save body and every remaining owned or provisional
+  reference is an adjacent exact nonreturning restore. Apply only the exact
+  scalar `EAX`/`ECX` result and cache the classification inside one query.
+
+  Add an exact named-stdcall survivor RED: `GlobalFree` preserves an incoming
+  callee-saved EDI mask, kills an incoming caller-clobbered EDX mask, while an
+  unknown name and wrong pushed arity reject. Add the same preservation/kill
+  pair for the exact publication contracts `EnterCriticalSection` and
+  `LeaveCriticalSection`, which deliberately remain outside the generic named
+  stdcall list. Use these results only to omit a wholly parametric incoming GPR
+  from alias relevance. Never summarize ESP and never turn either ABI fact into
+  live-residue import authority.
+
 - [ ] **Step 4: Implement recurrence-shape widening**
 
   Before an instruction-state join would add another shifted row family, group rows uniquely by `(mask, correlations, pairwise-relative-layout)`. A repeated family may widen only when every moving row has the same `delta < 0` and all other rows are stationary. Convert the moving bytes from both observations into `Tail(max_live_byte)` and retain stationary rows. Apply the identical rule at callee entry, return-fact, and caller-suffix joins.
@@ -396,7 +511,7 @@
 
 - [ ] **Step 5: Enforce terminal and all-path closure**
 
-  The graph succeeds only when every maximal live-fact path either reaches an empty fact or the exact trusted ExitProcess boundary. A repeated SCC without a return/terminal witness is false. Owned no-return bodies are traversed; `_call_is_proven_no_return` does not skip them. Unowned calls reject with any live fact.
+  The graph succeeds only when every reachable transfer is locally free of observation/escape and the connected live-fact component has at least one audited empty-fact or exact trusted ExitProcess witness. A divergent branch with no observation is safe under this partial-correctness property; termination is not authority. A repeated SCC without any return/terminal witness is false. Owned no-return bodies are traversed; `_call_is_proven_no_return` does not skip them. Unowned calls reject with any live fact.
 
 - [ ] **Step 6: Run the exact recursive matrix and adjacency**
 
@@ -416,6 +531,19 @@
 ---
 
 ### Task 5: Exact retail, root replay, and durable handoff
+
+**Current exact-retail boundary (2026-08-15 14:10 PDT):** the context diagnostic
+at formatter callback `0x40395d` is complete. The generic alias lattice widens
+the reverse-helper result at exactly 65 enumerated positions, but the existing
+independent reverse-helper proof certifies the same return as `("buffer",)`.
+A strict seven-case TDD cycle therefore adds only an exact positive-literal
+count origin to the existing path-sensitive end/count interpreter; it does not
+change the generic alias cap, accept TOP directly, weaken dynamic counts, add a
+callback/address allowlist, or raise a semantic limit. The 29-case local
+regression slice and static checks are green. The authoritative call-slot replay
+is running restart-safe in detached tmux directory
+`20260815-literal-count-green-tmux`; no root is accepted until its completed
+semantic row is `result=True`.
 
 **Files:**
 - Modify: `tools/mwcc_retro/x86_cfg.py`
@@ -450,18 +578,35 @@
 
   ```bash
   python -m pytest -q tools/melee-agent/tests/test_retro_x86_cfg.py \
-    -k 'private_stack_scalar or private_stack_residue or noescape_scalar or partial_return or partial_register or session_capability_seal or narrow_scalar_argument'
+    -k 'private_stack_scalar or private_stack_residue or noescape_scalar or partial_return or partial_register or session_capability_seal or narrow_scalar_argument or format or writer or stream'
   python -m pytest -q tools/melee-agent/tests/test_retro_x86_cfg.py
   python -m py_compile tools/mwcc_retro/x86_cfg.py tools/melee-agent/tests/test_retro_x86_cfg.py
   ruff check tools/mwcc_retro/x86_cfg.py tools/melee-agent/tests/test_retro_x86_cfg.py
   git diff --check
   ```
 
-  Scan added production lines for retail addresses, hashes, compiler markers, and allowlists. Compare test collection to the expected named recursive-residue IDs so `-k` cannot silently deselect a required hostile.
+  Scan added production lines for retail addresses, hashes, compiler markers, and allowlists. Compare test collection to the expected named recursive-residue and formatter-protocol IDs so `-k` cannot silently deselect a required hostile.
 
 - [ ] **Step 3: Run the timed authoritative root replay**
 
-  After Step 2 is green, run the existing `--task4-publication-root 0x435620 --no-semantic-trace` command under `/usr/bin/time -l`, teeing to a uniquely named Task 8 log. Wait quietly for 15 minutes before polling unless the process completes earlier.
+  After Step 2 is green, run the exact root command under `/usr/bin/time -l`
+  in a fresh detached tmux directory:
+
+  ```bash
+  python -u build/diagnostics/task4-repair-exact/hydrate-cfg-query.py \
+    --scan-owned-blocks \
+    --task4-publication-certificate \
+    --task4-publication-root 0x435620 \
+    --no-semantic-trace
+  ```
+
+  All four arguments are mandatory: `--task4-publication-root` only filters
+  the certificate branch and is a no-op without
+  `--task4-publication-certificate`; `--scan-owned-blocks` binds the hydrated
+  ownership inventory. Accept only exactly one output row matching
+  `task4-publication-certificate;root=0x435620;...;result=True;stages=...`.
+  Wait quietly for 15 minutes before polling unless the process completes
+  earlier.
 
   If the root remains false, extract only its terminal named stage/reject reason, update the outlook ledger, and diagnose the next generic boundary. Do not treat progress past `0x4439ae` as root acceptance.
 
