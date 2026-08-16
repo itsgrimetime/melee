@@ -3776,7 +3776,12 @@ def straddled_argument_slot_push_image(tmp_path):
     cursor = emit_call(cursor, callee)
     emit(cursor, "83 c4 02 50 66 c7 44 24 04 00 00 83 c4 06 c3")
     emit(0x60, "89 44 24 04 66 83 7c 24 04 00 31 c0 c3")
-    return load_large_cfg_program(tmp_path, program), base, callee, call_address
+    image = replace(
+        load_large_cfg_program(tmp_path, program),
+        entrypoint=base,
+        exports=(),
+    )
+    return image, base, callee, call_address
 
 
 def straddled_argument_slot_ret_image(tmp_path):
@@ -13377,7 +13382,9 @@ def forwarded_movzx_dispatch_image(
         emit(0xF0, "8b 44 24 04 c6 00 ff c3")
     else:
         emit(0xF0, "c3")
-    emit(0x110, "c3")
+    # The helper is semantically inert, so make its caller-clobbered output
+    # explicit instead of accidentally returning the caller's ECX value.
+    emit(0x110, "31 c9 31 d2 c3")
     if conditional_helper_return:
         cursor = 0x120
         cursor = emit(cursor, "53")
@@ -21303,6 +21310,15 @@ def lifecycle_movzx_dispatch_image(
         "known-callee-saved-slot-address-alias",
         "known-call-preserved-receiver-alias-write",
     }
+    plain_second_stack_receiver = bool(
+        second_stack_receiver
+        and not second_stack_receiver_overwrite
+        and not second_stack_receiver_helper_mutation
+        and not second_stack_receiver_register_alias_mutation
+        and not second_stack_receiver_register_copy_alias_mutation
+        and not second_stack_receiver_preallocated_argument_mutation
+        and second_stack_receiver_alias_transport is None
+    )
 
     text_va = 0x00401000
     rdata_va = 0x00402000
@@ -21589,7 +21605,7 @@ def lifecycle_movzx_dispatch_image(
             cursor = emit(cursor, "83 c4 10")
         cursor = emit(cursor, "83 c4 04 5e c3")
         assert cursor <= callback
-    elif not (
+    elif not plain_second_stack_receiver and not (
         second_stack_receiver_helper_mutation
         or second_stack_receiver_register_alias_mutation
         or second_stack_receiver_register_copy_alias_mutation
@@ -21660,9 +21676,22 @@ def lifecycle_movzx_dispatch_image(
         elif second_stack_receiver_alias_transport == "spill-address":
             cursor = emit(cursor, "8d 3c 24")
         cursor = emit(cursor, "8b 04 24 0f b6 18")
+        if plain_second_stack_receiver:
+            # The lifecycle recurrence follows the stack observation but
+            # still precedes the computed transfer.  Reload EAX afterward
+            # because the recursive cdecl call may clobber it.
+            cursor = emit(cursor, "56")
+            cursor = emit_call(cursor, consumer_b)
+            cursor = emit(cursor, "59 8b 04 24")
         if second_stack_receiver_overwrite:
             cursor = emit(cursor, "89 0c 24")
-        cursor = emit(cursor, "ff 34 24")
+        if plain_second_stack_receiver:
+            # Preserve the stack-reload observation while retiring the
+            # original spill before the callback boundary.  Otherwise the
+            # same pointer is unintentionally exposed as a second argument.
+            cursor = emit(cursor, "83 c4 04 50")
+        else:
+            cursor = emit(cursor, "ff 34 24")
     else:
         cursor = emit(cursor, "51" if second_argument_mismatch else "56")
         cursor = emit(cursor, "0f b6 1e")
@@ -21670,7 +21699,7 @@ def lifecycle_movzx_dispatch_image(
         transfer_b = text_va + cursor
         cursor = emit_table_call(cursor)
         cursor = emit(cursor, "59")
-        if second_stack_receiver:
+        if second_stack_receiver and not plain_second_stack_receiver:
             cursor = emit(cursor, "83 c4 04")
         cursor = emit(cursor, "5e c3")
         assert cursor <= callback
@@ -22154,6 +22183,9 @@ def no_input_recursive_object_factory_image(
     # terminating path either creates a guarded object or exposes one hostile
     # caller/global dependency.
     cursor = 0x40
+    if open_base is None:
+        # This fixture models a genuinely register-input-free recurrence.
+        cursor = emit(cursor, "31 c0 31 c9 31 d2")
     if scalar_argument:
         cursor = emit(cursor, "83 7c 24 04 07")
     cursor = emit(cursor, "80 3d 20 30 40 00 00")
@@ -23449,7 +23481,10 @@ def callee_stack_object_writer_image(*, mutation=None, callee_published_outer=Fa
     emit(0x1C0, "8b 4c 24 04 88 11 c3")
 
     if mutation == "conditional-missing-write":
-        emit(0x200, "83 7c 24 08 00 74 07 8b 4c 24 04 c6 01 4a c3")
+        emit(
+            0x200,
+            "83 7c 24 08 00 74 08 8b 4c 24 04 c6 01 4a c3 31 c9 c3",
+        )
     elif mutation == "partial-overlap":
         emit(0x200, "8b 4c 24 04 66 89 11 c3")
     elif mutation == "conflicting-path-values":
@@ -24148,7 +24183,7 @@ def lifecycle_optional_allocation_pointee_image(*, mutation=None):
 
     # list_push(outer, tag): no local null guard.  Its allocation is total
     # only under the checked session/OOM nonreturn certificate above.
-    cursor = emit(0x300, "53 8b 5c 24 08 6a 1a")
+    cursor = emit(0x300, "53 31 c9 8b 5c 24 08 6a 1a")
     cursor = emit_call(cursor, 0x380)
     cursor = emit(cursor, "59 8b 0b 89 08")
     if mutation == "link-mutation":
@@ -43222,6 +43257,28 @@ def test_reverse_scan_pointer_difference_scalar_proof(mutation, expected):
         store.operands[1],
         function_entry,
     ) is expected
+    alias_states = recovery._private_stack_alias_states_for_residue_query(
+        function_entry
+    )
+    assert alias_states is not None
+    previous = recovery._previous_instruction(store.address)
+    assert previous is not None
+    subtract = recovery._owned_decoded(previous.address)
+    assert subtract.mnemonic == "sub"
+    initial = alias_states[subtract.address]
+    initial = replace(
+        initial,
+        registers=(None, *initial.registers[1:]),
+    )
+    resumed = recovery._private_stack_alias_states_for_residue_query(
+        function_entry,
+        start_address=subtract.address,
+        initial_fact=initial,
+    )
+    assert resumed is not None
+    assert resumed[store.address].registers[0] == (
+        () if expected else None
+    )
 
 
 @pytest.mark.parametrize(
@@ -65699,14 +65756,14 @@ def incoming_ecx_use_image(*, clear_first):
 
 
 def incoming_ecx_partial_definition_image(*, full_read=False, high_write=False):
-    """Replace one ECX byte, then read either that byte or wider state."""
+    """Replace/read one ECX slice, then close caller-visible return state."""
     from tools.mwcc_retro import pe as pe_mod
 
     text_va = 0x00401000
     data = bytes.fromhex(
         ("b5 00" if high_write else "b1 00")
         + ("85 c9" if full_read else "84 c9")
-        + "c3"
+        + "31 c9 c3"
     )
     return pe_mod.Image(
         data=data,
@@ -66208,7 +66265,11 @@ def terminal_indirect_argument_pointer_publication_image(
     data = (
         code
         + b"\x90" * (0x40 - len(code))
-        + (b"\xc3" + b"\x90" * 0x3F if call_with_published_pointer else b"")
+        + (
+            b"\x31\xc9\xc3" + b"\x90" * 0x3D
+            if call_with_published_pointer
+            else b""
+        )
     )
     return pe.Image(
         data=data,
@@ -69316,10 +69377,10 @@ def successful_object_outparam_image(
 
     if mutation == "nested-empty":
         cursor = 0xC0
-        emit("8b 44 24 04 85 d2 74 06 c7 00 00 00 00 00 c3")
+        emit("8b 44 24 04 85 d2 74 06 c7 00 00 00 00 00 31 c9 c3")
     elif normalize_result:
         cursor = 0xC0
-        emit("8b 44 24 04 c3")
+        emit("8b 44 24 04 31 c9 c3")
 
     image = pe_mod.Image(
         data=bytes(data),

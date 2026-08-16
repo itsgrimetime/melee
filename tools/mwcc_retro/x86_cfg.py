@@ -120919,6 +120919,21 @@ class _DirectCfgRecovery:
             elif (
                 decoded.mnemonic == "sub"
                 and len(operands) == 2
+                and operands[0].type == X86_OP_REG
+                and operands[0].size == 4
+                and self._register_family(operands[0].reg)
+                not in {"esp", "ebp"}
+                and self._register_reverse_scan_difference_is_scalar_before(
+                    address + decoded.size,
+                    operands[0],
+                    function_entry,
+                )
+            ):
+                family = self._register_family(operands[0].reg)
+                registers[family_indexes[family]] = ()
+            elif (
+                decoded.mnemonic == "sub"
+                and len(operands) == 2
                 and all(
                     operand.type == X86_OP_REG and operand.size == 4
                     for operand in operands

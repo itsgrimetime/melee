@@ -486,9 +486,68 @@ hostile, rather than choosing either JSON blob wholesale.
   malformed negative-basis demand remain closed. The focused gate is 12
   passed; the adjacent formatter/counted-string/memcpy gate is 220 passed;
   static checks are green. The final correctly invoked current-source replay
-  is detached in tmux session
-  `issue1240_format_buffer_source_final_current`; its in-process preflight is
-  exactly `writer:255;consumer:64;caller:64`.
+  completed in 4,816.61 seconds with the exact
+  `writer:255;consumer:64;caller:64` preflight, but the call-slot result remains
+  false before residue construction and without a configured limit failure.
+- The earlier post-hardening diagnostic has now completed: it remains false
+  before residue/fixed-point construction, with no limit failure, so the next
+  boundary is exact pre-residue alias-context construction rather than the
+  formatter-copy seam or a work cap. Its old trace filter missed the enclosing
+  return. The corrected diagnostic completed in 6,101.86 seconds and identifies
+  the first rejection exactly: writer `0x405ff0` reaches its `0x4061b0` call to
+  `0x404c30`, the call is recognized as the audited memcpy shape, but
+  `memcpy_alias_continuation(...)` returns `None` at the alias-context boundary
+  (current source line 108326). No limit or residue/fixed-point failure is
+  involved. The completed 11,966.65-second boundary diagnostic distinguishes
+  those exits: the certified 516/517-byte buffer cases succeed, while the
+  first failing state comes from non-stack callback `0x4034b0`, whose memcpy
+  source and destination are scalar but whose count slot remains TOP. It
+  rejects before numeric-bound or tracked-spill inspection. The initial
+  six-second engine-only attribution was incorrect: strict TDD shows the
+  engine already carries that callback count as scalar. The failing TOP is
+  introduced later inside writer `0x405ff0`, where exact reverse byte search
+  `0x404cd0` is copied, guarded, incremented, and subtracted from its exact
+  saved base at `0x406198`. The existing address-independent
+  `_register_reverse_scan_difference_is_scalar_before` proof certifies that
+  transform, but the private-stack alias transfer did not consume it. The
+  diagnostic used 1,228,308,480 bytes maximum RSS and has output/stderr hashes
+  `d0f1ca6aea96b7e1e7ffd8ac873dea382321891eef756a7b3998e112e6b90e54`
+  and `37925f41695e6f420924a9548d06144b58797c2d6e02d742c29b781f513cbbd1`.
+  Its tmux shell vanished after complete `/usr/bin/time` accounting but before
+  writing `exit-code.txt`, so it is diagnosis-only evidence; no process is
+  left running. A strict three-case RED reproduced that omission with an
+  explicit TOP input at the subtract: the exact same-base/callee form failed,
+  while wrong-base and wrong-callee forms remained closed. The minimal alias
+  transfer integration makes all three green; 66 adjacent
+  reverse-scan/private-stack-alias/format-writer/callback/memcpy tests and
+  scoped static checks are green. A broader exploratory slice exposed one
+  pre-existing checkpoint fixture defect: the intended root caller for the
+  partial-PUSH-overwrite positive was accidentally exported, so exact incoming
+  context closure correctly rejected it before residue analysis. Making that
+  synthetic caller the entrypoint with no export is a test-only repair; the
+  focused positive and all 752 private-stack/format/counted-string/memcpy/
+  reverse-scan tests are green. The first complete-module attempt then exposed
+  a second pre-existing checkpoint fixture defect in the conditional
+  callee-stack writer positive: its no-write branch returned a live incoming
+  ECX stack alias, so alias closure rejected before the intended optional-value
+  join. Killing ECX only on that no-write return preserves the byte as input
+  while closing the incidental alias; both finite-path writer cases are green.
+  The first complete x86-CFG run finished with 3,810 passes and 19 failures.
+  Replaying those exact 19 nodes at committed checkpoint `703e5558f` produced
+  the same 19 failures, while its parent produced 19 passes, proving that the
+  reverse-scan integration added no failures and that the committed checkpoint
+  had tightened caller-visible return-state semantics without updating seven
+  synthetic fixture families.  No production rule was weakened: the fixtures
+  now explicitly retire incidental caller-clobbered state or preserve their
+  intended lifecycle recurrence after the stack observation.  The expanded
+  21-node failure batch and a 217-node adjacent hostile matrix are green.
+  A corrected restart-safe wrapper then completed the full module with
+  authenticated exit 0: 3,829 passed in 256.10 seconds (256.77 seconds wall),
+  maximum RSS 209,731,584 bytes.  Output/stderr SHA-256 values are
+  `f56e42a1375a4533e5823c1e9d092bf94e3aef6cfbd9d68f6f9a5860c78d4b9b`
+  and `f7d6cdf5f01141e06dd1872f374b67f274d1e093ea2169d6d160a7b3808c084f`.
+  The durable run is
+  `build/diagnostics/task4-repair-exact/runs/20260816-reverse-scan-full-x86-authenticated`.
 - Task 8 is still open. The next semantic gate is a fresh complete call-slot
   replay, followed by roots `0x435620` and `0x435a8c`, broad/adversarial gates,
   immutable run1/run2 artifacts, and the parent promotion/merge/issue closure.
