@@ -30,7 +30,7 @@
 - Consumes: existing `load_large_cfg_program`, `_DirectCfgRecovery`, `build_seed_inventory`, `generous_limits`, `_pushed_call_argument`, `_finite_register_values_before`, `_memcpy_like_function`, and `_closed_call_argument_slot_is_consumed`.
 - Produces: `counted_cstring_copy_bound_image(tmp_path, *, mutation: str | None)` and tests whose function names and parameter IDs all contain `counted_cstring_copy_bound`.
 
-- [ ] **Step 1: Add one shared fixture with five recovered functions**
+- [ ] **Step 1: Add one shared fixture with five core functions and two readers**
 
   Construct one address-independent synthetic image with:
 
@@ -56,7 +56,8 @@
   mov esi,[esp+0x10]
   mov ebx,[esp+0x0c]
   movzx ecx,byte [esi]
-  lea eax,[esi+1]
+  mov eax,esi
+  inc eax
   push ecx
   push eax
   push ebx
@@ -71,9 +72,12 @@
 
   The guarded copier must save EDI/EBP, load source argument 0 into EBP,
   derive `EDI = 0xfffffffe - ECX` after a forward zero-byte scan, reject the
-  non-`JLE 63` arm without copying, and on the accepted arm push
-  `(destination argument 1, source argument 0, EDI + 1)` into the same audited
-  `memcpy` body before returning a scalar status.
+  non-`JLE 63` arm without copying, pass the source through two exact owned
+  direct reader calls whose results are tested only as scalar/null status,
+  and on the accepted arm push `(destination argument 1, source argument 0,
+  EDI + 1)` into the same audited `memcpy` body before returning a scalar
+  status. Each reader has a distinct recovered function entry and a closed
+  read-only/no-escape body.
 
 - [ ] **Step 2: Add the exact mutation table**
 
@@ -206,10 +210,10 @@
   operands rather than addresses or hashes.
 
   Require exactly one call, one `MOVZX` byte count load, the same source base
-  for `source + 1` and the reloaded count, the same destination base for the
-  `memcpy` argument and NUL store, exact cdecl argument ordering, exact raw and
-  recovered successors, and `_memcpy_like_function(target)`. Return `0xff`
-  only after all checks pass.
+  for the exact `MOV`/`INC` `source + 1` lineage and the reloaded count, the
+  same destination base for the `memcpy` argument and NUL store, exact cdecl
+  argument ordering, exact raw and recovered successors, and
+  `_memcpy_like_function(target)`. Return `0xff` only after all checks pass.
 
 - [ ] **Step 2: Run the producer-only slice**
 
