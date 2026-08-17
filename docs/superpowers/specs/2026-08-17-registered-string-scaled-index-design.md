@@ -50,15 +50,17 @@ limit is admitted.
 Extend the existing registered-string record fixture rather than creating a
 retail-shaped special case:
 
-- The positive uses a distinct full-width temporary for
-  `counter + counter * 2`, then loads the record pointer through that temporary.
+- Preserve the existing same-register positive and add a positive that uses a
+  distinct full-width temporary for `counter + counter * 2`, then loads the
+  record pointer through that temporary.
 - A one-fact hostile changes one LEA input to another register family while
   retaining the same destination, table load, CFG, and surrounding writer and
   reader facts. It must return `None`.
 - Existing same-family, detached-key, partial-write, mutable-name, wrong-field,
   wrong-source, wrong-stride, and zero-key cases retain their current outcomes.
 - The focused RED must fail only for the new valid distinct-family positive;
-  the mixed-source hostile must already reject before production changes.
+  the original same-register positive and mixed-source hostile must already
+  have their expected outcomes before production changes.
 
 After GREEN, run the focused registered-string/immutable-format matrix, the
 adjacent private-stack scalar-format selection, scoped static checks, current
