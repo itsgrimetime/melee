@@ -4033,7 +4033,13 @@ def prelive_argument_slot_alias_image(tmp_path, *, mutation):
 
 def aligned_unobserved_callee_alias_image(tmp_path, *, mutation=None):
     """Carry several exact aliases across alignment into one owned call."""
-    assert mutation in {None, "observed", "killed", "new-alias"}
+    assert mutation in {
+        None,
+        "observed",
+        "killed",
+        "new-alias",
+        "partial-survivor",
+    }
     base = 0x00401080
     root = base + 0xC0
     alias_callee = base + 0x100
@@ -4101,8 +4107,12 @@ def aligned_unobserved_callee_alias_image(tmp_path, *, mutation=None):
     )
     nested_call = base + cursor
     cursor = emit_call(cursor, alias_callee)
-    if mutation == "new-alias":
+    if mutation == "killed":
         cursor = emit(cursor, "89 35 00 30 40 00")
+    elif mutation == "new-alias":
+        cursor = emit(cursor, "89 35 00 30 40 00")
+    elif mutation == "partial-survivor":
+        cursor = emit(cursor, "c7 06 00 00 00 00")
     cursor = emit(cursor, "31 f6 6a 00")
     protected_call = base + cursor
     cursor = emit_call(cursor, callee)
@@ -4116,6 +4126,8 @@ def aligned_unobserved_callee_alias_image(tmp_path, *, mutation=None):
         cursor = emit(cursor, "31 f6")
     elif mutation == "new-alias":
         cursor = emit(cursor, "8d 34 24")
+    elif mutation == "partial-survivor":
+        cursor = emit(cursor, "66 be 00 00")
     emit(cursor, "31 c0 c3")
     store_address = callee
     cursor = emit(0x120, "89 44 24 04 66 83 7c 24 04 00")
@@ -51146,12 +51158,14 @@ def test_private_stack_residue_alias_allows_disjoint_unobserved_call_value(
         ("observed", False),
         ("killed", True),
         ("new-alias", False),
+        ("partial-survivor", False),
     ),
     ids=(
         "unobserved-preserved",
         "observed-publication",
         "unobserved-kill",
         "new-return-alias",
+        "partial-survivor",
     ),
 )
 def test_private_stack_alias_projects_only_unobserved_aligned_callee_input(
@@ -51213,6 +51227,19 @@ def test_private_stack_alias_projects_only_unobserved_aligned_callee_input(
         alias_callee,
         "esi",
     ) is (mutation == "observed")
+    if mutation == "killed":
+        assert recovery._function_entry_register_is_unobserved_until_kill(
+            alias_callee,
+            "esi",
+        )
+    if mutation == "partial-survivor":
+        assert (
+            recovery._function_incoming_register_unobserved_survivor_mask(
+                alias_callee,
+                "esi",
+            )
+            == 0xFFFF_0000
+        )
     if mutation == "new-alias":
         callee_aliases = (
             recovery._private_stack_alias_states_for_residue_query(
@@ -51228,7 +51255,7 @@ def test_private_stack_alias_projects_only_unobserved_aligned_callee_input(
         assert len(returned_aliases) == 1
         assert returned_aliases[0].registers[esi_index] == ((0, 0),)
         assert returned_aliases[0].registers[esi_index] != incoming_esi
-    if mutation in {"observed", "new-alias"}:
+    if mutation in {"observed", "killed", "new-alias"}:
         assert any(
             global_slot
             in {
@@ -51250,6 +51277,44 @@ def test_private_stack_alias_projects_only_unobserved_aligned_callee_input(
         store_address,
         callee,
     ) is expected
+
+
+def test_private_stack_alias_projection_cache_tracks_same_count_call_domain(
+    tmp_path,
+):
+    (
+        image,
+        _argument_push,
+        _root_call,
+        _root,
+        alias_callee,
+        nested_call,
+        callee,
+        _protected_call,
+        store_address,
+        _global_slot,
+    ) = aligned_unobserved_callee_alias_image(tmp_path)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        callee,
+    )
+    old_signature = recovery._summary_fact_signature()
+    old_revision = recovery.control_flow_revision
+    assert recovery.call_targets_by_source[nested_call] == {alias_callee}
+    recovery.call_targets_by_source[nested_call] = {callee}
+    assert recovery._summary_fact_signature() == old_signature
+    assert recovery.control_flow_revision == old_revision
+    assert not recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        callee,
+    )
 
 
 def test_private_stack_residue_alias_follows_nonleaf_prefix_returns(

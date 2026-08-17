@@ -5943,6 +5943,47 @@ class _DirectCfgRecovery:
             self.dynamic_field_write_count,
         )
 
+    def _scalar_quarantine_call_domain_signature(self) -> bytes:
+        """Hash the exact call facts consumed by scalar quarantine proofs."""
+        digest = hashlib.sha256()
+        for source, targets in sorted(self.call_targets_by_source.items()):
+            digest.update(struct.pack("<II", source, len(targets)))
+            for target in sorted(targets):
+                digest.update(struct.pack("<I", target))
+        digest.update(b"\xffinternal-direct\x00")
+        for source, target in sorted(self.direct_call_targets_by_source.items()):
+            digest.update(struct.pack("<II", source, target))
+        digest.update(b"\xffterminal-external\x00")
+        for edge in sorted(
+            self.terminal_external_edges,
+            key=lambda row: (
+                row.source,
+                row.flow_kind,
+                row.iat_va,
+                row.dll,
+                row.name or "",
+                row.ordinal if row.ordinal is not None else -1,
+                row.provenance,
+            ),
+        ):
+            digest.update(
+                json.dumps(
+                    (
+                        edge.source,
+                        edge.flow_kind,
+                        edge.iat_va,
+                        edge.dll,
+                        edge.name,
+                        edge.ordinal,
+                        edge.provenance,
+                    ),
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ).encode("ascii")
+            )
+            digest.update(b"\x00")
+        return digest.digest()
+
     def _producer_exact_call_context(
         self, function_entry: int
     ) -> tuple[int, int] | None:
@@ -105419,12 +105460,24 @@ class _DirectCfgRecovery:
             ):
                 if family in {"esp", "ebp"}:
                     mapped = ()
-                elif not self._function_reads_incoming_register(
-                    callee_entry,
-                    family,
+                elif (
+                    value is not None
+                    and bool(value)
+                    and not self._function_reads_incoming_register(
+                        callee_entry,
+                        family,
+                    )
+                    and self._function_incoming_register_unobserved_survivor_mask(
+                        callee_entry,
+                        family,
+                    )
+                    in {
+                        0,
+                        self._named_register_slice(family).mask,
+                    }
                 ):
-                    # The return mapper restores caller_base when this
-                    # parametric input remains unchanged or callee-saved.
+                    # The return mapper restores caller_base when this exact
+                    # input remains unchanged or is completely killed.
                     mapped = ()
                 else:
                     mapped = map_value(value)
@@ -128905,6 +128958,7 @@ class _DirectCfgRecovery:
             function_entry,
             self._summary_fact_signature(),
             self.control_flow_revision,
+            self._scalar_quarantine_call_domain_signature(),
         )
         cached = self.private_stack_scalar_quarantine_cache.get(cache_key)
         if cached is not None:

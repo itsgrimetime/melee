@@ -569,5 +569,15 @@ hostile, rather than choosing either JSON blob wholesale.
   Hydrated retail still reports
   `incoming-register-read=0x4058c0;family=esi;result=False` and retains the
   exact `0x402c2b` alignment/call/body evidence.  Scoped static checks are
-  green.  Task 8 remains open pending a detached complete-module gate and a
-  fresh authoritative call-slot replay; both retail roots remain gated.
+  green.  The restart-safe complete-module gate is now authenticated green:
+  3,833 passed in 281.94 seconds, with output/stderr SHA-256 values
+  `a408b078c7c2ecc00f684cf4266a4d84ee9c471ca14b7efeb119236bc00a5f4c`
+  and `4663a6c7f4efbb2e8583d986d3200ff15aad790c6a08a5dac2f66f0e96cfd383`.
+  Independent review then found a partial-register survivor false admission
+  and a same-count call-domain cache-currentness gap in that checkpoint.  The
+  follow-up strict REDs now reject a surviving `ESI` high half and stale cached
+  call target, while the preserved, killed, observed, and genuinely-new-alias
+  controls remain non-vacuous.  The six-case focused gate and expanded
+  191-node adjacent gate are green, and independent re-review approved the
+  repair with no remaining findings.  The authoritative call-slot replay and
+  both retail roots remain gated on a fresh complete-module run.
