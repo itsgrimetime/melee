@@ -79472,22 +79472,25 @@ class _DirectCfgRecovery:
             and name_memory.scale == 4
         ):
             return None
-        counter_family = self._register_family(name_memory.index)
-        counter_definitions = self._register_definitions_across_blocks(
+        scaled_index_family = self._register_family(name_memory.index)
+        scaled_index_definitions = self._register_definitions_across_blocks(
             load.address,
-            counter_family,
+            scaled_index_family,
             function_entry,
         )
-        if counter_definitions is None or len(counter_definitions) != 1:
+        if (
+            scaled_index_definitions is None
+            or len(scaled_index_definitions) != 1
+        ):
             return None
-        affine = self._owned_decoded(next(iter(counter_definitions)))
+        affine = self._owned_decoded(next(iter(scaled_index_definitions)))
         if not (
             affine.id == X86_INS_LEA
             and len(affine.operands) == 2
             and affine.operands[0].type == X86_OP_REG
             and affine.operands[0].size == 4
             and self._register_family(affine.operands[0].reg)
-            == counter_family
+            == scaled_index_family
             and affine.operands[1].type == X86_OP_MEM
             and affine.operands[1].size == 4
         ):
@@ -79498,10 +79501,11 @@ class _DirectCfgRecovery:
             and affine_memory.disp == 0
             and affine_memory.base != X86_REG_INVALID
             and affine_memory.index != X86_REG_INVALID
-            and self._register_family(affine_memory.base) == counter_family
-            and self._register_family(affine_memory.index) == counter_family
             and affine_memory.scale in {1, 2, 4, 8}
         ):
+            return None
+        counter_family = self._register_family(affine_memory.base)
+        if self._register_family(affine_memory.index) != counter_family:
             return None
         stride = (1 + affine_memory.scale) * name_memory.scale
         table = name_memory.disp & 0xFFFF_FFFF

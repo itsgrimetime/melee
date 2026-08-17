@@ -518,6 +518,8 @@ def registered_string_record_table_image(*, mutation=None):
     assert mutation in {
         None,
         "detached-reader-key",
+        "distinct-reader-index",
+        "mixed-reader-index-source",
         "partial-name-write",
         "mutable-name",
         "wrong-key-field",
@@ -640,8 +642,20 @@ def registered_string_record_table_image(*, mutation=None):
     cursor = emit(cursor, "66 85 c9")
     zero_branch = cursor
     cursor = emit(cursor, "74 00")
-    cursor = emit(cursor, "8d 14 52")
-    cursor = emit_absolute(cursor, "8b 04 95", table)
+    affine_address = text_va + cursor
+    if mutation in {"distinct-reader-index", "mixed-reader-index-source"}:
+        cursor = emit(
+            cursor,
+            "8d 0c 5a"
+            if mutation == "mixed-reader-index-source"
+            else "8d 0c 52",
+        )
+        load_address = text_va + cursor
+        cursor = emit_absolute(cursor, "8b 04 8d", table)
+    else:
+        cursor = emit(cursor, "8d 14 52")
+        load_address = text_va + cursor
+        cursor = emit_absolute(cursor, "8b 04 95", table)
     push_address = text_va + cursor
     cursor = emit(cursor, "50 58 5b c3")
     zero = cursor
@@ -680,7 +694,15 @@ def registered_string_record_table_image(*, mutation=None):
         relocations=tuple(relocations),
         executable_ranges=((text_va, text_va + 0x400),),
     )
-    return image, reader, registrar, push_address, table
+    return (
+        image,
+        reader,
+        registrar,
+        push_address,
+        table,
+        affine_address,
+        load_address,
+    )
 
 
 def transitive_partial_return_image(tmp_path, *, mutation=None):
@@ -72823,6 +72845,8 @@ def test_private_stack_alias_immediate_push_overwrites_stale_slot(tmp_path):
     (
         (None, (3, 5)),
         ("detached-reader-key", None),
+        ("distinct-reader-index", (3, 5)),
+        ("mixed-reader-index-source", None),
         ("partial-name-write", None),
         ("mutable-name", None),
         ("wrong-key-field", None),
@@ -72835,7 +72859,7 @@ def test_registered_string_record_domain_requires_closed_writer_and_reader(
     mutation,
     expected,
 ):
-    image, reader, registrar, push_address, table = (
+    image, reader, registrar, push_address, table, affine_address, load_address = (
         registered_string_record_table_image(mutation=mutation)
     )
     recovery = _DirectCfgRecovery(
@@ -72845,6 +72869,8 @@ def test_registered_string_record_domain_requires_closed_writer_and_reader(
     )
     recovery.recover()
     pushed = recovery._owned_decoded(push_address)
+    affine = recovery._owned_decoded(affine_address)
+    load = recovery._owned_decoded(load_address)
     registrar_names = recovery._finite_argument_values(
         registrar,
         0,
@@ -72859,6 +72885,23 @@ def test_registered_string_record_domain_requires_closed_writer_and_reader(
     assert {reader, registrar} <= recovery.function_addresses
     assert pushed.mnemonic == "push"
     assert pushed.operands[0].type == capstone.x86.X86_OP_REG
+    assert affine.mnemonic == "lea"
+    assert load.mnemonic == "mov"
+    if mutation in {"distinct-reader-index", "mixed-reader-index-source"}:
+        assert image.read(affine_address, 3) == bytes.fromhex(
+            "8d 0c 5a"
+            if mutation == "mixed-reader-index-source"
+            else "8d 0c 52"
+        )
+        assert image.read(load_address, 3) == bytes.fromhex("8b 04 8d")
+        assert affine.operands[0].reg == capstone.x86.X86_REG_ECX
+        assert load.operands[1].mem.index == capstone.x86.X86_REG_ECX
+        assert affine.operands[1].mem.base == capstone.x86.X86_REG_EDX
+        assert affine.operands[1].mem.index == (
+            capstone.x86.X86_REG_EBX
+            if mutation == "mixed-reader-index-source"
+            else capstone.x86.X86_REG_EDX
+        )
     assert image.read(table, 0x24) == b"\0" * 0x24
     assert registrar_names is not None
     assert registrar_names[0] == frozenset({0x00402000, 0x00402010})
