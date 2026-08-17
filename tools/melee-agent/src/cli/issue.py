@@ -612,6 +612,13 @@ def resolve_command(
         str | None,
         typer.Option("--agent-id", help="Resolving agent ID; auto-detected when omitted"),
     ] = None,
+    require_current_claim: Annotated[
+        bool,
+        typer.Option(
+            "--require-current-claim",
+            help="Resolve only if the issue is still claimed by this agent",
+        ),
+    ] = False,
     output_json: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ):
     """Mark a reported tooling issue as resolved."""
@@ -621,11 +628,19 @@ def resolve_command(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2) from exc
 
-    issue = get_db().resolve_tool_issue(
-        issue_id,
-        agent_id=agent_id or _get_agent_id(),
-        resolution_note=resolution_note,
-    )
+    resolved_agent_id = agent_id or _get_agent_id()
+    try:
+        issue = get_db().resolve_tool_issue(
+            issue_id,
+            agent_id=resolved_agent_id,
+            resolution_note=resolution_note,
+            require_claimed_by=(
+                resolved_agent_id if require_current_claim else None
+            ),
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
     if issue is None:
         console.print(f"[red]Issue not found: {issue_id}[/red]")
         raise typer.Exit(1)
