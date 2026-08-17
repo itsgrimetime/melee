@@ -614,3 +614,26 @@ hostile, rather than choosing either JSON blob wholesale.
   wrapper SHA-256 is
   `b202280263a5f6a858f7565232418b1710291c31e9a1465d768194e6660f60ce`.
   Both roots remain gated on the next authoritative call-slot replay.
+
+### 2026-08-17 Task 8 detached-chain review and v6 inventory
+
+- The authoritative call-slot replay remains the only semantic process.  Its
+  two root handoffs now rehash both prerequisite and child wrappers immediately
+  before launch, require complete prerequisite terminal artifacts, and retain
+  exact-row validation.  The root wrappers publish their atomic exit marker
+  only after timestamps and log hashes.  No semantic process was signaled while
+  repairing the handoffs.
+- Independent review rejected automatic post-root resume because the complete
+  parent Task 4/companion Task 8 gate and tracked retained-checkpoint inventory
+  had not yet authorized it.  All post-root watcher sessions remain disabled;
+  their draft resume/verification/run1-run2 scripts are not launch authority.
+- The authoritative arena plan now records the deterministic retained-v6
+  inventory at source HEAD `395cb7148`: 5,618 files, 37,237,187 logical bytes,
+  44,404 KiB on disk, no symlinks/specials/`CURRENT`, exact compiler binding,
+  5,573 producer-v27 certificates, 14 lifecycle-v6 certificates, 30 rejection
+  ledgers, and stream SHA-256
+  `0f9051684322b00de6c5bcad72089a22854a5b39fa8d4a9ae619a313dd4b2d1c`.
+  It also pins current code/helper/table identities and the still-gated exact
+  resume command.  A diagnostic SQLite read created only WAL/SHM sidecars;
+  both were confirmed unopened and removed, restoring the exact prior count,
+  bytes, database hash, and stream digest.

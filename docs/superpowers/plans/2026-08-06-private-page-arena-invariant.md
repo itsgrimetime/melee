@@ -2030,3 +2030,55 @@ test -f "$ROOT/build/mwcc_retro/gc125n-proof/return-path-publication-v6/CURRENT"
 (cd "$CHECKPOINT" && find . -type f | wc -l)
 du -sk "$CHECKPOINT"
 ```
+
+#### Task 8 retained-v6 pre-resume inventory — 2026-08-17T09:57:57Z
+
+This is an inventory/currentness record only.  It does not claim an accepted
+bundle, and the resume remains gated on positive roots plus the complete parent
+Task 4 and companion Task 8 verification.
+
+```text
+worktree=/Users/mike/code/melee/.claude/worktrees/codex-issue-1240-retail-pcode-proof
+branch=codex/issue-1240-retail-pcode-proof
+inventory_head=395cb7148804715ffa9fec88e0b801b876dcea00
+checkpoint_root=build/mwcc_retro/gc125n-proof/return-path-publication-v6/.producer-domain-checkpoints.v1
+checkpoint_file_count=5618
+checkpoint_logical_bytes=37237187
+checkpoint_du_kib=44404
+checkpoint_symlink_count=0
+checkpoint_special_file_count=0
+checkpoint_oldest=2026-08-02T12:38:58.178188-07:00
+checkpoint_newest=2026-08-06T02:25:56.654254-07:00
+checkpoint_stream_algorithm=(cd CHECKPOINT && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256)
+checkpoint_stream_sha256=0f9051684322b00de6c5bcad72089a22854a5b39fa8d4a9ae619a313dd4b2d1c
+checkpoint_schema_mwcc-retro-x86-producer-certificate-v1=5573
+checkpoint_schema_mwcc-retro-x86-object-tag-lifecycle-certificate-v1=14
+checkpoint_schema_mwcc-retro-relocated-rejection-ledger-v1=30
+checkpoint_sqlite_count=1
+checkpoint_sqlite_sha256=f31214b049c043e35c407ed5d5528017686171a33e0da878b32e90a30bb152c9
+checkpoint_compiler_sha256=ccf4b465cec73b5aae9c5c5543dcf8cda8a62aba246f89e2e0b200d742f2e55c
+current_compiler_sha256=ccf4b465cec73b5aae9c5c5543dcf8cda8a62aba246f89e2e0b200d742f2e55c
+producer_semantics=movzx-producer-analysis-v27
+lifecycle_semantics=object-tag-lifecycle-analysis-v6
+current_exists=false
+x86_cfg_sha256=400591e5e98a490957f046708e8ae3cfee443bf9eda7e230e9d04f8be2e688cd
+backend_lifetime_proof_sha256=dae3eaf811a9fa43b5557468149258b0347e4d6b19788b18074ee1b71a8ba676
+branch_cli_retro_sha256=b2bf4f9699373d4bd8e2984b8222123dcb4b38e628b7da94e8519ffe317bd3ac
+hydrated_helper_sha256=c31d612d10fb7618bc4189f5d90efd1ac53b557cadf9d71d03a5e0623c856a57
+tracked_proof_sha256=43e8283263a96283d67633e40e76fdf87a725db9c2a5ba1f3e1952da2105a2b9
+tracked_hooks_sha256=4d44eae5c33cb3147c412d171301bb96df18b3a5387192345102a2249b558524
+installed_table_sha256=2d5a1f2786949cf4cd38a4349e92ec97df17a385b3865650dd7cab137ea98ec7
+installed_state=unpromoted
+resume_wrapper=build/diagnostics/task4-repair-exact/runs/20260817-final-v6-resume-authoritative/run.zsh
+resume_wrapper_sha256=7669df304f77474a4aaf938b8d12c827b187a21c81c521f41aa18d8d2cc3f1d7
+resume_exact_command=cd /Users/mike/code/melee/.claude/worktrees/codex-issue-1240-retail-pcode-proof && zsh build/diagnostics/task4-repair-exact/runs/20260817-final-v6-resume-authoritative/run.zsh
+resume_status=gated-unlaunched
+```
+
+The JSON schema counts and compiler/semantic bindings were read without
+changing certificate files. A SQLite metadata probe unexpectedly created the
+database's `-shm` and `-wal` sidecars despite a read-only URI; after the
+connection closed, `lsof` proved both sidecars unopened and they were removed.
+The final 5,618-file count, logical bytes, SQLite hash, and deterministic stream
+digest exactly match the pre-probe retained inventory. No v6 resume process was
+active during this snapshot.
