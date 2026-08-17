@@ -420,6 +420,36 @@ register copying, unresolved edges, or a live value at RET rejects. A locally
 safe scalar recurrence is not enumerated offset-by-offset: divergence cannot
 return the value, while every reachable exit remains audited.
 
+### Parametric unobserved callee inputs
+
+An exact owned call may project one non-`ESP`/`EBP` incoming register value to
+the non-stack element at callee entry only when the existing complete
+transitive incoming-register proof says that the callee never observes any live
+bit of that value.  The proof must include every reachable owned descendant,
+raw/recovered call-domain equality, prologue-save privacy, every reachable
+return, and the current summary-fact signature and CFG revision.  Unknown,
+unresolved, imported, address-forming, memory, copied, pushed, partial-read, or
+caller-visible return uses decline the projection.
+
+The projection is parametric, not a loss of caller state.  On each exact return,
+the existing return-effect mapper compares the projected initial and final
+register values.  An unchanged or exactly callee-saved value restores the
+caller's original alias fact; a proven unobserved kill selects the callee's
+non-stack result; and a genuinely new finite/TOP result is mapped normally.
+Private spills, escaped aliases, demands, and all other registers are unchanged.
+This can prevent an irrelevant finite alias set from exceeding its
+representation cap across stack-alignment mappings, but it neither widens the
+cap nor converts an observed or unknown value to non-stack.
+
+Strict RED coverage includes an aligned caller whose finite, disjoint incoming
+callee-saved register alternatives expand beyond the exact-coordinate cap at a
+nested call.  The unobserving/preserving callee is positive; a one-body-fact
+callee that observes or publishes that register remains negative.  Controls
+cover a proven kill and a genuinely new returned stack alias so the caller-value
+restoration rule cannot hide output changes.  Exact retail evidence must also
+show the blocked callee's incoming register is unobserved before the complete
+detached call-slot replay is repeated.
+
 The enclosing scalar-quarantine boolean cache must include the complete current
 summary-fact signature and CFG revision, or be cleared whenever either changes;
 instruction count alone is not currentness. A run-true-then-mutate test changes
