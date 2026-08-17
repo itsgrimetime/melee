@@ -8,15 +8,39 @@ backend-events.v1.jsonl or backend-trace.v1.json.
 from tools.mwcc_retro import struct_map
 
 
-def pcode_probe_status(table):
+def pcode_probe_status(table, runtime_bundle=None):
     """Return the exact fail-closed proof/layout status for map evidence."""
 
     layout_errors = struct_map.validate_pcode_arg_capture_capability(table)
-    proof_errors = struct_map.validate_pcode_instrumentation_capability(table)
+    validated = bool(
+        runtime_bundle is not None
+        and getattr(runtime_bundle, "validated", False)
+    )
+    proof = getattr(runtime_bundle, "proof", None) if validated else None
+    proof_errors = struct_map.validate_pcode_instrumentation_capability(
+        table, proof=proof
+    )
+    expected = set(getattr(runtime_bundle, "expected_site_ids", ()))
+    installed = set(getattr(runtime_bundle, "installed_site_ids", ()))
+    hook_errors = list(getattr(runtime_bundle, "errors", ()))
+    if validated and installed != expected:
+        hook_errors.append("installed runtime site inventory differs from expected")
     return {
-        "status": "unpromoted" if layout_errors or proof_errors else "validated",
+        "status": (
+            "unpromoted"
+            if layout_errors or proof_errors
+            else ("failed" if hook_errors else "validated")
+        ),
         "layout_errors": layout_errors,
         "proof_errors": proof_errors,
+        "expected_site_ids": sorted(
+            getattr(runtime_bundle, "expected_site_ids", ())
+        ),
+        "installed_site_ids": sorted(
+            getattr(runtime_bundle, "installed_site_ids", ())
+        ),
+        "hit_site_ids": sorted(getattr(runtime_bundle, "hit_site_ids", ())),
+        "hook_errors": hook_errors,
         "capabilities": [],
     }
 
@@ -24,7 +48,11 @@ def pcode_probe_status(table):
 def intervene(ctx):
     import json
 
-    from tools.mwcc_retro import backend_frame_state, backend_object_snapshot
+    from tools.mwcc_retro import (
+        backend_frame_state,
+        backend_object_snapshot,
+        backend_runtime_instrumentation,
+    )
 
     gdb = ctx.gdb
     cad = ctx.cad
@@ -32,7 +60,9 @@ def intervene(ctx):
     entries = ctx.table.get("entries", {})
     partial = ctx.table.get("backend_partial", {})
     object_layout = struct_map.load_object_capture_layout(ctx.table)
-    pcode_status = pcode_probe_status(ctx.table)
+    runtime_bundle = backend_runtime_instrumentation.install_runtime_instrumentation(
+        ctx
+    )
     object_offsets = backend_object_snapshot.ObjObjectOffsets(
         name_record=object_layout.objobject_name_record,
         type_pointer=object_layout.objobject_type_pointer,
@@ -252,6 +282,9 @@ def intervene(ctx):
         n_ignodes = snap["globals"].get("n_ignodes", {}).get("u32", 0)
         if bounded_ptr(graph) and isinstance(n_ignodes, int) and 0 < n_ignodes < 2048:
             sample = []
+            object_bindings = []
+            rclass = args.get("rclass") if isinstance(args, dict) else None
+            class_shapes = {0: ("gpr", "r"), 1: ("fpr", "f"), 9: ("vector", "v")}
             for idx in range(min(n_ignodes, 8)):
                 try:
                     ptr = read_u32(graph + idx * 4)
@@ -276,6 +309,44 @@ def intervene(ctx):
                 except Exception as exc:  # noqa: BLE001
                     sample.append({"slot": idx, "error": str(exc)})
             snap["ig_sample"] = sample
+            if rclass in class_shapes:
+                class_name, virtual_kind = class_shapes[rclass]
+                for idx in range(n_ignodes):
+                    try:
+                        ptr = read_u32(graph + idx * 4)
+                        if not bounded_ptr(ptr):
+                            continue
+                        objobject_ptr = read_u32(ptr + 0x04)
+                        ig_id = read_i16(ptr + 0x0C)
+                        if not bounded_ptr(objobject_ptr) or ig_id < 0:
+                            continue
+                        object_bindings.append(
+                            {
+                                "event_id": (
+                                    f"map:{snap['sequence']}:ig-object:"
+                                    f"{rclass}:{ig_id}:{objobject_ptr}"
+                                ),
+                                "objobject_ptr": objobject_ptr,
+                                "class_id": rclass,
+                                "class_name": class_name,
+                                "virtual_kind": virtual_kind,
+                                "virtual": ig_id,
+                                "ig_id": ig_id,
+                                "ignode_runtime_address": ptr,
+                                "confidence": "observed",
+                                "provenance": "retail-ignode.obj_addr",
+                            }
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        state["errors"].append(
+                            {
+                                "stage": stage,
+                                "error": f"IG object binding {idx}: {exc}",
+                            }
+                        )
+                        break
+                if object_bindings:
+                    snap["ig_object_bindings"] = object_bindings
         sample_blocks(snap)
         sample_frame_state(snap, stage)
         state["events"].append(snap)
@@ -326,6 +397,11 @@ def intervene(ctx):
     try:
         ctx.cont()
     finally:
+        runtime_status = (
+            backend_runtime_instrumentation.runtime_bundle_status(
+                runtime_bundle
+            )
+        )
         payload = {
             "schema_version": "mwcc-retro-backend-map-probe.v1",
             "compiler": {"family": "MWCC", "version": "GC/1.2.5n", "retail": True},
@@ -337,7 +413,10 @@ def intervene(ctx):
             "stage_counts": state["stage_counts"],
             "events": state["events"],
             "errors": state["errors"],
-            "pcode_instrumentation": pcode_status,
+            "pcode_instrumentation": pcode_probe_status(
+                ctx.table, runtime_bundle
+            ),
+            "runtime_instrumentation": runtime_status,
             "notes": [
                 "Probe evidence is not a backend trace and does not satisfy the struct-map gate by itself.",
                 "Events are scoped by ObjObject source name when readable at codegen_start.",

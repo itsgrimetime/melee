@@ -7,6 +7,7 @@ The full ``debug retro backend`` command uses it behind the
 for candidate-only diagnostics.
 """
 
+import hashlib
 import json
 import os
 import secrets
@@ -183,12 +184,19 @@ _PCODE_SITE_LABEL = {
 }
 
 _PCODE_ROLES = frozenset({"use", "def", "use-def"})
-_PCODE_CLASS_SHAPES = {0: ("gpr", "r"), 1: ("fpr", "f")}
-_PCODE_REQUIREMENTS = frozenset(
-    {"allocator-rewrite-required", "fixed-physical"}
-)
+_PCODE_CLASS_SHAPES = {0: ("gpr", "r"), 1: ("fpr", "f"), 9: ("vector", "v")}
+_PCODE_ALLOCATION_STATES = frozenset({"virtual", "physical", "non-allocator"})
 _PCODE_MUTATION_KINDS = frozenset(
-    {"update", "clone", "replace", "delete", "create"}
+    {
+        "update",
+        "clone",
+        "replace",
+        "delete",
+        "create",
+        "reorder",
+        "spill",
+        "coalesce",
+    }
 )
 _PCODE_STATE_FIELDS = frozenset(
     {
@@ -206,6 +214,9 @@ _PCODE_OPERAND_FIELDS = frozenset(
         "operand_index",
         "operand_lineage_id",
         "raw_arg_kind_id",
+        "raw_register_flags",
+        "raw_register_value",
+        "raw_payload_hex",
         "raw_payload_sha256",
     }
 )
@@ -232,7 +243,9 @@ _PCODE_PARSED_FIELDS = frozenset(
         "class_id",
         "raw_arg_kind_id",
         "raw_register_flags",
-        "allocation_requirement",
+        "raw_register_value",
+        "allocation_state",
+        "register_form",
         "operand_lineage_id",
         "virtual_kind",
         "virtual",
@@ -372,8 +385,37 @@ def _validate_pcode_operands(
             diagnostics.append(
                 f"{row_label} raw_arg_kind_id must be nonnegative integer"
             )
+        if not _pcode_nonnegative(row.get("raw_register_flags")) or row.get(
+            "raw_register_flags"
+        ) > 0xFF:
+            diagnostics.append(f"{row_label} raw_register_flags must be unsigned byte")
+        if not _pcode_nonnegative(row.get("raw_register_value")) or row.get(
+            "raw_register_value"
+        ) > 0xFFFF:
+            diagnostics.append(f"{row_label} raw_register_value must be unsigned 16-bit")
+        raw_hex = row.get("raw_payload_hex")
+        raw = None
+        if (
+            type(raw_hex) is not str
+            or len(raw_hex) != 24
+            or any(char not in "0123456789abcdef" for char in raw_hex)
+        ):
+            diagnostics.append(f"{row_label} raw payload must be exactly 12 lowercase-hex bytes")
+        else:
+            raw = bytes.fromhex(raw_hex)
         if not _pcode_sha256(row.get("raw_payload_sha256")):
             diagnostics.append(f"{row_label} raw payload digest is invalid")
+        elif raw is not None and hashlib.sha256(raw).hexdigest() != row.get(
+            "raw_payload_sha256"
+        ):
+            diagnostics.append(f"{row_label} raw payload digest differs from bytes")
+        if raw is not None:
+            if raw[0] != row.get("raw_arg_kind_id"):
+                diagnostics.append(f"{row_label} raw kind differs from bytes")
+            if raw[1] != row.get("raw_register_flags"):
+                diagnostics.append(f"{row_label} raw flags differ from bytes")
+            if int.from_bytes(raw[2:4], "little") != row.get("raw_register_value"):
+                diagnostics.append(f"{row_label} raw value differs from bytes")
         if "parent_lineage_ids" in row:
             parents = row.get("parent_lineage_ids")
             if not allow_parents:
@@ -441,6 +483,10 @@ def _validate_pcode_parsed_operands(value, inventory, label, diagnostics):
                 != row.get("operand_lineage_id")
                 or inventory_row.get("raw_arg_kind_id")
                 != row.get("raw_arg_kind_id")
+                or inventory_row.get("raw_register_flags")
+                != row.get("raw_register_flags")
+                or inventory_row.get("raw_register_value")
+                != row.get("raw_register_value")
             ):
                 diagnostics.append(
                     f"{row_label} identity differs from operand inventory"
@@ -454,8 +500,9 @@ def _validate_pcode_parsed_operands(value, inventory, label, diagnostics):
             if _pcode_nonnegative(class_id)
             else None
         )
-        if shape is None:
-            diagnostics.append(f"{row_label} class_id must be 0 or 1")
+        register_form = row.get("register_form")
+        if register_form not in {"gpr", "fpr", "vector", "special", "cr"}:
+            diagnostics.append(f"{row_label} register_form is invalid")
         if not _pcode_nonnegative(row.get("raw_arg_kind_id")):
             diagnostics.append(
                 f"{row_label} raw_arg_kind_id must be nonnegative integer"
@@ -464,27 +511,48 @@ def _validate_pcode_parsed_operands(value, inventory, label, diagnostics):
             diagnostics.append(
                 f"{row_label} raw_register_flags must be nonnegative integer"
             )
+        if not _pcode_nonnegative(row.get("raw_register_value")) or row.get(
+            "raw_register_value"
+        ) > 0xFFFF:
+            diagnostics.append(f"{row_label} raw_register_value must be unsigned 16-bit")
         if not _pcode_nonempty_string(row.get("operand_lineage_id")):
             diagnostics.append(
                 f"{row_label} operand_lineage_id must be nonempty string"
             )
-        requirement = row.get("allocation_requirement")
-        if type(requirement) is not str or requirement not in _PCODE_REQUIREMENTS:
-            diagnostics.append(f"{row_label} allocation_requirement is invalid")
-        elif requirement == "allocator-rewrite-required":
+        allocation_state = row.get("allocation_state")
+        if (
+            type(allocation_state) is not str
+            or allocation_state not in _PCODE_ALLOCATION_STATES
+        ):
+            diagnostics.append(f"{row_label} allocation_state is invalid")
+        elif allocation_state == "virtual":
             if (
                 shape is None
+                or register_form != shape[0]
                 or row.get("virtual_kind") != shape[1]
                 or not _pcode_nonnegative(row.get("virtual"))
                 or row.get("physical_register") is not None
+                or row.get("virtual") != row.get("raw_register_value")
             ):
                 diagnostics.append(f"{row_label} virtual register shape is invalid")
+        elif allocation_state == "physical":
+            if (
+                shape is None
+                or register_form != shape[0]
+                or row.get("virtual_kind") is not None
+                or row.get("virtual") is not None
+                or not _pcode_physical(row.get("physical_register"))
+                or row.get("physical_register") != row.get("raw_register_value")
+            ):
+                diagnostics.append(f"{row_label} physical register shape is invalid")
         elif (
-            row.get("virtual_kind") is not None
-            or row.get("virtual") is not None
-            or not _pcode_physical(row.get("physical_register"))
+            register_form not in {"special", "cr"}
+            or any(
+                row.get(field) is not None
+                for field in ("class_id", "virtual_kind", "virtual", "physical_register")
+            )
         ):
-            diagnostics.append(f"{row_label} physical register shape is invalid")
+            diagnostics.append(f"{row_label} non-allocator register shape is invalid")
         keys.append(
             (
                 operand_index,
@@ -633,6 +701,12 @@ def _validate_pcode_mutation(row, label, diagnostics):
         diagnostics.append(f"{label} delete requires inputs and no outputs")
     elif kind == "create" and (inputs or not outputs):
         diagnostics.append(f"{label} create requires no inputs and outputs")
+    elif kind in {"reorder", "spill", "coalesce"} and (
+        not inputs or not outputs
+    ):
+        diagnostics.append(
+            f"{label} {kind} requires nonempty inputs and outputs"
+        )
 
 
 def _validate_pcode_relocations(value, range_size, label, diagnostics):
@@ -1284,6 +1358,8 @@ def _finalize_pcode_capture(
     hooked_site_ids,
     gate_errors,
     event_cap=8192,
+    dropped_events=0,
+    truncated=False,
 ):
     """Publish partial raw PCode evidence with the object-attempt identity."""
 
@@ -1296,8 +1372,8 @@ def _finalize_pcode_capture(
             hooked_site_ids=hooked_site_ids,
             events=pcode_events,
             event_cap=event_cap,
-            dropped_events=0,
-            truncated=len(pcode_events) >= event_cap,
+            dropped_events=dropped_events,
+            truncated=truncated,
             errors=errors,
         )
 
@@ -1422,6 +1498,7 @@ def intervene(ctx):
         backend_frame_state,
         backend_ig_snapshot,
         backend_pcode_snapshot,
+        backend_runtime_instrumentation,
         backend_trace_assembler,
         struct_map,
     )
@@ -1435,6 +1512,9 @@ def intervene(ctx):
     out_summary = ctx.out_dir + "/backend-onepass-candidate.json"
     source_file = os.environ.get("RETRO_SOURCE", "")
     requested = os.environ.get("RETRO_FUNCTION", ctx.fn)
+    runtime_bundle = backend_runtime_instrumentation.install_runtime_instrumentation(
+        ctx
+    )
     lifecycle_capture = getattr(ctx, "lifecycle_capture", None)
     pcode_raw_reader = _validated_pcode_raw_reader(ctx.table, ctx.read)
     object_layout = struct_map.load_object_capture_layout(ctx.table)
@@ -1645,6 +1725,12 @@ def intervene(ctx):
             opcode_names=opcode_names,
             source_stage=stage,
         )
+        if runtime_bundle.validated:
+            events = (
+                backend_runtime_instrumentation.bind_pcode_snapshot_lifecycle(
+                    events, runtime_bundle
+                )
+            )
         for event in events:
             append_event(event)
         state["passes_seen"].append(
@@ -2197,20 +2283,40 @@ def intervene(ctx):
         ctx.cont()
     finally:
         object_capture = _finalize_object_capture(state, out_object_events)
+        state["pcode_events"] = [
+            dict(event) for event in runtime_bundle.pcode_events
+        ]
+        runtime_status = (
+            backend_runtime_instrumentation.runtime_bundle_status(
+                runtime_bundle
+            )
+        )
+        proof = (
+            runtime_bundle.proof
+            if runtime_bundle.validated and runtime_bundle.proof is not None
+            else {
+                "operand_rewrite_sites": [],
+                "operand_mutation_sites": [],
+                "code_emission_sites": [],
+            }
+        )
         pcode_gate_errors = [
             *struct_map.validate_pcode_arg_capture_capability(ctx.table),
-            *struct_map.validate_pcode_instrumentation_capability(ctx.table),
+            *struct_map.validate_pcode_instrumentation_capability(
+                ctx.table,
+                proof=(runtime_bundle.proof if runtime_bundle.validated else None),
+            ),
+            *runtime_bundle.errors,
         ]
         pcode_capture = _finalize_pcode_capture(
             state,
             out_pcode_events,
-            proof={
-                "operand_rewrite_sites": [],
-                "operand_mutation_sites": [],
-                "code_emission_sites": [],
-            },
-            hooked_site_ids=set(),
+            proof=proof,
+            hooked_site_ids=set(runtime_bundle.installed_site_ids),
             gate_errors=pcode_gate_errors,
+            event_cap=runtime_bundle.event_cap,
+            dropped_events=runtime_bundle.dropped_events,
+            truncated=runtime_bundle.truncated,
         )
         payload = {
             "schema_version": "mwcc-retro-backend-onepass-candidate.v1",
@@ -2229,6 +2335,7 @@ def intervene(ctx):
             "object_capture_warnings": object_capture["warnings"],
             "pcode_capture_attempt": pcode_capture["capture_attempt"],
             "pcode_capture": pcode_capture["capture_status"],
+            "runtime_instrumentation": runtime_status,
             "notes": [
                 "One-pass retail backend event stream.",
                 "Diagnostic sidecar for trace assembly and completeness checks.",

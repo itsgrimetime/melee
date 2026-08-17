@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from src.cli import _build_failure_report_command, _should_print_failure_report_hint, app
@@ -130,6 +131,81 @@ def test_issue_list_and_resolve_work_from_cli(tmp_path):
     open_result = runner.invoke(app, ["issue", "list", "--status", "open", "--tool", "mwcc-debug", "--json"])
     assert open_result.exit_code == 0, open_result.stdout
     assert json.loads(open_result.stdout) == []
+
+    reset_db()
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_exit", "message"),
+    [
+        ("owned", 0, None),
+        ("unclaimed", 2, "is not claimed"),
+        ("other-owner", 2, "claimed by other-agent"),
+        ("resolved", 2, "cannot resolve resolved issue"),
+    ],
+)
+def test_issue_resolve_require_current_claim_is_atomic(
+    tmp_path,
+    state,
+    expected_exit,
+    message,
+):
+    reset_db()
+    db = StateDB(tmp_path / "state.db")
+    issue = db.report_tool_issue("close only from the exact live owner")
+    if state == "owned":
+        db.claim_tool_issue(issue["id"], "owner-agent")
+    elif state == "other-owner":
+        db.claim_tool_issue(issue["id"], "other-agent")
+    elif state == "resolved":
+        db.claim_tool_issue(issue["id"], "owner-agent")
+        db.resolve_tool_issue(
+            issue["id"],
+            agent_id="owner-agent",
+            resolution_note="already closed",
+        )
+    before = db.get_tool_issue(issue["id"])
+    history_before = db.get_history(
+        entity_type="tool_issue",
+        entity_id=str(issue["id"]),
+    )
+    db.close()
+    reset_db()
+    get_db(tmp_path / "state.db")
+
+    result = runner.invoke(
+        app,
+        [
+            "issue",
+            "resolve",
+            str(issue["id"]),
+            "--note",
+            "guarded closeout",
+            "--agent-id",
+            "owner-agent",
+            "--require-current-claim",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == expected_exit, result.stdout
+    stored = get_db().get_tool_issue(issue["id"])
+    history_after = get_db().get_history(
+        entity_type="tool_issue",
+        entity_id=str(issue["id"]),
+    )
+    if expected_exit == 0:
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "resolved"
+        assert payload["resolved_by_agent"] == "owner-agent"
+        assert stored == payload
+        assert len(history_after) == len(history_before) + 1
+        assert history_after[0]["action"] == "resolved"
+    else:
+        assert message in strip_ansi(result.stdout)
+        assert not result.stdout.lstrip().startswith("{")
+        assert stored == before
+        assert history_after == history_before
 
     reset_db()
 

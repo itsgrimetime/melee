@@ -700,6 +700,108 @@ class TestToolIssues:
         open_issues = db.list_tool_issues(status="open")
         assert open_issues == []
 
+    def test_guarded_resolve_requires_exact_current_owner_and_audits_once(self, db):
+        issue = db.report_tool_issue("close issue only from its active claim")
+        claimed = db.claim_tool_issue(issue["id"], "owner-agent")
+        history_before = db.get_history(
+            entity_type="tool_issue",
+            entity_id=str(issue["id"]),
+        )
+
+        resolved = db.resolve_tool_issue(
+            issue["id"],
+            agent_id="owner-agent",
+            resolution_note="reviewed closeout",
+            require_claimed_by="owner-agent",
+        )
+
+        assert resolved is not None
+        assert resolved["status"] == "resolved"
+        assert resolved["resolved_by_agent"] == "owner-agent"
+        assert resolved["claimed_by"] is None
+        history_after = db.get_history(
+            entity_type="tool_issue",
+            entity_id=str(issue["id"]),
+        )
+        assert len(history_after) == len(history_before) + 1
+        resolution_rows = [
+            row for row in history_after if row["action"] == "resolved"
+        ]
+        assert len(resolution_rows) == 1
+        assert resolution_rows[0]["old_value"] == claimed
+        assert resolution_rows[0]["new_value"] == resolved
+
+    @pytest.mark.parametrize(
+        ("claim_owner", "required_owner", "message"),
+        [
+            (None, "owner-agent", "is not claimed"),
+            ("other-agent", "owner-agent", "claimed by other-agent"),
+        ],
+    )
+    def test_guarded_resolve_rejects_wrong_claim_without_mutation_or_audit(
+        self,
+        db,
+        claim_owner,
+        required_owner,
+        message,
+    ):
+        issue = db.report_tool_issue("preserve rejected closeout")
+        if claim_owner is not None:
+            db.claim_tool_issue(issue["id"], claim_owner)
+        before = db.get_tool_issue(issue["id"])
+        history_before = db.get_history(
+            entity_type="tool_issue",
+            entity_id=str(issue["id"]),
+        )
+
+        with pytest.raises(ValueError, match=message):
+            db.resolve_tool_issue(
+                issue["id"],
+                agent_id=required_owner,
+                resolution_note="must not land",
+                require_claimed_by=required_owner,
+            )
+
+        assert db.get_tool_issue(issue["id"]) == before
+        assert db.get_history(
+            entity_type="tool_issue",
+            entity_id=str(issue["id"]),
+        ) == history_before
+
+    @pytest.mark.parametrize("guarded", [False, True], ids=["legacy", "guarded"])
+    def test_resolve_rejects_already_resolved_without_mutation_or_audit(
+        self,
+        db,
+        guarded,
+    ):
+        issue = db.report_tool_issue("resolved state is immutable")
+        db.claim_tool_issue(issue["id"], "owner-agent")
+        db.resolve_tool_issue(
+            issue["id"],
+            agent_id="owner-agent",
+            resolution_note="first closeout",
+        )
+        before = db.get_tool_issue(issue["id"])
+        history_before = db.get_history(
+            entity_type="tool_issue",
+            entity_id=str(issue["id"]),
+        )
+
+        kwargs = {"require_claimed_by": "owner-agent"} if guarded else {}
+        with pytest.raises(ValueError, match="cannot resolve resolved issue"):
+            db.resolve_tool_issue(
+                issue["id"],
+                agent_id="owner-agent",
+                resolution_note="second closeout",
+                **kwargs,
+            )
+
+        assert db.get_tool_issue(issue["id"]) == before
+        assert db.get_history(
+            entity_type="tool_issue",
+            entity_id=str(issue["id"]),
+        ) == history_before
+
     def test_note_tool_issue_appends_body_without_resolving(self, db):
         """Adding a note should preserve open status and append audit history."""
         issue = db.report_tool_issue(

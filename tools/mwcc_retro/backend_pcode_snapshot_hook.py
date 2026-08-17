@@ -9,7 +9,11 @@ def intervene(ctx):
     import json
     import os
 
-    from tools.mwcc_retro import backend_pcode_snapshot
+    from tools.mwcc_retro import (
+        backend_pcode_snapshot,
+        backend_runtime_instrumentation,
+        struct_map,
+    )
 
     gdb = ctx.gdb
     cad = ctx.cad
@@ -18,6 +22,14 @@ def intervene(ctx):
     out_summary = ctx.out_dir + "/backend-pcode-snapshot.json"
     source_file = os.environ.get("RETRO_SOURCE", "")
     requested = os.environ.get("RETRO_FUNCTION", ctx.fn)
+    runtime_bundle = backend_runtime_instrumentation.install_runtime_instrumentation(
+        ctx
+    )
+    raw_reader = (
+        ctx.read
+        if not struct_map.validate_pcode_arg_capture_capability(ctx.table)
+        else None
+    )
 
     def entry_va(key):
         entry = entries.get(key)
@@ -102,7 +114,14 @@ def intervene(ctx):
             pass_name="PCode Snapshot",
             opcode_names=opcode_names,
             source_stage=stage,
+            read_bytes=raw_reader,
         )
+        if runtime_bundle.validated:
+            events = (
+                backend_runtime_instrumentation.bind_pcode_snapshot_lifecycle(
+                    events, runtime_bundle
+                )
+            )
         blocks = sum(1 for event in events if event["event"] == "block")
         instructions = sum(1 for event in events if event["event"] == "pcode_instruction")
         for event in events:
@@ -197,6 +216,11 @@ def intervene(ctx):
             "functions_seen": state["functions_seen"],
             "passes_seen": state["passes_seen"],
             "errors": state["errors"],
+            "runtime_instrumentation": (
+                backend_runtime_instrumentation.runtime_bundle_status(
+                    runtime_bundle
+                )
+            ),
             "notes": [
                 "Partial PCode snapshot only; does not satisfy full backend trace schema.",
                 "Events are dedicated to backend-pcode-snapshot-events.v1.jsonl.",

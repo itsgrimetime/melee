@@ -6,7 +6,8 @@ import os
 import shlex
 import sys
 import tempfile
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import typer
@@ -19,16 +20,19 @@ retro_app = typer.Typer(
 # Package checkout discovery (this file is tools/melee-agent/src/cli/debug/retro.py).
 _PACKAGE_REPO = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(_PACKAGE_REPO))
-from src.mwcc_debug.diff_capture import _run_with_process_group_timeout  # noqa: E402
 from tools.mwcc_retro import (  # noqa: E402
+    TABLES_DIR,
     backend_events,
     backend_trace_assembler,
-    TABLES_DIR,
+)
+from tools.mwcc_retro import (
     setup as retro_setup,
 )
 
+from src.mwcc_debug.diff_capture import _run_with_process_group_timeout  # noqa: E402
 
 RETRO_DUMP_TIMEOUT_SECONDS = 600
+_STATIC_BACKEND_PRODUCER_QUERY_BUDGET = 2048
 
 
 def setup_mwcc_ghidra(**kwargs):
@@ -570,12 +574,18 @@ def _run_parity_compile_command(*, phase: str, cmd: list[str], melee_root: Path)
         ) from exc
 
 
-def _run_object_parity_for_backend(*, src: str, melee_root: Path) -> dict:
+def _run_object_parity_for_backend(
+    *,
+    src: str,
+    melee_root: Path,
+    retain_object: Path | None = None,
+) -> dict:
     """Run the raw .o byte-parity gate for backend tracing."""
     import shlex
     import tempfile
 
-    from tools.mwcc_retro import object_parity, setup as _setup
+    from tools.mwcc_retro import object_parity
+    from tools.mwcc_retro import setup as _setup
 
     setup_result = _setup.ensure_for_root(melee_root, force=False)
     cmd = _ninja_cmd_for_unit(src, melee_root=melee_root)
@@ -610,7 +620,11 @@ def _run_object_parity_for_backend(*, src: str, melee_root: Path) -> dict:
             cmd=[str(setup_result.retrowin32_bin), compiler] + with_output(retro_obj),
             melee_root=melee_root,
         )
-        return object_parity.compare_objects(ref, retro_obj).to_dict()
+        result = object_parity.compare_objects(ref, retro_obj).to_dict()
+        if retain_object is not None and result.get("matched") is True:
+            retain_object.parent.mkdir(parents=True, exist_ok=True)
+            retain_object.write_bytes(ref.read_bytes())
+        return result
 
 
 def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path) -> Path:
@@ -618,8 +632,8 @@ def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path
     import shlex
     import subprocess
 
-    from tools.mwcc_retro import struct_map
     from tools.mwcc_retro import setup as _setup
+    from tools.mwcc_retro import struct_map
 
     setup_result = _setup.ensure_for_root(melee_root, force=False)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -758,6 +772,8 @@ def _launch_backend_events(*, src: str, fn: str, out_dir: Path, melee_root: Path
 def _remove_backend_probe_stale_artifacts(out_dir: Path) -> None:
     """Remove backend trace artifacts that would make probe output ambiguous."""
     names = {
+        "raw-pe-cfg.v1.jsonl",
+        "raw-ghidra-crosscheck.v1.json",
         "backend-map-candidates.json",
         "backend-map-probe.json",
         "backend-map-evidence.json",
@@ -765,6 +781,8 @@ def _remove_backend_probe_stale_artifacts(out_dir: Path) -> None:
         "backend-ig-snapshot-events.v1.jsonl",
         "backend-pcode-snapshot.json",
         "backend-pcode-snapshot-events.v1.jsonl",
+        "backend-pcode-lineage.v1.json",
+        "candidate.o",
         "backend-colorgraph-decisions.v1.jsonl",
         "backend-colorgraph-trace.json",
         "backend-events.v1.jsonl",
@@ -780,6 +798,7 @@ def _remove_backend_probe_stale_artifacts(out_dir: Path) -> None:
         "launch.log",
         "provenance.json",
         "variables.txt",
+        "instrumentation.json",
     }
     for name in names:
         (out_dir / name).unlink(missing_ok=True)
@@ -1518,6 +1537,7 @@ def _run_backend_map_probe(
     out_dir: Path,
     static_only: bool,
     melee_root: Path,
+    instrumentation_table: Path | None = None,
 ) -> DumpOutcome:
     """Write static candidate evidence and optionally run a live map probe."""
     from tools.mwcc_retro import backend_discovery
@@ -1526,8 +1546,13 @@ def _run_backend_map_probe(
     _remove_backend_probe_stale_artifacts(out_dir)
     exe = melee_root / "build" / "compilers" / "GC" / "1.2.5n" / "mwcceppc.exe"
     report = backend_discovery.build_gc125n_backend_candidate_report(exe)
-    (out_dir / "backend-map-candidates.json").write_text(
+    candidate_payload = (
         json.dumps(report, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    _run_static_backend_map_audit(
+        melee_root=melee_root,
+        out_dir=out_dir,
+        candidate_payload=candidate_payload,
     )
 
     if static_only:
@@ -1538,6 +1563,18 @@ def _run_backend_map_probe(
         raise RuntimeError(_format_parity_mismatch(parity))
 
     table = _retro_tables_dir(melee_root) / "gc_125n.json"
+    if instrumentation_table is not None:
+        table = instrumentation_table
+    from tools.mwcc_retro.backend_runtime_instrumentation import (
+        load_runtime_bundle,
+    )
+
+    bundle = load_runtime_bundle(table, exe)
+    instrumentation = {
+        "status": bundle.status,
+        "compiler_sha256": bundle.compiler_sha256,
+        "expected_site_ids": sorted(bundle.expected_site_ids),
+    }
     hook = _retro_script("backend_map_probe_hook.py")
     outcome = _launch_dump(
         src=src,
@@ -1548,6 +1585,7 @@ def _run_backend_map_probe(
         table=table,
         melee_root=melee_root,
         gdb_py=str(hook),
+        instrumentation=instrumentation,
     )
     if outcome.exit_code != 0:
         missing = f"\nmissing: {', '.join(outcome.missing)}" if outcome.missing else ""
@@ -1567,6 +1605,207 @@ def _run_backend_map_probe(
     return outcome
 
 
+def _load_transient_ghidra_inventory(*, melee_root: Path):
+    """Validate the canonical project and consume one fresh temp export."""
+    import subprocess
+    import tempfile
+
+    from tools.mwcc_retro.backend_lifetime_audit import (
+        load_ghidra_inventory,
+    )
+
+    from src.mwcc_debug.ghidra_mwcc_setup import (
+        EXPECTED_COMPILER_SHA256,
+        PROGRAM_PATH,
+        PROJECT_NAME,
+    )
+
+    project_dir = melee_root / "tools" / "mwcc_debug" / "ghidra_project"
+    setup = setup_mwcc_ghidra(
+        melee_root=melee_root,
+        project_dir=project_dir,
+        analysis_timeout=300,
+        wall_timeout=420,
+        repair=False,
+    )
+    if (
+        setup.compiler_sha256 != EXPECTED_COMPILER_SHA256
+        or setup.project_name != PROJECT_NAME
+        or setup.program_path != PROGRAM_PATH
+        or setup.project_dir.resolve() != project_dir.resolve()
+    ):
+        raise RuntimeError("validated Ghidra project identity differs")
+    exporter = melee_root / "tools/mwcc_debug/scripts/ExportMwccRawCrosscheck.java"
+    if not exporter.is_file():
+        raise RuntimeError(f"missing Ghidra raw cross-check exporter: {exporter}")
+
+    with tempfile.TemporaryDirectory(prefix="mwcc-ghidra-crosscheck-") as temporary:
+        inventory_path = Path(temporary) / "inventory.jsonl"
+        if inventory_path.exists():
+            raise RuntimeError("fresh Ghidra inventory path unexpectedly exists")
+        command = [
+            str(setup.headless_path),
+            str(setup.project_dir),
+            setup.project_name,
+            "-process",
+            setup.program_path.removeprefix("/"),
+            "-noanalysis",
+            "-scriptPath",
+            str(exporter.parent),
+            "-postScript",
+            exporter.name,
+            EXPECTED_COMPILER_SHA256,
+            str(inventory_path),
+        ]
+        try:
+            process = _run_with_process_group_timeout(
+                command,
+                cwd=melee_root,
+                timeout=420,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("Ghidra raw cross-check export timed out") from exc
+        combined = f"{process.stdout or ''}\n{process.stderr or ''}"
+        lowered = combined.lower()
+        if process.returncode != 0 or any(
+            marker in lowered
+            for marker in (
+                "analysis timed out",
+                "analysis cancelled",
+                "analysis canceled",
+                "processing cancelled",
+                "processing canceled",
+                "abort due to headless analyzer error",
+            )
+        ):
+            raise RuntimeError(
+                "Ghidra raw cross-check export failed: " + _tail(combined)
+            )
+        return load_ghidra_inventory(
+            inventory_path,
+            expected_sha256=EXPECTED_COMPILER_SHA256,
+        )
+
+
+def _run_static_backend_map_audit(
+    *, melee_root: Path, out_dir: Path, candidate_payload: bytes
+) -> object:
+    """Recover and reconcile Task 4, then construct the closed Task 7 bundle."""
+    from tools.mwcc_retro import (
+        backend_abstract_values,
+        backend_lifetime_audit,
+        backend_lifetime_proof,
+        backend_opcode_layout,
+        pe,
+        x86_cfg,
+    )
+
+    from src.mwcc_debug.ghidra_mwcc_setup import EXPECTED_COMPILER_SHA256
+
+    compiler = (
+        melee_root / "build/compilers/GC/1.2.5n/mwcceppc.exe"
+    )
+    image = pe.load(
+        compiler,
+        expected_sha256=EXPECTED_COMPILER_SHA256,
+        require_pe32_i386=True,
+    )
+    format_anchor = x86_cfg.AuditAnchor(
+        name="formatoperands",
+        address=0x004C4BF0,
+        instruction_bytes=b"\x53",
+        evidence="retail-encoder-dispatch-bound",
+    )
+    seeds = x86_cfg.build_seed_inventory(image, (format_anchor,))
+    static_started_at = time.monotonic()
+
+    def report_static_progress(message: str) -> None:
+        typer.echo(
+            f"{message};elapsed_seconds="
+            f"{time.monotonic() - static_started_at:.1f}",
+            err=True,
+        )
+
+    cfg = x86_cfg.recover_cfg(
+        image,
+        seeds,
+        x86_cfg.AnalysisLimits.for_image(image),
+        producer_checkpoint_dir=(
+            out_dir / ".producer-domain-checkpoints.v1"
+        ),
+        producer_query_budget=_STATIC_BACKEND_PRODUCER_QUERY_BUDGET,
+        producer_progress_callback=report_static_progress,
+    )
+    format_dispatch = backend_lifetime_audit.validate_gc125n_formatoperands(
+        image, cfg
+    )
+    inventory = _load_transient_ghidra_inventory(melee_root=melee_root)
+    report = backend_lifetime_audit.compare_ghidra_inventory(cfg, inventory)
+    report.require_no_raw_decode_conflicts()
+    report.require_retained_regressions()
+    report = replace(report, formatoperands_dispatch=format_dispatch)
+    cfg = backend_lifetime_audit.accept_reconciled_residue(cfg, report)
+    values = backend_abstract_values.analyze_values(
+        image,
+        cfg,
+        cfg.control_targets,
+    )
+    lifetime_sites = backend_lifetime_audit.build_lifetime_site_inventory(
+        image, cfg, values
+    )
+    opcode_layouts = backend_opcode_layout.analyze_opcode_layouts(
+        image, cfg, values
+    )
+    if opcode_layouts.proof_ready and not opcode_layouts.unresolved:
+        opcode_tables = backend_opcode_layout.build_opcode_proof_tables(
+            opcode_layouts
+        ).to_dict()
+    else:
+        opcode_tables = {"opcode_table": [], "operand_rules": []}
+    proof_plan = backend_lifetime_proof.derive_exact_lifetime_proof_plan(
+        cfg, lifetime_sites
+    )
+    candidate_table_path = (
+        melee_root / "tools/mwcc_retro/tables/gc_125n.json"
+    )
+    if not candidate_table_path.is_file():
+        raise RuntimeError(
+            f"missing production-shape candidate table: {candidate_table_path}"
+        )
+    try:
+        candidate_table = json.loads(candidate_table_path.read_bytes())
+        backend_map_candidates = json.loads(candidate_payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("static Task 7 input JSON is malformed") from exc
+    exact_inputs = backend_lifetime_proof.ExactLifetimeBundleInputs(
+        compiler_sha256=image.sha256,
+        raw_cfg_jsonl=x86_cfg.canonical_jsonl_bytes(cfg),
+        ghidra_crosscheck_json=(
+            backend_lifetime_audit.crosscheck_json_bytes(report)
+        ),
+        value_analysis=values,
+        lifetime_site_inventory=lifetime_sites,
+        opcode_layout_inventory=opcode_layouts,
+        opcode_tables=opcode_tables,
+        proof_plan=proof_plan,
+        candidate_table=candidate_table,
+        backend_map_candidates=backend_map_candidates,
+    )
+    generated = backend_lifetime_proof.generate_exact_lifetime_bundle(
+        exact_inputs, out_dir
+    )
+    if (
+        generated.audit_summary.get("proof_ready") is not True
+        or generated.publication is None
+    ):
+        unresolved = generated.audit_summary.get("unresolved_inputs", [])
+        raise RuntimeError(
+            "static Task 7 proof is not ready: "
+            + ("; ".join(map(str, unresolved)) or "unresolved exact evidence")
+        )
+    return generated
+
+
 def _launch_backend_ig_snapshot(
     *,
     src: str,
@@ -1574,8 +1813,8 @@ def _launch_backend_ig_snapshot(
     out_dir: Path,
     melee_root: Path,
 ) -> tuple[Path, Path]:
-    from tools.mwcc_retro import struct_map
     from tools.mwcc_retro import setup as _setup
+    from tools.mwcc_retro import struct_map
 
     _setup.ensure_for_root(melee_root, force=False)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1664,9 +1903,10 @@ def _launch_backend_pcode_snapshot(
     fn: str,
     out_dir: Path,
     melee_root: Path,
+    instrumentation_table: Path | None = None,
 ) -> tuple[Path, Path]:
-    from tools.mwcc_retro import struct_map
     from tools.mwcc_retro import setup as _setup
+    from tools.mwcc_retro import struct_map
 
     _setup.ensure_for_root(melee_root, force=False)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1675,7 +1915,11 @@ def _launch_backend_pcode_snapshot(
     summary_path.unlink(missing_ok=True)
     events_path.unlink(missing_ok=True)
 
-    table = _retro_tables_dir(melee_root) / "gc_125n.json"
+    table = (
+        instrumentation_table
+        if instrumentation_table is not None
+        else _retro_tables_dir(melee_root) / "gc_125n.json"
+    )
     table_data = json.loads(table.read_text())
     map_errors = struct_map.validate_required_backend_map(table_data)
     if map_errors:
@@ -1690,6 +1934,26 @@ def _launch_backend_pcode_snapshot(
             + "; ".join(partial_errors)
         )
 
+    instrumentation = None
+    if instrumentation_table is not None:
+        from tools.mwcc_retro.backend_runtime_instrumentation import (
+            load_runtime_bundle,
+        )
+
+        compiler_exe = (
+            melee_root
+            / "build"
+            / "compilers"
+            / "GC"
+            / "1.2.5n"
+            / "mwcceppc.exe"
+        )
+        bundle = load_runtime_bundle(table, compiler_exe)
+        instrumentation = {
+            "status": bundle.status,
+            "compiler_sha256": bundle.compiler_sha256,
+            "expected_site_ids": sorted(bundle.expected_site_ids),
+        }
     hook = _retro_script("backend_pcode_snapshot_hook.py")
     outcome = _launch_dump(
         src=src,
@@ -1700,6 +1964,7 @@ def _launch_backend_pcode_snapshot(
         table=table,
         melee_root=melee_root,
         gdb_py=str(hook),
+        instrumentation=instrumentation,
     )
     if outcome.exit_code != 0:
         missing = f"\nmissing: {', '.join(outcome.missing)}" if outcome.missing else ""
@@ -1728,10 +1993,16 @@ def _run_backend_pcode_snapshot(
     fn: str,
     out_dir: Path,
     melee_root: Path,
+    instrumentation_table: Path | None = None,
 ) -> BackendPcodeSnapshotOutcome:
     out_dir.mkdir(parents=True, exist_ok=True)
     _remove_backend_probe_stale_artifacts(out_dir)
-    parity = _run_object_parity_for_backend(src=src, melee_root=melee_root)
+    candidate_object = out_dir / "candidate.o"
+    parity = _run_object_parity_for_backend(
+        src=src,
+        melee_root=melee_root,
+        retain_object=(candidate_object if instrumentation_table else None),
+    )
     if not parity.get("matched"):
         raise RuntimeError(_format_parity_mismatch(parity))
     summary_path, events_path = _launch_backend_pcode_snapshot(
@@ -1739,7 +2010,71 @@ def _run_backend_pcode_snapshot(
         fn=fn,
         out_dir=out_dir,
         melee_root=melee_root,
+        instrumentation_table=instrumentation_table,
     )
+    if instrumentation_table is not None:
+        from tools.mwcc_retro.backend_instrumentation_proof import (
+            InstrumentationProof,
+            proof_sha256,
+        )
+        from tools.mwcc_retro.backend_pcode_lineage import (
+            validate_pcode_lineage,
+        )
+        from tools.mwcc_retro.backend_runtime_instrumentation import (
+            load_runtime_bundle,
+        )
+
+        compiler = (
+            melee_root
+            / "build"
+            / "compilers"
+            / "GC"
+            / "1.2.5n"
+            / "mwcceppc.exe"
+        )
+        bundle = load_runtime_bundle(instrumentation_table, compiler)
+        if not bundle.validated or bundle.proof is None:
+            raise RuntimeError(
+                "proof-bound PCode probe requires a validated runtime bundle"
+            )
+        runtime_status = json.loads(summary_path.read_text()).get(
+            "runtime_instrumentation"
+        )
+        if not isinstance(runtime_status, dict):
+            raise RuntimeError("PCode probe has no runtime instrumentation status")
+        lineage_payload = backend_trace_assembler.assemble_pcode_lineage_payload(
+            snapshot_events=backend_events.load_events(events_path),
+            runtime_status=runtime_status,
+            proof=bundle.proof,
+            function=fn,
+            candidate_object=candidate_object,
+        )
+        proof = InstrumentationProof(
+            str(bundle.proof["proof_id"]),
+            bundle.compiler_sha256,
+            bundle.proof,
+            proof_sha256(bundle.proof),
+        )
+        validation = validate_pcode_lineage(
+            lineage_payload,
+            proof,
+            candidate_object,
+            fn,
+            promotion_registry=bundle.table,
+        )
+        if validation.errors:
+            raise RuntimeError(
+                "proof-bound PCode lineage validation failed: "
+                + "; ".join(validation.errors)
+            )
+        (out_dir / "backend-pcode-lineage.v1.json").write_text(
+            json.dumps(
+                lineage_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
     return BackendPcodeSnapshotOutcome(
         exit_code=0,
         summary_path=summary_path,
@@ -2176,6 +2511,7 @@ def _backend_source_metadata(*, src: str, fn: str, melee_root: Path) -> dict:
 def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
                  out_dir: Path, table: Path, melee_root: Path,
                  gdb_py: str = "",
+                 instrumentation: dict | None = None,
                  timeout: int = RETRO_DUMP_TIMEOUT_SECONDS) -> DumpOutcome:
     """Invoke the gdb-side launcher, then post-process the IRO trace.
 
@@ -2187,7 +2523,8 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
     """
     import subprocess
 
-    from tools.mwcc_retro import setup as _setup, trace_summary
+    from tools.mwcc_retro import setup as _setup
+    from tools.mwcc_retro import trace_summary
 
     if hasattr(_setup, "ensure_for_root"):
         res = _setup.ensure_for_root(melee_root, force=False)
@@ -2221,6 +2558,10 @@ def _launch_dump(*, src: str, fn: str, phases: str, compiler: str,
         RETRO_FUNCTION=fn,
         RETRO_FUNCTION_ALIASES=_backend_function_aliases_json(fn, melee_root=melee_root),
     )
+    if instrumentation:
+        instr_path = out_dir / "instrumentation.json"
+        instr_path.write_text(json.dumps(instrumentation))
+        env["RETRO_INSTRUMENTATION"] = str(instr_path)
     log = out_dir / "launch.log"
     command_text = shlex.join([str(part) for part in cmd])
 
@@ -2647,7 +2988,7 @@ def backend_cmd(
         help="Also compare the retail backend trace to the mwcc-debug pcdump.",
     ),
 ):
-    """Generate an exact retail GC/1.2.5n backend/regalloc trace."""
+    """Gated retail GC/1.2.5n backend/regalloc trace command."""
     active_root = _resolve_melee_root(melee_root)
     out_dir = _resolve_output_dir(out, melee_root=active_root, src=src, fn=fn)
     try:
@@ -2790,10 +3131,27 @@ def probe_backend_map_cmd(
     static_only: bool = typer.Option(
         False,
         "--static-only",
-        help="Only write backend-map-candidates.json; skip parity and live gdb probe.",
+        help=(
+            "Generate the canonical nine-member static bundle, including "
+            "raw-pe-cfg.v1.jsonl, raw-ghidra-crosscheck.v1.json, and "
+            "gc_125n_lifetime_proof.candidate.json; skip parity and the live "
+            "gdb probe."
+        ),
+    ),
+    instrumentation_table: Path = typer.Option(
+        None,
+        "--instrumentation-table",
+        help=(
+            "Path to gc_125n.json or gc_125n.candidate.json table. "
+            "Defaults to installed gc_125n.json in the configured tables dir. "
+            "Resolves sibling _lifetime_proof.json and _lifetime_hooks.json."
+        ),
     ),
 ):
-    """Probe retail GC/1.2.5n backend map candidates without emitting traces."""
+    """Probe retail GC/1.2.5n backend map candidates without emitting traces.
+
+    Static mode produces gc_125n_lifetime_proof.candidate.json.
+    """
     active_root = _resolve_melee_root(melee_root)
     out_dir = _resolve_output_dir(out, melee_root=active_root, src=src, fn=fn)
     try:
@@ -2803,6 +3161,7 @@ def probe_backend_map_cmd(
             out_dir=out_dir,
             static_only=static_only,
             melee_root=active_root,
+            instrumentation_table=instrumentation_table,
         )
     except RuntimeError as exc:
         typer.secho(str(exc), fg="red", err=True)
@@ -2814,7 +3173,50 @@ def probe_backend_map_cmd(
             err=True,
         )
         raise typer.Exit(2)
-    typer.echo(f"backend map candidates: {out_dir / 'backend-map-candidates.json'}")
+    current = out_dir / "CURRENT"
+    if current.exists():
+        from tools.mwcc_retro.backend_lifetime_proof import (
+            CURRENT_SCHEMA as LIFETIME_CURRENT_SCHEMA,
+        )
+        from tools.mwcc_retro.backend_lifetime_proof import (
+            resolve_lifetime_bundle,
+        )
+
+        try:
+            pointer = json.loads(current.read_bytes())
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("static backend CURRENT pointer is malformed") from exc
+        if pointer.get("schema_version") == LIFETIME_CURRENT_SCHEMA:
+            bundle = resolve_lifetime_bundle(out_dir)
+            typer.echo(f"raw PE CFG: {bundle.path('raw-pe-cfg.v1.jsonl')}")
+            typer.echo(
+                "raw/Ghidra cross-check: "
+                f"{bundle.path('raw-ghidra-crosscheck.v1.json')}"
+            )
+            typer.echo(
+                "lifetime proof candidate: "
+                f"{bundle.path('gc_125n_lifetime_proof.candidate.json')}"
+            )
+            typer.echo(
+                "runtime hook manifest candidate: "
+                f"{bundle.path('gc_125n_lifetime_hooks.candidate.json')}"
+            )
+            typer.echo(f"lifetime audit report: {bundle.path('REPORT.md')}")
+        else:
+            from tools.mwcc_retro.backend_lifetime_audit import (
+                resolve_static_backend_bundle,
+            )
+
+            bundle = resolve_static_backend_bundle(out_dir)
+            typer.echo(
+                "backend map candidates: "
+                f"{bundle.path('backend-map-candidates.json')}"
+            )
+            typer.echo(f"raw PE CFG: {bundle.path('raw-pe-cfg.v1.jsonl')}")
+            typer.echo(
+                "raw/Ghidra cross-check: "
+                f"{bundle.path('raw-ghidra-crosscheck.v1.json')}"
+            )
     if (out_dir / "backend-map-probe.json").exists():
         typer.echo(f"backend map probe: {out_dir / 'backend-map-probe.json'}")
     if (out_dir / "backend-map-evidence.json").exists():
@@ -2876,6 +3278,15 @@ def probe_backend_pcode_cmd(
         "--melee-root",
         help="Active Melee checkout/worktree root. Defaults to the current cwd tree.",
     ),
+    instrumentation_table: Path = typer.Option(
+        None,
+        "--instrumentation-table",
+        help=(
+            "Path to gc_125n.json or gc_125n.candidate.json table. "
+            "Defaults to installed gc_125n.json in the configured tables dir. "
+            "Resolves fixed proof and runtime-hook siblings."
+        ),
+    ),
 ):
     """Probe retail GC/1.2.5n backend PCode/block snapshots."""
     active_root = _resolve_melee_root(melee_root)
@@ -2886,6 +3297,7 @@ def probe_backend_pcode_cmd(
             fn=fn,
             out_dir=out_dir,
             melee_root=active_root,
+            instrumentation_table=instrumentation_table,
         )
     except RuntimeError as exc:
         typer.secho(str(exc), fg="red", err=True)
@@ -2994,7 +3406,7 @@ def verify_cmd(
 
 
 def _write_provenance(out_dir: Path, src, fn, compiler, table, outcome, melee_root):
-    from tools.mwcc_retro import RETROWIN32_PIN, CADMIC_PIN
+    from tools.mwcc_retro import CADMIC_PIN, RETROWIN32_PIN
     prov = {
         "true_compiler": compiler,
         "note": "dumps use a GC/1.1 name-spoof internally; true compiler above",

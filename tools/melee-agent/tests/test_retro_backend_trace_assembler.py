@@ -15,9 +15,13 @@ from tools.mwcc_retro.backend_instrumentation_proof import proof_sha256  # noqa:
 from tests.test_retro_backend_object_bindings import (  # noqa: E402
     lifetime_coverage,
     minimal_object_bindings,
-    trusted_proof,
 )
-from tests.test_retro_backend_pcode_lineage import _candidate_elf  # noqa: E402
+from tests.test_retro_backend_pcode_lineage import (  # noqa: E402
+    _candidate_elf,
+)
+from tests.test_retro_backend_pcode_lineage import (
+    trusted_proof as strict_trusted_proof,
+)
 
 COMPILER = {"family": "MWCC", "version": "GC/1.2.5n", "retail": True}
 FIXTURE_ROOT = REPO / "tools/melee-agent/tests/fixtures/retro"
@@ -34,6 +38,7 @@ def _function_start() -> dict:
 
 
 def _pcode_events() -> list[dict]:
+    raw = bytes.fromhex("000222000000000000000000")
     return [
         _function_start(),
         {"event": "backend_marker", "name": "pcode_pass_boundary"},
@@ -53,6 +58,20 @@ def _pcode_events() -> list[dict]:
             "block_id": "B0",
             "order": 0,
             "opcode": "mr",
+            "opcode_id": 63,
+            "arg_count": 1,
+            "runtime_address": 0x700000,
+            "source_stage": "allocator_input",
+            "operand_lineage_inventory": [
+                {
+                    "operand_index": 0,
+                    "raw_arg_kind_id": 0,
+                    "raw_register_flags": 2,
+                    "raw_register_value": 34,
+                    "raw_payload_hex": raw.hex(),
+                    "raw_payload_sha256": hashlib.sha256(raw).hexdigest(),
+                }
+            ],
             "operands": "",
             "normalized": "mr",
         },
@@ -252,6 +271,9 @@ def test_assemble_candidate_trace_replaces_matching_partial_decisions() -> None:
     cls = fn["regalloc"]["classes"][0]
     nodes = {node["ig_id"]: node for node in cls["nodes"]}
     assert fn["pcode"]["passes"][0]["instructions"][0]["opcode"] == "mr"
+    assert fn["pcode"]["passes"][0]["instructions"][0][
+        "operand_lineage_inventory"
+    ][0]["raw_payload_hex"] == "000222000000000000000000"
     assert [decision["id"] for decision in cls["color_decisions"]] == ["gpr-i0", "gpr-i1"]
     assert nodes[32]["assigned_phys"] == 0
     assert nodes[32]["color_decision_ref"] == "gpr-i0"
@@ -382,6 +404,8 @@ def test_frame_events_from_map_probe_payload_converts_probe_frame_shape() -> Non
 
 def _empty_v2_bindings() -> dict[str, object]:
     payload = minimal_object_bindings()
+    proof = strict_trusted_proof()
+    payload["lifetime_proof"] = copy.deepcopy(dict(proof.payload))
     payload["lifecycle_events"] = []
     payload["objects"] = []
     payload["virtual_bindings"] = []
@@ -389,14 +413,34 @@ def _empty_v2_bindings() -> dict[str, object]:
     payload["coverage"]["objects_seen"] = 0
     payload["coverage"]["virtual_bindings_seen"] = 0
     payload["coverage"]["frame_bindings_seen"] = 0
-    payload["coverage"]["lifetime_identity"] = lifetime_coverage(empty=True)
+    lifetime_identity = lifetime_coverage(empty=True)
+    lifetime_identity.update(
+        {
+            "proof_sha256": proof.sha256,
+            "allocation_sites_expected": len(proof.payload["allocation_sites"]),
+            "allocation_sites_hooked": len(proof.payload["allocation_sites"]),
+            "free_sites_expected": len(proof.payload["free_sites"]),
+            "free_sites_hooked": len(proof.payload["free_sites"]),
+        }
+    )
+    payload["coverage"]["lifetime_identity"] = lifetime_identity
+    pcode_instrumentation = payload["coverage"]["pcode_instrumentation"]
+    pcode_instrumentation.pop("allocatable_register_operands")
+    pcode_instrumentation.pop("fixed_physical_register_operands")
+    pcode_instrumentation.update(
+        {
+            "virtual_register_operands": 0,
+            "physical_register_operands": 0,
+            "non_allocator_register_operands": 0,
+        }
+    )
     payload.pop("capture_identity")
     payload.pop("capture_run_id")
     return payload
 
 
 def _trusted_table() -> dict[str, object]:
-    proof = trusted_proof()
+    proof = strict_trusted_proof()
     payload = dict(proof.payload)
     table = json.loads(
         (REPO / "tools/mwcc_retro/tables/gc_125n.json").read_text()
@@ -414,9 +458,15 @@ def _trusted_table() -> dict[str, object]:
         "compiler_executable_sha256": proof.compiler_executable_sha256,
         "proof_id": proof.proof_id,
         "proof_sha256": proof.sha256,
-        "operand_rewrite_site_ids": ["rewrite-register-operand-1"],
-        "operand_mutation_site_ids": ["rewrite-pcode-operands-1"],
-        "code_emission_site_ids": ["emit-pcode-1"],
+        "operand_rewrite_site_ids": [
+            row["site_id"] for row in payload["operand_rewrite_sites"]
+        ],
+        "operand_mutation_site_ids": [
+            row["site_id"] for row in payload["operand_mutation_sites"]
+        ],
+        "code_emission_site_ids": [
+            row["site_id"] for row in payload["code_emission_sites"]
+        ],
     }
     return table
 
@@ -848,3 +898,99 @@ def test_frame_events_from_map_probe_payload_names_unnamed_slots_by_area_and_off
 
     assert event["objects"][0]["name"] == "arguments_slot_4"
     assert event["objects"][0]["confidence"] == "observed-unnamed"
+
+
+def test_pcode_lineage_assembler_serializes_runtime_events_without_placeholders():
+    from tools.mwcc_retro.backend_trace_assembler import (
+        assemble_pcode_lineage_payload,
+    )
+
+    from tests.test_retro_backend_pcode_lineage import (
+        minimal_payload,
+        proof_payload,
+    )
+
+    expected = minimal_payload()
+    proof = proof_payload()
+    instruction = expected["pcode_instructions"][0]
+    initial = instruction["stage_snapshots"][0]
+    emission = instruction["stage_snapshots"][1]
+    snapshot_events = [
+        {"event": "block", "id": "B0", "order": 0},
+        {
+            "event": "pcode_instruction",
+            "pcode_id": instruction["pcode_id"],
+            "block_id": "B0",
+            "order": 0,
+            "runtime_address": instruction["runtime_address"],
+            "allocation_generation": instruction["allocation_generation"],
+            "lifecycle_sequence_at_capture": initial[
+                "lifecycle_sequence_at_capture"
+            ],
+            "opcode_id": initial["opcode_id"],
+            "arg_count": initial["arg_count"],
+            "operand_lineage_inventory": initial[
+                "operand_lineage_inventory"
+            ],
+        },
+    ]
+    runtime_events = [
+        {"event": "operand_rewrite", **row}
+        for row in expected["pcode_occurrences"]
+    ]
+    runtime_events.append(
+        {
+            "event": "pcode_mutation",
+            **expected["pcode_operand_lineage_events"][0],
+        }
+    )
+    runtime_events.append(
+        {
+            "event": "code_emission",
+            "pcode_event_sequence": instruction["emission_event_sequence"],
+            "instrumented_site_id": instruction["emission_site_id"],
+            "pcode_id": instruction["pcode_id"],
+            "runtime_address": instruction["emission_runtime_address"],
+            "allocation_generation": instruction[
+                "emission_allocation_generation"
+            ],
+            "lifecycle_sequence_at_capture": instruction[
+                "emission_lifecycle_sequence_at_capture"
+            ],
+            "emission_snapshot": emission,
+            "code_ranges": instruction["code_ranges"],
+        }
+    )
+    all_site_ids = {
+        row["site_id"]
+        for family in (
+            "allocation_sites",
+            "free_sites",
+            "operand_rewrite_sites",
+            "operand_mutation_sites",
+            "code_emission_sites",
+        )
+        for row in proof[family]
+    }
+    runtime = {
+        "status": "validated",
+        "errors": [],
+        "truncated": False,
+        "dropped_events": 0,
+        "event_cap": 64,
+        "expected_site_ids": sorted(all_site_ids),
+        "installed_site_ids": sorted(all_site_ids),
+        "lifecycle_events": expected["lifecycle_events"],
+        "pcode_events": runtime_events,
+    }
+
+    actual = assemble_pcode_lineage_payload(
+        snapshot_events=snapshot_events,
+        runtime_status=runtime,
+        proof=proof,
+        function="fn",
+        max_pcode_instructions=4,
+        max_pcode_operands_per_instruction=4,
+    )
+
+    assert actual == expected

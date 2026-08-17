@@ -500,15 +500,26 @@ def test_port_lock_reports_contention_and_keeps_blocking_acquisition(
     assert "[retro] acquired gdb port 9001 lock:" in stderr
 
 
-def test_main_holds_port_lock_across_complete_trace_lifecycle(monkeypatch, tmp_path):
+def _exercise_debugger_main(
+    monkeypatch,
+    tmp_path,
+    *,
+    inherited_instrumentation: Path,
+    explicit_instrumentation: Path | None,
+):
     import shutil
 
     from tools.mwcc_retro import mwcc_retro_debugger as debugger
 
     events = []
+    observed = {}
     trace_tmp = tmp_path / "mwcc_retro_iro.txt"
     trace_tmp.write_text("stale trace\n")
     out_dir = tmp_path / "out"
+    inherited_instrumentation.write_text("{}\n")
+    monkeypatch.setenv("RETRO_INSTRUMENTATION", str(inherited_instrumentation))
+    if explicit_instrumentation is not None:
+        explicit_instrumentation.write_text("{}\n")
 
     @contextmanager
     def fake_port_lock():
@@ -535,6 +546,7 @@ def test_main_holds_port_lock_across_complete_trace_lifecycle(monkeypatch, tmp_p
     def fake_run(_cmd, *, check, env):
         assert check is True
         assert env["RETRO_PORT"] == "9001"
+        observed["instrumentation"] = env["RETRO_INSTRUMENTATION"]
         events.append("gdb")
         trace_tmp.write_text("fresh trace\n")
 
@@ -551,24 +563,36 @@ def test_main_holds_port_lock_across_complete_trace_lifecycle(monkeypatch, tmp_p
     monkeypatch.setattr(debugger.subprocess, "run", fake_run)
     monkeypatch.setattr(debugger.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(shutil, "copy", fake_copy)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "mwcc_retro_debugger.py",
-            "-e",
-            "retrowin32",
-            "-a",
-            "mwcceppc.exe input.c",
-            "--table",
-            "table.json",
-            "--out",
-            str(out_dir),
-            "target_fn",
-        ],
-    )
+    argv = [
+        "mwcc_retro_debugger.py",
+        "-e",
+        "retrowin32",
+        "-a",
+        "mwcceppc.exe input.c",
+        "--table",
+        "table.json",
+        "--out",
+        str(out_dir),
+    ]
+    if explicit_instrumentation is not None:
+        argv.extend(("--instrumentation", str(explicit_instrumentation)))
+    argv.append("target_fn")
+    monkeypatch.setattr(sys, "argv", argv)
 
     debugger.main()
+
+    return events, observed["instrumentation"], out_dir
+
+
+def test_main_holds_port_lock_across_complete_trace_lifecycle(monkeypatch, tmp_path):
+    inherited = tmp_path / "inherited-instrumentation.json"
+    explicit = tmp_path / "explicit-instrumentation.json"
+    events, instrumentation, out_dir = _exercise_debugger_main(
+        monkeypatch,
+        tmp_path,
+        inherited_instrumentation=inherited,
+        explicit_instrumentation=explicit,
+    )
 
     assert events == [
         "lock enter",
@@ -578,7 +602,20 @@ def test_main_holds_port_lock_across_complete_trace_lifecycle(monkeypatch, tmp_p
         "trace copy",
         "lock exit",
     ]
+    assert instrumentation == str(explicit)
     assert (out_dir / "iro-trace.txt").read_text() == "fresh trace\n"
+
+
+def test_main_inherits_instrumentation_when_flag_is_absent(monkeypatch, tmp_path):
+    inherited = tmp_path / "inherited-instrumentation.json"
+    _events, instrumentation, _out_dir = _exercise_debugger_main(
+        monkeypatch,
+        tmp_path,
+        inherited_instrumentation=inherited,
+        explicit_instrumentation=None,
+    )
+
+    assert instrumentation == str(inherited)
 
 
 def test_retro_dump_uses_package_table_with_explicit_melee_root(monkeypatch, tmp_path):

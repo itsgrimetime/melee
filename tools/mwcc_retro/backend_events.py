@@ -23,6 +23,7 @@ _AREA_ORDER = {name: index for index, name in enumerate(("arguments", "locals", 
 _OBJECT_STAGE_ORDER = {"colorgraph_return": 0, "final_scheduler": 1}
 _PCODE_STAGE_ORDER = {"allocator_input": 0, "mutation_output": 1, "code_emission": 2}
 _CLASS_ORDER = {"gpr": 0, "fpr": 1}
+_ALLOCATION_STATE_ORDER = {"virtual": 0, "physical": 1, "non-allocator": 2}
 
 
 def load_events(path: str | Path) -> list[dict[str, Any]]:
@@ -90,16 +91,34 @@ def _canonicalize_proof(proof: object) -> None:
         "code_emission_sites",
     ):
         _sort_rows(proof.get(field), lambda row: (row["address"], row["site_id"]))
+    operand_rules = proof.get("operand_rules")
     _sort_rows(
-        proof.get("operand_rules"),
-        lambda row: (
-            row["opcode_id"],
-            row["operand_index"],
-            row["raw_arg_kind_id"],
-            row["register_flags_mask"],
-            row["register_flags_value"],
-        ),
+        operand_rules,
+        lambda row: (row["opcode_id"], row["descriptor_index"]),
     )
+    if isinstance(operand_rules, list):
+        for descriptor in operand_rules:
+            if not isinstance(descriptor, dict):
+                continue
+            _sort_rows(
+                descriptor.get("role_rules"),
+                lambda row: (
+                    row["register_flags_mask"],
+                    row["register_flags_value"],
+                    row["role"],
+                ),
+            )
+            _sort_rows(
+                descriptor.get("state_rules"),
+                lambda row: (
+                    _PCODE_STAGE_ORDER[row["capture_stage"]],
+                    row["register_flags_mask"],
+                    row["register_flags_value"],
+                    row["register_value_min"],
+                    row["register_value_max"],
+                    _ALLOCATION_STATE_ORDER[row["allocation_state"]],
+                ),
+            )
     _sort_rows(proof.get("opcode_table"), lambda row: row["opcode_id"])
 
 
@@ -370,16 +389,28 @@ class _Normalizer:
             self.passes_by_id[pass_id] = pcode_pass
             self.function["pcode"]["passes"].append(pcode_pass)
 
-        pcode_pass["instructions"].append(
-            {
-                "id": event["id"],
-                "block_id": event["block_id"],
-                "order": event["order"],
-                "opcode": event["opcode"],
-                "operands": event.get("operands", ""),
-                "normalized": event.get("normalized", ""),
-            }
-        )
+        instruction = {
+            "id": event["id"],
+            "block_id": event["block_id"],
+            "order": event["order"],
+            "opcode": event["opcode"],
+            "operands": event.get("operands", ""),
+            "normalized": event.get("normalized", ""),
+        }
+        for field in (
+            "opcode_id",
+            "arg_count",
+            "pcode_id",
+            "runtime_address",
+            "allocation_generation",
+            "lifecycle_sequence_at_capture",
+            "source_stage",
+            "operand_lineage_inventory",
+            "retail_pcode",
+        ):
+            if field in event:
+                instruction[field] = copy.deepcopy(event[field])
+        pcode_pass["instructions"].append(instruction)
 
     def _apply_regclass(self, event: dict[str, Any]) -> None:
         class_id = event["class_id"]

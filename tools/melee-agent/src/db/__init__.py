@@ -517,10 +517,14 @@ class StateDB:
         issue_id: int,
         agent_id: str | None = None,
         resolution_note: str | None = None,
+        *,
+        require_claimed_by: str | None = None,
     ) -> dict | None:
         """Mark a reported tool issue as resolved.
 
         Returns the updated issue, or None if the issue does not exist.
+        When ``require_claimed_by`` is provided, the open issue must still be
+        claimed by that exact owner in the same transaction as the update.
         """
         now = time.time()
 
@@ -529,21 +533,61 @@ class StateDB:
             old_value = self._decode_tool_issue_row(old_row)
             if old_value is None:
                 return None
+            if old_value["status"] != "open":
+                raise ValueError(f"cannot resolve resolved issue #{issue_id}")
 
-            conn.execute(
-                """
-                UPDATE tool_issues
-                SET status = 'resolved',
-                    claimed_by = NULL,
-                    claimed_at = NULL,
-                    updated_at = ?,
-                    resolved_at = ?,
-                    resolved_by_agent = ?,
-                    resolution_note = ?
-                WHERE id = ?
-                """,
-                (now, now, agent_id, resolution_note, issue_id),
-            )
+            current_owner = old_value.get("claimed_by")
+            if require_claimed_by is not None:
+                if current_owner is None:
+                    raise ValueError(
+                        f"issue #{issue_id} is not claimed; "
+                        f"required owner {require_claimed_by}"
+                    )
+                if current_owner != require_claimed_by:
+                    raise ValueError(
+                        f"issue #{issue_id} claimed by {current_owner}; "
+                        f"required owner {require_claimed_by}"
+                    )
+
+            if require_claimed_by is None:
+                cursor = conn.execute(
+                    """
+                    UPDATE tool_issues
+                    SET status = 'resolved',
+                        claimed_by = NULL,
+                        claimed_at = NULL,
+                        updated_at = ?,
+                        resolved_at = ?,
+                        resolved_by_agent = ?,
+                        resolution_note = ?
+                    WHERE id = ? AND status = 'open'
+                    """,
+                    (now, now, agent_id, resolution_note, issue_id),
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    UPDATE tool_issues
+                    SET status = 'resolved',
+                        claimed_by = NULL,
+                        claimed_at = NULL,
+                        updated_at = ?,
+                        resolved_at = ?,
+                        resolved_by_agent = ?,
+                        resolution_note = ?
+                    WHERE id = ? AND status = 'open' AND claimed_by = ?
+                    """,
+                    (
+                        now,
+                        now,
+                        agent_id,
+                        resolution_note,
+                        issue_id,
+                        require_claimed_by,
+                    ),
+                )
+            if cursor.rowcount != 1:
+                raise ValueError(f"issue #{issue_id} changed while resolving")
             new_row = conn.execute("SELECT * FROM tool_issues WHERE id = ?", (issue_id,)).fetchone()
             issue = self._decode_tool_issue_row(new_row)
 

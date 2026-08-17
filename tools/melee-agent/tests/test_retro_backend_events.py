@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import sys
 from pathlib import Path
 
@@ -159,6 +160,43 @@ def test_marker_only_events_do_not_normalize_to_complete_trace():
             source=SOURCE,
             tool_version="test",
         )
+
+
+def test_pcode_normalization_preserves_exact_raw_operand_inventory():
+    events = backend_events.load_events(FIXTURE)
+    event = next(row for row in events if row.get("event") == "pcode_instruction")
+    raw = bytes.fromhex("000222000000000000000000")
+    event.update(
+        {
+            "opcode_id": 63,
+            "arg_count": 1,
+            "runtime_address": 0x700000,
+            "source_stage": "allocator_input",
+            "operand_lineage_inventory": [
+                {
+                    "operand_index": 0,
+                    "raw_arg_kind_id": 0,
+                    "raw_register_flags": 2,
+                    "raw_register_value": 34,
+                    "raw_payload_hex": raw.hex(),
+                    "raw_payload_sha256": hashlib.sha256(raw).hexdigest(),
+                }
+            ],
+        }
+    )
+
+    trace = backend_events.normalize_events(
+        events, compiler=COMPILER, source=SOURCE, tool_version="test"
+    )
+    instruction = trace["functions"][0]["pcode"]["passes"][0]["instructions"][0]
+
+    assert instruction["opcode_id"] == 63
+    assert instruction["arg_count"] == 1
+    assert instruction["runtime_address"] == 0x700000
+    assert instruction["source_stage"] == "allocator_input"
+    assert instruction["operand_lineage_inventory"] == event[
+        "operand_lineage_inventory"
+    ]
 
 
 def test_allocator_event_before_regclass_is_rejected():
@@ -329,7 +367,64 @@ def test_v2_object_binding_collection_order_is_canonical() -> None:
             "operand_rewrite_sites": [],
             "operand_mutation_sites": [],
             "code_emission_sites": [],
-            "operand_rules": [],
+            "operand_rules": [
+                {
+                    "opcode_id": 63,
+                    "descriptor_index": 1,
+                    "descriptor_source": "format",
+                    "format_code": "b",
+                    "expansion": {"kind": "one", "count": 1},
+                    "raw_arg_kind_id": 0,
+                    "role": "use",
+                    "role_rules": [],
+                    "register_form": "gpr",
+                    "class_id": 0,
+                    "virtual_kind": "r",
+                    "state_rules": [
+                        {
+                            "capture_stage": "code_emission",
+                            "register_flags_mask": 0xFF,
+                            "register_flags_value": 2,
+                            "register_value_min": 0,
+                            "register_value_max": 31,
+                            "allocation_state": "physical",
+                        },
+                        {
+                            "capture_stage": "allocator_input",
+                            "register_flags_mask": 0xFF,
+                            "register_flags_value": 2,
+                            "register_value_min": 32,
+                            "register_value_max": 0xFFFF,
+                            "allocation_state": "virtual",
+                        },
+                    ],
+                },
+                {
+                    "opcode_id": 63,
+                    "descriptor_index": 0,
+                    "descriptor_source": "variadic-tail",
+                    "format_code": None,
+                    "expansion": {"kind": "remaining", "count": None},
+                    "raw_arg_kind_id": 0,
+                    "role": None,
+                    "role_rules": [
+                        {
+                            "register_flags_mask": 1,
+                            "register_flags_value": 1,
+                            "role": "use",
+                        },
+                        {
+                            "register_flags_mask": 1,
+                            "register_flags_value": 0,
+                            "role": "def",
+                        },
+                    ],
+                    "register_form": "gpr",
+                    "class_id": 0,
+                    "virtual_kind": "r",
+                    "state_rules": [],
+                },
+            ],
             "opcode_table": [],
         },
     }
@@ -342,6 +437,17 @@ def test_v2_object_binding_collection_order_is_canonical() -> None:
             "objects": list(reversed(payload["objects"])),
             "virtual_bindings": list(reversed(payload["virtual_bindings"])),
             "pcode_occurrences": list(reversed(payload["pcode_occurrences"])),
+            "lifetime_proof": {
+                **payload["lifetime_proof"],
+                "operand_rules": [
+                    {
+                        **row,
+                        "role_rules": list(reversed(row["role_rules"])),
+                        "state_rules": list(reversed(row["state_rules"])),
+                    }
+                    for row in reversed(payload["lifetime_proof"]["operand_rules"])
+                ],
+            },
         }
     )
 
@@ -352,3 +458,12 @@ def test_v2_object_binding_collection_order_is_canonical() -> None:
     assert forward["coverage"]["ig_classes"] == ["gpr", "fpr"]
     assert forward["coverage"]["frame_areas"] == ["arguments", "locals", "temps"]
     assert forward["coverage"]["errors"] == ["a", "z"]
+    descriptors = forward["lifetime_proof"]["operand_rules"]
+    assert [(row["opcode_id"], row["descriptor_index"]) for row in descriptors] == [
+        (63, 0),
+        (63, 1),
+    ]
+    assert [row["role"] for row in descriptors[0]["role_rules"]] == ["def", "use"]
+    assert [
+        row["capture_stage"] for row in descriptors[1]["state_rules"]
+    ] == ["allocator_input", "code_emission"]
