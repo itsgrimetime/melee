@@ -105417,11 +105417,17 @@ class _DirectCfgRecovery:
                 aliases.registers,
                 strict=True,
             ):
-                mapped = (
-                    ()
-                    if family in {"esp", "ebp"}
-                    else map_value(value)
-                )
+                if family in {"esp", "ebp"}:
+                    mapped = ()
+                elif not self._function_reads_incoming_register(
+                    callee_entry,
+                    family,
+                ):
+                    # The return mapper restores caller_base when this
+                    # parametric input remains unchanged or callee-saved.
+                    mapped = ()
+                else:
+                    mapped = map_value(value)
                 if mapped is False:
                     return None
                 registers.append(mapped)

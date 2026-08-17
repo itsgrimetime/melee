@@ -551,3 +551,23 @@ hostile, rather than choosing either JSON blob wholesale.
 - Task 8 is still open. The next semantic gate is a fresh complete call-slot
   replay, followed by roots `0x435620` and `0x435a8c`, broad/adversarial gates,
   immutable run1/run2 artifacts, and the parent promotion/merge/issue closure.
+
+### 2026-08-16 Task 8 unobserved-callee alias projection handoff
+
+- The authenticated call-slot replay after checkpoint `13bfea262d` expanded
+  exact prefix tabulation to 987 owners/627 contexts, then rejected owned call
+  `0x402d5c -> 0x4058c0`: 58 exact `ESI` aliases crossed an 8-byte-aligned
+  caller frame and exceeded the 64-coordinate callee map.  The callee's full
+  reachable body independently proves incoming `ESI` unobserved.
+- A strict four-case synthetic boundary now isolates that register mapping.
+  At unchanged production `d7f934a91`, both valid unobserved-input cases fail
+  only at call-slot closure while the observing-publication and genuinely-new
+  return-alias hostiles already reject.  The minimal repair projects only a
+  completely unobserved callee register input; return mapping, TOP, spills,
+  escapes, caps, and durable schemas are unchanged.
+- The exact matrix is 4 passed and the named adjacent matrix is 189 passed.
+  Hydrated retail still reports
+  `incoming-register-read=0x4058c0;family=esi;result=False` and retains the
+  exact `0x402c2b` alignment/call/body evidence.  Scoped static checks are
+  green.  Task 8 remains open pending a detached complete-module gate and a
+  fresh authoritative call-slot replay; both retail roots remain gated.

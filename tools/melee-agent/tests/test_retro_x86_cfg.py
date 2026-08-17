@@ -4031,6 +4031,124 @@ def prelive_argument_slot_alias_image(tmp_path, *, mutation):
     )
 
 
+def aligned_unobserved_callee_alias_image(tmp_path, *, mutation=None):
+    """Carry several exact aliases across alignment into one owned call."""
+    assert mutation in {None, "observed", "killed", "new-alias"}
+    base = 0x00401080
+    root = base + 0xC0
+    alias_callee = base + 0x100
+    callee = base + 0x120
+    global_slot = 0x00403000
+    exit_iat = 0x00402160
+    program = bytearray(b"\x90" * 0x180)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = base + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "81 ec 80 01 00 00")
+    case_branches = []
+    for selector in range(8):
+        cursor = emit(cursor, f"83 3d 00 30 40 00 {selector:02x}")
+        case_branches.append(cursor)
+        cursor = emit(cursor, "74 00")
+    cursor = emit(cursor, "8d b4 24 40 01 00 00")
+    join_branches = [cursor]
+    cursor = emit(cursor, "eb 00")
+    case_offsets = []
+    for selector in range(8):
+        case_offsets.append(cursor)
+        displacement = 0x20 + selector * 0x20
+        cursor = emit(
+            cursor,
+            "8d b4 24 "
+            + displacement.to_bytes(4, "little").hex(),
+        )
+        join_branches.append(cursor)
+        cursor = emit(cursor, "eb 00")
+    join_offset = cursor
+    for branch, target in zip(case_branches, case_offsets, strict=True):
+        displacement = target - (branch + 2)
+        assert -128 <= displacement <= 127
+        program[branch + 1] = displacement & 0xFF
+    for branch in join_branches:
+        displacement = join_offset - (branch + 2)
+        assert -128 <= displacement <= 127
+        program[branch + 1] = displacement & 0xFF
+
+    argument_push = base + cursor
+    cursor = emit(cursor, "56 31 f6")
+    root_call = base + cursor
+    cursor = emit_call(cursor, root)
+    cursor = emit(cursor, "83 c4 04 81 c4 80 01 00 00")
+    emit(cursor, "6a 00 ff 15 60 21 40 00 c3")
+
+    cursor = emit(
+        0xC0,
+        (
+            "55 89 e5 56 83 ec 34 83 e4 f8 8b 75 08 "
+            "c7 45 08 00 00 00 00 85 f6"
+        ),
+    )
+    nested_call = base + cursor
+    cursor = emit_call(cursor, alias_callee)
+    if mutation == "new-alias":
+        cursor = emit(cursor, "89 35 00 30 40 00")
+    cursor = emit(cursor, "31 f6 6a 00")
+    protected_call = base + cursor
+    cursor = emit_call(cursor, callee)
+    cursor = emit(cursor, "c7 04 24 00 00 00 00 83 c4 04")
+    emit(cursor, "8d 65 fc 5e 5d c3")
+
+    cursor = 0x100
+    if mutation == "observed":
+        cursor = emit(cursor, "8b 0e 89 0d 00 30 40 00")
+    elif mutation == "killed":
+        cursor = emit(cursor, "31 f6")
+    elif mutation == "new-alias":
+        cursor = emit(cursor, "8d 34 24")
+    emit(cursor, "31 c0 c3")
+    store_address = callee
+    cursor = emit(0x120, "89 44 24 04 66 83 7c 24 04 00")
+    emit(cursor, "31 c0 c3")
+
+    image = replace(
+        load_large_cfg_program(tmp_path, program),
+        entrypoint=base,
+        exports=(),
+        imports=(
+            pe_mod.Import(
+                dll="KERNEL32.dll",
+                name="ExitProcess",
+                ordinal=None,
+                hint=0,
+                iat_va=exit_iat,
+            ),
+        ),
+    )
+    return (
+        image,
+        argument_push,
+        root_call,
+        root,
+        alias_callee,
+        nested_call,
+        callee,
+        protected_call,
+        store_address,
+        global_slot,
+    )
+
+
 def duplicate_private_stack_return_effect_image(tmp_path, *, mutation=None):
     """Reach one clean leaf under several distinct stack-demand coordinates."""
     assert mutation in {None, "caller-base-sensitive-return"}
@@ -51019,6 +51137,119 @@ def test_private_stack_residue_alias_allows_disjoint_unobserved_call_value(
         store_address,
         callee,
     )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("observed", False),
+        ("killed", True),
+        ("new-alias", False),
+    ),
+    ids=(
+        "unobserved-preserved",
+        "observed-publication",
+        "unobserved-kill",
+        "new-return-alias",
+    ),
+)
+def test_private_stack_alias_projects_only_unobserved_aligned_callee_input(
+    tmp_path,
+    mutation,
+    expected,
+):
+    (
+        image,
+        argument_push,
+        root_call,
+        root,
+        alias_callee,
+        nested_call,
+        callee,
+        protected_call,
+        store_address,
+        global_slot,
+    ) = aligned_unobserved_callee_alias_image(tmp_path, mutation=mutation)
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+
+    assert recovery.call_targets_by_source[root_call] == {root}
+    assert recovery.call_targets_by_source[nested_call] == {alias_callee}
+    assert recovery.call_targets_by_source[protected_call] == {callee}
+    wrapper = recovery._registrar_function_entry(root_call)
+    assert wrapper is not None
+    wrapper_aliases = recovery._private_stack_alias_states_for_residue_query(
+        wrapper
+    )
+    assert wrapper_aliases is not None
+    esi_index = x86_cfg_module._REGISTER_FAMILIES.index("esi")
+    incoming_esi = wrapper_aliases[argument_push].registers[esi_index]
+    assert incoming_esi is not None
+    assert len(incoming_esi) == 9
+    assert {basis for basis, _offset in incoming_esi} == {0}
+    assert all(
+        incoming_esi[index + 1][1] - incoming_esi[index][1] >= 8
+        for index in range(len(incoming_esi) - 1)
+    )
+    root_coordinates = recovery._function_private_stack_coordinate_states(root)
+    assert root_coordinates is not None
+    stack_state = root_coordinates[0][protected_call]
+    assert stack_state[0][0] != 0
+    alignment = recovery._owned_decoded(stack_state[0][0])
+    assert alignment.mnemonic == "and"
+    assert alignment.op_str == "esp, 0xfffffff8"
+    assert not recovery._function_reads_incoming_register(root, "esi")
+    pushed_argument = recovery._pushed_call_argument(root_call, 0)
+    assert pushed_argument is not None
+    assert pushed_argument[0].address == argument_push
+    assert pushed_argument[1].type == capstone.x86.X86_OP_REG
+    assert pushed_argument[1].reg == capstone.x86.X86_REG_ESI
+    assert recovery._function_reads_incoming_register(
+        alias_callee,
+        "esi",
+    ) is (mutation == "observed")
+    if mutation == "new-alias":
+        callee_aliases = (
+            recovery._private_stack_alias_states_for_residue_query(
+                alias_callee
+            )
+        )
+        assert callee_aliases is not None
+        returned_aliases = tuple(
+            aliases
+            for address, aliases in callee_aliases.items()
+            if recovery._owned_decoded(address).group(capstone.CS_GRP_RET)
+        )
+        assert len(returned_aliases) == 1
+        assert returned_aliases[0].registers[esi_index] == ((0, 0),)
+        assert returned_aliases[0].registers[esi_index] != incoming_esi
+    if mutation in {"observed", "new-alias"}:
+        assert any(
+            global_slot
+            in {
+                operand.mem.disp & 0xFFFF_FFFF
+                for operand in recovery._owned_decoded(address).operands
+                if operand.type == capstone.x86.X86_OP_MEM
+            }
+            for owner in (
+                (alias_callee,) if mutation == "observed" else (root,)
+            )
+            for address in recovery._function_instruction_addresses(owner)
+        )
+    assert recovery._closed_call_argument_slot_is_consumed(
+        protected_call,
+        0,
+        root,
+    ) is expected
+    assert recovery._private_stack_store_is_scalar_quarantined(
+        store_address,
+        callee,
+    ) is expected
 
 
 def test_private_stack_residue_alias_follows_nonleaf_prefix_returns(
