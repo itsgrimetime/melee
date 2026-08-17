@@ -581,6 +581,12 @@ hostile, rather than choosing either JSON blob wholesale.
   191-node adjacent gate are green, and independent re-review approved the
   repair with no remaining findings.  Commit `be47ea242` is pushed, and the
   fresh authenticated complete-module run passed all 3,835 tests in 283.37
-  seconds with maximum RSS 185,188,352 bytes.  The authoritative call-slot
-  replay is now running restart-safe; both retail roots remain gated on its
-  exact positive result.
+  seconds with maximum RSS 185,188,352 bytes. The authoritative call-slot
+  replay then completed restart-safe after 15,507.63 seconds. It crossed the
+  repaired `0x402d5c -> 0x4058c0` edge and expanded prefix tabulation from 987
+  to 1,282 owners and from 627 to 881 processed contexts, without an exception
+  or configured-limit failure. The result remains false before residue
+  construction (`state-count=0;graph-count=0`) at the next exact return-context
+  boundary, owned variadic-wrapper call `0x408cbc -> 0x403c50` returning at
+  `0x408cc1` while tabulating `0x402480:0x402577`. Both retail roots remain
+  gated on a strict reduction/repair and an exact positive call-slot result.
