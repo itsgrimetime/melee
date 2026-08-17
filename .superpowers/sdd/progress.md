@@ -579,5 +579,8 @@ hostile, rather than choosing either JSON blob wholesale.
   call target, while the preserved, killed, observed, and genuinely-new-alias
   controls remain non-vacuous.  The six-case focused gate and expanded
   191-node adjacent gate are green, and independent re-review approved the
-  repair with no remaining findings.  The authoritative call-slot replay and
-  both retail roots remain gated on a fresh complete-module run.
+  repair with no remaining findings.  Commit `be47ea242` is pushed, and the
+  fresh authenticated complete-module run passed all 3,835 tests in 283.37
+  seconds with maximum RSS 185,188,352 bytes.  The authoritative call-slot
+  replay is now running restart-safe; both retail roots remain gated on its
+  exact positive result.
