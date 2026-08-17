@@ -590,3 +590,27 @@ hostile, rather than choosing either JSON blob wholesale.
   boundary, owned variadic-wrapper call `0x408cbc -> 0x403c50` returning at
   `0x408cc1` while tabulating `0x402480:0x402577`. Both retail roots remain
   gated on a strict reduction/repair and an exact positive call-slot result.
+
+### 2026-08-17 Task 8 registered-string scaled-index handoff
+
+- The return-context rejection at owned call `0x408cbc -> 0x403c50` was the
+  existing bounded scalar formatter returning `(True, None)` because the `%s`
+  record-table proof conflated the table-load index temporary with the
+  postincrement counter family. Retail uses `EBP = EDX * 3`, then indexes the
+  12-byte table through `EBP`.
+- A strict ten-case fixture matrix preserves the original same-register
+  control, adds a distinct-register positive, and changes only the LEA SIB
+  byte `0x52 -> 0x5a` for a mixed-source hostile. The unchanged production RED
+  was exactly 1 failed/9 passed; the minimal family separation is now 10/10
+  green, with 30 adjacent cases green. Independent review found no issue.
+- The current retail mini-query proves registered string lengths
+  `(13, 14, 15, 16, 19, 20)` and scalar output interval `(53, 80)` with no
+  limit. Commit `95c5bc1d4` contains only the production/test repair. The
+  restart-safe full x86 module is authenticated green at 3,837 passed in
+  289.54 seconds (290.41 seconds wall), maximum RSS 184,614,912 bytes. Its
+  output/stderr SHA-256 values are
+  `9aecdc459ef74fffd07057aff87762d747c420850ec9e0b2e9c7f95715ec2f99`
+  and `06990e7d17b5ba9cb8f58175cbacb7c67bfa16535711ec73cd4fe96442af276e`;
+  wrapper SHA-256 is
+  `b202280263a5f6a858f7565232418b1710291c31e9a1465d768194e6660f60ce`.
+  Both roots remain gated on the next authoritative call-slot replay.

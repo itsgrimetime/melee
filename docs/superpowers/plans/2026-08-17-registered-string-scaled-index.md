@@ -31,7 +31,7 @@
 - Consumes: `_DirectCfgRecovery._registered_string_record_length_domain_before(address, operand, function_entry) -> tuple[int, ...] | None` and the existing `registered_string_record_table_image` fixture.
 - Produces: the same method signature and return type, now accepting a distinct full-width scaled-index temporary only when both LEA inputs derive from the same bounded counter family.
 
-- [ ] **Step 1: Write the strict fixture RED**
+- [x] **Step 1: Write the strict fixture RED**
 
   In `registered_string_record_table_image`, add mutations
   `distinct-reader-index` and `mixed-reader-index-source`. Preserve the
@@ -54,7 +54,7 @@
   Retain the default expected length tuple `(3, 5)` and every current hostile
   expectation.
 
-- [ ] **Step 2: Run the focused RED and authenticate its boundary**
+- [x] **Step 2: Run the focused RED and authenticate its boundary**
 
   Run:
 
@@ -70,7 +70,7 @@
   hostile differ only in the LEA SIB byte (`0x52` versus `0x5a`) and both
   retain non-null recovery/table prerequisites.
 
-- [ ] **Step 3: Implement the minimal family separation**
+- [x] **Step 3: Implement the minimal family separation**
 
   In `_registered_string_record_length_domain_before`:
 
@@ -97,7 +97,7 @@
   `_private_stack_postincrement_counter_index_values`. Do not alter later table
   or string checks.
 
-- [ ] **Step 4: Run focused and adjacent GREEN gates**
+- [x] **Step 4: Run focused and adjacent GREEN gates**
 
   Run:
 
@@ -113,7 +113,7 @@
   `(13, 14, 15, 16, 19, 20)` and scalar output interval `(53, 80)` at the
   current `0x408cbc -> 0x403c50` boundary, with no configured-limit row.
 
-- [ ] **Step 5: Run scoped static gates and review**
+- [x] **Step 5: Run scoped static gates and review**
 
   Run:
 
@@ -128,7 +128,7 @@
   new Ruff findings, and no added retail address/hash/name/byte allowlist.
   Obtain independent review of the exact diff and focused/retail evidence.
 
-- [ ] **Step 6: Commit the reviewed repair and authenticate the module**
+- [x] **Step 6: Commit the reviewed repair and authenticate the module**
 
   Commit only the production/test repair with:
 
