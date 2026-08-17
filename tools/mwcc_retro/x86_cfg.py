@@ -82662,6 +82662,17 @@ class _DirectCfgRecovery:
                 return None
             return retained
 
+        def current_stack_pointer(
+            fact: _PrivateStackAliasFact,
+            local: _PrivateStackAliasCoordinate,
+        ) -> _PrivateStackAliasCoordinate | None:
+            value = fact.registers[_REGISTER_FAMILIES.index("esp")]
+            if value == ():
+                return local
+            if value is None or len(value) != 1:
+                return None
+            return value[0]
+
         if not (
             engine in self.function_addresses
             and writer in self.function_addresses
@@ -82704,21 +82715,38 @@ class _DirectCfgRecovery:
                 return None
             engine_sp = engine_coordinates[0][callback_call][0]
             writer_sp = writer_coordinates[0][writer][0]
+            current_engine_sp = current_stack_pointer(
+                engine_aliases,
+                engine_sp,
+            )
+            current_writer_sp = current_stack_pointer(
+                writer_initial_aliases,
+                writer_sp,
+            )
+            if (
+                current_engine_sp is None
+                or current_writer_sp is None
+                or selected_protocol.buffer_base[0] != engine_sp[0]
+            ):
+                return None
             engine_source = canonical_aliases(
                 dict(engine_aliases.private_spills).get(
-                    (engine_sp[0], engine_sp[1] + 4),
+                    (current_engine_sp[0], current_engine_sp[1] + 4),
                     (),
                 )
             )
             writer_source = canonical_aliases(
                 dict(writer_initial_aliases.private_spills).get(
-                    (writer_sp[0], writer_sp[1] + 8),
+                    (current_writer_sp[0], current_writer_sp[1] + 8),
                     (),
                 )
             )
             source_window_base = (
-                selected_protocol.buffer_base[0],
-                selected_protocol.buffer_base[1] - 1,
+                current_engine_sp[0],
+                current_engine_sp[1]
+                + selected_protocol.buffer_base[1]
+                - 1
+                - engine_sp[1],
             )
             source_window_extent = selected_protocol.cursor_extent + 1
             if (
