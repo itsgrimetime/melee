@@ -96,9 +96,12 @@ missing ownership, unresolved flow, or analysis limits produce no authority.
 
 ## Propagation and Consumption
 
-The new authority participates in alias-context identity and is carried in
-subscriber effects so a joined context cannot borrow it from a different
-invocation.  It is valid only for its `writer` owner.
+The new authority participates in alias-context identity so a joined context
+cannot borrow it from a different invocation.  It is deliberately not stored
+in subscriber effects: those retain the caller's engine-level callback-target
+authority, so return mapping restores the caller context while the writer-copy
+authority dies with the writer invocation.  It is valid only for its `writer`
+owner.
 
 At the writer's unique exact memcpy call, `memcpy_alias_continuation` may use
 the authority only when:
