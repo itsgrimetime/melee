@@ -157,6 +157,17 @@ class _FormatCallbackAuthority:
 
 
 @dataclass(frozen=True, slots=True)
+class _FormatWriterCopyAuthority:
+    """One formatter invocation's source-bound bounded writer copy."""
+
+    engine: int
+    callback_call: int
+    writer: int
+    source_aliases: tuple[_PrivateStackAliasCoordinate, ...]
+    length_upper: int
+
+
+@dataclass(frozen=True, slots=True)
 class _PrivateStackAliasSubscriberEffect:
     """One canonical caller continuation input for owned return mapping."""
 
@@ -82567,6 +82578,218 @@ class _DirectCfgRecovery:
             )
         )
 
+    def _unique_audited_format_cursor_protocol_for_writer(
+        self,
+        engine: int,
+        writer: int,
+    ) -> _AuditedFormatCursorProtocol | None:
+        """Return the sole cursor protocol that can feed this writer."""
+        if not (
+            engine in self.function_addresses
+            and writer in self.function_addresses
+            and self._audited_format_writer_callback(writer)
+            and self._incoming_call_domain_is_closed(engine)
+        ):
+            return None
+        candidates = set()
+        try:
+            for source in sorted(
+                self.direct_call_sources_by_target.get(engine, ())
+            ):
+                caller = self._registrar_function_entry(source)
+                if caller is None:
+                    return None
+                callback_targets = (
+                    self._finite_format_callback_targets_for_engine_call(
+                        source,
+                        caller,
+                        engine,
+                    )
+                )
+                stream_targets = (
+                    self._finite_synchronous_stream_callback_targets_for_call_argument(
+                        source,
+                        caller,
+                        1,
+                    )
+                )
+                if callback_targets is None:
+                    return None
+                if stream_targets is None:
+                    continue
+                for wrapper in callback_targets:
+                    if wrapper == writer:
+                        continue
+                    protocol = self._audited_format_cursor_protocol(
+                        engine,
+                        wrapper,
+                        frozenset(stream_targets),
+                    )
+                    if protocol is not None:
+                        candidates.add(protocol)
+        except (AnalysisLimitError, CfgRecoveryError):
+            return None
+        return next(iter(candidates)) if len(candidates) == 1 else None
+
+    def _audited_format_writer_copy_authority(
+        self,
+        engine: int,
+        callback_call: int,
+        writer: int,
+        engine_aliases: _PrivateStackAliasFact,
+        writer_initial_aliases: _PrivateStackAliasFact,
+        callback_authority: _FormatCallbackAuthority | None,
+        *,
+        protocol: _AuditedFormatCursorProtocol | None = None,
+        source_count_proven: bool = False,
+    ) -> _FormatWriterCopyAuthority | None:
+        """Bind one exact engine callback invocation to one writer copy."""
+
+        def canonical_spills(fact: _PrivateStackAliasFact) -> bool:
+            coordinates = tuple(row[0] for row in fact.private_spills)
+            return bool(
+                len(fact.registers) == len(_REGISTER_FAMILIES)
+                and coordinates == tuple(sorted(set(coordinates)))
+            )
+
+        def canonical_aliases(
+            value: _PrivateStackAliasValue,
+        ) -> tuple[_PrivateStackAliasCoordinate, ...] | None:
+            if value is None or not value:
+                return None
+            retained = tuple(sorted(set(value)))
+            if value != retained or len(retained) > 64:
+                return None
+            return retained
+
+        if not (
+            engine in self.function_addresses
+            and writer in self.function_addresses
+            and self._registrar_function_entry(callback_call) == engine
+            and self._owned_decoded(callback_call).group(CS_GRP_CALL)
+            and writer in self.call_targets_by_source.get(callback_call, ())
+            and self._audited_format_writer_callback(writer)
+            and callback_authority is not None
+            and callback_authority.engine == engine
+            and callback_authority.callback_targets
+            == tuple(sorted(set(callback_authority.callback_targets)))
+            and writer in callback_authority.callback_targets
+            and canonical_spills(engine_aliases)
+            and canonical_spills(writer_initial_aliases)
+        ):
+            return None
+        try:
+            selected_protocol = (
+                protocol
+                if protocol is not None
+                else self._unique_audited_format_cursor_protocol_for_writer(
+                    engine,
+                    writer,
+                )
+            )
+            engine_coordinates = (
+                self._function_private_stack_coordinate_states(engine)
+            )
+            writer_coordinates = (
+                self._function_private_stack_coordinate_states(writer)
+            )
+            if (
+                selected_protocol is None
+                or selected_protocol.engine != engine
+                or engine_coordinates is None
+                or writer_coordinates is None
+                or callback_call not in engine_coordinates[0]
+                or writer not in writer_coordinates[0]
+            ):
+                return None
+            engine_sp = engine_coordinates[0][callback_call][0]
+            writer_sp = writer_coordinates[0][writer][0]
+            engine_source = canonical_aliases(
+                dict(engine_aliases.private_spills).get(
+                    (engine_sp[0], engine_sp[1] + 4),
+                    (),
+                )
+            )
+            writer_source = canonical_aliases(
+                dict(writer_initial_aliases.private_spills).get(
+                    (writer_sp[0], writer_sp[1] + 8),
+                    (),
+                )
+            )
+            source_window_base = (
+                selected_protocol.buffer_base[0],
+                selected_protocol.buffer_base[1] - 1,
+            )
+            source_window_extent = selected_protocol.cursor_extent + 1
+            if (
+                engine_source is None
+                or writer_source is None
+                or any(
+                    basis != source_window_base[0]
+                    or not 0
+                    <= offset - source_window_base[1]
+                    < source_window_extent
+                    for basis, offset in engine_source
+                )
+                or not source_count_proven
+                and not self._audited_format_buffer_end_count(
+                    callback_call,
+                    engine,
+                    selected_protocol,
+                    engine_source,
+                )
+            ):
+                return None
+            length_upper = selected_protocol.cursor_extent + 1
+            if not 0 < length_upper <= 0xFFFF_FFFF:
+                return None
+        except (AnalysisLimitError, CfgRecoveryError, KeyError, ValueError):
+            return None
+        return _FormatWriterCopyAuthority(
+            engine,
+            callback_call,
+            writer,
+            writer_source,
+            length_upper,
+        )
+
+    def _format_writer_copy_length_upper_for_memcpy(
+        self,
+        caller_entry: int,
+        call_source: int,
+        target: int,
+        source_aliases: tuple[_PrivateStackAliasCoordinate, ...],
+        authority: _FormatWriterCopyAuthority | None,
+    ) -> int | None:
+        """Return the source-bound upper copy length for one writer call."""
+        if authority is None:
+            return None
+        canonical_sources = tuple(sorted(set(source_aliases)))
+        if not (
+            0 <= authority.engine <= 0xFFFF_FFFF
+            and 0 <= authority.callback_call <= 0xFFFF_FFFF
+            and authority.writer == caller_entry
+            and authority.source_aliases == canonical_sources
+            and source_aliases == canonical_sources
+            and bool(source_aliases)
+            and len(source_aliases) <= 64
+            and 0 < authority.length_upper <= 0xFFFF_FFFF
+            and self._audited_format_writer_callback(caller_entry)
+        ):
+            return None
+        calls = self._function_direct_calls(caller_entry)
+        if len(calls) != 1:
+            return None
+        call = calls[0]
+        if not (
+            call.address == call_source
+            and call.target == target
+            and self.direct_call_targets_by_source.get(call_source) == target
+            and self.call_targets_by_source.get(call_source) == {target}
+        ):
+            return None
+        return authority.length_upper
+
     def _audited_vsnprintf_function(self, function_entry: int) -> bool:
         """Recognize the bounded runtime engine wrapper and terminator."""
         following_entry = self._following_function_entry(function_entry)
@@ -104574,6 +104797,14 @@ class _DirectCfgRecovery:
             tuple[int, int, int],
             _FormatCallbackAuthority | None,
         ] = {}
+        format_writer_protocol_cache: dict[
+            tuple[int, int],
+            _AuditedFormatCursorProtocol | None,
+        ] = {}
+        format_writer_count_cache: dict[
+            tuple[int, int, _AuditedFormatCursorProtocol],
+            bool,
+        ] = {}
         exact_memcpy_alias_body_cache: dict[int, bool] = {}
         memcpy_length_upper_cache: dict[tuple[int, int], int | None] = {}
         scalar_format_candidate_cache: dict[int, bool] = {}
@@ -104646,6 +104877,60 @@ class _DirectCfgRecovery:
                     else _FormatCallbackAuthority(target, targets)
                 )
             return format_callback_authority_cache[key]
+
+        def format_writer_copy_authority_for_target(
+            caller_entry: int,
+            call_source: int,
+            target: int,
+            caller_aliases: _PrivateStackAliasFact,
+            target_initial_aliases: _PrivateStackAliasFact,
+            current: _FormatCallbackAuthority | None,
+        ) -> _FormatWriterCopyAuthority | None:
+            """Issue one source-bound writer authority at an engine edge."""
+            if not (
+                current is not None
+                and current.engine == caller_entry
+                and target in current.callback_targets
+                and self._direct_target(self._owned_decoded(call_source))
+                is None
+            ):
+                return None
+            key = caller_entry, target
+            if key not in format_writer_protocol_cache:
+                format_writer_protocol_cache[key] = (
+                    self._unique_audited_format_cursor_protocol_for_writer(
+                        caller_entry,
+                        target,
+                    )
+                )
+            protocol = format_writer_protocol_cache[key]
+            if protocol is None:
+                return None
+            count_key = caller_entry, call_source, protocol
+            if count_key not in format_writer_count_cache:
+                try:
+                    format_writer_count_cache[count_key] = (
+                        self._audited_format_buffer_end_count(
+                            call_source,
+                            caller_entry,
+                            protocol,
+                            None,
+                        )
+                    )
+                except (AnalysisLimitError, CfgRecoveryError):
+                    format_writer_count_cache[count_key] = False
+            if not format_writer_count_cache[count_key]:
+                return None
+            return self._audited_format_writer_copy_authority(
+                caller_entry,
+                call_source,
+                target,
+                caller_aliases,
+                target_initial_aliases,
+                current,
+                protocol=protocol,
+                source_count_proven=True,
+            )
 
         def exact_owned_callees(owner_entry: int) -> frozenset[int]:
             cached = exact_owned_callees_cache.get(owner_entry)
@@ -105852,6 +106137,7 @@ class _DirectCfgRecovery:
             caller_base: _PrivateStackAliasFact,
             escape_demand: tuple[_PrivateStackAliasCoordinate, ...],
             format_envelope: _FormatBufferEnvelope | None,
+            format_writer_copy_authority: _FormatWriterCopyAuthority | None,
         ) -> tuple[bool, _PrivateStackAliasFact | None]:
             """Apply the exact alias effect of one audited memcpy body."""
             if target not in exact_memcpy_alias_body_cache:
@@ -105953,6 +106239,14 @@ class _DirectCfgRecovery:
                     format_envelope,
                     source,
                 )
+            if length is None and source:
+                length = self._format_writer_copy_length_upper_for_memcpy(
+                    caller_entry,
+                    call_source,
+                    target,
+                    source,
+                    format_writer_copy_authority,
+                )
             if length is None and (source or destination):
                 # An unbounded count is harmless to this capability proof
                 # only when both endpoints are already proven non-stack.
@@ -106005,6 +106299,65 @@ class _DirectCfgRecovery:
                     ),
                     escape_demand,
                 ),
+            )
+
+        def format_writer_copy_residue_is_disjoint(
+            caller_entry: int,
+            call_source: int,
+            target: int,
+            aliases: _PrivateStackAliasFact,
+            fact: _PrivateStackResidueFact,
+            authority: _FormatWriterCopyAuthority | None,
+        ) -> bool:
+            """Prove one certified writer copy cannot read live residue."""
+            if authority is None:
+                return False
+            coordinates = self._function_private_stack_coordinate_states(
+                caller_entry
+            )
+            call_state = (
+                None
+                if coordinates is None
+                else coordinates[0].get(call_source)
+            )
+            if call_state is None:
+                return False
+            sp_basis, sp_offset = call_state[0]
+            source = dict(aliases.private_spills).get(
+                (sp_basis, sp_offset + 4),
+                (),
+            )
+            if source is None or not source:
+                return False
+            length = self._format_writer_copy_length_upper_for_memcpy(
+                caller_entry,
+                call_source,
+                target,
+                source,
+                authority,
+            )
+            if length is None or length <= 0:
+                return False
+            relative_sources = []
+            for source_basis, source_offset in source:
+                if source_basis != sp_basis:
+                    return False
+                relative_sources.append(source_offset - sp_offset)
+            if fact.tail_upper is not None and any(
+                source_offset <= fact.tail_upper
+                for source_offset in relative_sources
+            ):
+                return False
+            return not any(
+                live_mask & (1 << byte_index)
+                and any(
+                    source_offset
+                    <= row_offset + byte_index
+                    < source_offset + length
+                    for source_offset in relative_sources
+                )
+                for row_offset, live_mask, _correlations in fact.rows
+                for byte_index in range(4)
             )
 
         def counted_c_string_alias_continuation(
@@ -107105,6 +107458,7 @@ class _DirectCfgRecovery:
                     _FormatBufferEnvelope | None,
                     _SynchronousStreamAuthority | None,
                     _FormatCallbackAuthority | None,
+                    _FormatWriterCopyAuthority | None,
                 ],
                 int,
             ] = {}
@@ -107133,6 +107487,10 @@ class _DirectCfgRecovery:
                 int,
                 _FormatCallbackAuthority | None,
             ] = {}
+            alias_context_format_writer_copy_authorities: dict[
+                int,
+                _FormatWriterCopyAuthority | None,
+            ] = {}
             alias_context_call_bases: dict[
                 int,
                 dict[int, _PrivateStackAliasFact],
@@ -107148,6 +107506,8 @@ class _DirectCfgRecovery:
                 format_envelope: _FormatBufferEnvelope | None = None,
                 stream_authority: _SynchronousStreamAuthority | None = None,
                 format_callback_authority: _FormatCallbackAuthority | None = None,
+                format_writer_copy_authority: _FormatWriterCopyAuthority
+                | None = None,
             ) -> int | None:
                 if not escape_demand:
                     return None
@@ -107173,6 +107533,34 @@ class _DirectCfgRecovery:
                         target not in self.function_addresses
                         for target in format_callback_authority.callback_targets
                     )
+                ):
+                    return None
+                if format_writer_copy_authority is not None and (
+                    format_writer_copy_authority.writer != owner_entry
+                    or format_writer_copy_authority.engine
+                    not in self.function_addresses
+                    or self._registrar_function_entry(
+                        format_writer_copy_authority.callback_call
+                    )
+                    != format_writer_copy_authority.engine
+                    or owner_entry
+                    not in self.call_targets_by_source.get(
+                        format_writer_copy_authority.callback_call,
+                        (),
+                    )
+                    or not format_writer_copy_authority.source_aliases
+                    or format_writer_copy_authority.source_aliases
+                    != tuple(
+                        sorted(
+                            set(
+                                format_writer_copy_authority.source_aliases
+                            )
+                        )
+                    )
+                    or len(format_writer_copy_authority.source_aliases) > 64
+                    or not 0
+                    < format_writer_copy_authority.length_upper
+                    <= 0xFFFF_FFFF
                 ):
                     return None
                 if initial_alias is not None:
@@ -107238,6 +107626,7 @@ class _DirectCfgRecovery:
                     format_envelope,
                     stream_authority,
                     format_callback_authority,
+                    format_writer_copy_authority,
                 )
                 cached = alias_context_keys.get(key)
                 if cached is not None and initial_alias is None:
@@ -107316,6 +107705,9 @@ class _DirectCfgRecovery:
                 alias_context_format_callback_authorities[context_id] = (
                     format_callback_authority
                 )
+                alias_context_format_writer_copy_authorities[context_id] = (
+                    format_writer_copy_authority
+                )
                 alias_context_call_bases[context_id] = call_bases
                 alias_context_versions[context_id] = (
                     alias_context_versions.get(context_id, 0) + 1
@@ -107330,6 +107722,8 @@ class _DirectCfgRecovery:
                 owner_entry: int,
                 context_id: int,
                 aliases: _PrivateStackAliasFact,
+                format_writer_copy_authority: _FormatWriterCopyAuthority
+                | None,
             ) -> bool:
                 initial_alias = alias_context_initials.get(context_id)
                 if initial_alias is None:
@@ -107352,9 +107746,31 @@ class _DirectCfgRecovery:
                         or survivor == 0
                     ):
                         return False
-                return not any(
-                    value is None or bool(value)
-                    for _coordinate, value in aliases.private_spills
+                retained_spills = tuple(
+                    row
+                    for row in aliases.private_spills
+                    if row[1] is None or bool(row[1])
+                )
+                if not retained_spills:
+                    return True
+                if format_writer_copy_authority is None:
+                    return False
+                coordinates = self._function_private_stack_coordinate_states(
+                    owner_entry
+                )
+                entry_state = (
+                    None
+                    if coordinates is None
+                    else coordinates[0].get(owner_entry)
+                )
+                if entry_state is None:
+                    return False
+                sp_basis, sp_offset = entry_state[0]
+                return retained_spills == (
+                    (
+                        (sp_basis, sp_offset + 8),
+                        format_writer_copy_authority.source_aliases,
+                    ),
                 )
 
             def exact_shapes(
@@ -107694,6 +108110,7 @@ class _DirectCfgRecovery:
                             _FormatBufferEnvelope | None,
                             _SynchronousStreamAuthority | None,
                             _FormatCallbackAuthority | None,
+                            _FormatWriterCopyAuthority | None,
                         ],
                         _PrivateStackAliasFact,
                     ] = {}
@@ -107743,6 +108160,11 @@ class _DirectCfgRecovery:
                             )
                             caller_stream_authority = (
                                 alias_context_stream_authorities.get(context_id)
+                            )
+                            caller_format_callback_authority = (
+                                alias_context_format_callback_authorities.get(
+                                    context_id
+                                )
                             )
                             target_format_callback_authority = (
                                 format_callback_authority_for_target(
@@ -107808,10 +108230,23 @@ class _DirectCfgRecovery:
                             if mapped is None:
                                 exact_incoming_alias_context_cache[cache_key] = None
                                 return None
+                            target_format_writer_copy_authority = (
+                                None
+                                if target_call_aliases is None
+                                else format_writer_copy_authority_for_target(
+                                    caller,
+                                    source,
+                                    owner_entry,
+                                    target_call_aliases,
+                                    mapped,
+                                    caller_format_callback_authority,
+                                )
+                            )
                             target_protocol = (
                                 target_format_envelope,
                                 target_stream_authority,
                                 target_format_callback_authority,
+                                target_format_writer_copy_authority,
                             )
                             prior_input = joined_inputs.get(target_protocol)
                             joined_input = (
@@ -107844,11 +108279,13 @@ class _DirectCfgRecovery:
                             target_format_envelope,
                             target_stream_authority,
                             target_format_callback_authority,
+                            target_format_writer_copy_authority,
                         )
                         for (
                             target_format_envelope,
                             target_stream_authority,
                             target_format_callback_authority,
+                            target_format_writer_copy_authority,
                         ), joined_input in sorted(
                             joined_inputs.items(),
                             key=lambda row: repr(row[0]),
@@ -107963,6 +108400,11 @@ class _DirectCfgRecovery:
                     )
                     context_format_callback_authority = (
                         alias_context_format_callback_authorities.get(
+                            context_id
+                        )
+                    )
+                    context_format_writer_copy_authority = (
+                        alias_context_format_writer_copy_authorities.get(
                             context_id
                         )
                     )
@@ -108382,6 +108824,7 @@ class _DirectCfgRecovery:
                                 caller_base,
                                 context_escape_demand,
                                 context_format_envelope,
+                                context_format_writer_copy_authority,
                             )
                         )
                         if memcpy_recognized:
@@ -108409,6 +108852,7 @@ class _DirectCfgRecovery:
                                     ),
                                     context_stream_authority,
                                     context_format_callback_authority,
+                                    context_format_writer_copy_authority,
                                 )
                             )
                             if continuation_context is None:
@@ -108531,6 +108975,19 @@ class _DirectCfgRecovery:
                                         target,
                                     )
                                 )
+                                target_format_writer_copy_authority = (
+                                    None
+                                    if target_call_aliases is None
+                                    or target_initial is None
+                                    else format_writer_copy_authority_for_target(
+                                        owner_entry,
+                                        call_source,
+                                        target,
+                                        target_call_aliases,
+                                        target_initial,
+                                        context_format_callback_authority,
+                                    )
+                                )
                                 if (
                                     context_format_envelope is not None
                                     and owner_entry
@@ -108554,6 +109011,7 @@ class _DirectCfgRecovery:
                                         target_format_envelope,
                                         target_stream_authority,
                                         target_format_callback_authority,
+                                        target_format_writer_copy_authority,
                                     )
                                 )
                                 if target_context is None:
@@ -108754,6 +109212,11 @@ class _DirectCfgRecovery:
                 )
                 context_format_callback_authority = (
                     alias_context_format_callback_authorities.get(
+                        alias_context
+                    )
+                )
+                context_format_writer_copy_authority = (
+                    alias_context_format_writer_copy_authorities.get(
                         alias_context
                     )
                 )
@@ -109031,6 +109494,81 @@ class _DirectCfgRecovery:
                         )
                     ):
                         return False
+                    return_address = cursor + decoded.size
+                    caller_base = alias_context_call_bases.get(
+                        alias_context,
+                        {},
+                    ).get(cursor)
+                    memcpy_recognized, memcpy_aliases = (
+                        (False, None)
+                        if context_format_writer_copy_authority is None
+                        or caller_base is None
+                        or direct_target is None
+                        or targets != {direct_target}
+                        else memcpy_alias_continuation(
+                            current_function,
+                            cursor,
+                            direct_target,
+                            aliases,
+                            caller_base,
+                            context_escape_demand,
+                            context_format_envelope,
+                            context_format_writer_copy_authority,
+                        )
+                    )
+                    if memcpy_recognized:
+                        if (
+                            memcpy_aliases is None
+                            or self._summary_successors(
+                                cursor,
+                                current_function,
+                                self._following_function_entry(
+                                    current_function
+                                ),
+                            )
+                            != (return_address,)
+                            or not format_writer_copy_residue_is_disjoint(
+                                current_function,
+                                cursor,
+                                direct_target,
+                                aliases,
+                                fact,
+                                context_format_writer_copy_authority,
+                            )
+                        ):
+                            return False
+                        continuation_assumptions = alias_assumptions_for(
+                            current_function
+                        )
+                        continuation_context = (
+                            None
+                            if continuation_assumptions is None
+                            else ensure_alias_context(
+                                current_function,
+                                return_address,
+                                memcpy_aliases,
+                                continuation_assumptions,
+                                context_escape_demand,
+                                _format_buffer_envelope_after_owned_return(
+                                    context_format_envelope,
+                                    current_function,
+                                ),
+                                context_stream_authority,
+                                context_format_callback_authority,
+                                context_format_writer_copy_authority,
+                            )
+                        )
+                        if continuation_context is None or not enqueue(
+                            (
+                                current_function,
+                                return_address,
+                                continuation_context,
+                            ),
+                            fact,
+                            node,
+                        ):
+                            return False
+                        continue
                     called = _push_private_stack_residue(fact)
                     if called is None:
                         return False
@@ -109147,6 +109685,19 @@ class _DirectCfgRecovery:
                             is not None
                         ):
                             target_initial_alias = None
+                        target_format_writer_copy_authority = (
+                            None
+                            if target_call_aliases is None
+                            or target_initial_alias is None
+                            else format_writer_copy_authority_for_target(
+                                current_function,
+                                cursor,
+                                target,
+                                target_call_aliases,
+                                target_initial_alias,
+                                context_format_callback_authority,
+                            )
+                        )
                         target_alias_context = (
                             None
                             if target_initial_alias is None
@@ -109160,6 +109711,7 @@ class _DirectCfgRecovery:
                                 target_format_envelope,
                                 target_stream_authority,
                                 target_format_callback_authority,
+                                target_format_writer_copy_authority,
                             )
                         )
                         if target_alias_context is None:
@@ -109193,6 +109745,7 @@ class _DirectCfgRecovery:
                         current_function,
                         alias_context,
                         aliases,
+                        context_format_writer_copy_authority,
                     ):
                         return False
                     returned, observed = _pop_private_stack_residue(fact)

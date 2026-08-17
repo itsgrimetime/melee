@@ -47,7 +47,7 @@ partition on return.
 - Produces: fixture `format_writer_copy_authority_image(tmp_path, *, mutation)`
   and the exact test ID family `private_stack_format_writer_copy_authority`.
 
-- [ ] **Step 1: Extend the exact bounded-writer fixture**
+- [x] **Step 1: Extend the exact bounded-writer fixture**
 
 Add `wrong-copy-source` to `audited_format_size_argument_image`.  Change only
 the source push at the callback's unique copy call while retaining the exact
@@ -62,7 +62,7 @@ Assert the changed instruction remains one full-width register PUSH, the copy
 target is unchanged, and `_audited_format_writer_callback(callback)` is false.
 This catches an issuer or consumer that binds only the writer address.
 
-- [ ] **Step 2: Add a compact engine/writer authority fixture**
+- [x] **Step 2: Add a compact engine/writer authority fixture**
 
 Create `format_writer_copy_authority_image` by placing these three real
 components in one `load_large_cfg_program` image:
@@ -71,8 +71,11 @@ components in one `load_large_cfg_program` image:
    `test_format_buffer_dynamic_count_is_exact_end_minus_pointer` at
    `0x00401080`;
 2. the exact 26-instruction writer bytes from
-   `audited_format_size_argument_image` at `engine + 0x100`; and
-3. the exact memcpy bytes from that fixture at `engine + 0x180`.
+   `audited_format_size_argument_image` at `engine + 0x60`; and
+3. the exact memcpy bytes from that fixture at `engine + 0xB0`.
+
+Those offsets keep all three functions inside the synthetic fixture's mapped
+text window and below its PE export-table storage.
 
 Return a facts dictionary containing literal addresses for `engine`,
 `callback_call`, `writer`, `copy_call`, `memcpy`, `buffer_base`, and the
@@ -86,6 +89,8 @@ hand-derived writer source aliases.  Support exactly these mutations:
     "wrong-copy-count",
     "wrong-copy-source",
     "excluded-target",
+    "mapped-source",
+    "missing-writer-source",
 }
 ```
 
@@ -106,7 +111,7 @@ The fixture may seed only the recovered indirect callback target row needed
 to model the synthetic callback edge.  It must not monkeypatch the source/count
 proof or writer recognizer.
 
-- [ ] **Step 3: Add the issuance behavior test**
+- [x] **Step 3: Add the issuance behavior test**
 
 Add a parameterized test whose production mutation target is “minting an
 authority without exact engine count, target, writer, or source evidence”:
@@ -121,6 +126,8 @@ authority without exact engine count, target, writer, or source evidence”:
         ("wrong-copy-count", False),
         ("wrong-copy-source", False),
         ("excluded-target", False),
+        ("mapped-source", True),
+        ("missing-writer-source", False),
     ),
     ids=(
         "private_stack_format_writer_copy_authority-positive",
@@ -129,6 +136,8 @@ authority without exact engine count, target, writer, or source evidence”:
         "private_stack_format_writer_copy_authority-wrong-copy-count",
         "private_stack_format_writer_copy_authority-wrong-copy-source",
         "private_stack_format_writer_copy_authority-excluded-target",
+        "private_stack_format_writer_copy_authority-mapped-source",
+        "private_stack_format_writer_copy_authority-missing-writer-source",
     ),
 )
 def test_private_stack_format_writer_copy_authority_requires_exact_edge(
@@ -193,7 +202,7 @@ recognizer is a 494-instruction component.  The real engine-side range proof,
 writer recognizer, call ownership, source mapping, and mutation bytes remain
 active.
 
-- [ ] **Step 4: Run RED and record the boundary**
+- [x] **Step 4: Run RED and record the boundary**
 
 Run:
 
@@ -238,13 +247,13 @@ writer: int, engine_aliases: _PrivateStackAliasFact,
 writer_initial_aliases: _PrivateStackAliasFact, callback_authority:
 _FormatCallbackAuthority | None) -> _FormatWriterCopyAuthority | None`.
 
-- [ ] **Step 1: Add the frozen schema**
+- [x] **Step 1: Add the frozen schema**
 
 Place `_FormatWriterCopyAuthority` immediately after
 `_FormatCallbackAuthority`.  Do not add defaults.  Reject malformed facts at
 the first consumer rather than normalizing them.
 
-- [ ] **Step 2: Add unique protocol discovery**
+- [x] **Step 2: Add unique protocol discovery**
 
 Implement the address-independent discovery rule:
 
@@ -294,7 +303,7 @@ return next(iter(candidates)) if len(candidates) == 1 else None
 Keep any memo for this method inside the outer call-slot query and key it by
 `(engine, writer)`; do not add an object-global cache.
 
-- [ ] **Step 3: Mint the authority at one exact edge**
+- [x] **Step 3: Mint the authority at one exact edge**
 
 The issuer must:
 
@@ -302,7 +311,10 @@ The issuer must:
 2. require the exact recovered target set at `callback_call` contains `writer`;
 3. derive the engine call SP coordinate and exact source argument at index 1;
 4. read the nonempty finite source alias from `engine_aliases.private_spills`;
-5. require `_audited_format_buffer_end_count` for that exact source value;
+5. require `_audited_format_buffer_end_count` for that exact source value, or
+   reuse the query-local universal `source_value=None` result keyed by exact
+   `(engine, callback_call, protocol)` while independently requiring every
+   current source coordinate to remain inside the protocol source window;
 6. derive the writer entry SP coordinate and its argument-1 source alias from
    `writer_initial_aliases`;
 7. require a nonempty finite mapped source tuple with at most 64 coordinates;
@@ -310,12 +322,12 @@ The issuer must:
    `0 < length_upper <= 0xFFFF_FFFF`; and
 9. return the exact frozen row.
 
-Any missing row, ambiguous protocol, TOP alias, scalar source, mapping drift,
-or `AnalysisLimitError` returns `None`.
+Any missing row, ambiguous protocol, TOP alias, scalar source, out-of-window
+source, mapping drift, or `AnalysisLimitError` returns `None`.
 
-- [ ] **Step 4: Run the issuer GREEN**
+- [x] **Step 4: Run the issuer GREEN**
 
-Run the Task 1 command.  Expected: all six IDs pass.  Then run:
+Run the Task 1 command. Expected: all eight IDs pass. Then run:
 
 ```bash
 uv run pytest tests/test_retro_x86_cfg.py \
@@ -337,7 +349,7 @@ Expected: all existing source/count and writer mutations remain green.
 - Consumes: `_FormatWriterCopyAuthority` from Task 2.
 - Produces: context plumbing and a source-bound conservative memcpy length.
 
-- [ ] **Step 1: Add direct consumer hostiles before production plumbing**
+- [x] **Step 1: Add direct consumer hostiles before production plumbing**
 
 Add a focused test whose production mutation target is “using an authority in
 the wrong writer, at the wrong copy, or for a different source”:
@@ -405,7 +417,7 @@ Construct the authority with literal fields and use the exact writer/memcpy
 fixture.  Mutate one input at a time; do not compute the expected value with a
 production helper.
 
-- [ ] **Step 2: Verify the consumer RED**
+- [x] **Step 2: Verify the consumer RED**
 
 Run:
 
@@ -417,7 +429,7 @@ uv run pytest tests/test_retro_x86_cfg.py \
 Expected: the positive fails because the consumer is absent; fixture and
 hostile preconditions pass.
 
-- [ ] **Step 3: Add the exact consumer**
+- [x] **Step 3: Add the exact consumer**
 
 Implement:
 
@@ -431,7 +443,7 @@ Require schema ranges, `authority.writer == caller_entry`, exact source tuple,
 the writer, and exact equality of that call's address/target with
 `call_source`/`target`.  Return only `authority.length_upper`.
 
-- [ ] **Step 4: Thread the authority through alias contexts**
+- [x] **Step 4: Thread the authority through alias contexts**
 
 Add an optional `format_writer_copy_authority` parameter to
 `ensure_alias_context`; include it in `alias_context_keys`; store it in a
@@ -450,7 +462,7 @@ Do not add the writer authority to `_PrivateStackAliasSubscriberEffect`.
 Subscriber return mapping must restore the caller's existing engine callback
 authority and discard the callee-only writer authority.
 
-- [ ] **Step 5: Consume it in `memcpy_alias_continuation`**
+- [x] **Step 5: Consume it in `memcpy_alias_continuation`**
 
 Add the authority parameter.  Preserve the current finite and interval length
 routes.  Only when both are absent may the new consumer supply `length_upper`:
@@ -467,17 +479,35 @@ if length is None:
 ```
 
 Run the existing tracked-spill overlap block unchanged with that upper bound.
-On the special memcpy continuation, call `ensure_alias_context` with writer
-authority `None`, consuming it.  All other continuation paths retain the
-current value only while still inside the writer before the unique copy.
+On the special memcpy continuation, retain the authority only inside the
+writer until its return.  Permit only the unchanged certified source argument
+spill at that return; subscriber effects still omit the authority, so caller
+mapping consumes it.  All ordinary paths retain no new authority.
 
-- [ ] **Step 6: Run focused GREEN and lifetime controls**
+Add an exact-authority-only residue summary for the same memcpy call.  Map the
+certified source coordinates against the current writer SP and require the
+entire `[source, source + length_upper)` window to be disjoint from every live
+exact byte and dense tail in `_PrivateStackResidueFact`.  On success, enqueue
+the writer continuation with the residue fact unchanged and retain the
+authority only until writer return.  Reject basis ambiguity or any overlap;
+never summarize generic memcpy bodies or weaken TOP/`rep movs` observation.
+
+- [x] **Step 6: Add and run end-to-end flow/lifetime controls**
+
+Add `format_writer_copy_authority_flow_image` and the exact three-case family
+`private_stack_format_writer_copy_flow`: positive engine-to-writer-to-memcpy
+flow, a source window overlapping live residue, and an otherwise identical
+later direct writer invocation after authority death.  Assert the complete
+call graph, universal source/count proof, exact writer and memcpy recognition,
+and final `_closed_call_argument_slot_is_consumed` result.
+
+- [x] **Step 7: Run focused GREEN and lifetime controls**
 
 Run:
 
 ```bash
 uv run pytest tests/test_retro_x86_cfg.py \
-  -k 'private_stack_format_writer_copy_authority or private_stack_format_writer_copy_consumer' \
+  -k 'private_stack_format_writer_copy_authority or private_stack_format_writer_copy_consumer or private_stack_format_writer_copy_flow' \
   -vv
 uv run pytest tests/test_retro_x86_cfg.py \
   -k 'private_stack_alias or format_callback or format_buffer or audited_format' \
@@ -502,7 +532,7 @@ and reject an otherwise identical unknown-length stack source.
 - Consumes: the complete GREEN repair.
 - Produces: one reviewed semantic commit and a restart-safe retail replay.
 
-- [ ] **Step 1: Run static and full-module gates**
+- [x] **Step 1: Run static and full-module gates**
 
 Run from the worktree root:
 
@@ -519,7 +549,7 @@ uv run pytest tests/test_retro_x86_cfg.py -q
 Expected: zero static errors and the complete x86 module passes.  Do not run
 `ruff format`.
 
-- [ ] **Step 2: Run exact-retail structural mini-query**
+- [x] **Step 2: Run exact-retail structural mini-query**
 
 Use `hydrate-cfg-query.py` with the retained exact raw CFG to assert:
 
@@ -531,7 +561,7 @@ Use `hydrate-cfg-query.py` with the retained exact raw CFG to assert:
 
 This is diagnostic evidence only; it does not replace the call-slot replay.
 
-- [ ] **Step 3: Request independent review**
+- [x] **Step 3: Request independent review**
 
 Give the reviewer the design, plan, complete production/test diff, strict RED
 record, focused/full/static outputs, and mini-query output.  Require an

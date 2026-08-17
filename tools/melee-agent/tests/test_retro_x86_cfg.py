@@ -9104,6 +9104,7 @@ def audited_format_size_argument_image(tmp_path, *, mutation=None):
         "copy-direction",
         "wrong-clamp-operand",
         "wrong-copy-count",
+        "wrong-copy-source",
         "wrong-stream-field",
         "wrong-callee-save",
     }
@@ -9135,6 +9136,8 @@ def audited_format_size_argument_image(tmp_path, *, mutation=None):
         callback_bytes[0x15] = 0xD8
     elif mutation == "wrong-copy-count":
         callback_bytes[0x2A] = 0x52
+    elif mutation == "wrong-copy-source":
+        callback_bytes[0x2B] = 0x52
     elif mutation == "wrong-stream-field":
         callback_bytes[0x37] = 0x04
     elif mutation == "wrong-callee-save":
@@ -9162,6 +9165,186 @@ def audited_format_size_argument_image(tmp_path, *, mutation=None):
         push_address,
         callback,
     )
+
+
+def format_writer_copy_authority_image(tmp_path, *, mutation=None):
+    """Join one bounded formatter callback edge to one exact writer copy."""
+    assert mutation in {
+        None,
+        "add-count",
+        "wrong-clamp-operand",
+        "wrong-copy-count",
+        "wrong-copy-source",
+        "excluded-target",
+        "mapped-source",
+        "missing-writer-source",
+        "outside-window",
+    }
+    engine = 0x00401080
+    writer = engine + 0x60
+    copy = engine + 0xB0
+    program = bytearray(b"\x90" * 0x100)
+    engine_bytes = bytearray.fromhex(
+        "55 89 e5 83 ec 40 "
+        "8d 74 24 10 "
+        "8d 44 24 10 "
+        "89 44 24 08 "
+        "83 44 24 08 1f "
+        "8b 5c 24 08 "
+        "29 f3 "
+        "85 db "
+        "74 0d "
+        "53 56 68 00 30 40 00 "
+        "ff 55 08 "
+        "83 c4 0c c9 c3"
+    )
+    if mutation == "add-count":
+        engine_bytes[27] = 0x01
+    program[: len(engine_bytes)] = engine_bytes
+
+    writer_bytes = bytearray.fromhex(
+        "538b5c24088b542410568b7308558b6b048d043239e8770889d5eb06"
+        "9090909029f58b038b4c241401f0555150e80000000083c40c016b08"
+        "5d5e5bc3"
+    )
+    if mutation == "wrong-clamp-operand":
+        writer_bytes[0x15] = 0xD8
+    elif mutation == "wrong-copy-count":
+        writer_bytes[0x2A] = 0x52
+    elif mutation == "wrong-copy-source":
+        writer_bytes[0x2B] = 0x52
+    copy_call = writer + 0x2D
+    writer_bytes[0x2E:0x32] = (copy - (copy_call + 5)).to_bytes(
+        4,
+        "little",
+        signed=True,
+    )
+    program[writer - engine : writer - engine + len(writer_bytes)] = writer_bytes
+
+    copy_bytes = bytes.fromhex(
+        "8b54240456578b4424148b74241089d731c93d100000007c1e29f9"
+        "81e103000000740429c8f3a489c12503000000c1e902f3a585c07404"
+        "89c1f3a489d05f5ec3"
+    )
+    program[copy - engine : copy - engine + len(copy_bytes)] = copy_bytes
+    return load_large_cfg_program(tmp_path, program), {
+        "engine": engine,
+        "source_lea": engine + 6,
+        "buffer_lea": engine + 10,
+        "callback_call": engine + 40,
+        "writer": writer,
+        "copy_call": copy_call,
+        "copy": copy,
+    }
+
+
+def format_writer_copy_authority_flow_image(tmp_path, *, mutation=None):
+    """Carry one writer-copy authority through the complete alias query."""
+    assert mutation in {None, "overlapping-source", "later-direct-writer"}
+    root = 0x00401080
+    engine = root + 0x60
+    writer = root + 0xC0
+    copy = root + 0x110
+    callee = root + 0x160
+    program = bytearray(b"\x90" * 0x180)
+
+    def emit(offset, encoded):
+        encoded = bytes.fromhex(encoded)
+        program[offset : offset + len(encoded)] = encoded
+        return offset + len(encoded)
+
+    def emit_call(offset, target):
+        address = root + offset
+        program[offset] = 0xE8
+        program[offset + 1 : offset + 5] = (
+            target - (address + 5)
+        ).to_bytes(4, "little", signed=True)
+        return offset + 5
+
+    cursor = emit(0, "55 89 e5 83 ec 20 68 00 30 40 00")
+    protected_call = root + cursor
+    cursor = emit_call(cursor, callee)
+    cursor = emit(cursor, "68 " + writer.to_bytes(4, "little").hex())
+    engine_call = root + cursor
+    cursor = emit_call(cursor, engine)
+    if mutation == "later-direct-writer":
+        cursor = emit(
+            cursor,
+            "83 c4 04 8b 0d 00 31 40 00 51 8d 45 f0 50 "
+            "68 00 20 40 00",
+        )
+        direct_writer_call = root + cursor
+        cursor = emit_call(cursor, writer)
+        cursor = emit(
+            cursor,
+            "83 c4 0c c7 04 24 00 00 00 00 83 c4 04 89 ec 5d c3",
+        )
+    else:
+        direct_writer_call = None
+        cursor = emit(
+            cursor,
+            "c7 44 24 04 00 00 00 00 83 c4 08 89 ec 5d c3",
+        )
+
+    buffer_displacement = 0x4C if mutation == "overlapping-source" else 0x10
+    engine_body = bytearray.fromhex(
+        "55 89 e5 53 56 83 ec 40 "
+        f"8d 74 24 {buffer_displacement:02x} "
+        f"8d 44 24 {buffer_displacement:02x} "
+        "89 44 24 08 "
+        "83 44 24 08 1f "
+        "8b 5c 24 08 "
+        "29 f3 "
+        "85 db "
+        "74 0d "
+        "53 56 68 00 20 40 00 "
+        "ff 55 08 "
+        "83 c4 0c 31 c0 83 c4 40 5e 5b 5d c3"
+    )
+    source_lea_offset = engine_body.index(bytes.fromhex("8d 74 24"))
+    buffer_lea_offset = engine_body.index(bytes.fromhex("8d 44 24"))
+    callback_call_offset = engine_body.index(bytes.fromhex("ff 55 08"))
+    program[engine - root : engine - root + len(engine_body)] = engine_body
+
+    writer_body = bytearray.fromhex(
+        "538b5c24088b542410568b7308558b6b048d043239e8770889d5eb06"
+        "9090909029f58b038b4c241401f0555150e80000000083c40c016b08"
+        "5d5e5bc3"
+    )
+    copy_call = writer + 0x2D
+    writer_body[0x2E:0x32] = (copy - (copy_call + 5)).to_bytes(
+        4,
+        "little",
+        signed=True,
+    )
+    program[writer - root : writer - root + len(writer_body)] = writer_body
+    copy_body = bytes.fromhex(
+        "8b54240456578b4424148b74241089d731c93d100000007c1e29f9"
+        "81e103000000740429c8f3a489c12503000000c1e902f3a585c07404"
+        "89c1f3a489d05f5ec3"
+    )
+    program[copy - root : copy - root + len(copy_body)] = copy_body
+    emit(callee - root, "8b 44 24 04 85 c0 31 c0 c3")
+    image = replace(
+        load_large_cfg_program(tmp_path, program),
+        entrypoint=root,
+        exports=(),
+        relocations=(pe_mod.Relocation(root + 17, 3),),
+    )
+    return image, {
+        "root": root,
+        "protected_call": protected_call,
+        "engine_call": engine_call,
+        "engine": engine,
+        "source_lea": engine + source_lea_offset,
+        "buffer_lea": engine + buffer_lea_offset,
+        "callback_call": engine + callback_call_offset,
+        "writer": writer,
+        "direct_writer_call": direct_writer_call,
+        "copy_call": copy_call,
+        "copy": copy,
+        "callee": callee,
+    }
 
 
 def closed_popped_read_only_argument_image(tmp_path, *, mutation=None):
@@ -49922,6 +50105,384 @@ def test_format_buffer_dynamic_count_is_exact_end_minus_pointer(
 @pytest.mark.parametrize(
     ("mutation", "expected"),
     (
+        (None, True),
+        ("add-count", False),
+        ("wrong-clamp-operand", False),
+        ("wrong-copy-count", False),
+        ("wrong-copy-source", False),
+        ("excluded-target", False),
+        ("mapped-source", True),
+        ("missing-writer-source", False),
+        ("outside-window", False),
+    ),
+    ids=(
+        "private_stack_format_writer_copy_authority-positive",
+        "private_stack_format_writer_copy_authority-add-count",
+        "private_stack_format_writer_copy_authority-wrong-clamp-operand",
+        "private_stack_format_writer_copy_authority-wrong-copy-count",
+        "private_stack_format_writer_copy_authority-wrong-copy-source",
+        "private_stack_format_writer_copy_authority-excluded-target",
+        "private_stack_format_writer_copy_authority-mapped-source",
+        "private_stack_format_writer_copy_authority-missing-writer-source",
+        "private_stack_format_writer_copy_authority-outside-window",
+    ),
+)
+def test_private_stack_format_writer_copy_authority_requires_exact_edge(
+    tmp_path,
+    monkeypatch,
+    mutation,
+    expected,
+):
+    image, facts = format_writer_copy_authority_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        x86_cfg_module._explicit_seed_inventory(
+            image,
+            (facts["engine"], facts["writer"], facts["copy"]),
+        ),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.call_targets_by_source[facts["callback_call"]] = {
+        facts["writer"]
+    }
+
+    source_lea = recovery._owned_decoded(facts["source_lea"])
+    buffer_lea = recovery._owned_decoded(facts["buffer_lea"])
+    source_base = recovery._private_stack_operand_coordinate(
+        source_lea.address,
+        source_lea.operands[1],
+        facts["engine"],
+    )
+    buffer_base = recovery._private_stack_operand_coordinate(
+        buffer_lea.address,
+        buffer_lea.operands[1],
+        facts["engine"],
+    )
+    assert source_base is not None
+    assert buffer_base is not None
+    protocol = x86_cfg_module._AuditedFormatCursorProtocol(
+        engine=facts["engine"],
+        wrapper=facts["engine"] + 0x80,
+        writer=facts["writer"],
+        flush=facts["copy"],
+        callback_calls=(facts["callback_call"],),
+        buffer_base=buffer_base,
+        buffer_extent=0x20,
+        cursor_extent=0x20,
+        publication=facts["writer"],
+        end_publication=facts["writer"] + 1,
+        restoration=facts["writer"] + 2,
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_unique_audited_format_cursor_protocol_for_writer",
+        lambda engine, writer: (
+            protocol
+            if (engine, writer) == (facts["engine"], facts["writer"])
+            else None
+        ),
+        raising=False,
+    )
+
+    engine_coordinates = recovery._function_private_stack_coordinate_states(
+        facts["engine"]
+    )
+    writer_coordinates = recovery._function_private_stack_coordinate_states(
+        facts["writer"]
+    )
+    assert engine_coordinates is not None
+    assert writer_coordinates is not None
+    engine_sp = engine_coordinates[0][facts["callback_call"]][0]
+    writer_sp = writer_coordinates[0][facts["writer"]][0]
+    source_aliases = (
+        ((source_base[0], source_base[1] + 0x40),)
+        if mutation == "outside-window"
+        else (source_base,)
+    )
+    engine_aliases = _PrivateStackAliasFact(
+        registers=((),) * 8,
+        private_spills=(
+            ((engine_sp[0], engine_sp[1] + 4), source_aliases),
+        ),
+        escaped=(),
+        escaped_top=False,
+    )
+    writer_source_aliases = (
+        ((source_base[0], source_base[1] + 0x40),)
+        if mutation == "mapped-source"
+        else ()
+        if mutation == "missing-writer-source"
+        else source_aliases
+    )
+    writer_initial_aliases = _PrivateStackAliasFact(
+        registers=((),) * 8,
+        private_spills=(
+            ((writer_sp[0], writer_sp[1] + 8), writer_source_aliases),
+        ),
+        escaped=(),
+        escaped_top=False,
+    )
+    callback_authority = x86_cfg_module._FormatCallbackAuthority(
+        facts["engine"],
+        () if mutation == "excluded-target" else (facts["writer"],),
+    )
+
+    assert recovery._owned_decoded(facts["callback_call"]).mnemonic == "call"
+    assert recovery.call_targets_by_source[facts["callback_call"]] == {
+        facts["writer"]
+    }
+    assert recovery._audited_format_buffer_end_count(
+        facts["callback_call"],
+        facts["engine"],
+        protocol,
+        source_aliases,
+    ) is (mutation not in {"add-count", "outside-window"})
+    assert recovery._audited_format_writer_callback(facts["writer"]) is (
+        mutation
+        not in {
+            "wrong-clamp-operand",
+            "wrong-copy-count",
+            "wrong-copy-source",
+        }
+    )
+
+    result = recovery._audited_format_writer_copy_authority(
+        facts["engine"],
+        facts["callback_call"],
+        facts["writer"],
+        engine_aliases,
+        writer_initial_aliases,
+        callback_authority,
+        source_count_proven=mutation == "outside-window",
+    )
+
+    assert (result is not None) is expected
+    if result is not None:
+        assert result.engine == facts["engine"]
+        assert result.callback_call == facts["callback_call"]
+        assert result.writer == facts["writer"]
+        assert result.source_aliases == writer_source_aliases
+        assert result.length_upper == protocol.cursor_extent + 1
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, 0x201),
+        ("wrong-writer", None),
+        ("wrong-call", None),
+        ("wrong-source", None),
+        ("wrong-copy-count", None),
+    ),
+    ids=(
+        "private_stack_format_writer_copy_consumer-positive",
+        "private_stack_format_writer_copy_consumer-wrong-writer",
+        "private_stack_format_writer_copy_consumer-wrong-call",
+        "private_stack_format_writer_copy_consumer-wrong-source",
+        "private_stack_format_writer_copy_consumer-wrong-copy-count",
+    ),
+)
+def test_private_stack_format_writer_copy_authority_is_source_bound(
+    tmp_path,
+    mutation,
+    expected,
+):
+    image, _caller, _push, callback = audited_format_size_argument_image(
+        tmp_path,
+        mutation=(
+            "wrong-copy-count"
+            if mutation == "wrong-copy-count"
+            else None
+        ),
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        build_seed_inventory(image, ()),
+        generous_limits(image),
+    )
+    recovery.recover()
+    copy_call = callback + 0x2D
+    copy = callback + 0x80
+    source_aliases = ((0, 0x40),)
+    authority = x86_cfg_module._FormatWriterCopyAuthority(
+        engine=callback - 0x100,
+        callback_call=callback - 0x80,
+        writer=(callback + 1 if mutation == "wrong-writer" else callback),
+        source_aliases=(
+            ((0, 0x44),) if mutation == "wrong-source" else source_aliases
+        ),
+        length_upper=0x201,
+    )
+
+    assert recovery.direct_call_targets_by_source[copy_call] == copy
+    assert recovery.call_targets_by_source[copy_call] == {copy}
+    assert recovery._audited_format_writer_callback(callback) is (
+        mutation != "wrong-copy-count"
+    )
+
+    result = recovery._format_writer_copy_length_upper_for_memcpy(
+        callback,
+        copy_call + (1 if mutation == "wrong-call" else 0),
+        copy,
+        source_aliases,
+        authority,
+    )
+    assert result == expected
+
+
+def test_private_stack_format_writer_copy_authority_schema_is_exact():
+    authority_fields = fields(x86_cfg_module._FormatWriterCopyAuthority)
+
+    assert tuple(field.name for field in authority_fields) == (
+        "engine",
+        "callback_call",
+        "writer",
+        "source_aliases",
+        "length_upper",
+    )
+    assert all(field.default is MISSING for field in authority_fields)
+    assert "format_writer_copy_authority" not in {
+        field.name
+        for field in fields(x86_cfg_module._PrivateStackAliasSubscriberEffect)
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        (None, True),
+        ("overlapping-source", False),
+        ("later-direct-writer", False),
+    ),
+    ids=(
+        "private_stack_format_writer_copy_flow-positive",
+        "private_stack_format_writer_copy_flow-overlapping-source",
+        "private_stack_format_writer_copy_flow-later-direct-writer",
+    ),
+)
+def test_private_stack_format_writer_copy_authority_is_invocation_scoped(
+    tmp_path,
+    monkeypatch,
+    mutation,
+    expected,
+):
+    image, facts = format_writer_copy_authority_flow_image(
+        tmp_path,
+        mutation=mutation,
+    )
+    recovery = _DirectCfgRecovery(
+        image,
+        x86_cfg_module._explicit_seed_inventory(
+            image,
+            (
+                facts["root"],
+                facts["engine"],
+                facts["writer"],
+                facts["copy"],
+                facts["callee"],
+            ),
+        ),
+        generous_limits(image),
+    )
+    recovery.recover()
+    recovery.call_targets_by_source[facts["callback_call"]] = {
+        facts["writer"]
+    }
+
+    source_lea = recovery._owned_decoded(facts["source_lea"])
+    buffer_lea = recovery._owned_decoded(facts["buffer_lea"])
+    source_base = recovery._private_stack_operand_coordinate(
+        source_lea.address,
+        source_lea.operands[1],
+        facts["engine"],
+    )
+    buffer_base = recovery._private_stack_operand_coordinate(
+        buffer_lea.address,
+        buffer_lea.operands[1],
+        facts["engine"],
+    )
+    assert source_base is not None
+    assert buffer_base is not None
+    protocol = x86_cfg_module._AuditedFormatCursorProtocol(
+        engine=facts["engine"],
+        wrapper=facts["root"],
+        writer=facts["writer"],
+        flush=facts["copy"],
+        callback_calls=(facts["callback_call"],),
+        buffer_base=buffer_base,
+        buffer_extent=0x20,
+        cursor_extent=0x20,
+        publication=facts["writer"],
+        end_publication=facts["writer"] + 1,
+        restoration=facts["writer"] + 2,
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_finite_format_callback_targets_for_engine_call",
+        lambda call_source, caller_entry, target: (
+            (facts["writer"],)
+            if (
+                call_source,
+                caller_entry,
+                target,
+            )
+            == (
+                facts["engine_call"],
+                facts["root"],
+                facts["engine"],
+            )
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_unique_audited_format_cursor_protocol_for_writer",
+        lambda engine, writer: (
+            protocol
+            if (engine, writer) == (facts["engine"], facts["writer"])
+            else None
+        ),
+    )
+
+    assert recovery.call_targets_by_source[facts["protected_call"]] == {
+        facts["callee"]
+    }
+    assert recovery.call_targets_by_source[facts["engine_call"]] == {
+        facts["engine"]
+    }
+    assert recovery.call_targets_by_source[facts["callback_call"]] == {
+        facts["writer"]
+    }
+    assert recovery.call_targets_by_source[facts["copy_call"]] == {
+        facts["copy"]
+    }
+    if facts["direct_writer_call"] is not None:
+        assert recovery.call_targets_by_source[facts["direct_writer_call"]] == {
+            facts["writer"]
+        }
+    assert recovery._audited_format_buffer_end_count(
+        facts["callback_call"],
+        facts["engine"],
+        protocol,
+        None,
+    )
+    assert recovery._audited_format_writer_callback(facts["writer"])
+    assert recovery._memcpy_like_function(facts["copy"])
+
+    assert recovery._closed_call_argument_slot_is_consumed(
+        facts["protected_call"],
+        0,
+        facts["root"],
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
         (None, ("buffer",)),
         ("one-before-end", None),
         ("past-end", None),
@@ -54596,6 +55157,7 @@ def test_closed_read_only_argument_retains_scalar_transform_taint(
         ("copy-direction", False),
         ("wrong-clamp-operand", False),
         ("wrong-copy-count", False),
+        ("wrong-copy-source", False),
         ("wrong-stream-field", False),
         ("wrong-callee-save", False),
     ),

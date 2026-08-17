@@ -83,10 +83,24 @@ and only when all of the following hold:
 6. `length_upper` is exactly `protocol.cursor_extent + 1`, with checked
    non-wrapping range.
 
+The engine-side and writer-side source tuples need not be textually equal:
+the existing exact caller-to-callee mapper may rebase the same physical bytes
+into the writer's stack coordinate system. The issuer validates the
+engine-side tuple with the source/count proof, requires a nonempty canonical
+writer-side tuple produced by that exact mapping, and stores the writer-side
+tuple consumed at memcpy.
+
 The cursor upper bound is intentionally conservative.  The engine-side
 source/count proof establishes the correlation; the writer clamp can only
 reduce the requested count.  A loose upper bound may conservatively reject a
 nearby spill, but cannot authorize an unproven read.
+
+The outer call-slot query may cache the stronger universal
+`_audited_format_buffer_end_count(..., source_value=None)` result by exact
+`(engine, callback_call, protocol)`. Before reusing that result, issuance must
+still require every current engine-side source alias to lie inside the exact
+protocol source window. This cache is query-local and cannot outlive the
+current recovery or source tree.
 
 Protocol discovery must be address-independent and fail closed: enumerate
 the engine's exact callback-target union and closed incoming domain, identify
@@ -115,10 +129,23 @@ All existing exact-memcpy, stack-coordinate, raw-CFG, argument-order,
 destination, and escape-demand checks remain in force.  The continuation then
 applies the same ABI register result as the existing exact memcpy path.
 
-The authority is consumed after that copy and is not returned to the writer's
-caller.  A later direct call with identical bytes and arguments cannot reuse
-it.  Generic calls, other memcpy bodies, other writer instances, and contexts
-without the exact authority continue to reject.
+The residue fixed point may summarize that same exact memcpy call instead of
+descending into its internal alignment branches only when the writer-copy
+authority and exact alias continuation both validate.  It maps each certified
+source coordinate against the current writer SP, requires the complete
+half-open source window `[source, source + length_upper)` to be disjoint from
+every live byte and dense tail in the current `_PrivateStackResidueFact`, and
+enqueues the writer continuation with the residue fact unchanged.  A basis
+ambiguity, exact-row overlap, or tail overlap rejects.  This is not a generic
+memcpy or `rep movs` summary, and it does not relax TOP alias observation.
+
+The authority remains in the writer context only through its unique exact
+copy so the unchanged caller-owned source-argument word can be returned to
+the audited subscriber.  It is consumed when the writer returns and is never
+stored in the subscriber effect.  A later direct call with identical bytes
+and arguments therefore cannot reuse it.  Generic calls, other memcpy bodies,
+other writer instances, and contexts without the exact authority continue to
+reject.
 
 ## Fail-Closed Behavior
 
@@ -143,7 +170,10 @@ implementation.  The strict matrix contains:
 7. a later direct invocation of the same writer proving the authority does
    not leak past return; and
 8. an overlapping tracked private spill proving the conservative upper bound
-   still rejects.
+   still rejects; and
+9. a complete alias/residue-flow fixture proving exact engine-to-writer
+   context plumbing, source-window disjointness, unchanged residue
+   continuation, and post-return authority death.
 
 Each hostile asserts nonvacuous recovery, exact call ownership/targets, and
 the intended one-fact mutation before asserting rejection.  Focused tests are
