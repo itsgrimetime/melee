@@ -1,0 +1,18 @@
+
+ Usage: melee-agent debug permute remote fetch [OPTIONS] [JOB_ID]
+
+ Fetch remote permuter outputs into the local permuter directory.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   job_id      [JOB_ID]  Remote permuter job id. Omit when using --all.       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --all                          Fetch all jobs (optionally filtered by        │
+│                                --function/--target).                         │
+│ --function       -f      TEXT  Only fetch jobs for this function.            │
+│ --target         -t      TEXT  Only fetch jobs on this target.               │
+│ --triage                       Print the follow-up triage command.           │
+│ --delete-remote                Delete each fetched stopped job's remote run  │
+│                                directory after a successful fetch.           │
+│ --help                         Show this message and exit.                   │
+╰──────────────────────────────────────────────────────────────────────────────╯

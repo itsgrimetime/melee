@@ -1,0 +1,24 @@
+
+ Usage: melee-agent debug retro backend-candidate [OPTIONS] SRC
+
+ Assemble a candidate retail GC/1.2.5n backend trace.
+
+ Diagnostic candidate output. Use `debug retro backend` for full traces.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    src      TEXT  TU source path to compile under retail MWCC [required]   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function       -f      TEXT  [required]                                 │
+│    --output         -O      PATH                                             │
+│    --melee-root             PATH  Active Melee checkout/worktree root.       │
+│                                   Defaults to the current cwd tree.          │
+│    --one-pass                     Use the one-pass candidate hook instead of │
+│                                   separate map/PCode/IG probe compiles.      │
+│    --trace-version          TEXT  Candidate artifact contract: v1 preserves  │
+│                                   the existing diagnostic outputs; v2        │
+│                                   requires --one-pass and an independently   │
+│                                   promoted proof.                            │
+│                                   [default: v1]                              │
+│    --help                         Show this message and exit.                │
+╰──────────────────────────────────────────────────────────────────────────────╯

@@ -1,0 +1,151 @@
+                                                                                
+ Usage: melee-agent debug mutate lifetime-layout [OPTIONS]                      
+                                                                                
+ Explore lifetime/layout source probes and attribute pressure deltas.           
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function          -f                       TEXT     Function to         │
+│                                                          explore.            │
+│                                                          [required]          │
+│    --pcdump                                     PATH     Baseline pcdump.    │
+│                                                          Auto-resolves from  │
+│                                                          cache when omitted. │
+│    --source-file                                PATH     Source file used to │
+│                                                          generate            │
+│                                                          lifetime/layout     │
+│                                                          probes.             │
+│    --output-dir                                 PATH     Directory for       │
+│                                                          generated           │
+│                                                          --compile-probes    │
+│                                                          source files. When  │
+│                                                          omitted, JSON       │
+│                                                          output retains a    │
+│                                                          temp directory      │
+│                                                          because variant     │
+│                                                          paths are           │
+│                                                          machine-readable    │
+│                                                          follow-up inputs.   │
+│    --candidate                                  TEXT     Candidate           │
+│                                                          pcdump/source to    │
+│                                                          score, repeatable.  │
+│                                                          Format              │
+│                                                          OPERATOR=path or    │
+│                                                          LABEL:OPERATOR=pat… │
+│    --pairs                                      TEXT     Comma-separated     │
+│                                                          target virtual      │
+│                                                          pairs, e.g.         │
+│                                                          r37/r40,r43/r33 or  │
+│                                                          f32/f38.            │
+│    --compile-probes        --no-compile-pro…             Compile generated   │
+│                                                          source probes and   │
+│                                                          report pressure     │
+│                                                          deltas.             │
+│                                                          [default:           │
+│                                                          no-compile-probes]  │
+│    --score-match-per…      --no-score-match…             For source          │
+│                                                          candidates,         │
+│                                                          temporarily         │
+│                                                          transfer into the   │
+│                                                          real tree and read  │
+│                                                          final report.json   │
+│                                                          match percent plus  │
+│                                                          checkdiff           │
+│                                                          stack-slot deltas.  │
+│                                                          Enabled by default; │
+│                                                          use                 │
+│                                                          --no-score-match-p… │
+│                                                          for faster          │
+│                                                          pcdump-only         │
+│                                                          scoring.            │
+│                                                          [default:           │
+│                                                          score-match-percen… │
+│    --expression-targ…                           PATH     Target spec used to │
+│                                                          expression-score    │
+│                                                          compiled lifetime   │
+│                                                          probes. When set,   │
+│                                                          ranking demotes     │
+│                                                          pressure-only       │
+│                                                          candidates that do  │
+│                                                          not move protected  │
+│                                                          expression anchors. │
+│    --expression-base…                           PATH     Baseline pcdump     │
+│                                                          used to derive      │
+│                                                          expression anchors  │
+│                                                          for                 │
+│                                                          --expression-targe… │
+│                                                          Defaults to         │
+│                                                          --pcdump.           │
+│    --expression-sour…                           TEXT     Baseline C source   │
+│                                                          for expression      │
+│                                                          anchors. Defaults   │
+│                                                          to --source-file    │
+│                                                          when available.     │
+│    --expression-reg-…                           TEXT     Register class for  │
+│                                                          expression anchors: │
+│                                                          fpr or gpr.         │
+│                                                          [default: fpr]      │
+│    --max-probes                                 INTEGER  Maximum generated   │
+│                                                          probes to list or   │
+│                                                          compile.            │
+│                                                          [default: 12]       │
+│    --include-transfo…      --no-include-tra…             Opt in to           │
+│                                                          transform-corpus    │
+│                                                          source-shape probes │
+│                                                          after the existing  │
+│                                                          lifetime/layout     │
+│                                                          probe families.     │
+│                                                          [default:           │
+│                                                          no-include-transfo… │
+│    --transform-family                           TEXT     Transform-corpus    │
+│                                                          source-shape family │
+│                                                          to generate. Repeat │
+│                                                          or pass             │
+│                                                          comma-separated     │
+│                                                          names; passing this │
+│                                                          also opts in.       │
+│    --transform-force…                           TEXT     Proof mapping for   │
+│                                                          transform-corpus    │
+│                                                          source-shape        │
+│                                                          probes, e.g.        │
+│                                                          IG:PHYS or          │
+│                                                          comma-separated     │
+│                                                          IG:PHYS entries.    │
+│    --frame-reservati…                           INTEGER  Add a PAD_STACK(N)  │
+│                                                          source probe for    │
+│                                                          implicit no-access  │
+│                                                          frame reservation   │
+│                                                          gaps.               │
+│    --focus                                      TEXT     Named probe-family  │
+│                                                          bundle.             │
+│                                                          `b4-tree-loop`      │
+│                                                          focuses the x594_b4 │
+│                                                          tree loop problem   │
+│                                                          space;              │
+│                                                          `helper-inline-lif… │
+│                                                          focuses             │
+│                                                          helper-inline/sour… │
+│                                                          register cascades;  │
+│                                                          `mixed-pcode-fpr-l… │
+│                                                          focuses the         │
+│                                                          mnDiagram           │
+│                                                          row/callarg FPR     │
+│                                                          pressure lane.      │
+│    --operator                                   TEXT     Only                │
+│                                                          generate/compile    │
+│                                                          probes from this    │
+│                                                          operator family.    │
+│                                                          Repeat or pass      │
+│                                                          comma-separated     │
+│                                                          names; combines     │
+│                                                          with most focuses   │
+│                                                          and narrows --focus │
+│                                                          helper-inline-life… │
+│    --timeout                                    INTEGER  Per-candidate       │
+│                                                          compile timeout in  │
+│                                                          seconds.            │
+│                                                          [default: 120]      │
+│    --json                                                Emit as JSON.       │
+│    --help                                                Show this message   │
+│                                                          and exit.           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

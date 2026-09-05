@@ -1,0 +1,423 @@
+name: taxonomy-pages
+run-name: Publish function taxonomy dashboard
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "src/**"
+      - "include/**"
+      - "config/**"
+      - "tools/**"
+      - ".github/workflows/taxonomy-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  packages: read
+  pages: write
+
+concurrency:
+  group: taxonomy-pages-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OUTPUT: _site
+  TAXONOMY_DIR: build/function-taxonomy
+
+jobs:
+  build:
+    name: Generate taxonomy dashboard
+    if: github.repository == 'itsgrimetime/melee'
+    runs-on: ubuntu-latest
+    container: ghcr.io/itsgrimetime/build-melee:main
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Git config
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global advice.detachedHead false
+
+      - name: Prepare original DOL data
+        run: |
+          rm -rf orig
+          ln -s /orig orig
+
+      - name: Verify taxonomy entrypoint imports
+        run: python3 -I -S tools/function_taxonomy_inventory.py --help
+
+      - name: Configure
+        run: |
+          python3 configure.py \
+            --compilers /compilers \
+            --max-errors 0 \
+            --verbose \
+            --version GALE01
+
+      - name: Build report
+        run: ninja all_source build/GALE01/report.json
+
+      - name: Generate taxonomy artifacts
+        run: |
+          python3 tools/function_taxonomy_inventory.py \
+            --report build/GALE01/report.json \
+            --output "$TAXONOMY_DIR" \
+            --workers 4 \
+            --skip-decl-order-eval
+
+      - name: Validate taxonomy artifacts
+        run: |
+          python3 - <<'PY'
+          from collections import Counter
+          import json
+          import os
+          from pathlib import Path
+
+          taxonomy_dir = Path(os.environ["TAXONOMY_DIR"])
+
+          def count_jsonl(path):
+              return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+          record_rows = []
+          records_path = taxonomy_dir / "taxonomy.records.jsonl"
+          for line_number, line in enumerate(
+              records_path.read_text(encoding="utf-8").splitlines(), 1
+          ):
+              if not line.strip():
+                  continue
+              try:
+                  record = json.loads(line)
+              except json.JSONDecodeError as exc:
+                  raise SystemExit(
+                      f"{records_path}:{line_number}: invalid JSON record"
+                  ) from exc
+              if not isinstance(record, dict):
+                  raise SystemExit(
+                      f"{records_path}:{line_number}: expected an object"
+                  )
+              function = record.get("function") or f"line {line_number}"
+              for field in ("primary_intervention", "evidence_stage"):
+                  if not isinstance(record.get(field), str) or not record[field].strip():
+                      raise SystemExit(
+                          f"{function}: routing facet {field} must be a non-empty string"
+                      )
+              for field in ("secondary_signals", "blocker_families"):
+                  if field not in record or not isinstance(record[field], list):
+                      raise SystemExit(
+                          f"{function}: routing facet {field} must be a list"
+                      )
+                  if not all(
+                      isinstance(value, str) and value.strip()
+                      for value in record[field]
+                  ):
+                      raise SystemExit(
+                          f"{function}: routing facet {field} has an invalid member"
+                      )
+              bucket = record.get("work_bucket")
+              subcategory = record.get("subcategory")
+              generic_opcode_route = (
+                  bucket == "structural-reconstruction"
+                  and subcategory == "opcode-sequence-diff"
+              )
+              near_route = bucket == "normalized-structural-near-match"
+              classification = record.get("classification")
+              truth_gate = (
+                  classification.get("structural_truth_gate")
+                  if isinstance(classification, dict)
+                  else None
+              )
+              normalized_diff_lines = (
+                  truth_gate.get("normalized_diff_lines")
+                  if isinstance(truth_gate, dict)
+                  else None
+              )
+              trigger_eligible = (
+                  near_route
+                  and not isinstance(normalized_diff_lines, bool)
+                  and normalized_diff_lines in (1, 2, 3)
+              )
+              semantic_route = generic_opcode_route or near_route
+              if semantic_route:
+                  families = record.get("semantic_delta_families")
+                  if (generic_opcode_route or trigger_eligible) and (
+                      not isinstance(families, list)
+                      or not all(
+                          isinstance(value, str) and value.strip()
+                          for value in families
+                      )
+                  ):
+                      raise SystemExit(
+                          f"{function}: semantic_delta_families must be a string list"
+                      )
+                  if families is not None and (
+                      not isinstance(families, list)
+                      or not all(
+                          isinstance(value, str) and value.strip()
+                          for value in families
+                      )
+                  ):
+                      raise SystemExit(
+                          f"{function}: optional semantic_delta_families is invalid"
+                      )
+                  direction = record.get("opcode_edit_direction")
+                  if (generic_opcode_route or trigger_eligible) and (
+                      not isinstance(direction, str) or not direction.strip()
+                  ):
+                      raise SystemExit(
+                          f"{function}: opcode_edit_direction must be non-empty"
+                      )
+                  if direction is not None and not isinstance(direction, str):
+                      raise SystemExit(
+                          f"{function}: optional opcode_edit_direction is invalid"
+                      )
+                  opcode_status = record.get("opcode_delta_signature_status")
+                  opcode_signature = record.get("opcode_delta_signature")
+                  if generic_opcode_route:
+                      if not families:
+                          raise SystemExit(
+                              f"{function}: generic opcode row has no semantic family"
+                          )
+                      if opcode_status != "available" or not isinstance(
+                          opcode_signature, str
+                      ) or not opcode_signature:
+                          raise SystemExit(
+                              f"{function}: generic opcode row lacks available opcode evidence"
+                          )
+                  elif trigger_eligible:
+                      if direction == "operand-shape-only":
+                          if families or opcode_status != "no-opcode-delta":
+                              raise SystemExit(
+                                  f"{function}: operand-only trigger has opcode evidence"
+                              )
+                      elif not families or opcode_status != "available" or not isinstance(
+                          opcode_signature, str
+                      ) or not opcode_signature:
+                          raise SystemExit(
+                              f"{function}: near row lacks semantic opcode evidence"
+                          )
+
+                      trigger_status = record.get(
+                          "normalized_trigger_signature_status"
+                      )
+                      if trigger_status != "available":
+                          raise SystemExit(
+                              f"{function}: normalized trigger is unavailable"
+                          )
+                      if not isinstance(
+                          record.get("normalized_trigger_signature"), str
+                      ) or not record["normalized_trigger_signature"]:
+                          raise SystemExit(
+                              f"{function}: normalized trigger signature is empty"
+                          )
+                      if not isinstance(
+                          record.get("normalized_trigger_family"), str
+                      ) or not record["normalized_trigger_family"].strip():
+                          raise SystemExit(
+                              f"{function}: normalized trigger family is empty"
+                          )
+                      cluster_size = record.get("normalized_trigger_cluster_size")
+                      if (
+                          not isinstance(record.get("normalized_trigger_cluster_size"), int)
+                          or isinstance(cluster_size, bool)
+                          or cluster_size <= 0
+                      ):
+                          raise SystemExit(
+                              f"{function}: normalized trigger cluster size is invalid"
+                          )
+                      try:
+                          signature = json.loads(record["normalized_trigger_signature"])
+                      except (TypeError, json.JSONDecodeError) as exc:
+                          raise SystemExit(
+                              f"{function}: normalized trigger signature is invalid JSON"
+                          ) from exc
+                      if not isinstance(signature, dict) or set(signature) != {
+                          "edit_direction",
+                          "normalized_diff_lines",
+                          "pairs",
+                          "version",
+                      }:
+                          raise SystemExit(
+                              f"{function}: normalized trigger signature shape is invalid"
+                          )
+                      if signature.get("version") != 1:
+                          raise SystemExit(
+                              f"{function}: normalized trigger signature version is invalid"
+                          )
+                      if signature.get("normalized_diff_lines") != normalized_diff_lines:
+                          raise SystemExit(
+                              f"{function}: normalized trigger line count disagrees with truth gate"
+                          )
+                      if signature.get("edit_direction") != direction:
+                          raise SystemExit(
+                              f"{function}: normalized trigger direction disagrees with row"
+                          )
+                      pairs = signature.get("pairs")
+                      if not isinstance(pairs, list) or not all(
+                          isinstance(pair, list)
+                          and len(pair) == 2
+                          and all(
+                              value is None
+                              or (isinstance(value, str) and value)
+                              for value in pair
+                          )
+                          for pair in pairs
+                      ):
+                          raise SystemExit(
+                              f"{function}: normalized trigger opcode pairs are invalid"
+                          )
+                      if (direction == "operand-shape-only") != (pairs == []):
+                          raise SystemExit(
+                              f"{function}: operand-only direction disagrees with opcode pairs"
+                          )
+                      size_label = {
+                          1: "one-line",
+                          2: "two-line",
+                          3: "three-line",
+                      }[normalized_diff_lines]
+                      if record["normalized_trigger_family"] != (
+                          f"{size_label}-{direction}"
+                      ):
+                          raise SystemExit(
+                              f"{function}: normalized trigger family disagrees with evidence"
+                          )
+              is_bss_root_cause = (
+                  bucket == "data-symbol-relocation"
+                  and subcategory == "bss-section-anchor-ceiling"
+              )
+              if is_bss_root_cause:
+                  root_cause_keys = record.get("root_cause_keys")
+                  if not isinstance(root_cause_keys, list) or not root_cause_keys:
+                      raise SystemExit(
+                          f"{function}: root_cause_keys must be a non-empty list"
+                      )
+                  if not all(
+                      isinstance(value, str)
+                      and value.startswith("bss-symbol:")
+                      and value.removeprefix("bss-symbol:").strip()
+                      for value in root_cause_keys
+                  ):
+                      raise SystemExit(
+                          f"{function}: BSS root_cause_keys are invalid"
+                      )
+                  classification = record.get("classification")
+                  relocations = (
+                      classification.get("bss_anchor_relocations")
+                      if isinstance(classification, dict)
+                      else None
+                  )
+                  pairs = (
+                      relocations.get("pairs")
+                      if isinstance(relocations, dict)
+                      else None
+                  )
+                  expected_root_cause_keys = []
+                  seen_root_cause_keys = set()
+                  if isinstance(pairs, list):
+                      for pair in pairs:
+                          symbol = (
+                              pair.get("named_symbol")
+                              if isinstance(pair, dict)
+                              else None
+                          )
+                          if not isinstance(symbol, str) or not symbol.strip():
+                              continue
+                          key = f"bss-symbol:{symbol.strip()}"
+                          if key not in seen_root_cause_keys:
+                              seen_root_cause_keys.add(key)
+                              expected_root_cause_keys.append(key)
+                  if root_cause_keys != expected_root_cause_keys:
+                      raise SystemExit(
+                          f"{function}: root cause keys disagree with structured BSS evidence"
+                      )
+                  impact = record.get("max_root_cause_impact")
+                  if (
+                      not isinstance(impact, int)
+                      or isinstance(impact, bool)
+                      or impact <= 0
+                  ):
+                      raise SystemExit(
+                          f"{function}: max_root_cause_impact is invalid"
+                      )
+              record_rows.append(record)
+
+          root_cause_counts = Counter()
+          for record in record_rows:
+              keys = record.get("root_cause_keys")
+              if isinstance(keys, list):
+                  root_cause_counts.update(set(keys))
+          for record in record_rows:
+              keys = record.get("root_cause_keys")
+              if not isinstance(keys, list):
+                  continue
+              expected_impact = max(
+                  (root_cause_counts[key] for key in set(keys)), default=0
+              )
+              if record.get("max_root_cause_impact") != expected_impact:
+                  function = record.get("function") or "unknown function"
+                  raise SystemExit(
+                      f"{function}: root cause impact disagrees with aggregate membership"
+                  )
+
+          records = len(record_rows)
+          errors = count_jsonl(taxonomy_dir / "checkdiff-errors.jsonl")
+          if errors > 0:
+              raise SystemExit(
+                  "refusing to publish taxonomy with "
+                  f"{errors} checkdiff extraction errors "
+                  f"({records} classified records)"
+              )
+          print(
+              f"taxonomy validation: {records} classified records, "
+              f"{errors} checkdiff errors"
+          )
+          PY
+
+      - name: Generate dashboard
+        run: python3 tools/function_taxonomy_dashboard.py "$TAXONOMY_DIR"
+
+      - name: Assemble Pages site
+        run: |
+          mkdir -p "_site/taxonomy"
+          cp -R "$TAXONOMY_DIR"/. "_site/taxonomy/"
+          touch "_site/.nojekyll"
+          cat > "_site/index.html" <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <meta http-equiv="refresh" content="0; url=taxonomy/dashboard.html">
+            <title>Melee Function Taxonomy</title>
+          </head>
+          <body>
+            <p><a href="taxonomy/dashboard.html">Open the function taxonomy dashboard</a></p>
+          </body>
+          </html>
+          HTML
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ${{ env.OUTPUT }}
+
+  deploy:
+    name: Deploy GitHub Pages
+    if: github.repository == 'itsgrimetime/melee' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

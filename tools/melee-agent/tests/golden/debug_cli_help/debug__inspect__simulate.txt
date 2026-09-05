@@ -1,0 +1,30 @@
+                                                                                
+ Usage: melee-agent debug inspect simulate [OPTIONS] [DUMP]                     
+                                                                                
+ Simulate MWCC's coloring algorithm on a function and diff against actuals.     
+                                                                                
+ Re-implements the register-coloring loop from MWCC's source (extracted from    
+ the 7.0 decompilation at git.wuffs.org/MWCC). For each virtual register,       
+ the simulator predicts what physical the allocator would have picked and       
+ why. Compares against the actual choice from the pcdump.                       
+                                                                                
+ Matches confirm our understanding of the algorithm. Mismatches highlight       
+ cases where our model is wrong — usually due to factors we don't see in        
+ pcdump (caller-save kill at call sites, argument-passing ABI pinning, or       
+ nonvolatile-allocation-order edge cases).                                      
+                                                                                
+ See docs/mwcc-debug-future-ideas.md for the long-term plan to replace          
+ this simulator with a real hook into mwcceppc.exe's allocator.                 
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   dump      [DUMP]  Path to a pcdump.txt produced by 'debug dump remote'. If │
+│                     omitted, auto-resolves via --function from cache.        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function  -f      TEXT  Function to simulate (required) [required]      │
+│    --all                     Show every decision, even when prediction       │
+│                              matches actual.                                 │
+│    --json                    Emit simulation results as JSON.                │
+│    --help                    Show this message and exit.                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

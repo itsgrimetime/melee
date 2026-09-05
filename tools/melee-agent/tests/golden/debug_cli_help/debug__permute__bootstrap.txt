@@ -1,0 +1,36 @@
+                                                                                
+ Usage: melee-agent debug permute bootstrap [OPTIONS]                           
+                                                                                
+ Bootstrap a decomp-permuter function dir from the current repo source.         
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function                    -f      TEXT  Function name to import       │
+│                                                [required]                    │
+│    --perm-root                           PATH  Root of decomp-permuter       │
+│                                                clone.                        │
+│                                                [default:                     │
+│                                                /Users/mike/code/decomp-perm… │
+│    --source-file,--annotated-s…          PATH  Import this edited source     │
+│                                                instead of the repo TU. The   │
+│                                                file is temporarily staged    │
+│                                                over the real TU so           │
+│                                                decomp-permuter still uses    │
+│                                                the correct Melee build       │
+│                                                settings.                     │
+│    --melee-root                          PATH  Melee repo/worktree root.     │
+│                                                Defaults to MELEE_ROOT,       │
+│                                                --source-file/cwd detection,  │
+│                                                then the installed package    │
+│                                                repo.                         │
+│    --preserve-macros                     TEXT  Regex of source macros        │
+│                                                decomp-permuter should keep   │
+│                                                in base.c. Use an empty       │
+│                                                string to disable.            │
+│                                                [default:                     │
+│                                                PAD_STACK|FORCE_PAD_STACK(?:… │
+│    --force                                     Overwrite stock settings.toml │
+│                                                if present.                   │
+│    --json                                      Emit action summary as JSON.  │
+│    --help                                      Show this message and exit.   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

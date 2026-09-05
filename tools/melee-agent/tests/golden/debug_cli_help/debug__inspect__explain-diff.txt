@@ -1,0 +1,17 @@
+                                                                                
+ Usage: melee-agent debug inspect explain-diff [OPTIONS] FUNCTION_OR_PATH       
+                                                                                
+ Unified diff diagnosis: read checkdiff JSON (or auto-generate it for a         
+ function) and produce a structured, ranked list of recommendations with        
+ specific source-level actions and estimated costs.                             
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    function_or_path      TEXT  Function name (auto-runs checkdiff) or path │
+│                                  to a checkdiff JSON file.                   │
+│                                  [required]                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --json          Emit structured diagnosis as JSON.                           │
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,27 @@
+[
+  {
+    "lever": "alias",
+    "tier": "a",
+    "note": "T* a = x; route specific reads (CursorProc gp/flow-alias; 80241E78 loop-tail data_alias)"
+  },
+  {
+    "lever": "temp-for-expr",
+    "tier": "a",
+    "note": "T t = expr; (80241E78 (f32)digit through base temp)"
+  },
+  {
+    "lever": "anchoring",
+    "tier": "a",
+    "note": "second-genuine-use anchoring"
+  },
+  {
+    "lever": "per-loop-local",
+    "tier": "a",
+    "note": "snap1/saved1, snap2/saved2 per loop"
+  },
+  {
+    "lever": "inline-base-cast",
+    "tier": "a",
+    "note": "((CardBufEntry*)g)[i].f \u2014 NOT a cached pointer-temp"
+  }
+]

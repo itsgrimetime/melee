@@ -1,0 +1,45 @@
+                                                                                
+ Usage: melee-agent debug mutate indexed-struct-search [OPTIONS]                
+                                                                                
+ Compile and score indexed struct pointer dematerialization probes.             
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function          -f                       TEXT     Function to         │
+│                                                          explore.            │
+│                                                          [required]          │
+│    --source-file                                PATH     Source file used to │
+│                                                          generate            │
+│                                                          indexed-struct      │
+│                                                          probes.             │
+│    --candidate                                  TEXT     Candidate source to │
+│                                                          score, repeatable.  │
+│                                                          Format              │
+│                                                          OPERATOR=path or    │
+│                                                          LABEL:OPERATOR=pat… │
+│    --compile-probes        --no-compile-pro…             Compile generated   │
+│                                                          indexed-struct      │
+│                                                          source probes.      │
+│                                                          [default:           │
+│                                                          compile-probes]     │
+│    --score-match-per…      --no-score-match…             For source          │
+│                                                          candidates,         │
+│                                                          temporarily         │
+│                                                          transfer into the   │
+│                                                          real tree and read  │
+│                                                          final report.json   │
+│                                                          match percent.      │
+│                                                          [default:           │
+│                                                          score-match-percen… │
+│    --max-probes                                 INTEGER  Maximum generated   │
+│                                                          probes to list or   │
+│                                                          compile.            │
+│                                                          [default: 12]       │
+│    --timeout                                    INTEGER  Per-candidate       │
+│                                                          compile timeout in  │
+│                                                          seconds.            │
+│                                                          [default: 120]      │
+│    --json                                                Emit as JSON.       │
+│    --help                                                Show this message   │
+│                                                          and exit.           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

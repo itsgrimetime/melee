@@ -1,0 +1,35 @@
+                                                                                
+ Usage: melee-agent debug suggest [OPTIONS] COMMAND [ARGS]...                   
+                                                                                
+ Suggest source-shape and mismatch fixes.                                       
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ signatures                      Suggest source levers for checkdiff          │
+│                                 call-prep signature mismatches.              │
+│ frame                           Suggest source/probe levers for              │
+│                                 stack-frame/local-area residuals.            │
+│ casts                           Tier 7d: static lint for cast-mismatch and   │
+│                                 signedness patterns.                         │
+│ control-flow-shape              Suggest source-level control-flow shape      │
+│                                 transforms from ASM diff JSON.               │
+│ register-tiebreak               Suggest source levers for compiler-temp      │
+│                                 register tiebreaks.                          │
+│ coalesce                        Suggest C-source patterns producing a        │
+│                                 specific coalesce, or                        │
+│                                 discover candidate coalesces that would      │
+│                                 shorten the cascade.                         │
+│ schedule                        Suggest C source reshapes for a divergent    │
+│                                 scheduler decision.                          │
+│ expression-interferer-repair    Rank expression-scored FPR repair candidates │
+│                                 without losing protected hits.               │
+│ protected-expression-reconcile  Generate/rank dual-frontier protected        │
+│                                 expression reconciliation probes.            │
+│ inline-boundary-continuation    Generate or close strict inline-leverage     │
+│                                 helper-boundary probes.                      │
+│ inlines                         Suggest hidden inline/helper/source-shape    │
+│                                 candidates.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

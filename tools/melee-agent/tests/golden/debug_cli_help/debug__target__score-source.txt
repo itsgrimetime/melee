@@ -1,0 +1,148 @@
+
+ Usage: melee-agent debug target score-source [OPTIONS] C_FILE
+
+ Compile a source via debug dump local, then score target or checkdiff
+ evidence.
+
+ Single-command flow for use as decomp-permuter's external scorer.
+ Outputs an integer score (lower = better; 0 = perfect target match).
+ Use `--quiet` to silence everything except the score itself.
+
+ Wires:
+     c_file → mwcceppc_debug.exe → pcdump.txt → parse → score_function
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    c_file      TEXT  Path to a .c file to compile (relative to melee       │
+│                        root). Can be a staging path inside `nonmatchings/`.  │
+│                        [required]                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function          -f                        TEXT   Function within the  │
+│                                                         TU to score.         │
+│                                                         [required]           │
+│    --target            -t                        PATH   Target spec (YAML or │
+│                                                         JSON, from `debug    │
+│                                                         target derive`).     │
+│    --cflags-from                                 TEXT   Use cflags from this │
+│                                                         unit's ninja block   │
+│                                                         instead of inferring │
+│                                                         from c_file. Useful  │
+│                                                         when c_file is a     │
+│                                                         staged candidate     │
+│                                                         without its own      │
+│                                                         ninja build block.   │
+│    --quiet             -q                               Suppress everything  │
+│                                                         except the integer   │
+│                                                         score on stdout.     │
+│                                                         Designed for use as  │
+│                                                         permuter's external  │
+│                                                         scorer command.      │
+│    --json                  --no-json                    Emit                 │
+│                                                         machine-readable     │
+│                                                         scoring metadata.    │
+│                                                         [default: no-json]   │
+│    --retain-pcdump         --no-retain-pcdump           Keep the generated   │
+│                                                         pcdump beside the    │
+│                                                         scored source, or at │
+│                                                         --pcdump-output when │
+│                                                         provided. JSON       │
+│                                                         output reports the   │
+│                                                         path.                │
+│                                                         [default:            │
+│                                                         no-retain-pcdump]    │
+│    --pcdump-output                               PATH   Explicit destination │
+│                                                         for --retain-pcdump. │
+│                                                         Relative paths are   │
+│                                                         resolved from the    │
+│                                                         melee repo root.     │
+│                                                         Supplying this       │
+│                                                         implies pcdump       │
+│                                                         retention.           │
+│    --checkdiff-guard       --no-checkdiff-gu…           In JSON mode, apply  │
+│                                                         the candidate to the │
+│                                                         real source tree and │
+│                                                         include no-build     │
+│                                                         checkdiff structural │
+│                                                         guard metadata.      │
+│                                                         [default:            │
+│                                                         no-checkdiff-guard]  │
+│    --full-unit-source      --target-function…           Treat C_FILE as a    │
+│                                                         complete replacement │
+│                                                         for the compile unit │
+│                                                         when running the     │
+│                                                         real-tree checkdiff  │
+│                                                         guard. Required when │
+│                                                         a retained candidate │
+│                                                         defines              │
+│                                                         helper/type/data     │
+│                                                         context outside the  │
+│                                                         target function.     │
+│                                                         [default:            │
+│                                                         target-function-sou… │
+│    --remote                --no-remote                  Score through the    │
+│                                                         remote pcdump        │
+│                                                         backend directly,    │
+│                                                         bypassing local wibo │
+│                                                         and patched compiler │
+│                                                         discovery.           │
+│                                                         [default: no-remote] │
+│    --remote-fallback       --no-remote-fallb…           Use the local scorer │
+│                                                         unless the unsafe    │
+│                                                         local pcdump lane    │
+│                                                         guard blocks it,     │
+│                                                         then stage/score     │
+│                                                         through the remote   │
+│                                                         backend.             │
+│                                                         [default:            │
+│                                                         no-remote-fallback]  │
+│    --remote-host                                 TEXT   SSH host alias for   │
+│                                                         --remote/--remote-f… │
+│                                                         [env var:            │
+│                                                         MWCC_DEBUG_HOST]     │
+│                                                         [default:            │
+│                                                         nzxt-local]          │
+│    --remote-script                               TEXT   Path to              │
+│                                                         run_pcdump.ps1 on    │
+│                                                         the remote host.     │
+│                                                         [env var:            │
+│                                                         MWCC_DEBUG_REMOTE_S… │
+│                                                         [default:            │
+│                                                         C:\Users\mikes\code… │
+│    --remote-branch                               TEXT   Branch to compile on │
+│                                                         the remote backend.  │
+│                                                         [env var:            │
+│                                                         MWCC_DEBUG_BRANCH]   │
+│    --remote-no-pull                                     Forward --no-pull to │
+│                                                         the remote pcdump    │
+│                                                         backend.             │
+│    --timeout                                     FLOAT  Total score-source   │
+│                                                         budget in seconds,   │
+│                                                         shared by compile    │
+│                                                         and optional         │
+│                                                         checkdiff guard. Use │
+│                                                         0 to disable.        │
+│                                                         [default: 120.0]     │
+│    --expression-base…                            PATH   Baseline pcdump used │
+│                                                         to derive expression │
+│                                                         anchors for the      │
+│                                                         target virtuals.     │
+│                                                         JSON output then     │
+│                                                         reports              │
+│                                                         expression_score     │
+│                                                         that follows         │
+│                                                         expression identity  │
+│                                                         across virtual       │
+│                                                         renumbering.         │
+│    --expression-sour…                            TEXT   Baseline C source    │
+│                                                         for expression       │
+│                                                         anchors. Defaults to │
+│                                                         --cflags-from when   │
+│                                                         supplied, otherwise  │
+│                                                         c_file.              │
+│    --expression-reg-…                            TEXT   Register class for   │
+│                                                         expression anchors:  │
+│                                                         fpr or gpr.          │
+│                                                         [default: fpr]       │
+│    --help                                               Show this message    │
+│                                                         and exit.            │
+╰──────────────────────────────────────────────────────────────────────────────╯

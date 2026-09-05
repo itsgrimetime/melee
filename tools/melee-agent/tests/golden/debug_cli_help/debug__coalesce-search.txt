@@ -1,0 +1,120 @@
+                                                                                
+ Usage: melee-agent debug coalesce-search [OPTIONS]                             
+                                                                                
+ Search source-shape probes by target coalescing/interference objective.        
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function          -f                       TEXT     Function to         │
+│                                                          explore.            │
+│                                                          [required]          │
+│    --target                                     TEXT     Target virtual      │
+│                                                          pair(s), e.g.       │
+│                                                          r37=r40 or          │
+│                                                          r37=r40,r43=r33.    │
+│                                                          May be omitted when │
+│                                                          --trace-copy-json   │
+│                                                          is supplied.        │
+│    --trace-copy-json                            PATH     trace-copy --json   │
+│                                                          report to derive a  │
+│                                                          copy-survived       │
+│                                                          repair target and   │
+│                                                          register class.     │
+│    --pcdump                                     PATH     Baseline pcdump.    │
+│                                                          Auto-resolves from  │
+│                                                          cache when omitted. │
+│    --allow-stale-pcd…                                    Allow an            │
+│                                                          auto-resolved       │
+│                                                          baseline pcdump     │
+│                                                          whose source is     │
+│                                                          newer than the      │
+│                                                          cache. Off by       │
+│                                                          default so source   │
+│                                                          scores cannot be    │
+│                                                          mixed with stale    │
+│                                                          allocator facts.    │
+│    --source-file                                PATH     Source file used to │
+│                                                          generate            │
+│                                                          coalesce-directed   │
+│                                                          probes.             │
+│    --split-var                                  TEXT     Generate            │
+│                                                          anti-coalesce       │
+│                                                          volatile-copy       │
+│                                                          probes for this     │
+│                                                          local variable      │
+│                                                          before falling back │
+│                                                          to generic          │
+│                                                          lifetime/layout     │
+│                                                          probes.             │
+│    --candidate                                  TEXT     Candidate           │
+│                                                          pcdump/source to    │
+│                                                          score, repeatable.  │
+│                                                          Format              │
+│                                                          OPERATOR=path or    │
+│                                                          LABEL:OPERATOR=pat… │
+│    --compile-probes        --no-compile-pro…             Compile generated   │
+│                                                          source probes.      │
+│                                                          Enabled by default  │
+│                                                          so the plain        │
+│                                                          command emits       │
+│                                                          ranked, scored      │
+│                                                          candidates.         │
+│                                                          [default:           │
+│                                                          compile-probes]     │
+│    --score-match-per…      --no-score-match…             For source          │
+│                                                          candidates,         │
+│                                                          temporarily         │
+│                                                          transfer into the   │
+│                                                          real tree and read  │
+│                                                          final report.json   │
+│                                                          match percent.      │
+│                                                          Enabled by default  │
+│                                                          because ranking     │
+│                                                          uses match percent  │
+│                                                          as a tiebreaker;    │
+│                                                          use                 │
+│                                                          --no-score-match-p… │
+│                                                          for faster          │
+│                                                          pcdump-only         │
+│                                                          scoring.            │
+│                                                          [default:           │
+│                                                          score-match-percen… │
+│    --max-probes                                 INTEGER  Maximum generated   │
+│                                                          probes to compile   │
+│                                                          or list.            │
+│                                                          [default: 8]        │
+│    --include-transfo…      --no-include-tra…             Opt in to           │
+│                                                          transform-corpus    │
+│                                                          source-shape probes │
+│                                                          after the coalesce  │
+│                                                          and lifetime/layout │
+│                                                          probe families.     │
+│                                                          [default:           │
+│                                                          no-include-transfo… │
+│    --transform-family                           TEXT     Transform-corpus    │
+│                                                          source-shape family │
+│                                                          to generate. Repeat │
+│                                                          or pass             │
+│                                                          comma-separated     │
+│                                                          names; passing this │
+│                                                          also opts in.       │
+│    --transform-force…                           TEXT     Proof mapping for   │
+│                                                          transform-corpus    │
+│                                                          source-shape        │
+│                                                          probes, e.g.        │
+│                                                          IG:PHYS or          │
+│                                                          comma-separated     │
+│                                                          IG:PHYS entries.    │
+│    --frame-reservati…                           INTEGER  Add a PAD_STACK(N)  │
+│                                                          source probe for    │
+│                                                          implicit no-access  │
+│                                                          frame reservation   │
+│                                                          gaps.               │
+│    --timeout                                    INTEGER  Per-candidate       │
+│                                                          compile timeout in  │
+│                                                          seconds.            │
+│                                                          [default: 120]      │
+│    --json                                                Emit as JSON.       │
+│    --help                                                Show this message   │
+│                                                          and exit.           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

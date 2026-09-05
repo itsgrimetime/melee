@@ -1,0 +1,203 @@
+                                                                                
+ Usage: melee-agent debug dump remote [OPTIONS] C_FILE                          
+                                                                                
+ Dump MWCC's internal IR + codegen for a TU and emit pcdump.txt to stdout.      
+                                                                                
+ Compiles the given .c file on a remote Windows host under the mwcc_debug       
+ patched lmgr326b.dll, which unlocks MWCC's normally-disabled `debuglisting`    
+ output. The dump shows per-function basic-block structure, every pass of       
+ the IR optimizer with virtual registers, and the AFTER REGISTER COLORING       
+ pass with physical-register assignments — useful when diagnosing               
+ register-allocation mismatches that mismatch-db / opseq / ghidra haven't       
+ explained.                                                                     
+                                                                                
+ On success, the raw pcdump.txt is written to the cache at                      
+ build/mwcc_debug_cache/<unit>.txt by default. Use --output PATH for            
+ a custom location, or --output - for stdout. Follow-up commands like           
+ `debug inspect analyze -f FN` auto-resolve the cached pcdump by TU.            
+ All diagnostics go to stderr. Exit code matches the remote compile's           
+ exit code (0 = success).                                                       
+                                                                                
+ Setup: see docs/mwcc-debug.md. Requires SSH access to a Windows machine        
+ that has run_pcdump.ps1 and the patched lmgr326b.dll installed.                
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    c_file      TEXT  Path to a .c file in the melee repo [required]        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --output                     -o      PATH     Output path for the dump.      │
+│                                               Default: cache it under        │
+│                                               build/mwcc_debug_cache/<unit>… │
+│                                               so follow-up commands can      │
+│                                               auto-resolve it. Use '-' to    │
+│                                               force stdout instead.          │
+│ --unit-source,--cflags-from          TEXT     Compile retained/probe source  │
+│                                               through this real same-TU      │
+│                                               src/... file on the remote.    │
+│                                               Non-src sources are streamed   │
+│                                               over SSH stdin and staged into │
+│                                               the unit for the duration of   │
+│                                               the remote pcdump run.         │
+│ --function                   -f      TEXT     Function name used to infer    │
+│                                               --unit-source for retained     │
+│                                               remote sources when            │
+│                                               --unit-source is omitted.      │
+│ --timeout                    -t      INTEGER  Per-compile timeout in seconds │
+│                                               (passed to remote)             │
+│                                               [default: 60]                  │
+│ --host                               TEXT     SSH host alias for the Windows │
+│                                               debug machine                  │
+│                                               [env var: MWCC_DEBUG_HOST]     │
+│                                               [default: nzxt-local]          │
+│ --remote-script                      TEXT     Path to run_pcdump.ps1 on the  │
+│                                               remote host                    │
+│                                               [env var:                      │
+│                                               MWCC_DEBUG_REMOTE_SCRIPT]      │
+│                                               [default:                      │
+│                                               C:\Users\mikes\code\mwcc_debu… │
+│ --no-pull                                     Skip 'git pull' on the remote  │
+│                                               side (test stale code)         │
+│ --force-phys                         TEXT     Tier 5: bias the allocator.    │
+│                                               Format 'virtIdx:physReg[,...]' │
+│                                               or                             │
+│                                               'class:virtIdx:physReg[,...]'  │
+│                                               (class: gpr, fp, fpr, int).    │
+│                                               E.g. '36:31' or 'gpr:36:31'.   │
+│                                               Class-scoped entries are       │
+│                                               passed through to the DLL and  │
+│                                               only apply to that register    │
+│                                               class. EXPERIMENTAL — may      │
+│                                               produce broken code if         │
+│                                               interferences are violated.    │
+│ --force-phys-iter                    TEXT     Tier 5: bias by colorgraph     │
+│                                               iter position                  │
+│                                               (class:iter:phys[,...]). Use   │
+│                                               for nodes that lack an         │
+│                                               addressable ig_idx.            │
+│                                               EXPERIMENTAL.                  │
+│ --force-phys-fn                      TEXT     Scope --force-phys and         │
+│                                               --force-phys-iter to one       │
+│                                               function. EXPERIMENTAL.        │
+│ --branch                             TEXT     Compile against this branch on │
+│                                               the remote. If omitted,        │
+│                                               auto-detects from the local    │
+│                                               repo's current branch. The     │
+│                                               remote maintains a worktree    │
+│                                               per branch so concurrent       │
+│                                               pcdumps on different branches  │
+│                                               don't clobber each other.      │
+│                                               [env var: MWCC_DEBUG_BRANCH]   │
+│ --force-iter-first                   TEXT     Tier 6: reorder the            │
+│                                               simplification list so named   │
+│                                               virtuals are popped first by   │
+│                                               colorgraph. Format             │
+│                                               'virtIdx[,virtIdx]*'. E.g.     │
+│                                               '32' promotes virtual r32 to   │
+│                                               the head of the simplification │
+│                                               stack — it gets first crack at │
+│                                               the top-down callee-save       │
+│                                               dispense (r31). Addresses the  │
+│                                               param-iter-ceiling pattern.    │
+│                                               EXPERIMENTAL — produces        │
+│                                               DLL-patched binary, NOT what   │
+│                                               real MWCC would emit from any  │
+│                                               C source.                      │
+│ --force-iter-first-class             INTEGER  Scope --force-iter-first IG    │
+│                                               indices to one register class  │
+│                                               (0=GPR, 1=FPR). Use when the   │
+│                                               same ig_idx exists in multiple │
+│                                               classes and an FPR/GPR-only    │
+│                                               hypothesis must avoid          │
+│                                               disturbing the other allocator │
+│                                               pass.                          │
+│ --force-iter-first-iter              TEXT     Tier 6: reorder simplification │
+│                                               list by class and current      │
+│                                               iteration position. Format     │
+│                                               'class:iter[,class:iter]*'.    │
+│                                               Useful for split/spill nodes   │
+│                                               that lack a stable ig_idx.     │
+│ --force-iter-first-fn                TEXT     Scope --force-iter-first to    │
+│                                               one function in the TU. Other  │
+│                                               functions compile with their   │
+│                                               natural simplification order.  │
+│ --force-select-order                 TEXT     Tier 6: explicit alias for     │
+│                                               --force-iter-first when        │
+│                                               testing allocator selection    │
+│                                               order. Format                  │
+│                                               'virtIdx[,virtIdx]*'; the      │
+│                                               first listed node gets first   │
+│                                               selection priority.            │
+│ --force-select-order-class           INTEGER  Scope --force-select-order IG  │
+│                                               indices to one register class  │
+│                                               (0=GPR, 1=FPR).                │
+│ --force-select-order-fn              TEXT     Scope --force-select-order to  │
+│                                               one function in the TU.        │
+│ --force-coalesce                     TEXT     Tier 6: override the           │
+│                                               conservative coalescer. Format │
+│                                               'virt=root[,virt=root]*'. E.g. │
+│                                               '42=38' forces virtual 42 to   │
+│                                               coalesce into 38; '42=42'      │
+│                                               un-coalesces 42 back to its    │
+│                                               own root. EXPERIMENTAL.        │
+│ --force-coalesce-fn                  TEXT     Scope --force-coalesce to a    │
+│                                               single function name in the    │
+│                                               TU. Other functions compile    │
+│                                               naturally. EXPERIMENTAL.       │
+│ --force-coalesce-class               INTEGER  Scope --force-coalesce virtual │
+│                                               indices to one register class  │
+│                                               (0=GPR, 1=FPR).                │
+│ --force-remat                        TEXT     Tier 7: DIAGNOSTIC-ONLY        │
+│                                               rematerialization operand-slot │
+│                                               bias. Format                   │
+│                                               'class:ig=copy|literal[,...]'. │
+│                                               Sets or clears the observed    │
+│                                               remat alternate operand        │
+│                                               selector for a chosen IG node  │
+│                                               after coloring.                │
+│ --force-remat-fn                     TEXT     Scope --force-remat to a       │
+│                                               single function name in the    │
+│                                               TU. Other functions compile    │
+│                                               naturally. EXPERIMENTAL.       │
+│ --force-schedule                     TEXT     Tier 7: pin adjacent same-base │
+│                                               load order after MWCC's        │
+│                                               instruction scheduler. Format  │
+│                                               'op:beforeOffset>afterOffset[… │
+│                                               E.g. 'lwz:0x74>0x70' forces a  │
+│                                               same-base lwz pair at offsets  │
+│                                               0x70/0x74 to appear 0x74       │
+│                                               first. EXPERIMENTAL.           │
+│ --force-schedule-fn                  TEXT     Scope --force-schedule to a    │
+│                                               single function name in the    │
+│                                               TU. Other functions compile    │
+│                                               naturally. EXPERIMENTAL.       │
+│ --force-no-cse                       TEXT     Tier 8: veto selected IRO      │
+│                                               CommonSubs replacements.       │
+│                                               Format                         │
+│                                               'node[=with][,node[=with]]*';  │
+│                                               'iro:' prefixes and 0x hex are │
+│                                               accepted and normalized. E.g.  │
+│                                               'iro:439=431' skips only the   │
+│                                               replacement logged as          │
+│                                               'Replacing common sub at 439   │
+│                                               with 431'. Use --trace-cse     │
+│                                               first to discover node IDs.    │
+│                                               DIAGNOSTIC-ONLY.               │
+│ --force-no-cse-fn                    TEXT     Scope --force-no-cse to a      │
+│                                               single function name in the    │
+│                                               TU. Recommended because IRO    │
+│                                               node IDs are per               │
+│                                               function/pass.                 │
+│ --trace-cse                                   Trace IRO CommonSubs           │
+│                                               replacement node IDs without   │
+│                                               vetoing them. Emits            │
+│                                               'IRO_CommonSub: replaced node  │
+│                                               N with M' lines so             │
+│                                               --force-no-cse can be          │
+│                                               targeted. DIAGNOSTIC-ONLY.     │
+│ --trace-cse-fn                       TEXT     Scope --trace-cse to a single  │
+│                                               function name in the TU.       │
+│                                               Recommended because IRO node   │
+│                                               IDs are per function/pass.     │
+│ --help                                        Show this message and exit.    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

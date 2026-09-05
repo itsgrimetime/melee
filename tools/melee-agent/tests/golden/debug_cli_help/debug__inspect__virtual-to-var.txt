@@ -1,0 +1,27 @@
+                                                                                
+ Usage: melee-agent debug inspect virtual-to-var [OPTIONS] VIRTUAL [PCDUMP]     
+                                                                                
+ Bridge inverse: given a virtual register, predict the source variable name     
+ (decl-order heuristic), including the variable's scope path (function-top vs   
+ nested-block). When no source variable binds to the requested virtual          
+ (compiler-introduced temps, spill nodes, etc.), falls back to showing the      
+ first defining IR op so you can correlate to the C source manually.            
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    virtual      TEXT      Virtual register number (32+) or ig_idx. Accepts │
+│                             '62' or 'r62' — the 'r' prefix is stripped so    │
+│                             you can copy-paste straight from analyze/guide   │
+│                             output.                                          │
+│                             [required]                                       │
+│      pcdump       [PCDUMP]  Path to pcdump.txt. Auto-resolves from cache.    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function  -f      TEXT  Function to look up (required). [required]      │
+│    --json                    Emit as JSON.                                   │
+│    --class             TEXT  Register class for the inverse lookup: gpr/r/0  │
+│                              or fpr/f/1. When omitted, infer from an r*/f*   │
+│                              virtual token and default to GPR for bare       │
+│                              numbers.                                        │
+│    --help                    Show this message and exit.                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

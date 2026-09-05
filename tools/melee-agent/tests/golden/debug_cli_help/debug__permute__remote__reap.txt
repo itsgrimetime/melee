@@ -1,0 +1,20 @@
+                                                                                
+ Usage: melee-agent debug permute remote reap [OPTIONS]                         
+                                                                                
+ Stop remote permuter jobs that are byte-matched or plateaued.                  
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --function    -f                  TEXT   Only reap jobs for this function.   │
+│ --job-id                          TEXT   Only reap this specific job.        │
+│ --idle-hours                      FLOAT  Hours of log inactivity before      │
+│                                          plateau is reapable.                │
+│                                          [default: 6.0]                      │
+│ --timeout                         FLOAT  Per-job remote probe timeout in     │
+│                                          seconds.                            │
+│                                          [default: 30.0]                     │
+│ --dry-run         --no-dry-run           Show what would be reaped without   │
+│                                          stopping.                           │
+│                                          [default: dry-run]                  │
+│ --help                                   Show this message and exit.         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,59 @@
+                                                                                
+ Usage: melee-agent debug permute run [OPTIONS] [EXTRA]...                      
+                                                                                
+ Tier 2: run decomp-permuter with mwcc-debug score blended in.                  
+                                                                                
+ Per-iteration, permuter scores candidates by combining objdiff                 
+ byte-distance with `melee-agent debug target score-source` (IGNode-distance    
+ from pcdump). Byte distance stays primary; the mwcc signal breaks              
+ ties between byte-equivalent candidates — useful for register-cascade          
+ stuck cases where the byte scorer can't distinguish many mutations.            
+                                                                                
+ Prerequisites:                                                                 
+ - Run `melee-agent debug dump setup` (one-time).                               
+ - `<perm-root>/nonmatchings/<function>/` exists with base.c, target.o,         
+   compile.sh. Create via `decomp-permuter/import.py`.                          
+ - `melee-agent debug permute fix-compile <perm_dir>` if compile.sh was         
+   generated on macOS (auto-applied by debug permute config).                   
+                                                                                
+ Default is single-threaded for safety. score-source now emits                  
+ per-PID pcdump filenames so parallel threads no longer race on a               
+ shared pcdump.txt — raise `-j` above 1 if you want concurrency.                
+                                                                                
+ Passing flags through to permuter.py: Typer will try to consume any            
+ leading `--<name>` tokens as options of `permute` itself. Use `--`             
+ to separate. Examples:                                                         
+                                                                                
+     # WRONG — Typer rejects --best-only as an unknown option                   
+     melee-agent debug permute run -f my_fn --best-only                         
+                                                                                
+     # RIGHT — `--` ends `permute run`'s own options; everything after          
+     # is forwarded to permuter.py                                              
+     melee-agent debug permute run -f my_fn -- --best-only                      
+     melee-agent debug permute run -f my_fn -j 4 -- --best-only --seed 0        
+                                                                                
+ Note: stdout is set to line-buffering so that piping through `tail -N`         
+ shows live progress instead of buffering until the permuter exits.             
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   extra      [EXTRA]...  Extra args passed through to permuter.py.           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function   -f      TEXT     Function to permute (required). [required]  │
+│    --target     -t      PATH     Target spec for mwcc-debug scoring.         │
+│                                  Auto-derived from current pcdump if         │
+│                                  omitted.                                    │
+│    --perm-root          PATH     Root of decomp-permuter clone.              │
+│                                  [default: /Users/mike/code/decomp-permuter] │
+│    --blend              FLOAT    Weight α applied to mwcc-debug score when   │
+│                                  blending with objdiff bytes. Final = bytes  │
+│                                  + α * mwcc.                                 │
+│                                  [default: 0.1]                              │
+│    --threads    -j      INTEGER  Permuter parallelism. score-source now uses │
+│                                  unique per-PID pcdump filenames so parallel │
+│                                  threads no longer race; safe to raise above │
+│                                  1.                                          │
+│                                  [default: 1]                                │
+│    --help                        Show this message and exit.                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

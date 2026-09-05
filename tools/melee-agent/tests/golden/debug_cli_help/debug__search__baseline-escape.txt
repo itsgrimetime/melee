@@ -1,0 +1,75 @@
+                                                                                
+ Usage: melee-agent debug search baseline-escape [OPTIONS]                      
+                                                                                
+ Generate post-ceiling baseline escape candidates for retained allocator        
+ stalls.                                                                        
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function          -f                       TEXT     Function to plan    │
+│                                                          for.                │
+│                                                          [required]          │
+│    --source-function                            TEXT     Function name to    │
+│                                                          locate in the       │
+│                                                          retained source if  │
+│                                                          it differs.         │
+│    --source-file,--s…                           PATH     Optional retained C │
+│                                                          source baseline.    │
+│    --allocator-ceili…                           PATH     Allocator-ceiling   │
+│                                                          JSON with           │
+│                                                          expression-scored   │
+│                                                          terminal evidence.  │
+│                                                          [default:           │
+│                                                          allocator_ceiling.… │
+│    --expression-inte…                           PATH     Expression-interfe… │
+│                                                          repair JSON with    │
+│                                                          post-bridge         │
+│                                                          terminal.           │
+│    --retained-fronti…                           PATH     Retained-frontiers  │
+│                                                          triage JSON proving │
+│                                                          known lanes         │
+│                                                          exhausted.          │
+│                                                          [default:           │
+│                                                          retained_frontiers… │
+│    --evidence-json                              PATH     Supplemental        │
+│                                                          evidence JSON for   │
+│                                                          non-expression      │
+│                                                          baseline escapes.   │
+│                                                          Repeatable.         │
+│    --score-json                                 PATH     Optional score JSON │
+│                                                          for generated       │
+│                                                          candidates.         │
+│                                                          Repeatable.         │
+│    --target                                     PATH     Target JSON for     │
+│                                                          validation hints.   │
+│    --cflags-from                                PATH     Source path for     │
+│                                                          score-source        │
+│                                                          cflags.             │
+│    --unit-source                                PATH     Unit source path    │
+│                                                          for validation      │
+│                                                          hints.              │
+│    --expression-base…                           PATH     Baseline pcdump     │
+│                                                          used to enable      │
+│                                                          expression scoring. │
+│    --expression-sour…                           PATH     Source file used    │
+│                                                          for expression      │
+│                                                          attribution.        │
+│    --max-candidates                             INTEGER  Maximum candidates  │
+│                                                          to emit.            │
+│                                                          [default: 12]       │
+│    --write-probes                               PATH     Optional directory  │
+│                                                          where candidate     │
+│                                                          source files are    │
+│                                                          written.            │
+│    --include-source        --no-include-sou…             Include candidate   │
+│                                                          source text in JSON │
+│                                                          output.             │
+│                                                          [default:           │
+│                                                          no-include-source]  │
+│    --json                  --text                        Emit                │
+│                                                          machine-readable    │
+│                                                          JSON.               │
+│                                                          [default: json]     │
+│    --help                                                Show this message   │
+│                                                          and exit.           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,31 @@
+                                                                                
+ Usage: melee-agent debug search post-source-context-next-dimension             
+            [OPTIONS]                                                           
+                                                                                
+ Discover the next explicit handoff after Draw source-context exhaustion.       
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function                 -f            TEXT  Function to discover from. │
+│                                                   [required]                 │
+│    --source-model-json                      PATH  Terminal                   │
+│                                                   source-model-synthesis     │
+│                                                   JSON.                      │
+│    --retained-frontiers-json                PATH  Retained-frontiers         │
+│                                                   aggregate JSON from the    │
+│                                                   exhausted source context.  │
+│    --allocator-ceiling-json                 PATH  Allocator-ceiling JSON     │
+│                                                   consuming the exhausted    │
+│                                                   retained frontiers.        │
+│    --continuation-json                      PATH  Optional                   │
+│                                                   source-family-continuation │
+│                                                   JSON.                      │
+│    --source-file,--source                   PATH  Retained source file.      │
+│    --out                                    PATH  Optional path to write     │
+│                                                   discovery JSON.            │
+│    --json                         --text          Emit machine-readable      │
+│                                                   JSON.                      │
+│                                                   [default: json]            │
+│    --help                                         Show this message and      │
+│                                                   exit.                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

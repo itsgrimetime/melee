@@ -1,0 +1,37 @@
+                                                                                
+ Usage: melee-agent debug inspect var-to-virtual [OPTIONS] VAR_NAME [PCDUMP]    
+                                                                                
+ Bridge: given a source variable name, predict its MWCC virtual.                
+                                                                                
+ Reports `confidence`: best-guess (heuristic matched, no concerns),             
+ low-confidence (matched but red flags present — cursor may be                  
+ wrong), ambiguous (no observed virtual for this variable), or                  
+ unsupported (e.g., variable lives in a macro the tokenizer can't               
+ see). Pass `--basis` to see the underlying evidence.                           
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    var_name      TEXT      Source-level variable name. [required]          │
+│      pcdump        [PCDUMP]  Path to pcdump.txt. Auto-resolves from cache.   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function  -f      TEXT  Function to look up (required). [required]      │
+│    --json                    Emit as JSON.                                   │
+│    --basis                   Also dump the heuristic's evidence: parsed      │
+│                              params/locals, the cursor calculation           │
+│                              step-by-step, observed virtuals in the          │
+│                              pre-pass, and any red flags that lowered        │
+│                              confidence. Use when you suspect var-to-virtual │
+│                              gave you a wrong mapping — the basis tells you  │
+│                              whether the cursor shifted, a macro hid a decl, │
+│                              or the function has nested blocks the parser    │
+│                              skipped.                                        │
+│    --all                     Return ALL bindings matching the name. Default  │
+│                              picks the highest-confidence top-level binding  │
+│                              for back-compat.                                │
+│    --scope             TEXT  Filter bindings by scope path. Exact match by   │
+│                              default; trailing '/' for prefix (e.g. 'fn_X/'  │
+│                              matches the function and all nested blocks      │
+│                              inside it).                                     │
+│    --help                    Show this message and exit.                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,15 @@
+                                                                                
+ Usage: melee-agent debug inspect asm [OPTIONS]                                 
+                                                                                
+ Show the current compiled assembly for a function.                             
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function       -f      TEXT   Function name to disassemble [required]   │
+│    --no-build                      Skip rebuilding and show the current      │
+│                                    compiled .o as-is.                        │
+│    --build-timeout          FLOAT  Timeout in seconds for each checkdiff     │
+│                                    build/report step.                        │
+│                                    [default: 60.0]                           │
+│    --help                          Show this message and exit.               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

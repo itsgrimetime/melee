@@ -1,0 +1,61 @@
+[
+  {
+    "name": "current-root-cause-values-canonicalize",
+    "input": {
+      "function": "current_fn",
+      "root_cause_keys": [
+        " bss-symbol:lbl_80472ED8 ",
+        "bss-symbol:vmtx",
+        "bss-symbol:lbl_80472ED8"
+      ],
+      "max_root_cause_impact": 3
+    },
+    "expected": {
+      "root_cause_keys": [
+        "bss-symbol:lbl_80472ED8",
+        "bss-symbol:vmtx"
+      ],
+      "max_root_cause_impact": 3
+    }
+  },
+  {
+    "name": "future-root-cause-values-survive",
+    "input": {
+      "function": "future_fn",
+      "root_cause_keys": [
+        "future-cause:zeta",
+        "future-cause:alpha"
+      ],
+      "max_root_cause_impact": 7
+    },
+    "expected": {
+      "root_cause_keys": [
+        "future-cause:zeta",
+        "future-cause:alpha"
+      ],
+      "max_root_cause_impact": 7
+    }
+  },
+  {
+    "name": "malformed-root-cause-values-sanitize",
+    "input": {
+      "function": "malformed_fn",
+      "root_cause_keys": "bss-symbol:not-an-array",
+      "max_root_cause_impact": true
+    },
+    "expected": {
+      "root_cause_keys": [],
+      "max_root_cause_impact": 0
+    }
+  },
+  {
+    "name": "legacy-v4-row-remains-root-cause-free",
+    "input": {
+      "function": "legacy_fn",
+      "schema_version": 4,
+      "semantic_delta_families": ["branch-predicate-control"],
+      "opcode_edit_direction": "substitution"
+    },
+    "expected": {}
+  }
+]

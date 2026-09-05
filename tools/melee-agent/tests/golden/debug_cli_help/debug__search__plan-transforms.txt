@@ -1,0 +1,116 @@
+                                                                                
+ Usage: melee-agent debug search plan-transforms [OPTIONS]                      
+                                                                                
+ Plan source-transform families and instantiate bounded probes.                 
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function          -f                        TEXT     Function to plan   │
+│                                                           for.               │
+│                                                           [required]         │
+│ *  --unit              -u                        TEXT     Translation unit   │
+│                                                           path, e.g.         │
+│                                                           melee/ft/ftcommon. │
+│                                                           [required]         │
+│    --force-phys,--di…                            TEXT     Force-phys proof   │
+│                                                           vector as IG:PHYS  │
+│                                                           or CLASS:IG:PHYS   │
+│                                                           entries. Optional  │
+│                                                           when               │
+│                                                           --scheduler-order… │
+│                                                           is provided.       │
+│    --source-file,--s…                            PATH     Optional C source  │
+│                                                           file used to       │
+│                                                           instantiate        │
+│                                                           concrete probes.   │
+│    --node-set-delta                              PATH     JSON               │
+│                                                           node_set_delta     │
+│                                                           payload from       │
+│                                                           `debug solve       │
+│                                                           coloring --json`.  │
+│    --scheduler-order…                            PATH     JSON               │
+│                                                           scheduler-order    │
+│                                                           target used to     │
+│                                                           materialize source │
+│                                                           probes.            │
+│    --select-order-js…                            PATH     JSON emitted by    │
+│                                                           debug              │
+│                                                           select-order-sear… │
+│                                                           --json, used to    │
+│                                                           materialize        │
+│                                                           retained Case-C    │
+│                                                           window-order       │
+│                                                           continuation       │
+│                                                           probes.            │
+│    --coalesce-sugges…                            PATH     JSON emitted by    │
+│                                                           debug suggest      │
+│                                                           coalesce --json,   │
+│                                                           used to            │
+│                                                           materialize        │
+│                                                           retained GPR       │
+│                                                           common-subexpr/co… │
+│                                                           source probes.     │
+│    --virtual-explain…                            PATH     JSON emitted by    │
+│                                                           debug inspect      │
+│                                                           explain-virtual    │
+│                                                           --json, used to    │
+│                                                           derive retained    │
+│                                                           Case-C             │
+│                                                           blocker-color-cha… │
+│                                                           repair goals.      │
+│    --current-owner-e…                            PATH     Prior              │
+│                                                           plan-transforms or │
+│                                                           allocator-ceiling  │
+│                                                           JSON whose         │
+│                                                           retained Case-C    │
+│                                                           current            │
+│                                                           source-owner       │
+│                                                           terminal spans     │
+│                                                           should seed        │
+│                                                           alternate          │
+│                                                           source-owner       │
+│                                                           discovery.         │
+│    --max-per-family                              INTEGER  Maximum            │
+│                                                           materialized       │
+│                                                           probes per family. │
+│                                                           [default: 3]       │
+│    --transform-family                            TEXT     Restrict concrete  │
+│                                                           probe              │
+│                                                           materialization to │
+│                                                           one transform      │
+│                                                           family. May be     │
+│                                                           passed multiple    │
+│                                                           times.             │
+│    --write-probes                                PATH     Optional directory │
+│                                                           where materialized │
+│                                                           candidate source   │
+│                                                           files are written. │
+│    --record-ledger         --no-record-ledger             Record the         │
+│                                                           transform          │
+│                                                           plan/probe outcome │
+│                                                           in the shared      │
+│                                                           attempts ledger.   │
+│                                                           [default:          │
+│                                                           no-record-ledger]  │
+│    --validate-command                            TEXT     External command   │
+│                                                           template to        │
+│                                                           validate each      │
+│                                                           generated probe.   │
+│                                                           Use                │
+│                                                           {candidate_path}   │
+│                                                           as the candidate   │
+│                                                           source             │
+│                                                           placeholder.       │
+│    --stop-on-retained      --validate-all                 Stop validation    │
+│                                                           after the first    │
+│                                                           retained source    │
+│                                                           improvement.       │
+│                                                           [default:          │
+│                                                           validate-all]      │
+│    --json                  --no-json                      Emit               │
+│                                                           machine-readable   │
+│                                                           JSON.              │
+│                                                           [default: no-json] │
+│    --help                                                 Show this message  │
+│                                                           and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

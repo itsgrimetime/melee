@@ -1,0 +1,28 @@
+
+ Usage: melee-agent debug retro [OPTIONS] COMMAND [ARGS]...
+
+ Retail-binary MWCC introspection via retrowin32 + gdb (GC/1.2.5n front-end IRO
+ and backend/regalloc traces, plus GC/1.1 backend dumps).
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ setup                Clone + build retrowin32 and cadmic at pinned SHAs      │
+│                      (idempotent).                                           │
+│ ghidra-setup         Create or validate the exact GC/1.2.5n compiler Ghidra  │
+│                      audit project.                                          │
+│ dump                 Dump retail compiler internals for FN in SRC.           │
+│ backend              Generate an exact retail GC/1.2.5n backend/regalloc     │
+│                      trace.                                                  │
+│ backend-candidate    Assemble a candidate retail GC/1.2.5n backend trace.    │
+│ probe-backend-map    Probe retail GC/1.2.5n backend map candidates without   │
+│                      emitting traces.                                        │
+│ probe-backend-ig     Probe retail GC/1.2.5n partial                          │
+│                      IG/order/coalesce/observed-color snapshots.             │
+│ probe-backend-pcode  Probe retail GC/1.2.5n backend PCode/block snapshots.   │
+│ verify-backend       Compare a retail backend trace to mwcc-debug pcdump     │
+│                      facts.                                                  │
+│ verify               Cross-check a retro dump against the existing DLL       │
+│                      pcdump (control TU).                                    │
+╰──────────────────────────────────────────────────────────────────────────────╯

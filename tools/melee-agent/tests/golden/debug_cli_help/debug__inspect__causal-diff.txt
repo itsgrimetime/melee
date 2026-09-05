@@ -1,0 +1,33 @@
+
+ Usage: melee-agent debug inspect causal-diff [OPTIONS]
+
+ Compare two immutable compiler-artifact frontiers without generating
+ artifacts.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function        -f      TEXT                    Function to analyze.    │
+│                                                      [required]              │
+│ *  --frontier                TEXT                    Immutable frontier      │
+│                                                      bundle as               │
+│                                                      LABEL=MANIFEST; provide │
+│                                                      exactly two.            │
+│                                                      [required]              │
+│ *  --retail-offset           TEXT                    Required                │
+│                                                      function-relative       │
+│                                                      retail byte offset      │
+│                                                      (decimal or             │
+│                                                      0x-prefixed).           │
+│                                                      [required]              │
+│    --frontier-node           TEXT                    Optional expert node    │
+│                                                      assertion               │
+│                                                      LABEL:OPERAND=SPEC;     │
+│                                                      repeatable.             │
+│    --json                                            Emit                    │
+│                                                      causal-diff-report.v1   │
+│                                                      JSON.                   │
+│    --evidence-depth          INTEGER RANGE           Dependency traversal    │
+│                              [1<=x<=8]               bound (1..8).           │
+│                                                      [default: 4]            │
+│    --help                                            Show this message and   │
+│                                                      exit.                   │
+╰──────────────────────────────────────────────────────────────────────────────╯

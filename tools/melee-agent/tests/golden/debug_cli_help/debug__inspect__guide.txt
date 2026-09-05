@@ -1,0 +1,34 @@
+                                                                                
+ Usage: melee-agent debug inspect guide [OPTIONS] [PCDUMP]                      
+                                                                                
+ Tier 4: human-readable diagnostic for stuck-function debugging.                
+                                                                                
+ Reports which virtuals are at the wrong physical, why (interference,           
+ spill, iteration order), and suggests directions for C-source nudges.          
+ Hints, not guarantees — interpret in source context.                           
+                                                                                
+ Pass --asm-hunks N to also dump the top N asm-diff hunks from                  
+ checkdiff. Saves switching tools when allocator-only analysis                  
+ doesn't explain the mismatch (e.g. text diffs from a stray cast).              
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   pcdump      [PCDUMP]  Path to pcdump.txt. Omit to auto-resolve via         │
+│                         --function from the cache.                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function   -f      TEXT     Function name to analyze (required)         │
+│                                  [required]                                  │
+│    --target     -t      PATH     Target spec file (YAML or JSON). If         │
+│                                  omitted, all virtuals currently mapped to   │
+│                                  non-target physicals are shown.             │
+│    --asm-hunks          INTEGER  Also show the top N asm-diff hunks from     │
+│                                  checkdiff. 0 (default) omits. Useful when   │
+│                                  an allocator suggestion is hard to          │
+│                                  interpret without seeing the actual         │
+│                                  text-level diff (e.g. unexpected clrlwi     │
+│                                  from a missing cast). Caps each hunk at ~12 │
+│                                  lines for readability.                      │
+│                                  [default: 0]                                │
+│    --help                        Show this message and exit.                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

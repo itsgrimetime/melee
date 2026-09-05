@@ -49,9 +49,7 @@
     color: var(--page-secondary-foreground-color) !important;
     text-decoration: none;
     background-color: var(--page-background-color);
-    transition:
-        color 0.08s ease-in-out,
-        background-color 0.1s ease-in-out;
+    transition: color 0.08s ease-in-out, background-color 0.1s ease-in-out;
 }
 
 .next_section_button a:hover {
@@ -64,9 +62,7 @@
     color: var(--page-secondary-foreground-color) !important;
     padding-left: var(--spacing-large);
     display: inline-block;
-    transition:
-        color 0.08s ease-in-out,
-        transform 0.09s ease-in-out;
+    transition: color 0.08s ease-in-out, transform 0.09s ease-in-out;
 }
 
 .next_section_button a:hover::after {

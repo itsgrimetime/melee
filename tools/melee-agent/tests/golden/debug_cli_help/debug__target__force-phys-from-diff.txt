@@ -1,0 +1,64 @@
+                                                                                
+ Usage: melee-agent debug target force-phys-from-diff [OPTIONS] [PCDUMP]        
+                                                                                
+ Derive --force-phys targets from a register-only checkdiff.                    
+                                                                                
+ The command aligns target/current checkdiff assembly lines to the              
+ function's pre-coloring pcdump, maps each mismatching physical-register        
+ destination back to its virtual/ig node, and emits both target-spec JSON       
+ for `debug target score-dump` and a class-scoped force-vector suitable         
+ for `match-iter-first --force-vector` diagnostic verification.                 
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   pcdump      [PCDUMP]  Path to pcdump.txt. Omit to auto-resolve via         │
+│                         --function from the cache.                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function          -f                        TEXT   Function to analyze  │
+│                                                         (required).          │
+│                                                         [required]           │
+│    --checkdiff-json                              PATH   Existing             │
+│                                                         `tools/checkdiff.py  │
+│                                                         <function> --format  │
+│                                                         json` payload. If    │
+│                                                         omitted, this        │
+│                                                         command runs         │
+│                                                         checkdiff with       │
+│                                                         --no-build.          │
+│    --checkdiff-timeo…                            FLOAT  Timeout in seconds   │
+│                                                         when auto-running    │
+│                                                         checkdiff.           │
+│                                                         [default: 60.0]      │
+│    --verify                --no-verify                  Run bounded union,   │
+│                                                         singleton, and       │
+│                                                         prefix force-vector  │
+│                                                         verification after   │
+│                                                         deriving the target  │
+│                                                         list.                │
+│                                                         [default: no-verify] │
+│    --force-vector-pr…      --no-force-vector…           With --verify, run   │
+│                                                         singleton and prefix │
+│                                                         diagnostic probes    │
+│                                                         after the full       │
+│                                                         force-vector union.  │
+│                                                         [default:            │
+│                                                         force-vector-probes] │
+│    --force-vector-ch…                            FLOAT  Timeout in seconds   │
+│                                                         for each             │
+│                                                         force-vector         │
+│                                                         checkdiff run.       │
+│                                                         [default: 60.0]      │
+│    --allow-stale-pcd…                                   Allow an             │
+│                                                         auto-resolved cached │
+│                                                         pcdump whose source  │
+│                                                         has changed since    │
+│                                                         capture. Off by      │
+│                                                         default because      │
+│                                                         stale precolor data  │
+│                                                         can map targets to   │
+│                                                         the wrong ig_idx.    │
+│    --json                                               Emit as JSON.        │
+│    --help                                               Show this message    │
+│                                                         and exit.            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

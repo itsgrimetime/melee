@@ -1,0 +1,269 @@
+[
+  {
+    "name": "control-materializable-with-sibling-blockers",
+    "input": {
+      "function": "name_must_not_affect_facets",
+      "work_bucket": "structural-reconstruction",
+      "subcategory": "branch-or-control-flow-shape",
+      "classification": {
+        "primary": "control-flow-source-shape"
+      },
+      "control_flow_shape_analysis_status": "heuristic-hints",
+      "control_flow_shape_hint_kinds": [
+        "branch-idiom",
+        "loop-peel-unroll"
+      ],
+      "control_flow_shape_source_preflight_status": "materializable",
+      "control_flow_shape_generated_probe_count": 1,
+      "control_flow_shape_blockers": [
+        "call-anchor-not-found",
+        "unsafe-index-expression"
+      ],
+      "control_flow_shape_validation_status": "not-run",
+      "control_flow_shape_validated_probe_count": 0
+    },
+    "expected": {
+      "primary_intervention": "control-flow-reconstruction",
+      "secondary_signals": [
+        "branch-idiom",
+        "loop-peel-unroll"
+      ],
+      "evidence_stage": "materializable",
+      "blocker_families": [
+        "source-anchor",
+        "unsafe-source-transform"
+      ]
+    }
+  },
+  {
+    "name": "bss-generated-probe-keeps-data-route",
+    "input": {
+      "function": "register_allocator_in_name_is_irrelevant",
+      "work_bucket": "data-symbol-relocation",
+      "subcategory": "bss-section-anchor-ceiling",
+      "classification": {
+        "primary": "normalized-structural-match",
+        "bss_anchor_relocations": {
+          "status": "ceiling",
+          "pairs": [
+            {
+              "kind": "R_PPC_ADDR16_HA"
+            }
+          ]
+        },
+        "register_allocation_guidance": {
+          "register_only_count": 4,
+          "callee_swap_pairs": [
+            [
+              "r29",
+              "r30"
+            ]
+          ]
+        }
+      },
+      "name_magic_stop_kind": "unvalidated",
+      "name_magic_blocker": "no-name-magic-candidate",
+      "name_magic_probe_count": 2
+    },
+    "expected": {
+      "primary_intervention": "bss-anchor-analysis",
+      "secondary_signals": [
+        "bss-section-anchor",
+        "register-only-delta",
+        "callee-save-register-rotation"
+      ],
+      "evidence_stage": "materializable",
+      "blocker_families": [
+        "no-source-candidate"
+      ]
+    }
+  },
+  {
+    "name": "data-zero-probe-blocked",
+    "input": {
+      "work_bucket": "data-symbol-relocation",
+      "subcategory": "normalized-structural-relocation-only",
+      "name_magic_blocker": "unsupported-reloc-kind",
+      "name_magic_stop_kind": "blocked",
+      "name_magic_probe_count": 0
+    },
+    "expected": {
+      "primary_intervention": "data-symbol-modeling",
+      "secondary_signals": [
+        "relocation-only-residual"
+      ],
+      "evidence_stage": "blocked",
+      "blocker_families": [
+        "relocation-support"
+      ]
+    }
+  },
+  {
+    "name": "frame-checkdiff-needs-attribution",
+    "input": {
+      "work_bucket": "stack-local-layout",
+      "subcategory": "same-frame-stack-slot-placement",
+      "frame_cause": "stack-object-offset-shift",
+      "frame_evidence": "checkdiff-only",
+      "frame_probe_status": "needs-attribution",
+      "expected_frame_size": 64,
+      "current_frame_size": 64
+    },
+    "expected": {
+      "primary_intervention": "stack-lifetime-layout",
+      "secondary_signals": [
+        "equal-size-stack-layout"
+      ],
+      "evidence_stage": "observed",
+      "blocker_families": [
+        "source-attribution"
+      ]
+    }
+  },
+  {
+    "name": "frame-validated-improving",
+    "input": {
+      "work_bucket": "stack-local-layout",
+      "subcategory": "frame-too-small",
+      "frame_cause": "pure-reservation",
+      "frame_evidence": "probe-validated",
+      "frame_probe_status": "validated-improving",
+      "expected_frame_size": 64,
+      "current_frame_size": 48
+    },
+    "expected": {
+      "primary_intervention": "stack-frame-reconstruction",
+      "secondary_signals": [
+        "frame-size-delta"
+      ],
+      "evidence_stage": "validated",
+      "blocker_families": []
+    }
+  },
+  {
+    "name": "backend-ceiling-register-secondary",
+    "input": {
+      "work_bucket": "backend-ceiling",
+      "classification": {
+        "backend_ceiling": {
+          "subclass": "register-window-rotation"
+        },
+        "register_allocation_guidance": {
+          "register_only_count": 3,
+          "volatile_target_registers": [
+            "r3"
+          ]
+        }
+      }
+    },
+    "expected": {
+      "primary_intervention": "backend-ceiling-review",
+      "secondary_signals": [
+        "register-only-delta",
+        "volatile-register-selection",
+        "backend-register-window-rotation"
+      ],
+      "evidence_stage": "ceiling",
+      "blocker_families": [
+        "source-insensitive-ceiling"
+      ]
+    }
+  },
+  {
+    "name": "struct-unresolved",
+    "input": {
+      "work_bucket": "struct-offset-discrepancy",
+      "subcategory": "unresolved-operand-displacement",
+      "classification": {
+        "offset_discrepancies": [
+          {
+            "target": "0x20",
+            "current": "0x24"
+          }
+        ]
+      },
+      "struct_verify_status": "unverified",
+      "name_magic_blocker": "raw-diff-no-supported-data-symbol-pair"
+    },
+    "expected": {
+      "primary_intervention": "struct-layout-inference",
+      "secondary_signals": [
+        "operand-displacement",
+        "unresolved-struct-field"
+      ],
+      "evidence_stage": "blocked",
+      "blocker_families": [
+        "struct-inference"
+      ]
+    }
+  },
+  {
+    "name": "malformed-array-fields-derive-instead",
+    "input": {
+      "work_bucket": "structural-reconstruction",
+      "subcategory": "branch-or-control-flow-shape",
+      "classification": {
+        "primary": "control-flow-source-shape"
+      },
+      "control_flow_shape_analysis_status": "heuristic-hints",
+      "control_flow_shape_hint_kinds": [
+        "branch-idiom",
+        "loop-peel-unroll"
+      ],
+      "control_flow_shape_source_preflight_status": "materializable",
+      "control_flow_shape_generated_probe_count": 1,
+      "control_flow_shape_blockers": [
+        "call-anchor-not-found",
+        "unsafe-index-expression"
+      ],
+      "control_flow_shape_validation_status": "not-run",
+      "control_flow_shape_validated_probe_count": 0,
+      "secondary_signals": "branch-idiom",
+      "blocker_families": {
+        "bad": true
+      }
+    },
+    "expected": {
+      "primary_intervention": "control-flow-reconstruction",
+      "secondary_signals": [
+        "branch-idiom",
+        "loop-peel-unroll"
+      ],
+      "evidence_stage": "materializable",
+      "blocker_families": [
+        "source-anchor",
+        "unsafe-source-transform"
+      ]
+    }
+  },
+  {
+    "name": "explicit-future-facets-preserved",
+    "input": {
+      "work_bucket": "future-bucket",
+      "primary_intervention": "future-intervention",
+      "secondary_signals": [
+        "future-z",
+        "branch-idiom",
+        "future-z"
+      ],
+      "evidence_stage": "future-stage",
+      "blocker_families": [
+        "future-blocker",
+        "source-anchor",
+        "future-blocker"
+      ]
+    },
+    "expected": {
+      "primary_intervention": "future-intervention",
+      "secondary_signals": [
+        "branch-idiom",
+        "future-z"
+      ],
+      "evidence_stage": "future-stage",
+      "blocker_families": [
+        "source-anchor",
+        "future-blocker"
+      ]
+    }
+  }
+]
