@@ -1,0 +1,145 @@
+                                                                                
+ Usage: melee-agent debug solve node-set-split [OPTIONS]                        
+                                                                                
+ Realize a solve-coloring node-set split with source-shape candidates; use      
+ --coupled with --node-set-delta for interdependent rotations.                  
+                                                                                
+ Candidates are accepted only when they move the requested ig to the target     
+ physical register without adding spills, then improve real-tree checkdiff      
+ by at least `--threshold`.                                                     
+                                                                                
+ With `--coupled`, candidates must move EVERY bindable missing virtual in the   
+ delta to its target register at once (an interdependent rotation), composing   
+ the per-ig source edits into one patch.                                        
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --function           -f                         TEXT     Function to mutate. │
+│ --class                                         TEXT     Register class:     │
+│                                                          gpr/r/0 or fpr/f/1. │
+│                                                          [default: gpr]      │
+│ --ig,--target-ig                                INTEGER  COLORGRAPH ig_idx   │
+│                                                          to move.            │
+│ --current-reg                                   TEXT     Observed physical   │
+│                                                          register.           │
+│ --target-reg                                    TEXT     Desired physical    │
+│                                                          register.           │
+│ --force-phys,--tra…                             TEXT     Exact force-phys    │
+│                                                          target map to score │
+│                                                          for every retained  │
+│                                                          candidate, e.g.     │
+│                                                          34:27,44:25.        │
+│ --var                                           TEXT     Source variable to  │
+│                                                          split or extend.    │
+│ --generated-local-…                             TEXT     JSON                │
+│                                                          generated-local     │
+│                                                          source payload from │
+│                                                          coalesce-search     │
+│                                                          continuations       │
+│                                                          (kind/name/type/in… │
+│ --node-set-delta                                PATH     JSON node_set_delta │
+│                                                          payload from `debug │
+│                                                          solve coloring`.    │
+│ --source-file                                   PATH     Source file to use. │
+│                                                          Defaults to         │
+│                                                          report.json's TU    │
+│                                                          source.             │
+│ --max-read-sites                                INTEGER  Bound               │
+│                                                          alias/lifetime read │
+│                                                          sites.              │
+│                                                          [default: 4]        │
+│ --max-candidates                                INTEGER  Maximum source      │
+│                                                          candidates to       │
+│                                                          evaluate; 0 means   │
+│                                                          unlimited.          │
+│                                                          [default: 16]       │
+│ --budget                                        FLOAT    Global wall-clock   │
+│                                                          budget in seconds   │
+│                                                          for compile/score   │
+│                                                          probes.             │
+│ --threshold                                     FLOAT    Minimum checkdiff   │
+│                                                          percentage-point    │
+│                                                          win for an          │
+│                                                          improvement.        │
+│                                                          [default: 0.05]     │
+│ --apply-best                                             Leave the best      │
+│                                                          verified improving  │
+│                                                          candidate applied.  │
+│ --timeout                                       INTEGER  Per-candidate       │
+│                                                          compile timeout     │
+│                                                          seconds.            │
+│                                                          [default: 120]      │
+│ --coupled                                                Realize a COUPLED   │
+│                                                          rotation: move      │
+│                                                          every bindable      │
+│                                                          missing virtual in  │
+│                                                          --node-set-delta to │
+│                                                          its target register │
+│                                                          simultaneously (for │
+│                                                          interdependent N-ig │
+│                                                          cycles where        │
+│                                                          single-ig moves all │
+│                                                          land                │
+│                                                          wrong-register).    │
+│                                                          Requires            │
+│                                                          --node-set-delta.   │
+│ --remote                 --no-remote                     Compile allocator   │
+│                                                          pcdumps through the │
+│                                                          remote backend,     │
+│                                                          bypassing local     │
+│                                                          wibo/compiler       │
+│                                                          discovery.          │
+│                                                          [default:           │
+│                                                          no-remote]          │
+│ --remote-fallback        --no-remote-fallba…             Use the local       │
+│                                                          pcdump lane unless  │
+│                                                          the unsafe-lane     │
+│                                                          guard requires the  │
+│                                                          remote backend.     │
+│                                                          [default:           │
+│                                                          no-remote-fallback] │
+│ --remote-host                                   TEXT     SSH host alias for  │
+│                                                          --remote/--remote-… │
+│                                                          [env var:           │
+│                                                          MWCC_DEBUG_HOST]    │
+│                                                          [default:           │
+│                                                          nzxt-local]         │
+│ --remote-script                                 TEXT     Path to             │
+│                                                          run_pcdump.ps1 on   │
+│                                                          the remote host.    │
+│                                                          [env var:           │
+│                                                          MWCC_DEBUG_REMOTE_… │
+│                                                          [default:           │
+│                                                          C:\Users\mikes\cod… │
+│ --remote-branch                                 TEXT     Branch to compile   │
+│                                                          on the remote       │
+│                                                          backend.            │
+│                                                          [env var:           │
+│                                                          MWCC_DEBUG_BRANCH]  │
+│ --remote-no-pull                                         Forward --no-pull   │
+│                                                          to the remote       │
+│                                                          pcdump backend.     │
+│ --resume-summary                                PATH     Prior               │
+│                                                          node-set-split      │
+│                                                          summary to resume.  │
+│                                                          Existing summaries  │
+│                                                          without manifests   │
+│                                                          are regenerated and │
+│                                                          rescored.           │
+│ --output                                        PATH     Write the JSON      │
+│                                                          summary to this     │
+│                                                          path. Relative      │
+│                                                          paths resolve from  │
+│                                                          the melee repo      │
+│                                                          root.               │
+│ --retain-generated       --no-retain-genera…             Retain/report       │
+│                                                          generated candidate │
+│                                                          sources for remote  │
+│                                                          continuation        │
+│                                                          diagnostics.        │
+│                                                          [default:           │
+│                                                          no-retain-generate… │
+│ --json                                                                       │
+│ --help                                                   Show this message   │
+│                                                          and exit.           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

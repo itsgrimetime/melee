@@ -1,0 +1,33 @@
+                                                                                
+ Usage: melee-agent debug permute [OPTIONS] COMMAND [ARGS]...                   
+                                                                                
+ Run, verify, and triage decomp-permuter candidates.                            
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ doctor                       Validate local decomp-permuter paths before     │
+│                              run/config/verify.                              │
+│ bootstrap                    Bootstrap a decomp-permuter function dir from   │
+│                              the current repo source.                        │
+│ local-orphans                Detect abandoned local permuter compiler and    │
+│                              Python worker processes.                        │
+│ candidate-audit              Audit permuter candidates and print a compact   │
+│                              status summary.                                 │
+│ verify                       Tier 7a: apply a permuter candidate to the real │
+│                              source and verify.                              │
+│ triage                       Tier 7e: batch-triage decomp-permuter output    │
+│                              candidates.                                     │
+│ setup-simplify-order-scorer  Wire decomp-permuter to save candidates that    │
+│                              improve simplify-order.                         │
+│ config                       Generate a decomp-permuter settings.toml tuned  │
+│                              for the detected pattern.                       │
+│ fix-compile                  Fix decomp-permuter's `compile.sh` for          │
+│                              macOS+wine compatibility.                       │
+│ run                          Tier 2: run decomp-permuter with mwcc-debug     │
+│                              score blended in.                               │
+│ remote                       Run decomp-permuter jobs on configured SSH      │
+│                              remotes.                                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

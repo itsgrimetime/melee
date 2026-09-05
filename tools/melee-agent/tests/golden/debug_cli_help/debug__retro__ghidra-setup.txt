@@ -1,0 +1,27 @@
+
+ Usage: melee-agent debug retro ghidra-setup [OPTIONS]
+
+ Create or validate the exact GC/1.2.5n compiler Ghidra audit project.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --project-dir             PATH                  MWCC Ghidra project          │
+│                                                 directory; relative paths    │
+│                                                 use the Melee root.          │
+│                                                 [default:                    │
+│                                                 tools/mwcc_debug/ghidra_pro… │
+│ --analysis-timeout        INTEGER RANGE [x>=1]  Ghidra per-file analysis     │
+│                                                 timeout in seconds.          │
+│                                                 [default: 300]               │
+│ --wall-timeout            INTEGER RANGE [x>=1]  Outer process-group wall     │
+│                                                 timeout in seconds.          │
+│                                                 [default: 420]               │
+│ --repair                                        Retain and quarantine an     │
+│                                                 invalid canonical project    │
+│                                                 before importing.            │
+│ --json                                          Emit stable result JSON.     │
+│ --melee-root              PATH                  Active Melee                 │
+│                                                 checkout/worktree root.      │
+│                                                 Defaults to the current cwd  │
+│                                                 tree.                        │
+│ --help                                          Show this message and exit.  │
+╰──────────────────────────────────────────────────────────────────────────────╯

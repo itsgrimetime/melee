@@ -1,0 +1,16 @@
+                                                                                
+ Usage: melee-agent debug solve allocator-ceiling [OPTIONS]                     
+                                                                                
+ Classify exhausted allocator-rotation evidence without compiling.              
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function  -f      TEXT  Function these evidence files target.           │
+│                              [required]                                      │
+│ *  --evidence  -e      PATH  JSON evidence file from solve-coloring,         │
+│                              node-set-split, plan-transforms, or             │
+│                              force-phys-from-diff.                           │
+│                              [required]                                      │
+│    --json                                                                    │
+│    --help                    Show this message and exit.                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

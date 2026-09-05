@@ -1,0 +1,44 @@
+
+ Usage: melee-agent debug inspect lifetime-pressure [OPTIONS]
+
+ Explain register-allocation lifetime pressure blockers and validation.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function            -f      TEXT     Function name to inspect.          │
+│                                           [required]                         │
+│    --pcdump                      PATH     Baseline pcdump. Auto-resolves     │
+│                                           from cache when omitted unless     │
+│                                           --backend-trace is used.           │
+│    --source-file                 PATH     Source file for source attribution │
+│                                           and validation commands.           │
+│    --force-phys                  TEXT     Target coloring as                 │
+│                                           ig:phys[,ig:phys] or class:ig:phys │
+│                                           entries.                           │
+│    --target                      PATH     JSON target file consumed by the   │
+│                                           pressure explorer.                 │
+│    --candidate                   TEXT     Candidate to compare or validate,  │
+│                                           repeatable. Format LABEL=PATH.     │
+│    --backend-trace               PATH     Allocator backend trace JSON.      │
+│                                           Skips pcdump auto-resolution.      │
+│    --class                       INTEGER  Default register class for         │
+│                                           --force-phys.                      │
+│                                           [default: 0]                       │
+│    --allow-stale-pcdump                   Allow stale pcdump/source          │
+│                                           freshness when ranking hypotheses. │
+│    --json                                 Emit structured JSON instead of    │
+│                                           text.                              │
+│    --dot                         PATH     Write Graphviz DOT blocker graph   │
+│                                           to PATH.                           │
+│    --blocker-table               PATH     Write blocker table to PATH. Uses  │
+│                                           JSON for .json, CSV otherwise.     │
+│    --validate                    TEXT     Validation mode: none, quick,      │
+│                                           bounded, or remote.                │
+│                                           [default: none]                    │
+│    --timeout                     INTEGER  Validation subprocess timeout in   │
+│                                           seconds.                           │
+│                                           [default: 120]                     │
+│    --max-candidates              INTEGER  Maximum bounded-validation         │
+│                                           candidates to try.                 │
+│                                           [default: 100]                     │
+│    --help                                 Show this message and exit.        │
+╰──────────────────────────────────────────────────────────────────────────────╯

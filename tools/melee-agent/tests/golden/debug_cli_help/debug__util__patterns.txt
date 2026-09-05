@@ -1,0 +1,25 @@
+                                                                                
+ Usage: melee-agent debug util patterns [OPTIONS] [NAME]                        
+                                                                                
+ Tier 7c: dump the catalog of recurring MWCC mutation patterns.                 
+                                                                                
+ The catalog captures the small family of source mutations that                 
+ permuter keeps rediscovering across stuck functions — alias-split,             
+ decl-order, u8↔u32 widening, drop-variadic-cast, subexpr-extract,              
+ chained-init. Use as a starting point when staring at a stuck                  
+ function; `debug inspect guide` will also cite pattern names directly.         
+                                                                                
+ Without arguments: lists all patterns with title and one-liner summary.        
+ With `<name>`: shows the full pattern entry (when-to-try, example              
+ before/after, mechanism).                                                      
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   name      [NAME]  Optional pattern name. If omitted, lists all patterns.   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --search        TEXT  Filter the list by substring match against pattern     │
+│                       name/title.                                            │
+│ --json                Emit catalog as JSON.                                  │
+│ --help                Show this message and exit.                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

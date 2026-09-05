@@ -1,0 +1,24 @@
+                                                                                
+ Usage: melee-agent debug suggest control-flow-shape [OPTIONS]                  
+                                                                                
+ Suggest source-level control-flow shape transforms from ASM diff JSON.         
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function           -f      TEXT     Function to analyze. [required]     │
+│    --checkdiff-json             PATH     Existing tools/checkdiff.py         │
+│                                          --format json payload.              │
+│    --checkdiff-timeout          FLOAT    Timeout in seconds for live         │
+│                                          checkdiff.                          │
+│                                          [default: 60.0]                     │
+│    --no-build                            Pass --no-build to live checkdiff   │
+│                                          for a fast stale-object read.       │
+│    --source-file                PATH     Source file used to preflight       │
+│                                          whether suggested generated         │
+│                                          operators can materialize probes.   │
+│    --top                        INTEGER  Maximum number of ranked            │
+│                                          suggestions.                        │
+│                                          [default: 5]                        │
+│    --json                                Emit suggestions as JSON.           │
+│    --help                                Show this message and exit.         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

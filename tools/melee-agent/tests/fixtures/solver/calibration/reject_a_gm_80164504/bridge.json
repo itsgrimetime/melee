@@ -1,0 +1,5959 @@
+{
+  "function": "gm_80164504",
+  "virtuals": [
+    {
+      "virtual": 32,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 32,
+      "assigned_reg": 29,
+      "live_range": [
+        1,
+        5
+      ],
+      "live_blocks": [
+        1,
+        4
+      ],
+      "use_count": 2,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 1,
+        "instr_idx": 0,
+        "opcode": "mr",
+        "operands": "r32,r3"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 4,
+        "instr_idx": 1,
+        "opcode": "rlwinm",
+        "operands": "r3,r32,0,16,31"
+      },
+      "source": {
+        "kind": "param",
+        "confidence": "best-guess",
+        "name": "stage_id",
+        "type": "u16",
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": 2235,
+        "source_col": null,
+        "expression": "stage_id",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": null,
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 0,
+          "assigned_reg": 0,
+          "source": null
+        },
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 4,
+          "assigned_reg": 4,
+          "source": null
+        },
+        {
+          "virtual": 5,
+          "assigned_reg": 5,
+          "source": null
+        },
+        {
+          "virtual": 6,
+          "assigned_reg": 6,
+          "source": null
+        },
+        {
+          "virtual": 7,
+          "assigned_reg": 7,
+          "source": null
+        },
+        {
+          "virtual": 8,
+          "assigned_reg": 8,
+          "source": null
+        },
+        {
+          "virtual": 9,
+          "assigned_reg": 9,
+          "source": null
+        },
+        {
+          "virtual": 10,
+          "assigned_reg": 10,
+          "source": null
+        },
+        {
+          "virtual": 11,
+          "assigned_reg": 11,
+          "source": null
+        },
+        {
+          "virtual": 12,
+          "assigned_reg": 12,
+          "source": null
+        },
+        {
+          "virtual": 46,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "first-def",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "lis r46,HA(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 0,
+              "opcode": "lis",
+              "operands": "r46,HA(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 33,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 33,
+      "assigned_reg": 0,
+      "live_range": [
+        37,
+        43
+      ],
+      "live_blocks": [
+        15,
+        18,
+        19
+      ],
+      "use_count": 3,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 15,
+        "instr_idx": 2,
+        "opcode": "lbz",
+        "operands": "r33,790(r56)"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 19,
+        "instr_idx": 0,
+        "opcode": "rlwinm",
+        "operands": "r3,r33,0,24,31"
+      },
+      "source": {
+        "kind": "local",
+        "confidence": "low-confidence",
+        "name": "stage_unlock_mask",
+        "type": "u16*",
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": 2237,
+        "source_col": null,
+        "expression": "stage_unlock_mask",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": null,
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 39,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "rlwinm r39,r34,0,24,31",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 13,
+              "instr_idx": 2,
+              "opcode": "rlwinm",
+              "operands": "r39,r34,0,24,31"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 34,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 34,
+      "assigned_reg": 0,
+      "live_range": [
+        18,
+        24
+      ],
+      "live_blocks": [
+        8,
+        11,
+        12,
+        13
+      ],
+      "use_count": 3,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 8,
+        "instr_idx": 2,
+        "opcode": "lbz",
+        "operands": "r34,788(r52)"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 12,
+        "instr_idx": 0,
+        "opcode": "rlwinm",
+        "operands": "r53,r34,0,24,31"
+      },
+      "source": {
+        "kind": "local",
+        "confidence": "low-confidence",
+        "name": "internal_id",
+        "type": "u8",
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": 2238,
+        "source_col": null,
+        "expression": "internal_id",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": null,
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 40,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r40,r45,788",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 3,
+              "opcode": "addi",
+              "operands": "r40,r45,788"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 35,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 35,
+      "assigned_reg": 7,
+      "live_range": [
+        12,
+        21
+      ],
+      "live_blocks": [
+        6,
+        8,
+        9,
+        10
+      ],
+      "use_count": 3,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 6,
+        "instr_idx": 2,
+        "opcode": "li",
+        "operands": "r35,0"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 9,
+        "instr_idx": 1,
+        "opcode": "addi",
+        "operands": "r35,r35,1"
+      },
+      "source": {
+        "kind": "local",
+        "confidence": "low-confidence",
+        "name": "i",
+        "type": "s32",
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": 2239,
+        "source_col": null,
+        "expression": "i",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": null,
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 0,
+          "assigned_reg": 0,
+          "source": null
+        },
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 36,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "unlock_idx",
+            "type": "u8",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2240,
+            "source_col": null,
+            "expression": "unlock_idx",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 40,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r40,r45,788",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 3,
+              "opcode": "addi",
+              "operands": "r40,r45,788"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 44,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "copy/coalesce-product",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "mr r44,r40",
+            "base_virtual": 40,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 4,
+              "opcode": "mr",
+              "operands": "r44,r40"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        },
+        {
+          "virtual": 50,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "field-load",
+            "confidence": "source-expression",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 4973,
+            "source_col": 4,
+            "expression": "lbl_8046B488.x1",
+            "base_virtual": 44,
+            "base_var": "lbl_8046B488",
+            "base_confidence": "global-source-expression",
+            "field_offset": 1,
+            "field_name": "x1",
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 7,
+              "instr_idx": 0,
+              "opcode": "lbz",
+              "operands": "r50,1(r44)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 36,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 36,
+      "assigned_reg": 6,
+      "live_range": [
+        11,
+        14
+      ],
+      "live_blocks": [
+        6,
+        7
+      ],
+      "use_count": 2,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 6,
+        "instr_idx": 1,
+        "opcode": "rlwinm",
+        "operands": "r36,r49,0,24,31"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 7,
+        "instr_idx": 1,
+        "opcode": "cmp",
+        "operands": "cr0,r36,r50"
+      },
+      "source": {
+        "kind": "local",
+        "confidence": "low-confidence",
+        "name": "unlock_idx",
+        "type": "u8",
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": 2240,
+        "source_col": null,
+        "expression": "unlock_idx",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": null,
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 35,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "i",
+            "type": "s32",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2239,
+            "source_col": null,
+            "expression": "i",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 40,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r40,r45,788",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 3,
+              "opcode": "addi",
+              "operands": "r40,r45,788"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 44,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "copy/coalesce-product",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "mr r44,r40",
+            "base_virtual": 40,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 4,
+              "opcode": "mr",
+              "operands": "r44,r40"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        },
+        {
+          "virtual": 50,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "field-load",
+            "confidence": "source-expression",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 4973,
+            "source_col": 4,
+            "expression": "lbl_8046B488.x1",
+            "base_virtual": 44,
+            "base_var": "lbl_8046B488",
+            "base_confidence": "global-source-expression",
+            "field_offset": 1,
+            "field_name": "x1",
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 7,
+              "instr_idx": 0,
+              "opcode": "lbz",
+              "operands": "r50,1(r44)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 37,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 37,
+      "assigned_reg": 0,
+      "live_range": null,
+      "live_blocks": [
+        4,
+        23
+      ],
+      "use_count": 6,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 4,
+        "instr_idx": 1,
+        "opcode": "mr",
+        "operands": "r37,r48"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER VALUE NUMBERING",
+        "block_idx": 23,
+        "instr_idx": 6,
+        "opcode": "sth",
+        "operands": "r64,0(r37)"
+      },
+      "source": {
+        "kind": "call-return",
+        "confidence": "copy-chain",
+        "name": "temp_r31",
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": 2215,
+        "source_col": 16,
+        "expression": "gmMainLib_8015EDA4()",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 3,
+          "instr_idx": 0,
+          "opcode": "bl",
+          "operands": "gmMainLib_8015EDA4"
+        },
+        "call_symbol": "gmMainLib_8015EDA4",
+        "copy_chain": [
+          37,
+          48,
+          3
+        ],
+        "use_sites": [
+          {
+            "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+            "block_idx": 23,
+            "instr_idx": 2,
+            "opcode": "lhz",
+            "operands": "r62,0(r37)"
+          },
+          {
+            "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+            "block_idx": 23,
+            "instr_idx": 6,
+            "opcode": "sth",
+            "operands": "r64,0(r37)"
+          }
+        ]
+      },
+      "interferers": [],
+      "note": null
+    },
+    {
+      "virtual": 38,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 38,
+      "assigned_reg": 3,
+      "live_range": [
+        31,
+        40
+      ],
+      "live_blocks": [
+        13,
+        15,
+        16,
+        17
+      ],
+      "use_count": 3,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 13,
+        "instr_idx": 0,
+        "opcode": "li",
+        "operands": "r38,0"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 16,
+        "instr_idx": 1,
+        "opcode": "addi",
+        "operands": "r38,r38,1"
+      },
+      "source": {
+        "kind": "first-def",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "li r38,0",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 13,
+          "instr_idx": 0,
+          "opcode": "li",
+          "operands": "r38,0"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 0,
+          "assigned_reg": 0,
+          "source": null
+        },
+        {
+          "virtual": 39,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "rlwinm r39,r34,0,24,31",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 13,
+              "instr_idx": 2,
+              "opcode": "rlwinm",
+              "operands": "r39,r34,0,24,31"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 40,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r40,r45,788",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 3,
+              "opcode": "addi",
+              "operands": "r40,r45,788"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 42,
+          "assigned_reg": -1,
+          "source": null
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        },
+        {
+          "virtual": 54,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "field-load",
+            "confidence": "source-expression",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 4972,
+            "source_col": 4,
+            "expression": "lbl_8046B488.x0",
+            "base_virtual": 42,
+            "base_var": "lbl_8046B488",
+            "base_confidence": "global-source-expression",
+            "field_offset": 0,
+            "field_name": "x0",
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 14,
+              "instr_idx": 0,
+              "opcode": "lbz",
+              "operands": "r54,0(r42)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 39,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 39,
+      "assigned_reg": 29,
+      "live_range": [
+        30,
+        45
+      ],
+      "live_blocks": [
+        13,
+        14,
+        21
+      ],
+      "use_count": 3,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 13,
+        "instr_idx": 2,
+        "opcode": "rlwinm",
+        "operands": "r39,r34,0,24,31"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 21,
+        "instr_idx": 0,
+        "opcode": "mr",
+        "operands": "r5,r39"
+      },
+      "source": {
+        "kind": "implicit-temp",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "rlwinm r39,r34,0,24,31",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 13,
+          "instr_idx": 2,
+          "opcode": "rlwinm",
+          "operands": "r39,r34,0,24,31"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 0,
+          "assigned_reg": 0,
+          "source": null
+        },
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 4,
+          "assigned_reg": 4,
+          "source": null
+        },
+        {
+          "virtual": 5,
+          "assigned_reg": 5,
+          "source": null
+        },
+        {
+          "virtual": 6,
+          "assigned_reg": 6,
+          "source": null
+        },
+        {
+          "virtual": 7,
+          "assigned_reg": 7,
+          "source": null
+        },
+        {
+          "virtual": 8,
+          "assigned_reg": 8,
+          "source": null
+        },
+        {
+          "virtual": 9,
+          "assigned_reg": 9,
+          "source": null
+        },
+        {
+          "virtual": 10,
+          "assigned_reg": 10,
+          "source": null
+        },
+        {
+          "virtual": 11,
+          "assigned_reg": 11,
+          "source": null
+        },
+        {
+          "virtual": 12,
+          "assigned_reg": 12,
+          "source": null
+        },
+        {
+          "virtual": 33,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "stage_unlock_mask",
+            "type": "u16*",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2237,
+            "source_col": null,
+            "expression": "stage_unlock_mask",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 38,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "first-def",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "li r38,0",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 13,
+              "instr_idx": 0,
+              "opcode": "li",
+              "operands": "r38,0"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 40,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r40,r45,788",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 3,
+              "opcode": "addi",
+              "operands": "r40,r45,788"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 42,
+          "assigned_reg": -1,
+          "source": null
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        },
+        {
+          "virtual": 54,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "field-load",
+            "confidence": "source-expression",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 4972,
+            "source_col": 4,
+            "expression": "lbl_8046B488.x0",
+            "base_virtual": 42,
+            "base_var": "lbl_8046B488",
+            "base_confidence": "global-source-expression",
+            "field_offset": 0,
+            "field_name": "x0",
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 14,
+              "instr_idx": 0,
+              "opcode": "lbz",
+              "operands": "r54,0(r42)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 55,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "mulli r55,r38,3",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 15,
+              "instr_idx": 0,
+              "opcode": "mulli",
+              "operands": "r55,r38,3"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 56,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "add r56,r45,r55",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 15,
+              "instr_idx": 1,
+              "opcode": "add",
+              "operands": "r56,r45,r55"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 67,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "first-def",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "li r67,11",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "AFTER LOOP TRANSFORMATIONS",
+              "block_idx": 26,
+              "instr_idx": 0,
+              "opcode": "li",
+              "operands": "r67,11"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 40,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 40,
+      "assigned_reg": 5,
+      "live_range": [
+        8,
+        29
+      ],
+      "live_blocks": [
+        6,
+        13
+      ],
+      "use_count": 3,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 6,
+        "instr_idx": 3,
+        "opcode": "addi",
+        "operands": "r40,r45,788"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 13,
+        "instr_idx": 2,
+        "opcode": "mr",
+        "operands": "r42,r40"
+      },
+      "source": {
+        "kind": "implicit-temp",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "addi r40,r45,788",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 6,
+          "instr_idx": 3,
+          "opcode": "addi",
+          "operands": "r40,r45,788"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 0,
+          "assigned_reg": 0,
+          "source": null
+        },
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 34,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "internal_id",
+            "type": "u8",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2238,
+            "source_col": null,
+            "expression": "internal_id",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 35,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "i",
+            "type": "s32",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2239,
+            "source_col": null,
+            "expression": "i",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 36,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "unlock_idx",
+            "type": "u8",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2240,
+            "source_col": null,
+            "expression": "unlock_idx",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 38,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "first-def",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "li r38,0",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 13,
+              "instr_idx": 0,
+              "opcode": "li",
+              "operands": "r38,0"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 39,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "rlwinm r39,r34,0,24,31",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 13,
+              "instr_idx": 2,
+              "opcode": "rlwinm",
+              "operands": "r39,r34,0,24,31"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 44,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "copy/coalesce-product",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "mr r44,r40",
+            "base_virtual": 40,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 4,
+              "opcode": "mr",
+              "operands": "r44,r40"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        },
+        {
+          "virtual": 50,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "field-load",
+            "confidence": "source-expression",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 4973,
+            "source_col": 4,
+            "expression": "lbl_8046B488.x1",
+            "base_virtual": 44,
+            "base_var": "lbl_8046B488",
+            "base_confidence": "global-source-expression",
+            "field_offset": 1,
+            "field_name": "x1",
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 7,
+              "instr_idx": 0,
+              "opcode": "lbz",
+              "operands": "r50,1(r44)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 51,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "mulli r51,r35,3",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 8,
+              "instr_idx": 0,
+              "opcode": "mulli",
+              "operands": "r51,r35,3"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 52,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "add r52,r45,r51",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 8,
+              "instr_idx": 1,
+              "opcode": "add",
+              "operands": "r52,r45,r51"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 53,
+          "assigned_reg": -1,
+          "source": null
+        },
+        {
+          "virtual": 54,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "field-load",
+            "confidence": "source-expression",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 4972,
+            "source_col": 4,
+            "expression": "lbl_8046B488.x0",
+            "base_virtual": 42,
+            "base_var": "lbl_8046B488",
+            "base_confidence": "global-source-expression",
+            "field_offset": 0,
+            "field_name": "x0",
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 14,
+              "instr_idx": 0,
+              "opcode": "lbz",
+              "operands": "r54,0(r42)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 66,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "first-def",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "li r66,11",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "AFTER LOOP TRANSFORMATIONS",
+              "block_idx": 25,
+              "instr_idx": 0,
+              "opcode": "li",
+              "operands": "r66,11"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 67,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "first-def",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "li r67,11",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "AFTER LOOP TRANSFORMATIONS",
+              "block_idx": 26,
+              "instr_idx": 0,
+              "opcode": "li",
+              "operands": "r67,11"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 41,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 41,
+      "assigned_reg": 0,
+      "live_range": null,
+      "live_blocks": [
+        13,
+        14
+      ],
+      "use_count": 4,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 13,
+        "instr_idx": 3,
+        "opcode": "mr",
+        "operands": "r41,r39"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER VALUE NUMBERING",
+        "block_idx": 14,
+        "instr_idx": 1,
+        "opcode": "cmp",
+        "operands": "cr0,r41,r54"
+      },
+      "source": {
+        "kind": "copy/coalesce-product",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "mr r41,r39",
+        "base_virtual": 39,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 13,
+          "instr_idx": 3,
+          "opcode": "mr",
+          "operands": "r41,r39"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [],
+      "note": null
+    },
+    {
+      "virtual": 43,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 43,
+      "assigned_reg": 0,
+      "live_range": null,
+      "live_blocks": [
+        6,
+        7
+      ],
+      "use_count": 12,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 6,
+        "instr_idx": 5,
+        "opcode": "rlwinm",
+        "operands": "r43,r36,0,24,31"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER LOAD DELETATION",
+        "block_idx": 7,
+        "instr_idx": 1,
+        "opcode": "cmp",
+        "operands": "cr0,r43,r50"
+      },
+      "source": {
+        "kind": "implicit-temp",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "rlwinm r43,r36,0,24,31",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 6,
+          "instr_idx": 5,
+          "opcode": "rlwinm",
+          "operands": "r43,r36,0,24,31"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [],
+      "note": null
+    },
+    {
+      "virtual": 44,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 44,
+      "assigned_reg": 4,
+      "live_range": [
+        10,
+        20
+      ],
+      "live_blocks": [
+        6,
+        7,
+        9
+      ],
+      "use_count": 3,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 6,
+        "instr_idx": 4,
+        "opcode": "mr",
+        "operands": "r44,r40"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 9,
+        "instr_idx": 0,
+        "opcode": "addi",
+        "operands": "r44,r44,3"
+      },
+      "source": {
+        "kind": "copy/coalesce-product",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "mr r44,r40",
+        "base_virtual": 40,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 6,
+          "instr_idx": 4,
+          "opcode": "mr",
+          "operands": "r44,r40"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 0,
+          "assigned_reg": 0,
+          "source": null
+        },
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 35,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "i",
+            "type": "s32",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2239,
+            "source_col": null,
+            "expression": "i",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 36,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "unlock_idx",
+            "type": "u8",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2240,
+            "source_col": null,
+            "expression": "unlock_idx",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 40,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r40,r45,788",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 3,
+              "opcode": "addi",
+              "operands": "r40,r45,788"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        },
+        {
+          "virtual": 50,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "field-load",
+            "confidence": "source-expression",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 4973,
+            "source_col": 4,
+            "expression": "lbl_8046B488.x1",
+            "base_virtual": 44,
+            "base_var": "lbl_8046B488",
+            "base_confidence": "global-source-expression",
+            "field_offset": 1,
+            "field_name": "x1",
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 7,
+              "instr_idx": 0,
+              "opcode": "lbz",
+              "operands": "r50,1(r44)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 45,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 45,
+      "assigned_reg": 0,
+      "live_range": null,
+      "live_blocks": [
+        2,
+        6,
+        8,
+        15
+      ],
+      "use_count": 8,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 2,
+        "instr_idx": 2,
+        "opcode": "mr",
+        "operands": "r45,r47"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER VALUE NUMBERING",
+        "block_idx": 15,
+        "instr_idx": 1,
+        "opcode": "add",
+        "operands": "r56,r45,r55"
+      },
+      "source": {
+        "kind": "copy/coalesce-product",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "mr r45,r47",
+        "base_virtual": 47,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 2,
+          "instr_idx": 2,
+          "opcode": "mr",
+          "operands": "r45,r47"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [],
+      "note": null
+    },
+    {
+      "virtual": 46,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 46,
+      "assigned_reg": 4,
+      "live_range": [
+        0,
+        2
+      ],
+      "live_blocks": [
+        1,
+        2
+      ],
+      "use_count": 2,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 2,
+        "instr_idx": 0,
+        "opcode": "lis",
+        "operands": "r46,HA(lbl_803B75F8)"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 1,
+        "instr_idx": 2,
+        "opcode": "addi",
+        "operands": "r47,r46,LO(lbl_803B75F8)"
+      },
+      "source": {
+        "kind": "first-def",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "lis r46,HA(lbl_803B75F8)",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 2,
+          "instr_idx": 0,
+          "opcode": "lis",
+          "operands": "r46,HA(lbl_803B75F8)"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 0,
+          "assigned_reg": 0,
+          "source": null
+        },
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 32,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "param",
+            "confidence": "best-guess",
+            "name": "stage_id",
+            "type": "u16",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2235,
+            "source_col": null,
+            "expression": "stage_id",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 47,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 47,
+      "assigned_reg": 30,
+      "live_range": [
+        2,
+        36
+      ],
+      "live_blocks": [
+        1,
+        2,
+        6,
+        8,
+        15
+      ],
+      "use_count": 4,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 2,
+        "instr_idx": 1,
+        "opcode": "addi",
+        "operands": "r47,r46,LO(lbl_803B75F8)"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 15,
+        "instr_idx": 1,
+        "opcode": "add",
+        "operands": "r56,r47,r55"
+      },
+      "source": {
+        "kind": "implicit-temp",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "addi r47,r46,LO(lbl_803B75F8)",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 2,
+          "instr_idx": 1,
+          "opcode": "addi",
+          "operands": "r47,r46,LO(lbl_803B75F8)"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 0,
+          "assigned_reg": 0,
+          "source": null
+        },
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 4,
+          "assigned_reg": 4,
+          "source": null
+        },
+        {
+          "virtual": 5,
+          "assigned_reg": 5,
+          "source": null
+        },
+        {
+          "virtual": 6,
+          "assigned_reg": 6,
+          "source": null
+        },
+        {
+          "virtual": 7,
+          "assigned_reg": 7,
+          "source": null
+        },
+        {
+          "virtual": 8,
+          "assigned_reg": 8,
+          "source": null
+        },
+        {
+          "virtual": 9,
+          "assigned_reg": 9,
+          "source": null
+        },
+        {
+          "virtual": 10,
+          "assigned_reg": 10,
+          "source": null
+        },
+        {
+          "virtual": 11,
+          "assigned_reg": 11,
+          "source": null
+        },
+        {
+          "virtual": 12,
+          "assigned_reg": 12,
+          "source": null
+        },
+        {
+          "virtual": 32,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "param",
+            "confidence": "best-guess",
+            "name": "stage_id",
+            "type": "u16",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2235,
+            "source_col": null,
+            "expression": "stage_id",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 34,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "internal_id",
+            "type": "u8",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2238,
+            "source_col": null,
+            "expression": "internal_id",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 35,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "i",
+            "type": "s32",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2239,
+            "source_col": null,
+            "expression": "i",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 36,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "unlock_idx",
+            "type": "u8",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2240,
+            "source_col": null,
+            "expression": "unlock_idx",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 38,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "first-def",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "li r38,0",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 13,
+              "instr_idx": 0,
+              "opcode": "li",
+              "operands": "r38,0"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 39,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "rlwinm r39,r34,0,24,31",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 13,
+              "instr_idx": 2,
+              "opcode": "rlwinm",
+              "operands": "r39,r34,0,24,31"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 40,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r40,r45,788",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 3,
+              "opcode": "addi",
+              "operands": "r40,r45,788"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 42,
+          "assigned_reg": -1,
+          "source": null
+        },
+        {
+          "virtual": 44,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "copy/coalesce-product",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "mr r44,r40",
+            "base_virtual": 40,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 4,
+              "opcode": "mr",
+              "operands": "r44,r40"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        },
+        {
+          "virtual": 50,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "field-load",
+            "confidence": "source-expression",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 4973,
+            "source_col": 4,
+            "expression": "lbl_8046B488.x1",
+            "base_virtual": 44,
+            "base_var": "lbl_8046B488",
+            "base_confidence": "global-source-expression",
+            "field_offset": 1,
+            "field_name": "x1",
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 7,
+              "instr_idx": 0,
+              "opcode": "lbz",
+              "operands": "r50,1(r44)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 51,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "mulli r51,r35,3",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 8,
+              "instr_idx": 0,
+              "opcode": "mulli",
+              "operands": "r51,r35,3"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 52,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "add r52,r45,r51",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 8,
+              "instr_idx": 1,
+              "opcode": "add",
+              "operands": "r52,r45,r51"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 53,
+          "assigned_reg": -1,
+          "source": null
+        },
+        {
+          "virtual": 54,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "field-load",
+            "confidence": "source-expression",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 4972,
+            "source_col": 4,
+            "expression": "lbl_8046B488.x0",
+            "base_virtual": 42,
+            "base_var": "lbl_8046B488",
+            "base_confidence": "global-source-expression",
+            "field_offset": 0,
+            "field_name": "x0",
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 14,
+              "instr_idx": 0,
+              "opcode": "lbz",
+              "operands": "r54,0(r42)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 55,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "mulli r55,r38,3",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 15,
+              "instr_idx": 0,
+              "opcode": "mulli",
+              "operands": "r55,r38,3"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 66,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "first-def",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "li r66,11",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "AFTER LOOP TRANSFORMATIONS",
+              "block_idx": 25,
+              "instr_idx": 0,
+              "opcode": "li",
+              "operands": "r66,11"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 67,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "first-def",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "li r67,11",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "AFTER LOOP TRANSFORMATIONS",
+              "block_idx": 26,
+              "instr_idx": 0,
+              "opcode": "li",
+              "operands": "r67,11"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 48,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 48,
+      "assigned_reg": 31,
+      "live_range": [
+        4,
+        51
+      ],
+      "live_blocks": [
+        4,
+        23
+      ],
+      "use_count": 3,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 4,
+        "instr_idx": 0,
+        "opcode": "mr",
+        "operands": "r48,r3"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 23,
+        "instr_idx": 2,
+        "opcode": "sth",
+        "operands": "r64,0(r48)"
+      },
+      "source": {
+        "kind": "call-return",
+        "confidence": "copy-chain",
+        "name": "temp_r31",
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": 2215,
+        "source_col": 16,
+        "expression": "gmMainLib_8015EDA4()",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 3,
+          "instr_idx": 0,
+          "opcode": "bl",
+          "operands": "gmMainLib_8015EDA4"
+        },
+        "call_symbol": "gmMainLib_8015EDA4",
+        "copy_chain": [
+          48,
+          3
+        ],
+        "use_sites": [
+          {
+            "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+            "block_idx": 4,
+            "instr_idx": 1,
+            "opcode": "mr",
+            "operands": "r37,r48"
+          }
+        ]
+      },
+      "interferers": [
+        {
+          "virtual": 0,
+          "assigned_reg": 0,
+          "source": null
+        },
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 4,
+          "assigned_reg": 4,
+          "source": null
+        },
+        {
+          "virtual": 5,
+          "assigned_reg": 5,
+          "source": null
+        },
+        {
+          "virtual": 6,
+          "assigned_reg": 6,
+          "source": null
+        },
+        {
+          "virtual": 7,
+          "assigned_reg": 7,
+          "source": null
+        },
+        {
+          "virtual": 8,
+          "assigned_reg": 8,
+          "source": null
+        },
+        {
+          "virtual": 9,
+          "assigned_reg": 9,
+          "source": null
+        },
+        {
+          "virtual": 10,
+          "assigned_reg": 10,
+          "source": null
+        },
+        {
+          "virtual": 11,
+          "assigned_reg": 11,
+          "source": null
+        },
+        {
+          "virtual": 12,
+          "assigned_reg": 12,
+          "source": null
+        },
+        {
+          "virtual": 32,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "param",
+            "confidence": "best-guess",
+            "name": "stage_id",
+            "type": "u16",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2235,
+            "source_col": null,
+            "expression": "stage_id",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 33,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "stage_unlock_mask",
+            "type": "u16*",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2237,
+            "source_col": null,
+            "expression": "stage_unlock_mask",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 34,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "internal_id",
+            "type": "u8",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2238,
+            "source_col": null,
+            "expression": "internal_id",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 35,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "i",
+            "type": "s32",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2239,
+            "source_col": null,
+            "expression": "i",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 36,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "unlock_idx",
+            "type": "u8",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2240,
+            "source_col": null,
+            "expression": "unlock_idx",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 38,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "first-def",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "li r38,0",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 13,
+              "instr_idx": 0,
+              "opcode": "li",
+              "operands": "r38,0"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 39,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "rlwinm r39,r34,0,24,31",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 13,
+              "instr_idx": 2,
+              "opcode": "rlwinm",
+              "operands": "r39,r34,0,24,31"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 40,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r40,r45,788",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 3,
+              "opcode": "addi",
+              "operands": "r40,r45,788"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 42,
+          "assigned_reg": -1,
+          "source": null
+        },
+        {
+          "virtual": 44,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "copy/coalesce-product",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "mr r44,r40",
+            "base_virtual": 40,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 4,
+              "opcode": "mr",
+              "operands": "r44,r40"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 50,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "field-load",
+            "confidence": "source-expression",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 4973,
+            "source_col": 4,
+            "expression": "lbl_8046B488.x1",
+            "base_virtual": 44,
+            "base_var": "lbl_8046B488",
+            "base_confidence": "global-source-expression",
+            "field_offset": 1,
+            "field_name": "x1",
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 7,
+              "instr_idx": 0,
+              "opcode": "lbz",
+              "operands": "r50,1(r44)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 51,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "mulli r51,r35,3",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 8,
+              "instr_idx": 0,
+              "opcode": "mulli",
+              "operands": "r51,r35,3"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 52,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "add r52,r45,r51",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 8,
+              "instr_idx": 1,
+              "opcode": "add",
+              "operands": "r52,r45,r51"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 53,
+          "assigned_reg": -1,
+          "source": null
+        },
+        {
+          "virtual": 54,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "field-load",
+            "confidence": "source-expression",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 4972,
+            "source_col": 4,
+            "expression": "lbl_8046B488.x0",
+            "base_virtual": 42,
+            "base_var": "lbl_8046B488",
+            "base_confidence": "global-source-expression",
+            "field_offset": 0,
+            "field_name": "x0",
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 14,
+              "instr_idx": 0,
+              "opcode": "lbz",
+              "operands": "r54,0(r42)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 55,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "mulli r55,r38,3",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 15,
+              "instr_idx": 0,
+              "opcode": "mulli",
+              "operands": "r55,r38,3"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 56,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "add r56,r45,r55",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 15,
+              "instr_idx": 1,
+              "opcode": "add",
+              "operands": "r56,r45,r55"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 62,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "field-load",
+            "confidence": "source-expression",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 4972,
+            "source_col": 4,
+            "expression": "lbl_8046B488.x0",
+            "base_virtual": 37,
+            "base_var": "lbl_8046B488",
+            "base_confidence": "global-source-expression",
+            "field_offset": 0,
+            "field_name": "x0",
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 23,
+              "instr_idx": 2,
+              "opcode": "lhz",
+              "operands": "r62,0(r37)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 64,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "or r64,r62,r60",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 23,
+              "instr_idx": 4,
+              "opcode": "or",
+              "operands": "r64,r62,r60"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 66,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "first-def",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "li r66,11",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "AFTER LOOP TRANSFORMATIONS",
+              "block_idx": 25,
+              "instr_idx": 0,
+              "opcode": "li",
+              "operands": "r66,11"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 67,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "first-def",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "li r67,11",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "AFTER LOOP TRANSFORMATIONS",
+              "block_idx": 26,
+              "instr_idx": 0,
+              "opcode": "li",
+              "operands": "r67,11"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 49,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 49,
+      "assigned_reg": 0,
+      "live_range": null,
+      "live_blocks": [
+        6
+      ],
+      "use_count": 6,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 6,
+        "instr_idx": 0,
+        "opcode": "mr",
+        "operands": "r49,r3"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER COPY PROPAGATION",
+        "block_idx": 6,
+        "instr_idx": 1,
+        "opcode": "rlwinm",
+        "operands": "r36,r49,0,24,31"
+      },
+      "source": {
+        "kind": "call-return",
+        "confidence": "copy-chain",
+        "name": "stage_idx",
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": 2216,
+        "source_col": 17,
+        "expression": "Stage_8022519C(arg0)",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 5,
+          "instr_idx": 0,
+          "opcode": "bl",
+          "operands": "Stage_8022519C"
+        },
+        "call_symbol": "Stage_8022519C",
+        "copy_chain": [
+          49,
+          3
+        ],
+        "use_sites": [
+          {
+            "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+            "block_idx": 6,
+            "instr_idx": 1,
+            "opcode": "rlwinm",
+            "operands": "r36,r49,0,24,31"
+          }
+        ]
+      },
+      "interferers": [],
+      "note": null
+    },
+    {
+      "virtual": 50,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 50,
+      "assigned_reg": 0,
+      "live_range": [
+        13,
+        14
+      ],
+      "live_blocks": [
+        7
+      ],
+      "use_count": 2,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 7,
+        "instr_idx": 0,
+        "opcode": "lbz",
+        "operands": "r50,1(r44)"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 7,
+        "instr_idx": 1,
+        "opcode": "cmp",
+        "operands": "cr0,r36,r50"
+      },
+      "source": {
+        "kind": "field-load",
+        "confidence": "source-expression",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": 4973,
+        "source_col": 4,
+        "expression": "lbl_8046B488.x1",
+        "base_virtual": 44,
+        "base_var": "lbl_8046B488",
+        "base_confidence": "global-source-expression",
+        "field_offset": 1,
+        "field_name": "x1",
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 7,
+          "instr_idx": 0,
+          "opcode": "lbz",
+          "operands": "r50,1(r44)"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 35,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "i",
+            "type": "s32",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2239,
+            "source_col": null,
+            "expression": "i",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 36,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "local",
+            "confidence": "low-confidence",
+            "name": "unlock_idx",
+            "type": "u8",
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2240,
+            "source_col": null,
+            "expression": "unlock_idx",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": null,
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 40,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r40,r45,788",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 3,
+              "opcode": "addi",
+              "operands": "r40,r45,788"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 44,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "copy/coalesce-product",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "mr r44,r40",
+            "base_virtual": 40,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 4,
+              "opcode": "mr",
+              "operands": "r44,r40"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 51,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 51,
+      "assigned_reg": 0,
+      "live_range": [
+        16,
+        17
+      ],
+      "live_blocks": [
+        8
+      ],
+      "use_count": 2,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 8,
+        "instr_idx": 0,
+        "opcode": "mulli",
+        "operands": "r51,r35,3"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 8,
+        "instr_idx": 1,
+        "opcode": "add",
+        "operands": "r52,r47,r51"
+      },
+      "source": {
+        "kind": "implicit-temp",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "mulli r51,r35,3",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 8,
+          "instr_idx": 0,
+          "opcode": "mulli",
+          "operands": "r51,r35,3"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 40,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r40,r45,788",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 3,
+              "opcode": "addi",
+              "operands": "r40,r45,788"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 52,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 52,
+      "assigned_reg": 4,
+      "live_range": [
+        17,
+        18
+      ],
+      "live_blocks": [
+        8
+      ],
+      "use_count": 2,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 8,
+        "instr_idx": 1,
+        "opcode": "add",
+        "operands": "r52,r45,r51"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 8,
+        "instr_idx": 2,
+        "opcode": "lbz",
+        "operands": "r34,788(r52)"
+      },
+      "source": {
+        "kind": "implicit-temp",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "add r52,r45,r51",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 8,
+          "instr_idx": 1,
+          "opcode": "add",
+          "operands": "r52,r45,r51"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 0,
+          "assigned_reg": 0,
+          "source": null
+        },
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 40,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r40,r45,788",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 3,
+              "opcode": "addi",
+              "operands": "r40,r45,788"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 54,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 54,
+      "assigned_reg": 0,
+      "live_range": [
+        32,
+        33
+      ],
+      "live_blocks": [
+        14
+      ],
+      "use_count": 2,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 14,
+        "instr_idx": 0,
+        "opcode": "lbz",
+        "operands": "r54,0(r42)"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 14,
+        "instr_idx": 1,
+        "opcode": "cmp",
+        "operands": "cr0,r39,r54"
+      },
+      "source": {
+        "kind": "field-load",
+        "confidence": "source-expression",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": 4972,
+        "source_col": 4,
+        "expression": "lbl_8046B488.x0",
+        "base_virtual": 42,
+        "base_var": "lbl_8046B488",
+        "base_confidence": "global-source-expression",
+        "field_offset": 0,
+        "field_name": "x0",
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 14,
+          "instr_idx": 0,
+          "opcode": "lbz",
+          "operands": "r54,0(r42)"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 38,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "first-def",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "li r38,0",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 13,
+              "instr_idx": 0,
+              "opcode": "li",
+              "operands": "r38,0"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 39,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "rlwinm r39,r34,0,24,31",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 13,
+              "instr_idx": 2,
+              "opcode": "rlwinm",
+              "operands": "r39,r34,0,24,31"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 40,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r40,r45,788",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 3,
+              "opcode": "addi",
+              "operands": "r40,r45,788"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 42,
+          "assigned_reg": -1,
+          "source": null
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 55,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 55,
+      "assigned_reg": 0,
+      "live_range": [
+        35,
+        36
+      ],
+      "live_blocks": [
+        15
+      ],
+      "use_count": 2,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 15,
+        "instr_idx": 0,
+        "opcode": "mulli",
+        "operands": "r55,r38,3"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 15,
+        "instr_idx": 1,
+        "opcode": "add",
+        "operands": "r56,r47,r55"
+      },
+      "source": {
+        "kind": "implicit-temp",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "mulli r55,r38,3",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 15,
+          "instr_idx": 0,
+          "opcode": "mulli",
+          "operands": "r55,r38,3"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 39,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "rlwinm r39,r34,0,24,31",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 13,
+              "instr_idx": 2,
+              "opcode": "rlwinm",
+              "operands": "r39,r34,0,24,31"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 56,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 56,
+      "assigned_reg": 3,
+      "live_range": [
+        36,
+        37
+      ],
+      "live_blocks": [
+        15
+      ],
+      "use_count": 2,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 15,
+        "instr_idx": 1,
+        "opcode": "add",
+        "operands": "r56,r45,r55"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 15,
+        "instr_idx": 2,
+        "opcode": "lbz",
+        "operands": "r33,790(r56)"
+      },
+      "source": {
+        "kind": "implicit-temp",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "add r56,r45,r55",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 15,
+          "instr_idx": 1,
+          "opcode": "add",
+          "operands": "r56,r45,r55"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 0,
+          "assigned_reg": 0,
+          "source": null
+        },
+        {
+          "virtual": 39,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "rlwinm r39,r34,0,24,31",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 13,
+              "instr_idx": 2,
+              "opcode": "rlwinm",
+              "operands": "r39,r34,0,24,31"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 57,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 57,
+      "assigned_reg": 0,
+      "live_range": null,
+      "live_blocks": [
+        21
+      ],
+      "use_count": 3,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 21,
+        "instr_idx": 0,
+        "opcode": "mr",
+        "operands": "r57,r3"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER COPY PROPAGATION",
+        "block_idx": 21,
+        "instr_idx": 0,
+        "opcode": "mr",
+        "operands": "r57,r3"
+      },
+      "source": {
+        "kind": "call-return",
+        "confidence": "copy-chain",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": 2265,
+        "source_col": 9,
+        "expression": "gmMainLib_8015D818(notify_val)",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 20,
+          "instr_idx": 0,
+          "opcode": "bl",
+          "operands": "gmMainLib_8015D818"
+        },
+        "call_symbol": "gmMainLib_8015D818",
+        "copy_chain": [
+          57,
+          3
+        ],
+        "use_sites": []
+      },
+      "interferers": [],
+      "note": null
+    },
+    {
+      "virtual": 58,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 58,
+      "assigned_reg": 0,
+      "live_range": null,
+      "live_blocks": [
+        21
+      ],
+      "use_count": 9,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 21,
+        "instr_idx": 1,
+        "opcode": "li",
+        "operands": "r58,1"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER CONSTANT PROPAGATION",
+        "block_idx": 21,
+        "instr_idx": 0,
+        "opcode": "li",
+        "operands": "r58,1"
+      },
+      "source": {
+        "kind": "first-def",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "li r58,1",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 21,
+          "instr_idx": 1,
+          "opcode": "li",
+          "operands": "r58,1"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [],
+      "note": null
+    },
+    {
+      "virtual": 59,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 59,
+      "assigned_reg": 0,
+      "live_range": null,
+      "live_blocks": [
+        21
+      ],
+      "use_count": 9,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 21,
+        "instr_idx": 2,
+        "opcode": "li",
+        "operands": "r59,0"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER CONSTANT PROPAGATION",
+        "block_idx": 21,
+        "instr_idx": 1,
+        "opcode": "li",
+        "operands": "r59,0"
+      },
+      "source": {
+        "kind": "first-def",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "li r59,0",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 21,
+          "instr_idx": 2,
+          "opcode": "li",
+          "operands": "r59,0"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [],
+      "note": null
+    },
+    {
+      "virtual": 60,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 60,
+      "assigned_reg": 0,
+      "live_range": null,
+      "live_blocks": [
+        23
+      ],
+      "use_count": 6,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 23,
+        "instr_idx": 0,
+        "opcode": "mr",
+        "operands": "r60,r4"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER COPY PROPAGATION",
+        "block_idx": 23,
+        "instr_idx": 4,
+        "opcode": "or",
+        "operands": "r64,r62,r60"
+      },
+      "source": {
+        "kind": "copy/coalesce-product",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "mr r60,r4",
+        "base_virtual": 4,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 23,
+          "instr_idx": 0,
+          "opcode": "mr",
+          "operands": "r60,r4"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [],
+      "note": null
+    },
+    {
+      "virtual": 61,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 61,
+      "assigned_reg": 0,
+      "live_range": null,
+      "live_blocks": [
+        23
+      ],
+      "use_count": 6,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 23,
+        "instr_idx": 1,
+        "opcode": "mr",
+        "operands": "r61,r3"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER COPY PROPAGATION",
+        "block_idx": 23,
+        "instr_idx": 5,
+        "opcode": "or",
+        "operands": "r65,r63,r61"
+      },
+      "source": {
+        "kind": "call-return",
+        "confidence": "copy-chain",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": 3748,
+        "source_col": 16,
+        "expression": "__shl2i()",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 22,
+          "instr_idx": 0,
+          "opcode": "bl",
+          "operands": "__shl2i"
+        },
+        "call_symbol": "__shl2i",
+        "copy_chain": [
+          61,
+          3
+        ],
+        "use_sites": [
+          {
+            "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+            "block_idx": 23,
+            "instr_idx": 5,
+            "opcode": "or",
+            "operands": "r65,r63,r61"
+          }
+        ]
+      },
+      "interferers": [],
+      "note": null
+    },
+    {
+      "virtual": 62,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 62,
+      "assigned_reg": 0,
+      "live_range": [
+        49,
+        50
+      ],
+      "live_blocks": [
+        23
+      ],
+      "use_count": 2,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 23,
+        "instr_idx": 2,
+        "opcode": "lhz",
+        "operands": "r62,0(r37)"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 23,
+        "instr_idx": 1,
+        "opcode": "or",
+        "operands": "r64,r62,r4"
+      },
+      "source": {
+        "kind": "field-load",
+        "confidence": "source-expression",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": 4972,
+        "source_col": 4,
+        "expression": "lbl_8046B488.x0",
+        "base_virtual": 37,
+        "base_var": "lbl_8046B488",
+        "base_confidence": "global-source-expression",
+        "field_offset": 0,
+        "field_name": "x0",
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 23,
+          "instr_idx": 2,
+          "opcode": "lhz",
+          "operands": "r62,0(r37)"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 4,
+          "assigned_reg": 4,
+          "source": null
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 63,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 63,
+      "assigned_reg": 0,
+      "live_range": null,
+      "live_blocks": [
+        23
+      ],
+      "use_count": 9,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 23,
+        "instr_idx": 3,
+        "opcode": "li",
+        "operands": "r63,0"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER CONSTANT PROPAGATION",
+        "block_idx": 23,
+        "instr_idx": 1,
+        "opcode": "li",
+        "operands": "r63,0"
+      },
+      "source": {
+        "kind": "first-def",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "li r63,0",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 23,
+          "instr_idx": 3,
+          "opcode": "li",
+          "operands": "r63,0"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [],
+      "note": null
+    },
+    {
+      "virtual": 64,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 64,
+      "assigned_reg": 0,
+      "live_range": [
+        50,
+        51
+      ],
+      "live_blocks": [
+        23
+      ],
+      "use_count": 2,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 23,
+        "instr_idx": 4,
+        "opcode": "or",
+        "operands": "r64,r62,r60"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 23,
+        "instr_idx": 2,
+        "opcode": "sth",
+        "operands": "r64,0(r48)"
+      },
+      "source": {
+        "kind": "implicit-temp",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "or r64,r62,r60",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+          "block_idx": 23,
+          "instr_idx": 4,
+          "opcode": "or",
+          "operands": "r64,r62,r60"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 65,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 65,
+      "assigned_reg": 0,
+      "live_range": null,
+      "live_blocks": [
+        23
+      ],
+      "use_count": 6,
+      "first_occurrence": {
+        "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+        "block_idx": 23,
+        "instr_idx": 5,
+        "opcode": "or",
+        "operands": "r65,r63,r61"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER LOAD DELETATION",
+        "block_idx": 23,
+        "instr_idx": 2,
+        "opcode": "mr",
+        "operands": "r65,r3"
+      },
+      "source": {
+        "kind": "call-return",
+        "confidence": "copy-chain",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": 3748,
+        "source_col": 16,
+        "expression": "__shl2i()",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "AFTER CONSTANT PROPAGATION",
+          "block_idx": 22,
+          "instr_idx": 0,
+          "opcode": "bl",
+          "operands": "__shl2i"
+        },
+        "call_symbol": "__shl2i",
+        "copy_chain": [
+          65,
+          3
+        ],
+        "use_sites": []
+      },
+      "interferers": [],
+      "note": null
+    },
+    {
+      "virtual": 66,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 66,
+      "assigned_reg": 0,
+      "live_range": [
+        7,
+        9
+      ],
+      "live_blocks": [
+        6,
+        25
+      ],
+      "use_count": 2,
+      "first_occurrence": {
+        "pass_name": "AFTER LOOP TRANSFORMATIONS",
+        "block_idx": 25,
+        "instr_idx": 0,
+        "opcode": "li",
+        "operands": "r66,11"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 6,
+        "instr_idx": 2,
+        "opcode": "mtctr",
+        "operands": "r66"
+      },
+      "source": {
+        "kind": "first-def",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "li r66,11",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "AFTER LOOP TRANSFORMATIONS",
+          "block_idx": 25,
+          "instr_idx": 0,
+          "opcode": "li",
+          "operands": "r66,11"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 3,
+          "assigned_reg": 3,
+          "source": null
+        },
+        {
+          "virtual": 40,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r40,r45,788",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 3,
+              "opcode": "addi",
+              "operands": "r40,r45,788"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        }
+      ],
+      "note": null
+    },
+    {
+      "virtual": 67,
+      "status": "colorgraph",
+      "class_id": 0,
+      "ig_idx": 67,
+      "assigned_reg": 0,
+      "live_range": [
+        27,
+        28
+      ],
+      "live_blocks": [
+        13,
+        26
+      ],
+      "use_count": 2,
+      "first_occurrence": {
+        "pass_name": "AFTER LOOP TRANSFORMATIONS",
+        "block_idx": 26,
+        "instr_idx": 0,
+        "opcode": "li",
+        "operands": "r67,11"
+      },
+      "last_occurrence": {
+        "pass_name": "AFTER PEEPHOLE FORWARD",
+        "block_idx": 13,
+        "instr_idx": 1,
+        "opcode": "mtctr",
+        "operands": "r67"
+      },
+      "source": {
+        "kind": "first-def",
+        "confidence": "pcode-first-def",
+        "name": null,
+        "type": null,
+        "source_file": "src/melee/gm/gm_1601.c",
+        "source_line": null,
+        "source_col": null,
+        "expression": "li r67,11",
+        "base_virtual": null,
+        "base_var": null,
+        "base_confidence": null,
+        "field_offset": null,
+        "field_name": null,
+        "first_def": {
+          "pass_name": "AFTER LOOP TRANSFORMATIONS",
+          "block_idx": 26,
+          "instr_idx": 0,
+          "opcode": "li",
+          "operands": "r67,11"
+        },
+        "call_symbol": null,
+        "copy_chain": [],
+        "use_sites": []
+      },
+      "interferers": [
+        {
+          "virtual": 39,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "rlwinm r39,r34,0,24,31",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 13,
+              "instr_idx": 2,
+              "opcode": "rlwinm",
+              "operands": "r39,r34,0,24,31"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 40,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r40,r45,788",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 6,
+              "instr_idx": 3,
+              "opcode": "addi",
+              "operands": "r40,r45,788"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 47,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "implicit-temp",
+            "confidence": "pcode-first-def",
+            "name": null,
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": null,
+            "source_col": null,
+            "expression": "addi r47,r46,LO(lbl_803B75F8)",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 2,
+              "instr_idx": 1,
+              "opcode": "addi",
+              "operands": "r47,r46,LO(lbl_803B75F8)"
+            },
+            "call_symbol": null,
+            "copy_chain": [],
+            "use_sites": []
+          }
+        },
+        {
+          "virtual": 48,
+          "assigned_reg": -1,
+          "source": {
+            "kind": "call-return",
+            "confidence": "copy-chain",
+            "name": "temp_r31",
+            "type": null,
+            "source_file": "src/melee/gm/gm_1601.c",
+            "source_line": 2215,
+            "source_col": 16,
+            "expression": "gmMainLib_8015EDA4()",
+            "base_virtual": null,
+            "base_var": null,
+            "base_confidence": null,
+            "field_offset": null,
+            "field_name": null,
+            "first_def": {
+              "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+              "block_idx": 3,
+              "instr_idx": 0,
+              "opcode": "bl",
+              "operands": "gmMainLib_8015EDA4"
+            },
+            "call_symbol": "gmMainLib_8015EDA4",
+            "copy_chain": [
+              48,
+              3
+            ],
+            "use_sites": [
+              {
+                "pass_name": "BEFORE GLOBAL OPTIMIZATION",
+                "block_idx": 4,
+                "instr_idx": 1,
+                "opcode": "mr",
+                "operands": "r37,r48"
+              }
+            ]
+          }
+        },
+        {
+          "virtual": 53,
+          "assigned_reg": -1,
+          "source": null
+        }
+      ],
+      "note": null
+    }
+  ],
+  "pair_interferences": []
+}

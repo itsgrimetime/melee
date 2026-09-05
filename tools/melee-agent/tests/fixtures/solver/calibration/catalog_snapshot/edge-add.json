@@ -1,0 +1,7 @@
+[
+  {
+    "lever": "statement-hoist-sink",
+    "tier": "b",
+    "note": "move a def/use across the other value's range"
+  }
+]

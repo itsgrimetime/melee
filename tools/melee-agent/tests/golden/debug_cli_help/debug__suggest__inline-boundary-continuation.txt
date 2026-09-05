@@ -1,0 +1,43 @@
+                                                                                
+ Usage: melee-agent debug suggest inline-boundary-continuation                  
+            [OPTIONS]                                                           
+                                                                                
+ Generate or close strict inline-leverage helper-boundary probes.               
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --inline-leverage-json               PATH     debug measure               │
+│                                                  inline-leverage JSON        │
+│                                                  report.                     │
+│                                                  [required]                  │
+│    --function                   -f      TEXT     Function/report symbol.     │
+│    --inline-name                        TEXT     Inline helper name.         │
+│    --source-file                        PATH     Source file to mutate;      │
+│                                                  defaults from the inline    │
+│                                                  leverage report.            │
+│    --target                             TEXT     Target virtual mapping such │
+│                                                  as 34=27. Can be passed     │
+│                                                  repeatedly.                 │
+│    --target-spec,--target-json          PATH     Existing score-source       │
+│                                                  target spec. If omitted     │
+│                                                  with --write-probes, one is │
+│                                                  written.                    │
+│    --cflags-from                        TEXT     Compile flags unit to       │
+│                                                  include in emitted          │
+│                                                  score-source hints.         │
+│    --expression-baseline                PATH     Baseline pcdump path for    │
+│                                                  score-source expression     │
+│                                                  anchors.                    │
+│    --expression-source                  TEXT     Baseline source argument    │
+│                                                  for score-source expression │
+│                                                  anchors.                    │
+│    --write-probes,--out-dir             PATH     Directory for generated     │
+│                                                  candidate .c files.         │
+│    --score-json                         TEXT     Existing score-source       │
+│                                                  --json payload for a        │
+│                                                  generated candidate.        │
+│    --max-candidates                     INTEGER  Maximum generated           │
+│                                                  candidates.                 │
+│    --json                                        Emit JSON.                  │
+│    --help                                        Show this message and exit. │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

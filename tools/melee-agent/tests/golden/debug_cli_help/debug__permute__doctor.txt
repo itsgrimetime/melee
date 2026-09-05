@@ -1,0 +1,13 @@
+                                                                                
+ Usage: melee-agent debug permute doctor [OPTIONS]                              
+                                                                                
+ Validate local decomp-permuter paths before run/config/verify.                 
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function   -f      TEXT  Function name to inspect [required]            │
+│    --perm-root          PATH  Root of decomp-permuter clone.                 │
+│                               [default: /Users/mike/code/decomp-permuter]    │
+│    --json                     Emit check results as JSON.                    │
+│    --help                     Show this message and exit.                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -4,10 +4,10 @@ function melee_sed {
     find \
         src \
         docs \
+        ldscript.lcf \
         config/GALE01/splits.txt \
         config/GALE01/symbols.txt \
         configure.py \
-        .nix/CMakeLists.txt \
         -type f -exec sed -i "${@}" {} +
 }
 
@@ -15,7 +15,7 @@ function melee_sd {
     {
         find src -type f \( -name '*.c' -o -name '*.h' \) -print0
         find docs -type f -name '*.md' -print0
-        find config/GALE01/splits.txt config/GALE01/symbols.txt configure.py .nix/CMakeLists.txt -type f -print0
+        find ldscript.lcf config/GALE01/splits.txt config/GALE01/symbols.txt configure.py -type f -print0
     } | xargs -0 sd "${@}"
 }
 
@@ -82,7 +82,7 @@ function gen_header {
 
 function rename_tu {
     for ext in c s h dox; do
-        find src docs -name "$1.$ext" | while read -r file; do
+        find asm src docs -name "$1.$ext" | while read -r file; do
             new_file="$(dirname "$file")/$2.$ext"
             mv "$file" "$new_file"
         done

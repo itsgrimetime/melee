@@ -1,0 +1,48 @@
+{
+  "function": "mnDiagram2_GetRankedFighter",
+  "class_id": 0,
+  "matched_dump": "mnDiagram2_GetRankedFighter_matched_pcdump.txt",
+  "wip_dump": "mnDiagram2_GetRankedFighter_wip_pcdump.txt",
+  "matched_rev": "d1a10c029",
+  "wip_rev": "388f5b89c",
+  "adjudication_basis": "AUTO unique-first-def (non-circular): each label is a class-0 role whose normalized first-def signature is unique in BOTH compiles -- a source-grounded struct access / named symbol / immediate that identifies it independent of ig number and of the matcher use-site feature. Cross-file pair (mndiagram2.c), distinct from the mnvibration corpus. Generic first-defs left unadjudicated.",
+  "same": {
+    "36": 38,
+    "37": 39,
+    "64": 64,
+    "65": 48,
+    "66": 49,
+    "68": 66,
+    "69": 67,
+    "75": 73,
+    "76": 74,
+    "84": 82,
+    "85": 83,
+    "86": 84
+  },
+  "same_role_notes": {
+    "36": "addi r#,r#,1",
+    "37": "subf r#,r#,r#",
+    "64": "addi r#,r#,8",
+    "65": "add r#,r#,r#",
+    "66": "lwz r#,0(r#)",
+    "68": "subfe r#,r#,r#",
+    "69": "subfc r#,r#,r#",
+    "75": "rlwinm r#,r#,0,24,31",
+    "76": "rlwinm r#,r#,4,20,27",
+    "84": "rlwinm r#,r#,29,3,31",
+    "85": "neg r#,r#",
+    "86": "subfic r#,r#,25"
+  },
+  "raw_ig_baseline_correct": 1,
+  "raw_ig_note": "Of 12 auto-labels raw ig_idx agrees on 1; 11 drifted and must be recovered by first-def identity.",
+  "use_site_stress": {
+    "83": 81,
+    "35": 37
+  },
+  "use_site_stress_notes": {
+    "83": "mr r#,r# <- subf r#,r#,r#",
+    "35": "mr r#,r# <- li r#,0"
+  },
+  "use_site_stress_basis": "Use-site-stress labels: GENERIC first-def roles (mr/add/lbz/rlwinm/subf) that DRIFTED, adjudicated by source-grounded composite def-lineage (the chain of defining ops to a unique anchor such as lwz +44 / a named symbol) -- this lineage is the role PRODUCERS, independent of the matcher use_site (consumers) feature, so it is non-circular. Each listed role is recovered by the matcher WITH use_site but NOT when use_site is ablated, proving use_site is load-bearing. The method reproduces mnVibration hand-labels 41->44 and 42->45."
+}

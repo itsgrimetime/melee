@@ -1,0 +1,46 @@
+                                                                                
+ Usage: melee-agent debug suggest coalesce [OPTIONS]                            
+                                                                                
+ Suggest C-source patterns producing a specific coalesce, or discover candidate 
+ coalesces that would shorten the cascade.                                      
+                                                                                
+ Pair mode example:                                                             
+     debug suggest coalesce -f fn_802461BC -V 53=3                              
+                                                                                
+ Discover mode example:                                                         
+     debug suggest coalesce -f fn_802461BC --discover --top 5                   
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function                -f      TEXT     Function to analyze            │
+│                                               (required).                    │
+│                                               [required]                     │
+│    --pair                    -V      TEXT     Pair mode: 'virt=root' (e.g.   │
+│                                               '53=3' or 'f46=f56'). Mutually │
+│                                               exclusive with                 │
+│                                               --discover/--trace-copy-json.  │
+│    --trace-copy-json                 PATH     trace-copy --json report to    │
+│                                               derive pair mode as copy       │
+│                                               destination=rooted to source,  │
+│                                               preserving register class.     │
+│    --discover                                 Discover mode: find candidate  │
+│                                               coalesces that would shorten   │
+│                                               the longest callee-save        │
+│                                               cascade. Mutually exclusive    │
+│                                               with --pair/--trace-copy-json. │
+│    --class                           TEXT     Register class for             │
+│                                               pair/discover mode: gpr/r/0 or │
+│                                               fpr/f/1.                       │
+│    --top                             INTEGER  Discover mode: max candidates  │
+│                                               (default 3). Raises            │
+│                                               BadParameter if passed in pair │
+│                                               mode.                          │
+│                                               [default: 3]                   │
+│    --pcdump                          PATH     Path to pcdump.txt.            │
+│                                               Auto-resolves from cache.      │
+│    --json                                     Emit as JSON.                  │
+│    --include-low-confidence                   Use low-confidence bridge      │
+│                                               bindings for source-line       │
+│                                               annotations.                   │
+│    --help                                     Show this message and exit.    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,104 @@
+                                                                                
+ Usage: melee-agent debug search run [OPTIONS]                                  
+                                                                                
+ Run a search over source variants for FUNCTION in UNIT.                        
+                                                                                
+ Uses seed source files as the starting candidate pool, optionally              
+ combined with remote permuter producers.  Prints a JSON summary                
+ including accounting when done.                                                
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function          -f                        TEXT     Function name to   │
+│                                                           search for.        │
+│                                                           [required]         │
+│ *  --unit              -u                        TEXT     Translation unit   │
+│                                                           path (e.g.         │
+│                                                           melee/gr/quatlib). │
+│                                                           [required]         │
+│    --store                                       PATH     Artifact store     │
+│                                                           directory.         │
+│                                                           Defaults to        │
+│                                                           build/search-stor… │
+│    --seed                                        TEXT     Seed source files  │
+│                                                           (.c), optionally   │
+│                                                           ID=path. May be    │
+│                                                           passed multiple    │
+│                                                           times.             │
+│    --no-remote             --remote                       Skip remote        │
+│                                                           permuter           │
+│                                                           producers.         │
+│                                                           [default: remote]  │
+│    --remotes                                     TEXT     Comma-separated    │
+│                                                           remote names       │
+│                                                           (default:          │
+│                                                           coder1,coder2,cod… │
+│                                                           [default:          │
+│                                                           coder1,coder2,cod… │
+│    --max-iters                                   INTEGER  Maximum scheduler  │
+│                                                           iterations.        │
+│                                                           [default: 10]      │
+│    --dry-compiler                                         Use stub compiler  │
+│                                                           (no real           │
+│                                                           mwcc/wibo). For    │
+│                                                           testing.           │
+│    --perm-root                                   PATH     Root of            │
+│                                                           decomp-permuter    │
+│                                                           clone used for     │
+│                                                           remote producer    │
+│                                                           jobs.              │
+│                                                           [default:          │
+│                                                           ~/code/decomp-per… │
+│    --directed-force-…                            TEXT     Enable directed    │
+│                                                           allocator scoring  │
+│                                                           with a force-phys  │
+│                                                           proof vector, e.g. │
+│                                                           0:58:4,0:44:4 or   │
+│                                                           class0:ig58:phys=… │
+│    --directed-from-d…      --no-directed-fro…             Derive the         │
+│                                                           directed           │
+│                                                           force-phys proof   │
+│                                                           from `debug target │
+│                                                           force-phys-from-d… │
+│                                                           before running.    │
+│                                                           [default:          │
+│                                                           no-directed-from-… │
+│    --directed-class                              INTEGER  Default register   │
+│                                                           class for unscoped │
+│                                                           directed proof     │
+│                                                           entries.           │
+│                                                           [default: 0]       │
+│    --verify                --no-verify                    With               │
+│                                                           --directed-from-d… │
+│                                                           require            │
+│                                                           force-vector       │
+│                                                           verification to    │
+│                                                           run and byte-match │
+│                                                           before the search  │
+│                                                           starts.            │
+│                                                           [default:          │
+│                                                           no-verify]         │
+│    --directed-force-…      --no-directed-for…             With               │
+│                                                           --directed-from-d… │
+│                                                           --verify, include  │
+│                                                           singleton and      │
+│                                                           prefix             │
+│                                                           force-vector       │
+│                                                           diagnostic probes. │
+│                                                           [default:          │
+│                                                           directed-force-ve… │
+│    --directed-checkd…                            FLOAT    Timeout in seconds │
+│                                                           for directed proof │
+│                                                           derivation and     │
+│                                                           force-vector       │
+│                                                           verification       │
+│                                                           checkdiff runs.    │
+│                                                           [default: 60.0]    │
+│    --directed-pcdump…                            INTEGER  Timeout in seconds │
+│                                                           for directed local │
+│                                                           pcdump             │
+│                                                           compilation.       │
+│                                                           [default: 120]     │
+│    --help                                                 Show this message  │
+│                                                           and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

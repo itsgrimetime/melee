@@ -1,0 +1,132 @@
+{
+  "name": "reject_a_gm_80164504",
+  "function": "gm_80164504",
+  "unit": "melee/gm/gm_1601",
+  "class_id": 0,
+  "kind": "reject_confirmation",
+  "real_exemplar": true,
+  "checkdiff_primary": "normalized-structural-match",
+  "phys_target": {
+    "35": 3,
+    "52": 3
+  },
+  "reachable": null,
+  "reachable_note": "forcing-set auto-verify unavailable (ValueError: --force-vector did not contain any entries); irrelevant to a reject fixture",
+  "phys_conflicts": [],
+  "expected": {
+    "outcome": "rejected_a",
+    "filter_token": "rejected_a"
+  },
+  "target_ig": 38,
+  "class_signal": {
+    "first_def_opcode": "li",
+    "implicated_hops": 2,
+    "observed_reg": 3,
+    "desired_reg": null,
+    "contested_residual": [
+      35,
+      52
+    ]
+  },
+  "whole_solver": {
+    "expected_token": "rejected_a",
+    "target_ig": 38,
+    "implicated_hops": 2,
+    "candidates_for_target": 8,
+    "rejected_count": 8,
+    "flagged_count": 0,
+    "survived_in_full": 0,
+    "survived_in_partial": 0,
+    "survived_in_window": 0,
+    "production_filter_token": "rejected_a",
+    "whole_solver_reject_assertion_ok": true,
+    "recompute_equality_audit_ok": true,
+    "recompute_audit": {
+      "reasons": [
+        "rejected_a"
+      ],
+      "flags": [],
+      "admits": 0,
+      "candidates": 8
+    },
+    "broken_filter_control": {
+      "survivors_under_admit_everything": 0,
+      "breaks_gate": true
+    },
+    "enumeration_trace": {
+      "filter_counts": {
+        "candidates_generated": 152,
+        "rejected_a": 24,
+        "rejected_b": 0,
+        "flagged_c": 0,
+        "rejected_survival": 4
+      },
+      "evals_per_kind": {
+        "node-add": 124,
+        "edge": 0,
+        "order": 0
+      },
+      "full_hits": 0,
+      "partial_hits": 0,
+      "window_order_hits": 0,
+      "truncated": false,
+      "last_kind": "node-add"
+    }
+  },
+  "bridge_file": "bridge.json",
+  "expectations": {
+    "predicted_base_coloring": {
+      "67": 0,
+      "66": 0,
+      "65": 0,
+      "64": 0,
+      "63": 0,
+      "62": 0,
+      "61": 0,
+      "60": 0,
+      "59": 0,
+      "58": 0,
+      "57": 0,
+      "56": 3,
+      "55": 0,
+      "54": 0,
+      "52": 4,
+      "51": 0,
+      "50": 0,
+      "49": 0,
+      "48": 31,
+      "47": 30,
+      "46": 4,
+      "45": 0,
+      "44": 4,
+      "43": 0,
+      "41": 0,
+      "40": 5,
+      "39": 29,
+      "38": 3,
+      "37": 0,
+      "36": 6,
+      "35": 7,
+      "34": 0,
+      "33": 0,
+      "32": 29
+    },
+    "base_g1_rate": 1.0
+  },
+  "admission": {
+    "mode": "direct_evidence",
+    "checkdiff_primary": "normalized-structural-match",
+    "check_i_bl_multiset_equal": true,
+    "check_ii_all_normalized_lines_register_class": true,
+    "bl_target_multiset_delta": {
+      "added": {},
+      "removed": {}
+    },
+    "normalized_diff_lines": 0,
+    "nonregister_class_lines": 0
+  },
+  "alias": {
+    "source_object_candidates": [],
+    "lever": "alias"
+  }
+}

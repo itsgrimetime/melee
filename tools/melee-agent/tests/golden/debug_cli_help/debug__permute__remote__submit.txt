@@ -1,0 +1,15 @@
+                                                                                
+ Usage: melee-agent debug permute remote submit [OPTIONS]                       
+                                                                                
+ Submit a local decomp-permuter function directory to a remote target.          
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function   -f      TEXT     Function to run remotely. [required]        │
+│ *  --target             TEXT     Configured remote target name. [required]   │
+│    --threads    -j      INTEGER  Override target thread count.               │
+│    --mode               TEXT     Remote permuter mode. [default: stock]      │
+│    --perm-root          PATH     Root of decomp-permuter clone.              │
+│                                  [default: /Users/mike/code/decomp-permuter] │
+│    --help                        Show this message and exit.                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

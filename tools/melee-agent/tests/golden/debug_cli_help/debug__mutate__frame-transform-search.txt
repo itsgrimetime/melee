@@ -1,0 +1,142 @@
+                                                                                
+ Usage: melee-agent debug mutate frame-transform-search [OPTIONS]               
+                                                                                
+ Compile and score directed source transforms for frame-size divergence.        
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function          -f                        TEXT     Function to        │
+│                                                           explore.           │
+│                                                           [required]         │
+│    --pcdump                                      PATH     Baseline pcdump.   │
+│                                                           Auto-resolves from │
+│                                                           cache when         │
+│                                                           omitted.           │
+│    --expected-asm                                PATH     Path to expected   │
+│                                                           target asm. Omit   │
+│                                                           to extract via     │
+│                                                           function.          │
+│    --no-expected                                          Allow planning     │
+│                                                           without expected   │
+│                                                           asm; validation    │
+│                                                           will report no     │
+│                                                           target.            │
+│    --source-file                                 PATH     Source file used   │
+│                                                           to generate        │
+│                                                           directed frame     │
+│                                                           probes.            │
+│    --output-dir                                  PATH     Directory for      │
+│                                                           generated          │
+│                                                           --compile-probes   │
+│                                                           source files. When │
+│                                                           omitted, JSON      │
+│                                                           output retains a   │
+│                                                           temp directory     │
+│                                                           because variant    │
+│                                                           paths are          │
+│                                                           machine-readable   │
+│                                                           follow-up inputs.  │
+│    --candidate                                   TEXT     Candidate          │
+│                                                           pcdump/source to   │
+│                                                           score, repeatable. │
+│                                                           Format             │
+│                                                           OPERATOR=path or   │
+│                                                           LABEL:OPERATOR=pa… │
+│    --compile-probes        --no-compile-prob…             Compile generated  │
+│                                                           directed source    │
+│                                                           probes.            │
+│                                                           [default:          │
+│                                                           compile-probes]    │
+│    --score-match-per…      --no-score-match-…             For source         │
+│                                                           candidates,        │
+│                                                           temporarily        │
+│                                                           transfer into the  │
+│                                                           real tree and read │
+│                                                           final report.json  │
+│                                                           match percent.     │
+│                                                           Enabled by default │
+│                                                           because ranking    │
+│                                                           uses match percent │
+│                                                           as a tiebreaker.   │
+│                                                           [default:          │
+│                                                           score-match-perce… │
+│    --max-probes                                  INTEGER  Maximum generated  │
+│                                                           probes to list or  │
+│                                                           compile.           │
+│                                                           [default: 12]      │
+│    --include-transfo…      --no-include-tran…             Opt in to          │
+│                                                           transform-corpus   │
+│                                                           source-shape       │
+│                                                           probes after       │
+│                                                           frame-directed and │
+│                                                           lifetime fallback  │
+│                                                           probes.            │
+│                                                           [default:          │
+│                                                           no-include-transf… │
+│    --prefer-staged-s…      --no-prefer-stage…             When --source-file │
+│                                                           and --pcdump are   │
+│                                                           both supplied,     │
+│                                                           prefer the         │
+│                                                           compiled           │
+│                                                           source-file        │
+│                                                           baseline over the  │
+│                                                           explicit pcdump.   │
+│                                                           By default         │
+│                                                           explicit pcdumps   │
+│                                                           remain             │
+│                                                           authoritative.     │
+│                                                           [default:          │
+│                                                           no-prefer-staged-… │
+│    --transform-family                            TEXT     Transform-corpus   │
+│                                                           source-shape       │
+│                                                           family to          │
+│                                                           generate. Repeat   │
+│                                                           or pass            │
+│                                                           comma-separated    │
+│                                                           names; passing     │
+│                                                           this also opts in  │
+│                                                           and overrides the  │
+│                                                           frame              │
+│                                                           transform-corpus   │
+│                                                           defaults.          │
+│    --transform-force…                            TEXT     Proof mapping for  │
+│                                                           transform-corpus   │
+│                                                           source-shape       │
+│                                                           probes, e.g.       │
+│                                                           IG:PHYS or         │
+│                                                           comma-separated    │
+│                                                           IG:PHYS entries.   │
+│    --operator                                    TEXT     Add an operator    │
+│                                                           family to the      │
+│                                                           directed search.   │
+│                                                           Repeat or pass     │
+│                                                           comma-separated    │
+│                                                           names; values are  │
+│                                                           unioned with the   │
+│                                                           frame-divergence   │
+│                                                           plan.              │
+│    --include-lifetim…      --no-include-life…             Also include       │
+│                                                           existing           │
+│                                                           lifetime-layout    │
+│                                                           probes whose       │
+│                                                           operator is        │
+│                                                           selected by the    │
+│                                                           frame-divergence   │
+│                                                           plan.              │
+│                                                           [default:          │
+│                                                           include-lifetime-… │
+│    --frame-reservati…                            INTEGER  Override the       │
+│                                                           inferred frame     │
+│                                                           delta with a       │
+│                                                           positive explicit  │
+│                                                           PAD_STACK(N) probe │
+│                                                           size for           │
+│                                                           frame-reservation… │
+│    --timeout                                     INTEGER  Per-candidate      │
+│                                                           compile timeout in │
+│                                                           seconds.           │
+│                                                           [default: 120]     │
+│    --json                                                 Emit as JSON.      │
+│    --help                                                 Show this message  │
+│                                                           and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

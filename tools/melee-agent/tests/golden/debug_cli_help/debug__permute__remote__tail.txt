@@ -1,0 +1,17 @@
+                                                                                
+ Usage: melee-agent debug permute remote tail [OPTIONS] JOB_ID                  
+                                                                                
+ Print a remote permuter job log snapshot.                                      
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    job_id      TEXT  Remote permuter job id. [required]                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --lines   -n                 INTEGER  Number of log lines to print.          │
+│                                       [default: 80]                          │
+│ --follow      --no-follow             Keep streaming the remote permuter log │
+│                                       after the snapshot.                    │
+│                                       [default: no-follow]                   │
+│ --help                                Show this message and exit.            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

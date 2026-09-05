@@ -1,0 +1,16 @@
+                                                                                
+ Usage: melee-agent debug permute candidate-audit [OPTIONS] ROOT                
+                                                                                
+ Audit permuter candidates and print a compact status summary.                  
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    root      PATH  Directory containing permuter output-*/source.c         │
+│                      candidates.                                             │
+│                      [required]                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --function  -f      TEXT  Function name for status sidecars                  │
+│ --json                    Emit the full candidate_audit.json payload.        │
+│ --help                    Show this message and exit.                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

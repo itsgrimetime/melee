@@ -1,0 +1,31 @@
+                                                                                
+ Usage: melee-agent debug search minimize [OPTIONS]                             
+                                                                                
+ Delta-reduce candidate subhunks while preserving proof assignments.            
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --base                       PATH     Retained/base source file used as   │
+│                                          the minimization anchor.            │
+│                                          [required]                          │
+│ *  --candidate                  TEXT     Candidate source file, or           │
+│                                          CANDIDATE_ID=path.                  │
+│                                          [required]                          │
+│    --range                      TEXT     Manual subhunk range                │
+│                                          CANDIDATE_ID:BASE_START-BASE_END=C… │
+│                                          May be repeated.                    │
+│    --preserve-assignment        TEXT     Required satisfied assignment       │
+│                                          IG:PHYS, e.g. 42:3.                 │
+│    --max-byte-score             INTEGER  Reject minimized candidates with    │
+│                                          byte_score above this value.        │
+│    --score-command              TEXT     Command template used to score each │
+│                                          minimized candidate. Use            │
+│                                          {candidate} as the generated source │
+│                                          path placeholder.                   │
+│    --out                        PATH     Output path for the minimized       │
+│                                          source.                             │
+│                                          [default:                           │
+│                                          build/search-minimized/minimized.c] │
+│    --json                                Emit machine-readable JSON.         │
+│    --help                                Show this message and exit.         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

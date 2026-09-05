@@ -1,0 +1,41 @@
+                                                                                
+ Usage: melee-agent debug search post-source-ceiling-axis [OPTIONS]             
+                                                                                
+ Rank backend/codegen axes after terminal source-family exhaustion.             
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function                 -f            TEXT  Function to discover from. │
+│                                                   [required]                 │
+│    --source-model-json                      PATH  Terminal                   │
+│                                                   source-model-synthesis     │
+│                                                   JSON.                      │
+│    --retained-frontiers-json                PATH  Retained-frontiers         │
+│                                                   aggregate JSON from source │
+│                                                   ceiling triage.            │
+│    --allocator-ceiling-json                 PATH  Allocator-ceiling JSON for │
+│                                                   the exhausted retained     │
+│                                                   frontiers.                 │
+│    --post-source-context-js…                PATH  Optional Draw              │
+│                                                   post-source-context        │
+│                                                   next-dimension JSON.       │
+│    --continuation-json                      PATH  Optional                   │
+│                                                   source-family-continuation │
+│                                                   JSON.                      │
+│    --first-divergence-json                  PATH  Optional first-divergence  │
+│                                                   JSON for post-axis repair  │
+│                                                   attribution.               │
+│    --simplify-order-json                    PATH  Optional retained          │
+│                                                   simplify-order JSON for    │
+│                                                   terminal repair evidence.  │
+│    --bank                                   TEXT  Register bank to use:      │
+│                                                   auto, gpr, or fpr.         │
+│                                                   [default: auto]            │
+│    --out                                    PATH  Optional path to write     │
+│                                                   discovery JSON.            │
+│    --json                         --text          Emit machine-readable      │
+│                                                   JSON.                      │
+│                                                   [default: json]            │
+│    --help                                         Show this message and      │
+│                                                   exit.                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

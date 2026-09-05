@@ -1,0 +1,510 @@
+# src/common/struct_layout.py
+"""Reusable MWCC offsetof-probe layout resolver.
+
+Resolves struct field offsets by compiling a probe TU with the same
+MWCC flags as the real build, then reading the .data symbol back from the
+ELF object file.
+"""
+from __future__ import annotations
+
+import re
+import shlex
+import struct
+import subprocess
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+
+
+@dataclass
+class CflagsSpec:
+    mw_version: str
+    cflags: list[str]
+
+
+def _read_ninja(repo: Path) -> str:
+    return (repo / "build.ninja").read_text()
+
+
+def _join_continuations(block: str) -> str:
+    # ninja line continuation is "$\n" + leading whitespace
+    return re.sub(r"\$\n\s*", " ", block)
+
+
+_HEADER_DIRS = [
+    "include",
+    "src",
+    "extern/dolphin/include",
+    "extern/dolphin/src",
+]
+
+
+def _balanced_body(txt: str, open_brace: int) -> str | None:
+    """Return the text between ``txt[open_brace]`` ('{') and its matching '}'.
+
+    Scans counting '{'/'}' so nested struct/union bodies are captured in full
+    (a non-greedy regex would stop at the first inner '}').
+    """
+    depth = 0
+    for i in range(open_brace, len(txt)):
+        c = txt[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return txt[open_brace + 1 : i]
+    return None
+
+
+def _find_struct_body(repo: Path, name: str) -> str | None:
+    """Find the body of a C struct (or typedef struct) by name.
+
+    Handles both:
+      struct Name { ... }
+      typedef struct _Name { ... } Name;
+    Returns the raw content between the outermost braces, or None.
+    """
+    # Match only up to the opening brace; the body is captured by a
+    # brace-balanced scan so nested struct/union members are not truncated.
+    pats = [
+        re.compile(rf"struct\s+_?{re.escape(name)}\s*\{{"),
+        re.compile(rf"struct\s*\{{(?P<body>.*?)\}}\s*{re.escape(name)}\s*;", re.S),
+    ]
+    for d in _HEADER_DIRS:
+        root = repo / d
+        if not root.exists():
+            continue
+        for hp in root.rglob("*.h"):
+            try:
+                txt = hp.read_text(errors="ignore")
+            except OSError:
+                continue
+            if name not in txt:
+                continue
+            # named form: struct Name { ... } — brace-balanced scan
+            m = pats[0].search(txt)
+            if m:
+                body = _balanced_body(txt, m.end() - 1)
+                if body is not None:
+                    return body
+            # typedef anonymous form: struct { ... } Name;
+            # the trailing `} Name;` anchor already bounds the body, but scan
+            # from the opening brace so a nested aggregate is captured in full.
+            for am in re.finditer(r"struct\s*\{", txt):
+                body = _balanced_body(txt, am.end() - 1)
+                if body is None:
+                    continue
+                after = txt[am.end() - 1 + len(body) + 2 :]
+                if re.match(rf"\s*{re.escape(name)}\s*;", after):
+                    return body
+    return None
+
+
+def _parse_c_fields(body: str) -> list[dict]:
+    """Parse C struct fields from raw body text (no offset-comment required).
+
+    Returns a list of dicts with keys: name, type, is_pointer, is_array,
+    array_size. Does NOT filter padding/unknown fields — callers that want
+    that filtering do it themselves (see enumerate_field_paths).
+
+    Handles simple declarations, array declarations, and pointer types
+    (the ``*`` may attach to the type, the name, or stand alone).
+    """
+    fields = []
+    # Strip C comments
+    cleaned = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+    cleaned = re.sub(r"//[^\n]*", "", cleaned)
+
+    # Split into statements at brace-depth-0 semicolons only, so a NAMED nested
+    # struct/union (`struct/union { ... } member;`) stays a SINGLE statement and
+    # its inner members are not spliced up as bogus top-level fields.
+    statements: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    for ch in cleaned:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        if ch == ";" and depth == 0:
+            statements.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        statements.append("".join(buf))
+
+    # Parse line-by-line within the (now brace-aware) statement list.
+    for line in statements:
+        line = line.strip()
+        if not line:
+            continue
+
+        # A NAMED nested aggregate (`struct/union { ... } member`) is one leaf
+        # field named after the trailing member; drop the inner body so we do
+        # not splice its members into the parent. Only the member name(s) remain
+        # after the closing brace, so there is no separate type token.
+        nested_aggregate = False
+        if "{" in line and "}" in line:
+            line = line[line.rindex("}") + 1 :].strip()
+            if not line:
+                continue
+            nested_aggregate = True
+
+        # Example lines (pointer ``*`` may be anywhere before the name):
+        #   u8 RST
+        #   u8* dLC[3]          -> pointer (array of pointers)
+        #   HSD_GObj* next      -> pointer
+        #   HSD_GObj *next      -> pointer (star on name)
+        #   THPComponent components[3]
+        #   u32 pad2[9]
+        #   u8 data[0x10]       -> hex array size
+
+        # A pointer field has a '*' somewhere in the declaration.
+        is_pointer = "*" in line
+
+        # Drop all '*' so the name token is clean regardless of star placement,
+        # then the last whitespace token is the name (possibly with array suffix).
+        no_star = line.replace("*", " ")
+        tokens = no_star.split()
+        # A regular declaration needs at least a type and a name; a nested
+        # aggregate leaves only the member name token(s).
+        if len(tokens) < (1 if nested_aggregate else 2):
+            continue
+
+        raw_name = tokens[-1]
+        # The array size may be numeric (0xNN / decimal) OR a macro/enum/const
+        # expression (e.g. NUM_CHARACTERS). Accept any non-empty bracket body;
+        # only numeric sizes resolve to a concrete array_size, others stay None.
+        arr_match = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)(?:\[([^\]]+)\])?$", raw_name)
+        if not arr_match:
+            continue
+
+        field_name = arr_match.group(1)
+        raw_size = arr_match.group(2)
+        is_array = raw_size is not None
+        if raw_size is not None and re.fullmatch(r"0x[0-9a-fA-F]+|\d+", raw_size.strip()):
+            array_size = int(raw_size, 0)
+        else:
+            array_size = None
+
+        # Type is everything except the last token.
+        type_str = " ".join(tokens[:-1]).strip()
+
+        fields.append({
+            "name": field_name,
+            "type": type_str,
+            "is_pointer": is_pointer,
+            "is_array": is_array,
+            "array_size": array_size,
+        })
+
+    return fields
+
+
+def enumerate_field_paths(repo: Path, struct_name: str, _depth: int = 0) -> list[str]:
+    """Enumerate offsetof-able field paths for a struct.
+
+    Returns strings like "RST", "components[0].predDC", etc.
+    Recurses one level into struct-typed fields.
+    Skips fields whose names start with 'pad' or 'unk'.
+    """
+    body = _find_struct_body(repo, struct_name)
+    if body is None:
+        raise ValueError(f"struct {struct_name!r} not found in header dirs")
+
+    fields = _parse_c_fields(body)
+    out: list[str] = []
+
+    for f in fields:
+        nm = f["name"]
+        if not nm or nm.startswith("pad") or nm.startswith("unk"):
+            continue
+
+        arr = f["array_size"]
+        elem_type = f["type"]
+
+        # An array with an unresolved (macro/enum) size has is_array True but
+        # array_size None. Emit it as a bare leaf path rather than dropping it
+        # or recursing (we cannot index it without a concrete element offset).
+        if f["is_array"] and arr is None:
+            out.append(nm)
+            continue
+
+        # Recurse into nested struct types (one level only).
+        # NEVER recurse into pointer fields: a pointer-to-struct field is a
+        # single scalar slot; expanding its members would emit paths like
+        # `next.classifier` which the probe would dereference through a null
+        # pointer (`&(((S*)0)->next.classifier)`) — wrong / undefined.
+        nested: list[str] = []
+        if _depth < 1 and not f["is_pointer"] and _find_struct_body(repo, elem_type) is not None:
+            try:
+                nested = enumerate_field_paths(repo, elem_type, _depth + 1)
+            except ValueError:
+                nested = []
+
+        # Determine indices to emit
+        if arr is not None:
+            indices: list[int | None] = list(range(min(arr, 2)))  # 0 and 1 (or just 0 for size-1)
+        else:
+            indices = [None]
+
+        for idx in indices:
+            base = nm if idx is None else f"{nm}[{idx}]"
+            if nested:
+                out.extend(f"{base}.{sub}" for sub in nested)
+            else:
+                out.append(base)
+
+    return out
+
+
+def parse_tu_cflags(repo: Path, tu_src: str) -> CflagsSpec:
+    """Extract mw_version + cflags for the build edge that compiles `tu_src`."""
+    text = _read_ninja(repo)
+    # find the build edge whose inputs include tu_src
+    # edges look like: "build <out>: mwcc_sjis $\n    <src> ...\n  mw_version = ...\n  cflags = ... $\n      ...\n  basedir = ..."
+    edges = re.split(r"\nbuild ", text)
+    for edge in edges:
+        if tu_src not in edge:
+            continue
+        joined = _join_continuations(edge)
+        mw = re.search(r"mw_version = (\S+)", joined)
+        cf = re.search(r"cflags = (.*?)(?:\n  \w+ =|\Z)", joined, re.S)
+        if mw and cf:
+            # Use shlex.split to properly handle quoted pragma values like
+            # -pragma "cats off" (split() would break the quoted string)
+            raw = cf.group(1).strip()
+            try:
+                tokens = shlex.split(raw)
+            except ValueError:
+                tokens = raw.split()
+            return CflagsSpec(mw.group(1).strip(), tokens)
+    raise ValueError(f"no build edge found for {tu_src}")
+
+
+# Flags to drop when building a standalone probe (build-system or path-dependent flags).
+# -cwd <dir> sets MWCC's "current working directory" for source-relative includes;
+# the probe doesn't need it and the 'source' dir doesn't exist in the worktree.
+# -warn iserror would turn probe warnings into errors unnecessarily.
+_DROP_FLAGS: set[str] = {"-MMD", "-warn"}
+# Flags that take a following argument to also drop
+_DROP_FLAGS_WITH_ARG: set[str] = {"-cwd"}
+
+
+def _probe_cflags(spec: CflagsSpec) -> list[str]:
+    """Filter spec.cflags to only the flags relevant for layout probing."""
+    out: list[str] = []
+    skip_next = False
+    i = 0
+    toks = spec.cflags
+    while i < len(toks):
+        tok = toks[i]
+        if skip_next:
+            skip_next = False
+            i += 1
+            continue
+        if tok in _DROP_FLAGS:
+            # drop this flag; if it has a following non-flag token, drop that too
+            # (e.g. -warn iserror: next token is "iserror", not a flag)
+            if i + 1 < len(toks) and not toks[i + 1].startswith("-"):
+                skip_next = True
+            i += 1
+            continue
+        if tok in _DROP_FLAGS_WITH_ARG:
+            # drop this flag AND its next argument unconditionally
+            skip_next = True
+            i += 1
+            continue
+        out.append(tok)
+        i += 1
+    return out
+
+
+def _compile_probe(repo: Path, spec: CflagsSpec, src: str) -> bytes:
+    """Compile a C source string with the given cflags via MWCC/wibo.
+
+    Returns the raw bytes of the resulting .o file.
+    Raises RuntimeError if compilation fails.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        cpath = Path(td) / "probe.c"
+        opath = Path(td) / "probe.o"
+        cpath.write_text(src)
+        cc = repo / "build/compilers" / spec.mw_version / "mwcceppc.exe"
+        wibo = repo / "build/tools/wibo"
+        if not wibo.exists():
+            raise RuntimeError(f"wibo not found at {wibo} (build the tools first)")
+        if not cc.exists():
+            raise RuntimeError(f"mwcceppc.exe not found at {cc} (build the compilers first)")
+        cmd = [str(wibo), str(cc), *_probe_cflags(spec), "-c", str(cpath), "-o", str(opath)]
+        try:
+            r = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
+        except FileNotFoundError as e:
+            raise RuntimeError(f"probe compile could not launch: {e}") from e
+        if not opath.exists():
+            raise RuntimeError(
+                f"probe compile failed:\n--- stdout ---\n{r.stdout}\n--- stderr ---\n{r.stderr}"
+            )
+        return opath.read_bytes()
+
+
+def _read_symbol_u32s(obj: bytes, symbol: str) -> list[int]:
+    """Read an array of u32 values from a named symbol in an ELF32 object file."""
+    if obj[:4] != b"\x7fELF":
+        raise ValueError("not an ELF file (bad magic)")
+    end = ">" if obj[5] == 2 else "<"  # ELFDATA2MSB = 2 → big-endian
+    (e_shoff,) = struct.unpack(end + "I", obj[0x20:0x24])
+    (e_shentsize,) = struct.unpack(end + "H", obj[0x2E:0x30])
+    (e_shnum,) = struct.unpack(end + "H", obj[0x30:0x32])
+    (e_shstrndx,) = struct.unpack(end + "H", obj[0x32:0x34])
+    secs = []
+    for i in range(e_shnum):
+        o = e_shoff + i * e_shentsize
+        nm, typ, fl, ad, off, sz, lk, inf, al, es = struct.unpack(end + "10I", obj[o : o + 40])
+        secs.append(dict(name=nm, offset=off, size=sz, link=lk, entsize=es))
+    sh = secs[e_shstrndx]
+    shstr = obj[sh["offset"] : sh["offset"] + sh["size"]]
+    for s in secs:
+        s["sn"] = shstr[s["name"] : shstr.index(b"\0", s["name"])].decode()
+    sym = next(s for s in secs if s["sn"] == ".symtab")
+    st = secs[sym["link"]]
+    strd = obj[st["offset"] : st["offset"] + st["size"]]
+    for i in range(sym["size"] // sym["entsize"]):
+        o = sym["offset"] + i * sym["entsize"]
+        n, val, sz, info, other, shndx = struct.unpack(end + "IIIBBH", obj[o : o + 16])
+        name = strd[n : strd.index(b"\0", n)].decode()
+        if name == symbol or name == "_" + symbol:
+            sec = secs[shndx]
+            raw = obj[sec["offset"] + val : sec["offset"] + val + sz]
+            return [struct.unpack(end + "I", raw[j : j + 4])[0] for j in range(0, len(raw), 4)]
+    raise KeyError(f"symbol {symbol!r} not found in .symtab")
+
+
+def _tu_include_of(repo: Path, struct_name: str) -> str:
+    """Find the angle-bracket include path for the header that defines `struct_name`.
+
+    Returns e.g. '<dolphin/thp/thp.h>' (relative to one of the -i include dirs).
+    """
+    pats = [
+        re.compile(rf"struct\s+_?{re.escape(struct_name)}\s*\{{"),
+        re.compile(rf"\}}\s*{re.escape(struct_name)}\s*;"),
+    ]
+    for d in _HEADER_DIRS:
+        root = repo / d
+        if not root.exists():
+            continue
+        for hp in root.rglob("*.h"):
+            try:
+                txt = hp.read_text(errors="ignore")
+            except OSError:
+                continue
+            if any(p.search(txt) for p in pats):
+                rel = hp.relative_to(root)
+                return f"<{rel.as_posix()}>"
+    raise ValueError(f"no header found for struct {struct_name!r}")
+
+
+def find_struct_header(repo: Path, struct_name: str) -> Path:
+    """Return the header path that defines ``struct_name``.
+
+    This mirrors _tu_include_of() but returns a filesystem path for guarded
+    local edits.
+    """
+    pats = [
+        re.compile(rf"struct\s+_?{re.escape(struct_name)}\s*\{{"),
+        re.compile(rf"\}}\s*{re.escape(struct_name)}\s*;"),
+    ]
+    for d in _HEADER_DIRS:
+        root = repo / d
+        if not root.exists():
+            continue
+        for hp in root.rglob("*.h"):
+            try:
+                txt = hp.read_text(errors="ignore")
+            except OSError:
+                continue
+            if any(p.search(txt) for p in pats):
+                return hp
+    raise ValueError(f"no header found for struct {struct_name!r}")
+
+
+def resolve_layout(repo: Path, struct_name: str, tu_src: str) -> dict[str, int]:
+    """Compile an offsetof-probe and return a mapping of field-path → byte offset.
+
+    Uses the same MWCC cflags as the real build edge for `tu_src`.
+    """
+    spec = parse_tu_cflags(repo, tu_src)
+    paths = enumerate_field_paths(repo, struct_name)
+    incl = _tu_include_of(repo, struct_name)
+
+    # Build the probe source: an array of offsets, one per field path.
+    # Use the address-of trick instead of offsetof() to avoid needing stddef.h.
+    body = f"#include {incl}\n"
+    body += f"#define OFF(f) ((unsigned long)&((({struct_name}*)0)->f))\n"
+    body += "unsigned long __off[] = {\n"
+    body += ",\n".join(f"  OFF({p})" for p in paths)
+    body += "\n};\n"
+
+    obj = _compile_probe(repo, spec, body)
+    offs = _read_symbol_u32s(obj, "__off")
+    return {p: o for p, o in zip(paths, offs)}
+
+
+def offset_to_field(layout: dict[str, int], offset: int) -> str | None:
+    """Return the field path for a given offset, or None if not found."""
+    for p, o in layout.items():
+        if o == offset:
+            return p
+    return None
+
+
+def verify_offsets(
+    repo: Path,
+    struct_name: str,
+    tu_src: str,
+    expect: dict[str, int],
+) -> bool:
+    """Compile a static-assertion probe to verify expected field offsets.
+
+    Returns True if all expected offsets match, False if any offset is wrong.
+    This is cheaper than resolve_layout() when you only need a pass/fail check
+    on a known set of offsets.
+
+    Raises ValueError if any path in ``expect`` is not a real member of the
+    struct (e.g. a typo) — this is distinct from "offset wrong", so a typo'd
+    field is never silently reported as a mismatch.
+    """
+    if not expect:
+        return True  # nothing to verify
+    spec = parse_tu_cflags(repo, tu_src)
+    incl = _tu_include_of(repo, struct_name)
+    header = (
+        f"#include {incl}\n"
+        f"#define OFF(f) ((unsigned long)&((({struct_name}*)0)->f))\n"
+    )
+
+    # Phase 1: validate every path is a real member (no assertion). If this
+    # fails, the paths themselves are bad — surface that as an error rather
+    # than masquerading as an offset mismatch.
+    probe_paths = header + "unsigned long __off[] = {\n"
+    probe_paths += ",\n".join(f"  OFF({p})" for p in expect)
+    probe_paths += "\n};\n"
+    try:
+        _compile_probe(repo, spec, probe_paths)
+    except RuntimeError as e:
+        raise ValueError(
+            f"verify_offsets: one or more field paths are not valid members "
+            f"of {struct_name!r}: {sorted(expect)}\n{e}"
+        ) from e
+
+    # Phase 2: assertion form — typedef char[1] (ok) / char[-1] (compile error).
+    probe_assert = header
+    for i, (path, off) in enumerate(expect.items()):
+        probe_assert += f"typedef char _chk{i}[OFF({path}) == {off} ? 1 : -1];\n"
+    try:
+        _compile_probe(repo, spec, probe_assert)
+        return True
+    except RuntimeError:
+        return False

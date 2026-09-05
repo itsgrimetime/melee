@@ -1,0 +1,32 @@
+
+ Usage: melee-agent debug inspect explain-virtual [OPTIONS]
+
+ Explain virtual-register source/interference attribution.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function      -f      TEXT  Function to analyze. [required]             │
+│    --virtuals              TEXT  Comma-separated virtual registers to        │
+│                                  explain, e.g. r37,r40.                      │
+│    --pairs                 TEXT  Comma-separated virtual pairs to explain,   │
+│                                  e.g. r37/r40,r43/r33.                       │
+│    --ig                    TEXT  Comma-separated COLORGRAPH ig_idx values to │
+│                                  explain, e.g. 88,90. ig_idx N maps to       │
+│                                  virtual rN; this is sugar for --virtuals so │
+│                                  you can query straight from a COLORGRAPH    │
+│                                  dump.                                       │
+│    --all                         Explain every virtual register observed in  │
+│                                  pre-coloring pcode.                         │
+│    --class                 TEXT  Register class for allocator lookup         │
+│                                  (gpr/int or fp/fpr).                        │
+│                                  [default: gpr]                              │
+│    --pcdump                PATH  Path to pcdump.txt. Auto-resolves from      │
+│                                  cache when omitted.                         │
+│    --source-file           PATH  C source file used for source/interference  │
+│                                  attribution. Defaults to the repo source    │
+│                                  for the function when available.            │
+│    --mwcc-inspect          PATH  mwcc-inspect output for this TU/function;   │
+│                                  attaches front-end ObjObject IDs to         │
+│                                  source-owner attribution.                   │
+│    --json                        Emit as JSON.                               │
+│    --help                        Show this message and exit.                 │
+╰──────────────────────────────────────────────────────────────────────────────╯

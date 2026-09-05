@@ -1,0 +1,182 @@
+                                                                                
+ Usage: melee-agent debug select-order-search [OPTIONS]                         
+                                                                                
+ Search source-shape probes by target COLORGRAPH select-order objective.        
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function          -f                       TEXT     Function to         │
+│                                                          explore.            │
+│                                                          [required]          │
+│ *  --target                                     TEXT     Target select       │
+│                                                          order(s), e.g.      │
+│                                                          r32<r33 or          │
+│                                                          r43<r33,r40<r33.    │
+│                                                          [required]          │
+│    --pcdump                                     PATH     Baseline pcdump.    │
+│                                                          Auto-resolves from  │
+│                                                          cache when omitted. │
+│    --allow-stale-pcd…                                    Allow an            │
+│                                                          auto-resolved       │
+│                                                          baseline pcdump     │
+│                                                          whose source is     │
+│                                                          newer than the      │
+│                                                          cache. Off by       │
+│                                                          default so source   │
+│                                                          scores cannot be    │
+│                                                          mixed with stale    │
+│                                                          allocator facts.    │
+│    --source-file                                PATH     Source file used to │
+│                                                          generate            │
+│                                                          select-order-direc… │
+│                                                          probes.             │
+│    --candidate                                  TEXT     Candidate           │
+│                                                          pcdump/source to    │
+│                                                          score, repeatable.  │
+│                                                          Format              │
+│                                                          OPERATOR=path or    │
+│                                                          LABEL:OPERATOR=pat… │
+│    --probe-provenance                           TEXT     JSON object         │
+│                                                          describing the      │
+│                                                          matching            │
+│                                                          --candidate         │
+│                                                          provenance. Repeat  │
+│                                                          in candidate order. │
+│    --class                                      INTEGER  Register class id   │
+│                                                          from COLORGRAPH     │
+│                                                          DECISIONS.          │
+│                                                          [default: 0]        │
+│    --compile-probes        --no-compile-pro…             Compile generated   │
+│                                                          source probes.      │
+│                                                          Enabled by default  │
+│                                                          so the plain        │
+│                                                          command emits       │
+│                                                          ranked, scored      │
+│                                                          candidates.         │
+│                                                          [default:           │
+│                                                          compile-probes]     │
+│    --score-match-per…      --no-score-match…             For source          │
+│                                                          candidates,         │
+│                                                          temporarily         │
+│                                                          transfer into the   │
+│                                                          real tree and read  │
+│                                                          final report.json   │
+│                                                          match percent.      │
+│                                                          Enabled by default  │
+│                                                          because ranking     │
+│                                                          uses match percent  │
+│                                                          as a tiebreaker;    │
+│                                                          use                 │
+│                                                          --no-score-match-p… │
+│                                                          for faster          │
+│                                                          pcdump-only         │
+│                                                          scoring.            │
+│                                                          [default:           │
+│                                                          score-match-percen… │
+│    --max-probes                                 INTEGER  Maximum generated   │
+│                                                          probes to compile   │
+│                                                          or list.            │
+│                                                          [default: 8]        │
+│    --include-transfo…      --no-include-tra…             Opt in to           │
+│                                                          transform-corpus    │
+│                                                          source-shape probes │
+│                                                          for the             │
+│                                                          single-probe        │
+│                                                          select-order search │
+│                                                          list.               │
+│                                                          [default:           │
+│                                                          no-include-transfo… │
+│    --transform-family                           TEXT     Transform-corpus    │
+│                                                          source-shape family │
+│                                                          to generate. Repeat │
+│                                                          or pass             │
+│                                                          comma-separated     │
+│                                                          names; passing this │
+│                                                          also opts in.       │
+│    --transform-force…                           TEXT     Proof mapping for   │
+│                                                          transform-corpus    │
+│                                                          source-shape        │
+│                                                          probes, e.g.        │
+│                                                          IG:PHYS or          │
+│                                                          comma-separated     │
+│                                                          IG:PHYS entries.    │
+│    --force-phys                                 TEXT     Proof mapping for   │
+│                                                          residual            │
+│                                                          first-divergence    │
+│                                                          scoring, e.g.       │
+│                                                          IG:PHYS or          │
+│                                                          comma-separated     │
+│                                                          IG:PHYS entries.    │
+│                                                          Alias of            │
+│                                                          --transform-force-… │
+│                                                          for select-order    │
+│                                                          proof workflows.    │
+│    --residual-first-…                           INTEGER  Attach              │
+│                                                          first-divergence    │
+│                                                          residual analysis   │
+│                                                          to the top N ranked │
+│                                                          successful          │
+│                                                          candidates. Omit    │
+│                                                          for automatic top-3 │
+│                                                          on force-phys       │
+│                                                          misses; pass 0 to   │
+│                                                          disable.            │
+│    --frame-reservati…                           INTEGER  Add a PAD_STACK(N)  │
+│                                                          source probe for    │
+│                                                          implicit no-access  │
+│                                                          frame reservation   │
+│                                                          gaps.               │
+│    --beam-depth                                 INTEGER  Compose generated   │
+│                                                          source probes for N │
+│                                                          rounds. 0 keeps the │
+│                                                          single-probe        │
+│                                                          search.             │
+│                                                          [default: 0]        │
+│    --beam-width                                 INTEGER  Number of           │
+│                                                          real-score-ranked   │
+│                                                          candidates to       │
+│                                                          expand per beam     │
+│                                                          round.              │
+│                                                          [default: 4]        │
+│    --guard-repair-de…                           INTEGER  Repair rounds       │
+│                                                          seeded from         │
+│                                                          structural-guard-r… │
+│                                                          force-phys hits.    │
+│                                                          Omitted             │
+│                                                          auto-enables depth  │
+│                                                          1 for force-phys    │
+│                                                          beam mode.          │
+│    --guard-repair-se…                           TEXT     Retained .c source  │
+│                                                          to score and use as │
+│                                                          a protected         │
+│                                                          guard-repair        │
+│                                                          frontier. Format    │
+│                                                          OPERATOR=path or    │
+│                                                          LABEL:OPERATOR=pat… │
+│                                                          Requires            │
+│                                                          --force-phys or     │
+│                                                          --transform-force-… │
+│    --guard-repair-wi…                           INTEGER  Number of           │
+│                                                          guard-repair        │
+│                                                          seeds/frontier      │
+│                                                          candidates to       │
+│                                                          expand.             │
+│                                                          [default: 2]        │
+│    --campaign-dir                               PATH     Directory for       │
+│                                                          composed probe      │
+│                                                          sources and ledger. │
+│                                                          Defaults to a       │
+│                                                          temporary           │
+│                                                          melee_select_order… │
+│                                                          directory.          │
+│    --timeout                                    INTEGER  Top-level search    │
+│                                                          timeout in seconds; │
+│                                                          compile and         │
+│                                                          source-score steps  │
+│                                                          share the remaining │
+│                                                          campaign budget.    │
+│                                                          [default: 120]      │
+│    --json                                                Emit as JSON.       │
+│    --help                                                Show this message   │
+│                                                          and exit.           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
