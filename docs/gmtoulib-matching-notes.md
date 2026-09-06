@@ -108,3 +108,14 @@ first-divergence report, and lifetime report. The
 checkdiff JSON, the generated lifetime-probe sources and dumps, a compact
 `results.json`, and a SHA-256 manifest. These files are diagnostic evidence;
 only the restored ordinary compiler result describes retained source.
+
+## JPEG lookup technique transfer (follow-up)
+
+The indexed-pointer assignment that improved the JPEG encoder was tested
+against this bracket function. It did not transfer into a retained win:
+slot assignment 99.57437% (+2 instructions), reused slot assignment
+98.72118% (200-byte frame), coordinate pointer assignment/raw dereference
+99.803604%, indexed slot entry 99.83258% (+1 instruction), embedded existing
+JObj assignment 99.94527% (neutral), new JObj assignment 99.86478%, and new
+GObj assignment 99.90019%. The baseline was restored. Source/checkdiff probes
+are retained in the `jpeg-lookup-transfer/` evidence subdirectory.
