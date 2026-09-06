@@ -58,7 +58,7 @@ class ConfigureParser:
         # Pattern to match Object definitions
         # Object(Status, "path/to/file.c")
         obj_pattern = re.compile(
-            r'Object\(\s*(Matching|NonMatching|Equivalent|MatchingFor\([^)]+\))\s*,\s*"([^"]+)"\s*[,)]'
+            r'Object\(\s*(Matching|NonMatching|Equivalent|Linkable|MatchingFor\([^)]+\))\s*,\s*"([^"]+)"\s*[,)]'
         )
 
         lines = content.split("\n")

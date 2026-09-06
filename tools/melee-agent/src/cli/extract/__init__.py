@@ -492,7 +492,7 @@ def extract_list(
         ),
     ] = False,
     show_status: Annotated[
-        bool, typer.Option("--show-status", help="Show object status column (Matching/NonMatching)")
+        bool, typer.Option("--show-status", help="Show object status column")
     ] = False,
     module: Annotated[str | None, typer.Option("--module", help="Filter by module path (e.g., ft, lb, gr, it)")] = None,
     sort_by: Annotated[str, typer.Option("--sort", help="Sort by: score (recommended), size, match")] = "score",
@@ -721,7 +721,7 @@ def extract_list(
                 console.print(
                     f"[yellow]Note: {hidden_by_matching_only} report-backed "
                     "non-100% function(s) match the file filter but are in "
-                    "NonMatching/Equivalent objects, so --matching-only hid "
+                    "NonMatching/Equivalent/Linkable objects, so --matching-only hid "
                     "them. Re-run without --matching-only to inspect them.[/yellow]"
                 )
 
@@ -873,7 +873,7 @@ def extract_files(
     ] = None,
     module: Annotated[str | None, typer.Option("--module", help="Filter by module path (e.g., ft, lb, gr, it)")] = None,
     status_filter: Annotated[
-        str | None, typer.Option("--status", "-s", help="Filter by status: Matching, NonMatching, Equivalent")
+        str | None, typer.Option("--status", "-s", help="Filter by status: Matching, NonMatching, Equivalent, Linkable")
     ] = None,
     sort_by: Annotated[str, typer.Option("--sort", help="Sort by: name, match, unmatched, total, pending")] = "name",
     limit: Annotated[int, typer.Option("--limit", "-n", help="Maximum number of results (0 for all)")] = 0,

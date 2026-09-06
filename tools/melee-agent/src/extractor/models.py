@@ -9,7 +9,9 @@ class ObjectStatus(BaseModel):
     """Status of an object file in the decompilation project."""
 
     file_path: str = Field(description="Relative path in src/ directory")
-    status: Literal["Matching", "NonMatching", "Equivalent"] = Field(description="Matching status of the object")
+    status: Literal["Matching", "NonMatching", "Equivalent", "Linkable"] = Field(
+        description="Matching status of the object"
+    )
     source: str | None = Field(default=None, description="Source file path (may differ from file_path)")
     lib: str | None = Field(default=None, description="Library this object belongs to")
 
@@ -42,7 +44,7 @@ class FunctionInfo(BaseModel):
     current_match: float = Field(description="Current match percentage (0.0 to 1.0)", ge=0.0, le=1.0)
     asm: str | None = Field(default=None, description="Assembly code for the function")
     context: str | None = Field(default=None, description="Includes and type definitions for decompilation")
-    object_status: Literal["Matching", "NonMatching", "Equivalent"] = Field(
+    object_status: Literal["Matching", "NonMatching", "Equivalent", "Linkable"] = Field(
         description="Status of the containing object file"
     )
     section: str = Field(default=".text", description="Section like .init, .text, etc.")

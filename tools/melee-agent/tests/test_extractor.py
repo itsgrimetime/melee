@@ -4,6 +4,7 @@ These tests use real files from the melee submodule to test parsing and extracti
 Run with: pytest tests/test_extractor.py -v
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -54,7 +55,7 @@ class TestConfigureParser:
         for obj in objects:
             assert isinstance(obj, ObjectStatus)
             assert obj.file_path
-            assert obj.status in ["Matching", "NonMatching", "Equivalent"]
+            assert obj.status in ["Matching", "NonMatching", "Equivalent", "Linkable"]
 
     def test_get_non_matching_objects(self, melee_root):
         """Test getting only non-matching objects."""
@@ -140,6 +141,37 @@ Object(MatchingFor(version="GALE01"), "test/file.c")
         objects = await parse_configure(melee_root)
         assert len(objects) > 0
         assert all(isinstance(obj, ObjectStatus) for obj in objects)
+
+
+@pytest.mark.parametrize("match_percent", [None, 99.5, 100.0])
+def test_extract_linkable_function(tmp_path, match_percent):
+    """Linkable TUs remain discoverable; only report scores establish a match."""
+    (tmp_path / "configure.py").write_text('MeleeLib("if (Interface)")\nObject(Linkable, "melee/if/ifstock.c"),\n')
+    config = tmp_path / "config" / "GALE01"
+    config.mkdir(parents=True)
+    (config / "symbols.txt").write_text(
+        "ifStock_802F98E8 = .text:0x802F98E8; // type:function size:0x660 scope:global\n"
+    )
+    (config / "splits.txt").write_text("melee/if/ifstock.c:\n\t.text start:0x802F98E8 end:0x802F9F48\n")
+    if match_percent is not None:
+        build = tmp_path / "build" / "GALE01"
+        build.mkdir(parents=True)
+        (build / "report.json").write_text(
+            json.dumps({"functions": [{"name": "ifStock_802F98E8", "fuzzy_match_percent": match_percent}]})
+        )
+
+    extractor = FunctionExtractor(tmp_path)
+    function = extractor.extract_function("ifStock_802F98E8", include_asm=False, include_context=False)
+
+    assert function is not None
+    assert function.file_path == "melee/if/ifstock.c"
+    assert function.object_status == "Linkable"
+    assert function.current_match == (match_percent or 0.0) / 100.0
+    assert function.is_matched == (match_percent == 100.0)
+    all_functions = extractor.extract_all_functions(include_asm=False)
+    assert all_functions.functions == [function]
+    unmatched = extractor.extract_unmatched_functions(include_asm=False)
+    assert unmatched.functions == ([] if match_percent == 100.0 else [function])
 
 
 class TestSymbolParser:
