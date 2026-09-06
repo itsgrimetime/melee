@@ -1,14 +1,13 @@
-#include "if/iftime.h"
+#include "iftime.h"
 
 #include <placeholder.h>
 
-#include "dolphin/os.h"
-#include "gm/gm_unsplit.h"
-#include "if/ifall.h"
-#include "lb/lb_00B0.h"
-#include "lb/lbarchive.h"
-#include "sc/types.h"
-
+#include "ifall.h"
+#include <dolphin/os.h>
+#include <melee/gm/gm_unsplit.h>
+#include <melee/lb/lb_00B0.h>
+#include <melee/lb/lbarchive.h>
+#include <melee/sc/types.h>
 #include <sysdolphin/baselib/dobj.h>
 #include <sysdolphin/baselib/gobj.h>
 #include <sysdolphin/baselib/gobjgxlink.h>
@@ -234,7 +233,7 @@ void ifTime_CreateTimers(void)
     HSD_JObj* digit;
     int i;
     void *anims, *matanims, *shapeanims;
-    if (!rules->x1_0 && !rules->x0_6) {
+    if (!rules->x1_0 && !rules->timer_enabled) {
         ifTime_data.match_timer = NULL;
         return;
     }

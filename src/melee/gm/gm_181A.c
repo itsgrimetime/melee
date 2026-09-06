@@ -1,14 +1,20 @@
-#include "gmregclear.h"
-#include "platform.h"
-
-#include "dolphin/pad.h"
-
-#include "gm/forward.h"
-
-#include "mn/inlines.h"
+#include <Runtime/platform.h>
 
 #include <sysdolphin/baselib/forward.h>
 
+#include "forward.h"
+#include "gm_unsplit.h"
+#include "gmmain_lib.h"
+#include "gmregclear.h"
+#include "types.h"
+#include <dolphin/pad.h>
+#include <melee/cm/camera.h>
+#include <melee/if/ifnametag.h>
+#include <melee/if/ifstock.h>
+#include <melee/lb/lbarchive.h>
+#include <melee/lb/lbaudio_ax.h>
+#include <melee/mn/inlines.h>
+#include <melee/pl/player.h>
 #include <sysdolphin/baselib/aobj.h>
 #include <sysdolphin/baselib/controller.h>
 #include <sysdolphin/baselib/dobj.h>
@@ -18,15 +24,6 @@
 #include <sysdolphin/baselib/mobj.h>
 #include <sysdolphin/baselib/random.h>
 #include <sysdolphin/baselib/tobj.h>
-#include <melee/cm/camera.h>
-#include <melee/gm/gm_unsplit.h>
-#include <melee/gm/gmmain_lib.h>
-#include <melee/gm/types.h>
-#include <melee/if/ifnametag.h>
-#include <melee/if/ifstock.h>
-#include <melee/lb/lbarchive.h>
-#include <melee/lb/lbaudio_ax.h>
-#include <melee/pl/player.h>
 
 typedef struct RegClearSpawnEntry {
     /* 0x00 */ s32 x0;
@@ -282,8 +279,8 @@ void fn_80181C80(s32 arg0)
         sp10.ckind = data->x54[arg0].x5;
         sp10.cpu_level = data->x54[arg0].x6;
         sp10.cpu_kind = data->x54[arg0].x7;
-        sp10.x18 = data->x54[arg0].x8;
-        sp10.x1C = data->x54[arg0].xC;
+        sp10.attack_ratio = data->x54[arg0].x8;
+        sp10.defense_ratio = data->x54[arg0].xC;
         gm_8016EDDC(sp38, &sp10);
         Player_SetNametagSlotID(sp38, 0x78);
         un_802FD28C(sp38);

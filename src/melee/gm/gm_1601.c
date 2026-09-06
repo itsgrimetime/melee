@@ -1,41 +1,37 @@
 #include "gm_1601.h"
 
-#include "gm_1601.static.h"
+#include <Runtime/platform.h>
 
+#include <melee/ft/forward.h>
+#include <melee/pl/forward.h>
+
+#include <placeholder.h>
+#include <stddef.h>
+
+#include "forward.h"
+#include "gm_1601.static.h"
+#include "gm_1A45.h"
 #include "gm_unsplit.h"
 #include "gmmain_lib.h"
 #include "gmstamina.h"
-#include "placeholder.h"
-#include "stddef.h"
-
-#include <platform.h>
-
-#include "cm/camera.h"
-
-#include "ft/forward.h"
-#include "gm/forward.h"
-
-#include "gm/types.h"
-#include "gr/ground.h"
-#include "gr/stage.h"
-#include "if/ifstatus.h"
-#include "lb/lb_00B0.h"
-#include "lb/lb_013B.h"
-#include "lb/lbaudio_ax.h"
-#include "lb/lblanguage.h"
-#include "lb/lbtime.h"
-#include "mn/mnstagesel.h"
-#include "mn/types.h"
-
-#include "pl/forward.h"
-
-#include "pl/player.h"
-#include "pl/plbonus.h"
-#include "pl/plbonuslib.h"
-#include "sc/types.h"
-#include "ty/toy.h"
-
+#include "types.h"
 #include <dolphin/pad.h>
+#include <melee/cm/camera.h>
+#include <melee/gr/ground.h>
+#include <melee/gr/stage.h>
+#include <melee/if/ifstatus.h>
+#include <melee/lb/lb_00B0.h>
+#include <melee/lb/lb_013B.h>
+#include <melee/lb/lbaudio_ax.h>
+#include <melee/lb/lblanguage.h>
+#include <melee/lb/lbtime.h>
+#include <melee/mn/mnstagesel.h>
+#include <melee/mn/types.h>
+#include <melee/pl/player.h>
+#include <melee/pl/plbonus.h>
+#include <melee/pl/plbonuslib.h>
+#include <melee/sc/types.h>
+#include <melee/ty/toy.h>
 #include <sysdolphin/baselib/controller.h>
 #include <sysdolphin/baselib/gobjplink.h>
 #include <sysdolphin/baselib/hsd_3924.h>
@@ -44,8 +40,6 @@
 #include <sysdolphin/baselib/random.h>
 #include <sysdolphin/baselib/sislib.h>
 #include <sysdolphin/baselib/video.h>
-#include <melee/gm/gm_1A45.h>
-#include <melee/pl/player.h>
 
 /* 166A8C */ static f32 fn_80166A8C(Vec3*, Vec3*);
 
@@ -3516,9 +3510,9 @@ void gm_SetupPlayerDefaults(struct PlayerInitData* player)
     player->cpu_level = 0;
     player->x12 = 0;
     player->hp = 0;
-    player->x18 = 1.0F;
-    player->x1C = 1.0F;
-    player->x20 = 1.0F;
+    player->attack_ratio = 1.0F;
+    player->defense_ratio = 1.0F;
+    player->model_scale = 1.0F;
 }
 
 void gm_SetupAllPlayerDefaults(struct PlayerInitData* player)
@@ -3579,20 +3573,20 @@ void gm_80167BC8(VsModeData* vs_data)
 
     rules = gmMainLib_GetGameRules();
     prefs = gmMainLib_8015CC58();
-    vs_data->start.rules.x0_6 = 0;
+    vs_data->start.rules.timer_enabled = 0;
 
     switch (rules->mode) {
     case 0:
         vs_data->start.rules.match_kind = 0;
         if (rules->time_limit != 0) {
-            vs_data->start.rules.x0_6 = 1;
+            vs_data->start.rules.timer_enabled = 1;
             vs_data->start.rules.time_limit = rules->time_limit * 60;
         }
         break;
     case 1:
         vs_data->start.rules.match_kind = 1;
         if (rules->stock_time_limit != 0) {
-            vs_data->start.rules.x0_6 = 1;
+            vs_data->start.rules.timer_enabled = 1;
             vs_data->start.rules.time_limit = rules->stock_time_limit * 60;
             break;
         }
@@ -3600,14 +3594,14 @@ void gm_80167BC8(VsModeData* vs_data)
     case 2:
         vs_data->start.rules.match_kind = 2;
         if (rules->time_limit != 0) {
-            vs_data->start.rules.x0_6 = 1;
+            vs_data->start.rules.timer_enabled = 1;
             vs_data->start.rules.time_limit = rules->time_limit * 60;
         }
         break;
     case 3:
         vs_data->start.rules.match_kind = 3;
         if (rules->time_limit != 0) {
-            vs_data->start.rules.x0_6 = 1;
+            vs_data->start.rules.timer_enabled = 1;
             vs_data->start.rules.time_limit = rules->time_limit * 60;
         }
         break;
@@ -3618,28 +3612,28 @@ void gm_80167BC8(VsModeData* vs_data)
         vs_data->start.players[i].stocks = (s8) rules->stock_count;
         switch (rules->handicap) {
         case 0:
-            vs_data->start.players[i].x18 = 1.0f;
-            vs_data->start.players[i].x1C = 1.0f;
+            vs_data->start.players[i].attack_ratio = 1.0f;
+            vs_data->start.players[i].defense_ratio = 1.0f;
             break;
         case 1:
             handicap =
                 gmMainLib_8015CE44(i, (s32) vs_data->start.players[i].nametag);
             if (handicap != NULL) {
                 vs_data->start.players[i].handicap = *handicap;
-                vs_data->start.players[i].x18 =
+                vs_data->start.players[i].attack_ratio =
                     lbl_803B7930[(u8) *handicap - 1].x;
-                vs_data->start.players[i].x1C =
+                vs_data->start.players[i].defense_ratio =
                     lbl_803B7930[(u8) *handicap - 1].y;
             } else {
                 vs_data->start.players[i].handicap = 5;
-                vs_data->start.players[i].x18 = lbl_803B7930[4].x;
-                vs_data->start.players[i].x1C = lbl_803B7930[4].y;
+                vs_data->start.players[i].attack_ratio = lbl_803B7930[4].x;
+                vs_data->start.players[i].defense_ratio = lbl_803B7930[4].y;
             }
             break;
         case 2:
-            vs_data->start.players[i].x18 =
+            vs_data->start.players[i].attack_ratio =
                 lbl_803B7930[(u8) vs_data->start.players[i].handicap - 1].x;
-            vs_data->start.players[i].x1C =
+            vs_data->start.players[i].defense_ratio =
                 lbl_803B7930[(u8) vs_data->start.players[i].handicap - 1].y;
             break;
         }

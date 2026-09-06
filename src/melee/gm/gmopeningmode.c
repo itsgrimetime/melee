@@ -1,33 +1,26 @@
+#include <melee/ft/forward.h>
+#include <melee/pl/forward.h>
+
+#include "gm_1601.h"
+#include "gm_16F1.h"
 #include "gm_unsplit.h"
 #include "gmevent.h"
-
-#include "ft/forward.h"
-
-#include "gm/gmtitlemode.h"
-#include "gm/types.h"
-#include "melee/db/db.h"
-#include "melee/gm/gm_1601.h"
-#include "melee/gm/gm_16F1.h"
-#include "melee/gm/gm_unsplit.h"
-#include "melee/gm/gmmain_lib.h"
-#include "melee/gm/types.h"
-#include "melee/lb/lbaudio_ax.h"
-#include "melee/lb/lbdvd.h"
-#include "melee/lb/lbmthp.h"
-#include "melee/lb/types.h"
-#include "melee/mn/types.h"
-
-#include "melee/pl/forward.h"
-
-#include "melee/vi/vi0102.h"
-#include "melee/vi/vi0401.h"
-#include "melee/vi/vi0501.h"
-#include "melee/vi/vi0502.h"
-#include "melee/vi/vi1101.h"
-#include "melee/vi/vi1201v1.h"
-#include "melee/vi/vi1201v2.h"
-#include "vi/vi0102.h"
-
+#include "gmmain_lib.h"
+#include "gmtitlemode.h"
+#include "types.h"
+#include <melee/db/db.h>
+#include <melee/lb/lbaudio_ax.h>
+#include <melee/lb/lbdvd.h>
+#include <melee/lb/lbmthp.h>
+#include <melee/lb/types.h>
+#include <melee/mn/types.h>
+#include <melee/vi/vi0102.h>
+#include <melee/vi/vi0401.h>
+#include <melee/vi/vi0501.h>
+#include <melee/vi/vi0502.h>
+#include <melee/vi/vi1101.h>
+#include <melee/vi/vi1201v1.h>
+#include <melee/vi/vi1201v2.h>
 #include <sysdolphin/baselib/random.h>
 
 struct gm_random_history {
@@ -480,7 +473,7 @@ void onEnterVs(GameModeState* arg0)
     gm_SetupRulesDefaults(&md->rules);
 
     md->rules.match_kind = gm_801BF6B8();
-    md->rules.x0_6 = false;
+    md->rules.timer_enabled = false;
     md->rules.time_limit = 0;
     md->rules.x1_0 = false;
     md->rules.x1_2 = true;

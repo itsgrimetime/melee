@@ -2,16 +2,14 @@
 
 #include "gm_18A1.h"
 #include "gm_unsplit.h"
+#include "gmmain_lib.h"
 #include "gmregcommon.h"
-
-#include "dolphin/types.h"
-#include "gr/ground.h"
-
-#include <sysdolphin/baselib/random.h>
-#include <melee/gm/gmmain_lib.h>
+#include <dolphin/types.h>
+#include <melee/gr/ground.h>
 #include <melee/lb/lbaudio_ax.h>
 #include <melee/lb/lbbgflash.h>
 #include <melee/lb/lbdvd.h>
+#include <sysdolphin/baselib/random.h>
 
 typedef struct AllStarOpponent {
     /* +0 */ u8 stages[2];
@@ -536,7 +534,7 @@ void gm_801B5624(GameModeState* arg0)
     gm_8017CE34(data, &allstar->x0, chars, 0, 0, 0, 0, (s32) opp_data->stage,
                 (s32) round, (s32) color);
 
-    data->rules.x0_6 = 1;
+    data->rules.timer_enabled = 1;
     data->rules.timer_counts_up = 1;
     data->rules.x1_0 = 1;
     data->rules.time_limit = (s32) allstar->x9C / GM_FPS;
@@ -638,7 +636,7 @@ void gm_801B5ACC(GameModeState* arg0)
 
     gm_8017CE34(data, &gm_80473A18.x0, chars, 0, 0, 0, 0, 85, 0, (s32) color);
 
-    data->rules.x0_6 = 0;
+    data->rules.timer_enabled = 0;
     data->rules.timer_counts_up = 1;
     data->rules.x1_0 = 1;
     data->rules.time_limit = (s32) gm_80473A18.x9C / GM_FPS;

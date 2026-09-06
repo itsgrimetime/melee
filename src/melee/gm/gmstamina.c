@@ -1,20 +1,17 @@
 #include "gmstamina.h"
 
-#include "gm_unsplit.h"
-
 #include <placeholder.h>
 
-#include "gm/gm_1A3F.h"
-
-#include <sysdolphin/baselib/gobjproc.h>
-#include <melee/gm/gm_unsplit.h>
-#include <melee/gm/gmmain_lib.h>
-#include <melee/gm/gmvsmelee.h>
-#include <melee/gm/types.h>
+#include "gm_1A3F.h"
+#include "gm_unsplit.h"
+#include "gmmain_lib.h"
+#include "gmvsmelee.h"
+#include "types.h"
 #include <melee/lb/lbaudio_ax.h>
 #include <melee/lb/lbdvd.h>
 #include <melee/mn/types.h>
 #include <melee/pl/player.h>
+#include <sysdolphin/baselib/gobjproc.h>
 
 GameModeState gm_Mode_StaminaVs_States[] = {
     {
@@ -108,7 +105,7 @@ void gm_801B931C(GameModeState* state)
     start->rules = vs->start.rules;
 
     start->rules.x2_5 = false;
-    start->rules.x0_6 = false;
+    start->rules.timer_enabled = false;
     start->rules.match_kind = 1;
     start->rules.x44 = fn_801B9850;
     start->rules.x3_0 = false;

@@ -1,23 +1,21 @@
 #include "soundtest.h"
 
-#include "db/db.h"
-#include "db/dbsound.h"
+#include <melee/gm/forward.h>
 
-#include "gm/forward.h"
-
-#include "gm/gm_unsplit.h"
-#include "gm/gmmain_lib.h"
-#include "if/textlib.h"
-#include "if/types.h"
-#include "lb/lbarchive.h"
-#include "lb/lbaudio_ax.h"
-#include "lb/lbcardgame.h"
-#include "lb/lbcardnew.h"
-#include "lb/lblanguage.h"
-#include "lb/lbsnap.h"
-#include "mn/inlines.h"
-#include "ty/toy.h"
-
+#include "textlib.h"
+#include "types.h"
+#include <melee/db/db.h>
+#include <melee/db/dbsound.h>
+#include <melee/gm/gm_unsplit.h>
+#include <melee/gm/gmmain_lib.h>
+#include <melee/lb/lbarchive.h>
+#include <melee/lb/lbaudio_ax.h>
+#include <melee/lb/lbcardgame.h>
+#include <melee/lb/lbcardnew.h>
+#include <melee/lb/lblanguage.h>
+#include <melee/lb/lbsnap.h>
+#include <melee/mn/inlines.h>
+#include <melee/ty/toy.h>
 #include <sysdolphin/baselib/cobj.h>
 #include <sysdolphin/baselib/fog.h>
 #include <sysdolphin/baselib/gobj.h>
@@ -1001,28 +999,28 @@ void un_802FFF2C(StartMeleeData* arg0)
         timer = s->x130.xCC[1] + s->x130.xCC[0] * 0x3C;
         if (timer != 0) {
             r->time_limit = timer;
-            r->x0_6 = 1;
+            r->timer_enabled = 1;
         } else {
-            r->x0_6 = 0;
+            r->timer_enabled = 0;
         }
         break;
     case 1:
         r->match_kind = 1;
-        r->x0_6 = 0;
+        r->timer_enabled = 0;
         break;
     case 2:
         r->match_kind = 2;
         timer = s->x130.xCC[1] + s->x130.xCC[0] * 0x3C;
         if (timer != 0) {
             r->time_limit = timer;
-            r->x0_6 = 1;
+            r->timer_enabled = 1;
         } else {
-            r->x0_6 = 0;
+            r->timer_enabled = 0;
         }
         break;
     default:
         r->match_kind = 0;
-        r->x0_6 = 0;
+        r->timer_enabled = 0;
         break;
     }
     r->stkind = s->x130.x8;
@@ -1040,13 +1038,13 @@ void un_802FFF2C(StartMeleeData* arg0)
         arg0->players[i].team = sp->x58[i];
         arg0->players[i].rumble_enabled = sp->xDC[i];
         arg0->players[i].x12 = sp->x68[i];
-        arg0->players[i].x18 = sp->x78[i];
-        arg0->players[i].x1C = sp->x88[i];
+        arg0->players[i].attack_ratio = sp->x78[i];
+        arg0->players[i].defense_ratio = sp->x88[i];
         arg0->players[i].cpu_kind = sp->xA8[i];
         arg0->players[i].cpu_level = sp->xB8[i];
         arg0->players[i].stocks = s->x130.xCC[2];
         arg0->players[i].xC_b1 = 0;
-        arg0->players[i].x20 = sp->x98[i];
+        arg0->players[i].model_scale = sp->x98[i];
     }
 }
 

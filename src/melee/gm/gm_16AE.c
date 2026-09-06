@@ -1,30 +1,22 @@
 #include "gm_16AE.h"
 
-#include "gm_16AE.static.h"
+#include <string.h>
 
+#include "forward.h"
+#include "gm_16AE.static.h"
 #include "gm_1884.h"
 #include "gm_18A1.h"
 #include "gm_unsplit.h"
 #include "gmmain_lib.h"
-
-#include "dolphin/pad.h"
-
-#include "gm/forward.h"
-
-#include "it/itspawn.h"
-#include "lb/lb_00F9.h"
-
-#include <string.h>
-#include <sysdolphin/baselib/controller.h>
-#include <sysdolphin/baselib/gobjproc.h>
+#include "gmmultiman.h"
+#include "gmpause.h"
+#include <dolphin/pad.h>
 #include <melee/cm/camera.h>
 #include <melee/db/db.h>
 #include <melee/ef/efasync.h>
 #include <melee/ef/eflib.h>
 #include <melee/ft/ftdevice.h>
 #include <melee/ft/ftlib.h>
-#include <melee/gm/gmmultiman.h>
-#include <melee/gm/gmpause.h>
 #include <melee/gr/ground.h>
 #include <melee/gr/grpstadium.h>
 #include <melee/gr/stage.h>
@@ -36,7 +28,9 @@
 #include <melee/if/ifstock.h>
 #include <melee/if/iftime.h>
 #include <melee/it/item.h>
+#include <melee/it/itspawn.h>
 #include <melee/lb/lb_00B0.h>
+#include <melee/lb/lb_00F9.h>
 #include <melee/lb/lb_0195.h>
 #include <melee/lb/lb_0219.h>
 #include <melee/lb/lbaudio_ax.h>
@@ -48,6 +42,8 @@
 #include <melee/pl/plbonus.h>
 #include <melee/pl/plbonuslib.h>
 #include <melee/sfx/crowdsfx.h>
+#include <sysdolphin/baselib/controller.h>
+#include <sysdolphin/baselib/gobjproc.h>
 
 lbl_8046B6A0_t* gm_16AE_GetUnkData_0(void)
 {
@@ -122,7 +118,7 @@ u16 gm_8016AF0C(void)
 bool GetMatchTimer(int* arg0)
 {
     lbl_8046B6A0_t* data = gm_16AE_GetUnkData_0();
-    if (arg0 != NULL && data->x24C8.x0_6) {
+    if (arg0 != NULL && data->x24C8.timer_enabled) {
         if (gm_8016B110()) {
             *arg0 = data->x24C8.time_limit - data->timer_seconds;
         } else {
@@ -238,7 +234,7 @@ bool gm_8016B1EC(void)
 bool gm_8016B204(void)
 {
     StartMeleeRules* rules = gm_GetRules();
-    if (rules->time_limit == 0 || !rules->x0_6) {
+    if (rules->time_limit == 0 || !rules->timer_enabled) {
         return true;
     }
     return false;
@@ -882,7 +878,7 @@ MatchOutcome gm_GetMatchOutcome(void)
     if (lbl_8046B6A0.x24C8.x5_0) {
         return OUTCOME_NONE;
     }
-    if (tmp->x24C8.x0_6) {
+    if (tmp->x24C8.timer_enabled) {
         if (tmp->x24C8.timer_counts_up) {
             if (lbl_8046B6A0.timer_seconds == lbl_8046B6A0.x24C8.time_limit &&
                 lbl_8046B6A0.unk_2C == 0)
@@ -1237,7 +1233,7 @@ void fn_8016CD98(lbl_8046B6A0_t* arg0)
         if (arg0->frame_count < -1) {
             arg0->frame_count++;
         }
-        if (arg0->x24C8.x0_6) {
+        if (arg0->x24C8.timer_enabled) {
             if (++arg0->unk_2C >= 60) {
                 arg0->unk_2C = 0;
                 if (arg0->x24C8.timer_counts_up) {
@@ -1613,9 +1609,9 @@ void fn_8016D8AC(int arg0, struct PlayerInitData* arg1)
         Player_SetMoreFlagsBit2(arg0, 0);
     }
     Player_SetOtherStamina(arg0, arg1->hp);
-    Player_SetModelScale(arg0, arg1->x20);
-    Player_SetAttackRatio(arg0, arg1->x18);
-    Player_SetDefenseRatio(arg0, arg1->x1C);
+    Player_SetModelScale(arg0, arg1->model_scale);
+    Player_SetAttackRatio(arg0, arg1->attack_ratio);
+    Player_SetDefenseRatio(arg0, arg1->defense_ratio);
     if (arg1->xC_b6) {
         Player_SetMoreFlagsBit1(arg0, 1);
     } else {
@@ -1680,7 +1676,7 @@ void fn_8016DCC0(StartMeleeData* arg0)
     lbl_8046B6A0.x24C.xC = arg0->rules.xC;
     Camera_80030E34(arg0->rules.x2C);
 
-    if (tmp->x24C8.x0_6) {
+    if (tmp->x24C8.timer_enabled) {
         if (tmp->x24C8.timer_counts_up) {
             if (arg0->rules.x14 != 0) {
                 lbl_8046B6A0.unk_2C = arg0->rules.x14 - 1;

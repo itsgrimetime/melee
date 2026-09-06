@@ -1,15 +1,13 @@
 #include "gmadventure.h"
 
+#include "forward.h"
 #include "gm_unsplit.h"
-
-#include "gm/forward.h"
-
-#include <sysdolphin/baselib/random.h>
-#include <melee/gm/gmmain_lib.h>
-#include <melee/gm/gmregcommon.h>
+#include "gmmain_lib.h"
+#include "gmregcommon.h"
 #include <melee/gr/ground.h>
 #include <melee/lb/lb_00B0.h>
 #include <melee/lb/lbaudio_ax.h>
+#include <sysdolphin/baselib/random.h>
 
 extern UNK_T gmClassic_80470708[];
 extern DebugGameOverData gmClassic_80470850;
@@ -1422,7 +1420,7 @@ void gm_801B4768(GameModeState* scene)
     gm_801B4064(scene);
     for (i = 0; i < 3; i++) {
         if (data->players[i + 1].slot_type == Gm_PKind_Cpu) {
-            data->players[i + 1].x20 *= 0.5F;
+            data->players[i + 1].model_scale *= 0.5F;
         }
     }
 }
@@ -1618,7 +1616,7 @@ void gm_801B4F44(GameModeState* scene)
     gm_801B4064(scene);
     for (i = 0; i < 3; i++) {
         if (data->players[i + 1].slot_type == Gm_PKind_Cpu) {
-            data->players[i + 1].x20 = 1.4F;
+            data->players[i + 1].model_scale = 1.4F;
         }
     }
     data->rules.x50 = gm_8017E7FC;

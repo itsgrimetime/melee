@@ -1,21 +1,17 @@
 #include "gm_1BFA.h"
 
+#include <melee/lb/forward.h>
+
+#include "forward.h"
 #include "gm_unsplit.h"
 #include "gmmain_lib.h"
 #include "gmvsmelee.h"
 #include "types.h"
-
-#include "gm/forward.h"
-
-#include "if/if_2FD9.h"
-
-#include "lb/forward.h"
-
-#include "lb/inlines.h"
-#include "lb/lb_00B0.h"
-#include "lb/lbtime.h"
-#include "ty/toy.h"
-
+#include <melee/if/if_2FD9.h>
+#include <melee/lb/inlines.h>
+#include <melee/lb/lb_00B0.h>
+#include <melee/lb/lbtime.h>
+#include <melee/ty/toy.h>
 #include <sysdolphin/baselib/memory.h>
 
 enum {
@@ -82,7 +78,7 @@ void gm_ModeState_ApproachVs_OnEnter(GameModeState* state)
     ChallengerData* challenger = gm_GetChallengerData();
     gm_SetupRulesDefaults(&start->rules);
     gm_SetupAllPlayerDefaults(start->players);
-    start->rules.x0_6 = false;
+    start->rules.timer_enabled = false;
     start->rules.match_kind = MatchKind_Stock;
     start->rules.x0_3 = 2;
     start->rules.stkind =
