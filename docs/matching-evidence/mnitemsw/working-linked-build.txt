@@ -1,0 +1,13 @@
+[1/6] MWCC build/GALE01/src/melee/mn/mnitemsw.o
+[2/6] REPORT
+[3/6] LINK build/GALE01/main.elf
+[4/6] DOL build/GALE01/main.dol
+[5/6] CHECK config/GALE01/build.sha1
+build/GALE01/main.dol: OK
+[6/6] PROGRESS
+Progress:
+  All: 99.98% fuzzy, 97.70% matched, 93.47% linked (1112 / 1129 files)
+    Code: 3792596 / 3882032 bytes (19799 / 19828 functions)
+    Data: 1211112 / 1211168 bytes (100.00%)
+
+You have 273 out of 293 Trophies and 48 out of 51 Event Matches.

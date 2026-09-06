@@ -1,0 +1,130 @@
+{
+  "schema": "mnitemsw-frontiers-v1",
+  "archive_sha256": "7fa0534ef932c05b36f51fec78c647a04377f8d9665f9d97796d29b270e8c85b",
+  "frontiers": [
+    {
+      "label": "retained baseline",
+      "source_archive_path": "c016-pr3358-best.c",
+      "source_sha256": "4153774a77315c854538a467cc9be4f73978c7d1f09a7619e463dc95ffd84bdb",
+      "result_archive_path": "c016-continued-final-checkdiff.json",
+      "result_sha256": "65fd1ab36598b66b767702526c9211b5fc4f5fff8edbdaa53f7e0194583df6bd",
+      "match": false,
+      "fuzzy_match_percent": 99.77376,
+      "formatted_assembly_lines": 552,
+      "frame": {
+        "expected_frame_size": 128,
+        "current_frame_size": 128,
+        "frame_growth": 0
+      },
+      "note": null
+    },
+    {
+      "label": "over-pressure original flag",
+      "source_archive_path": "c016-original-flag-use/joints-16.c",
+      "source_sha256": "59cb2af02801873cb642a7cf2a30a23b45ea0616c000ae7c83070e7ac882c325",
+      "result_archive_path": "c016-original-flag-use/joints-16.json",
+      "result_sha256": "21791c2f11c2365a08c57cb1f19b426add5581c074f9144d4f3774e7f49d35a0",
+      "match": false,
+      "fuzzy_match_percent": 99.13122,
+      "formatted_assembly_lines": 552,
+      "frame": {
+        "expected_frame_size": 128,
+        "current_frame_size": 136,
+        "frame_growth": 8
+      },
+      "note": null
+    },
+    {
+      "label": "first flag r31",
+      "source_archive_path": "c016-pressure-window/4-old-True.c",
+      "source_sha256": "7a4cfa1221beb8a2ff1d53d80d7ed0aa700849efb041171725240df628eb0a5b",
+      "result_archive_path": "c016-pressure-window/4-old-True.json",
+      "result_sha256": "6853d0ed508504e3b51e4d2ae34ab0fdfb1bf3a8bf2b594e2ca347c3d7a7c900",
+      "match": false,
+      "fuzzy_match_percent": 98.837105,
+      "formatted_assembly_lines": 552,
+      "frame": {
+        "expected_frame_size": 128,
+        "current_frame_size": 136,
+        "frame_growth": 8
+      },
+      "note": null
+    },
+    {
+      "label": "byte cursor",
+      "source_archive_path": "c016-flag31-cursor/u8-direct.c",
+      "source_sha256": "b48fd2442224c3e4b00d69f6b1a780b5438623ff23f14ef94ef17e41f8bb6d68",
+      "result_archive_path": "c016-flag31-cursor/u8-direct.json",
+      "result_sha256": "7254cf425e28fdd8fbe89e0fc11217a52ffaf532256f781f77d77ffabcd7d272",
+      "match": false,
+      "fuzzy_match_percent": 98.98416,
+      "formatted_assembly_lines": 552,
+      "frame": {
+        "expected_frame_size": 128,
+        "current_frame_size": 136,
+        "frame_growth": 8
+      },
+      "note": null
+    },
+    {
+      "label": "cursor declaration after data",
+      "source_archive_path": "c016-flag31-reorder/after-data-.c",
+      "source_sha256": "a286b2c4f21fc254c6e2ff2a89a1ea60baa86a2c81838ba29eb0c13b0dbcb0f2",
+      "result_archive_path": "c016-flag31-reorder/after-data-.json",
+      "result_sha256": "3807b594dc24851a3ea35e79970d73f509650c3a7353aa3958a316bf6add5aa4",
+      "match": false,
+      "fuzzy_match_percent": 99.73077,
+      "formatted_assembly_lines": 552,
+      "frame": {
+        "expected_frame_size": 128,
+        "current_frame_size": 136,
+        "frame_growth": 8
+      },
+      "note": null
+    },
+    {
+      "label": "first helper return discarded",
+      "source_archive_path": "c016-flag31-flagflow/1-alias.c",
+      "source_sha256": "389374532fd81ee5e105874d5850381840d68497b5e3a72ab40ecec53d46366e",
+      "result_archive_path": "c016-flag31-flagflow/1-alias.json",
+      "result_sha256": "1bcfdc6c0720749e4228697e3e1ed7c6709a00e4346031719e682a8996df9177",
+      "match": false,
+      "fuzzy_match_percent": 99.830315,
+      "formatted_assembly_lines": 552,
+      "frame": {
+        "expected_frame_size": 128,
+        "current_frame_size": 128,
+        "frame_growth": 0
+      },
+      "note": null
+    },
+    {
+      "label": "old lookup copy exact",
+      "source_archive_path": "c016-four-residual/old-voidptr.c",
+      "source_sha256": "f5740b2b81b7d16c77a316287fca520b1eed522751628507ecd336dc49b0a3db",
+      "result_archive_path": "c016-four-residual/old-voidptr.json",
+      "result_sha256": "cbab93a1f8b6eca6326ba32866ca8ba58286c7803ee43782a270cb64331235d9",
+      "match": true,
+      "fuzzy_match_percent": 100.0,
+      "formatted_assembly_lines": 552,
+      "frame": null,
+      "note": "Final exact matches have no stack mismatch classification; target frame is 128 bytes."
+    },
+    {
+      "label": "unsafe combined standalone cleanup",
+      "source_archive_path": "c016-matched-clean.c",
+      "source_sha256": "aaf6523371dc6ac7f3505b74e4744c19fddac6cb8504eb2545ff47c3947b3bc1",
+      "result_archive_path": "c016-matched-clean.json",
+      "result_sha256": "decf57b9cd75e5d90a310cb87224e4b0a24e13e20d65d5f58505574f1d9a498e",
+      "match": false,
+      "fuzzy_match_percent": 98.61991,
+      "formatted_assembly_lines": 553,
+      "frame": {
+        "expected_frame_size": 128,
+        "current_frame_size": 128,
+        "frame_growth": 0
+      },
+      "note": null
+    }
+  ]
+}

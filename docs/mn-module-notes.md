@@ -75,3 +75,15 @@ argument assignment, and literal-call/row-index expression shape. Moving the
 handler and helpers restored whole-file function order; moving them back leaves
 the handler at 100% but fails the linked checksum. Historical ceiling claims for
 `80245BA4` and `802461BC` are superseded by this result.
+
+## `mnitemsw` — completed 2026-09-06
+
+All ten functions and all data match; PR #3359 links the TU and passes the
+original DOL checksum. See [the detailed matching notes](mnitemsw-matching-notes.md).
+The final rotation required a narrow permanent-interference window, original
+flag lifetime, a byte cursor declared after data, and embedded argument copies
+at specific calls. Excess pressure invoked the allocator fallback and made the
+flag lose again. Discarding one identity-helper return restored the frame.
+The first flag-r31 source scored below the retained baseline but enabled the
+100% result. Separate duplicate-data and small-BSS order fixes were needed for
+linking. Earlier source-ceiling conclusions are superseded by this result.

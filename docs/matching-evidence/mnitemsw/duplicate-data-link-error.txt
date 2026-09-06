@@ -1,0 +1,3 @@
+ERROR Expected to find symbol mnStageSw_803ED488 (type Object, size 0x3C) at 0x803ED488
+ERROR At 0x803ED488, found: mnItemSw_803ED438 (type Object, size 0x20)
+ERROR Instead, found mnStageSw_803ED488 (type Object, size 0x3C) at 0x803ED4A8

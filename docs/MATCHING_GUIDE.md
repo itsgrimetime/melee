@@ -70,6 +70,11 @@ Every single one of these cost real hours at least once.
 10. **Verify refactors by byte-comparing objects, not by score.** Snapshot the
     `.o`s, apply the change, recompile, compare. Acceptable residual: anonymous
     literal renumbering only.
+11. **A 100% object report is not a linked-checksum proof.** Duplicate data and
+    reordered BSS can survive the body/data comparison yet move symbols in the
+    linked image. Set the TU to Matching and verify the original DOL checksum;
+    use `dtk dol diff` and `dtk elf info` to diagnose address/layout failures.
+    See the [mnitemsw case study](mnitemsw-matching-notes.md).
 
 ---
 
@@ -149,10 +154,19 @@ to degree 21 vs 20; another to 29 vs 28.
 Also: **coalescing takes the MIN vreg as root**, so no copy chain can ever
 *raise* a web's rank.
 
+The final degree snapshot is **not degree at removal**: later removals can
+continue decrementing a node already on the stack. Reconstruct the live neighbors
+at each scan. More permanent edges are not monotonically better: the
+[mnitemsw match](mnitemsw-matching-notes.md) needed a narrow window to keep the
+flag through one extra normal scan; more copies jammed simplification and let
+the spill-cost fallback remove the cheap flag too early.
+
 ### 3.3 The vreg strata law — what decides rank
 
-Selection is descending vreg within a class, so "which register does this value
-get" reduces to "what is its vreg number". Numbers are handed out by
+Within one ascending simplify scan, selection reverses the vreg order. Across
+multiple scans, survival into a later scan takes precedence over vreg rank;
+the low-ID original flag in the mnitemsw case study demonstrates this. Numbers
+are handed out by
 `CodeGen_PreallocateObjectRegisters` walking five object lists, and the bands
 are contiguous and ordered (ascending vreg = later = selected earlier):
 

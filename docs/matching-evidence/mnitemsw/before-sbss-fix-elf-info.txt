@@ -1,0 +1,90 @@
+ELF type: Relocatable
+Section count: 10
+Symbol count: 85
+Relocation count: 431
+
+Sections:
+           Name | Type       | Size       | File Off   | Index
+          .text | code       | 0x1EA4     | 0x34       | 1
+          .data | data       | 0x146      | 0x1ED8     | 2
+         .sdata | data       | 0x15       | 0x2020     | 3
+          .sbss | bss        | 0x8        | 0x0        | 4
+        .sdata2 | data       | 0x34       | 0x2038     | 5
+       .comment | other      | 0x2DC      | 0x3ED0     | 10
+
+Symbols:
+        Section | Address    | Size       | Name
+          .data | 0x0        | 0x30       | mnItemSw_803ED340
+          .data | 0x30       | 0xC8       | mnItemSw_AnimTable
+         .sdata | 0x0        | 0x8        | mnItemSw_804D4BA0
+        .sdata2 | 0x0        | 0x4        | @452
+        .sdata2 | 0x4        | 0x4        | @453
+        .sdata2 | 0x8        | 0x4        | @454
+        .sdata2 | 0xC        | 0x4        | @455
+        .sdata2 | 0x10       | 0x4        | @456
+        .sdata2 | 0x14       | 0x4        | @457
+        .sdata2 | 0x18       | 0x4        | @458
+        .sdata2 | 0x20       | 0x8        | @459
+         .sdata | 0x8        | 0x7        | @460
+         .sdata | 0x10       | 0x5        | @461
+        .sdata2 | 0x28       | 0x8        | @463
+        .sdata2 | 0x30       | 0x4        | @880
+          .data | 0x118      | 0x16       | @881
+          .data | 0x130      | 0xB        | @882
+          .data | 0x13C      | 0xA        | @883
+          .data | 0xF8       | 0x20       | mnItemSw_803ED438
+          .text | 0x0        | 0xD0       | mnItemSw_80233A98
+          .text | 0xD0       | 0x2A8      | mnItemSw_80233B68
+          .text | 0x378      | 0x24C      | fn_80233E10
+          .sbss | 0x4        | 0x4        | mnItemSw_804D6BE8
+          .sbss | 0x0        | 0x1        | mnItemSw_804D6BEC
+          .text | 0x5C4      | 0xA8       | mnItemSw_8023405C
+          .text | 0x66C      | 0x438      | mnItemSw_80234104
+          .text | 0xAA4      | 0x6E8      | mnItemSw_8023453C
+          .text | 0x118C     | 0x3FC      | fn_80234C24
+          .text | 0x1588     | 0x180      | mnItemSw_80235020
+          .text | 0x1708     | 0x720      | mnItemSw_802351A0
+          .text | 0x1E28     | 0x7C       | mnItemSw_802358C0
+
+Metrowerks metadata (.comment):
+	Version: 8
+	Compiler version: 2.3.0.1
+	Pool data: true
+	Float: Hard
+	Processor: Gekko
+	Incompatible return small structs: false
+	Incompatible sfpe double params: false
+	Unsafe global reg vars: false
+
+     Align | Vis    | Active | Symbol
+         4 | 0x0    | 0x0    | mnItemSw_803ED340
+         4 | 0x0    | 0x0    | mnItemSw_AnimTable
+         4 | 0x0    | 0x0    | mnItemSw_804D4BA0
+         4 | 0x0    | 0x0    | @452
+         4 | 0x0    | 0x0    | @453
+         4 | 0x0    | 0x0    | @454
+         4 | 0x0    | 0x0    | @455
+         4 | 0x0    | 0x0    | @456
+         4 | 0x0    | 0x0    | @457
+         4 | 0x0    | 0x0    | @458
+         8 | 0x0    | 0x0    | @459
+         4 | 0x0    | 0x0    | @460
+         4 | 0x0    | 0x0    | @461
+         8 | 0x0    | 0x0    | @463
+         4 | 0x0    | 0x0    | @880
+         4 | 0x0    | 0x0    | @881
+         4 | 0x0    | 0x0    | @882
+         4 | 0x0    | 0x0    | @883
+         4 | 0x0    | 0x0    | mnItemSw_803ED438
+         4 | 0x0    | 0x0    | mnItemSw_80233A98
+         4 | 0x0    | 0x0    | mnItemSw_80233B68
+         4 | 0x0    | 0x0    | fn_80233E10
+         4 | 0x0    | 0x0    | mnItemSw_804D6BE8
+         1 | 0x0    | 0x0    | mnItemSw_804D6BEC
+         4 | 0x0    | 0x0    | mnItemSw_8023405C
+         4 | 0x0    | 0x0    | mnItemSw_80234104
+         4 | 0x0    | 0x0    | mnItemSw_8023453C
+         4 | 0x0    | 0x0    | fn_80234C24
+         4 | 0x0    | 0x0    | mnItemSw_80235020
+         4 | 0x0    | 0x0    | mnItemSw_802351A0
+         4 | 0x0    | 0x0    | mnItemSw_802358C0
