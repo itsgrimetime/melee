@@ -137,3 +137,26 @@ Contains original/donor/final and failed-probe JSONs, baseline/final source, bas
 all address/type/helper candidates, ordinary checkdiff results, the fresh
 allocator map and pressure report, the byte-identical forced proof, and a
 recursive SHA-256 manifest. Its `results.json` is a compact score index.
+
+## Upstream merge and PR refresh
+
+PR3358 and PR3378 merged upstream. c016 merge `d24f281a99` incorporates
+upstream `87976be9f5` and retains the later coefficient lookup fix. The clean
+PR branch was updated with merge `116e620820`; PR3377 is now a single-file,
+five-addition/one-deletion patch against upstream, improving99.51487% to
+99.70266%. Its body describes that remaining change and credits both donors.
+
+The refreshed PR build passes the original DOL checksum. All six previously
+matched TU functions remain100%; RGB remains98.7788%. GitHub reports the PR
+mergeable; CI was running after the push, with all three style jobs passed at
+the first check. Local build evidence is saved separately from CI status.
+
+PR3372 (bracket) and PR3376 (JPEG decoder) were closed after confirming their
+source files were byte-identical to current upstream. Their improvements were
+absorbed by PR3358; no replacement PR was opened. PR3375 remains open and
+another agent holds the fn_802545C4 claim, so this pass did not alter it.
+
+The fork pre-commit style checker flags four unsuffixed floating literals
+already present in the merged upstream grbigblue/psdisp sources. All other
+checks and the full build passed. Merge commits preserve upstream source;
+the hook was bypassed for those merge commits only.

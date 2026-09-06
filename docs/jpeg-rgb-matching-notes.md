@@ -25,3 +25,80 @@ Bitfield union changed channel extraction and added8frame bytes. Explicit row po
 Residual: commuted row add at+0xb4, chroma scalar-index reassociation at+0xc4/+0xc8, downstream GPR cascade, and luma setup li/addi order at+0x1f0/+0x1f4. Next useful source lever should change lowering dependencies, not merely add parentheses. Dump is a baseline artifact; recapture after source changes before deriving allocation targets.
 
 A final subtract-negative operand-order probe regressed96.65899% and was reverted.
+
+## Address-lowering follow-up after upstream PR3358 merged
+
+Upstream is now `87976be9f5`; the c016 merge `d24f281a99` preserves the
+coefficient encoder's later lookup improvement. The RGB baseline remains
+98.7788%, 868 bytes, 152-byte frame. No RGB source change is retained.
+
+A fresh baseline debug dump still has the unwanted address association at
+`BEFORE GLOBAL OPTIMIZATION`: the two column terms are added before the row
+term. The ordinary final output agrees. This reinforces the existing retail
+finding about initial lowering; changing register allocation alone cannot
+repair that grouping. The luma setup still has `addi` before `li`, and the
+row addition still has commuted source registers.
+
+The successful coefficient lookup assignment technique did not transfer to
+this source. Embedded integer-index assignments can preserve a different
+association, but introduce another instruction and change the load form or
+register allocation. Explicit pointer assignments also disturb the load
+sequence. Typed luma field references compile identically; assigning a new
+pointer within that access regresses. Integer-address spelling, byte-pointer
+arithmetic, and equivalent shifts supply no retained improvement.
+
+Ordinary probe results (all reverted):
+
+| Probe | Match % | Instruction delta | Frame bytes |
+|---|---:|---:|---:|
+|byte-pointer-address|98.7788|0|152|
+|dst-embedded-assignment|98.31797|0|152|
+|dst-row-compound|98.7788|0|152|
+|group-increment-index|95.96774|1|152|
+|high-shift|98.29493|0|152|
+|index-embedded-existing-first|95.89862|1|152|
+|index-embedded-existing|95.89862|1|152|
+|index-embedded-new|95.89862|1|152|
+|index-embedded-srcrow|97.99539|0|152|
+|index-group-u32|98.7788|0|152|
+|index-group-unsigned-cast|98.7788|0|152|
+|int-all-locals|98.7788|0|152|
+|int-chroma-index|98.7788|0|152|
+|int-coordinates|98.7788|0|152|
+|int-dstrow|96.65899|0|152|
+|int-srcrow|98.7788|0|152|
+|integer-address-indexed|95.99078|0|152|
+|integer-address|98.7788|0|152|
+|low-shift|98.7788|0|152|
+|luma-field-indexed|98.7788|0|152|
+|luma-typed-array|98.7788|0|152|
+|luma-typed-field-embedded|95.02304|1|152|
+|luma-typed-field|98.7788|0|152|
+|luma-typed-word-offset|98.7788|0|152|
+|negative-group|98.7788|0|152|
+|pixel-pointer-embedded-reuse|91.70046|2|152|
+|pixel-pointer-embedded|92.156685|1|152|
+|row-assignment-first|90.08295|2|152|
+|row-assignment-in-index|95.39171|1|152|
+|row-formula-in-index|96.26728|0|152|
+|row-initializer-fixed|97.741936|0|152|
+|shifts|98.29493|0|152|
+|unsigned-row-group|98.68664|0|152|
+|x-assignment-in-index|95.9447|1|152|
+
+`row-initializer` initially had a generated-source replacement error and did
+not compile; it is not evidence against the source family. The corrected
+`row-initializer-fixed` probe above is the valid measurement. The self-assignment
+and nested destination-assignment variants were diagnostics only and are not
+proposed production source.
+
+Restored ordinary checkdiff is 98.7788%. The merged baseline also passed the
+full GALE01 build and original DOL checksum. Durable source, checkdiff, dump,
+result index and SHA256 manifest are under:
+
+`~/.config/decomp-me/matching-evidence/jpeg-rgb-2026-09-06/address-lowering-followup/`
+
+These rejected source families do not prove that matching is impossible.
+A next attempt should target a specific initial-lowering dependency or a
+substantially different address/helper reconstruction, rather than more
+parentheses or a forced physical register map.
