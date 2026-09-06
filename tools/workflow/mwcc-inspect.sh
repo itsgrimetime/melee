@@ -457,6 +457,8 @@ OVERLAY_SHAS=()
 OVERLAY_ARCHIVE_SHA=""
 HEADER_NAMES=()
 BASE_HEADER_NAMES=()
+GENERATED_INCLUDE_RELS=()
+GENERATED_PARENT_RELS=()
 cleanup_local_snapshot() {
   [[ -z "${LOCAL_SNAPSHOT}" ]] || rm -rf "${LOCAL_SNAPSHOT}"
 }
@@ -537,6 +539,48 @@ if [[ "${UPLOAD_SOURCE}" == "1" ]]; then
   OVERLAY_DESTS+=("${REL_SRC}")
 fi
 
+# Generated includes are not present in an exact Git checkout. Snapshot them
+# from the active build, including empty roots, just like candidate inputs.
+for PRIVATE_INCLUDE_REL in "${PRIVATE_INCLUDE_RELS[@]}"; do
+  [[ "${PRIVATE_INCLUDE_REL}" == build/* ]] || continue
+  GENERATED_PATH="${REPO_ROOT}"
+  IFS='/' read -r -a GENERATED_COMPONENTS <<< "${PRIVATE_INCLUDE_REL}"
+  for GENERATED_COMPONENT in "${GENERATED_COMPONENTS[@]}"; do
+    GENERATED_PATH="${GENERATED_PATH}/${GENERATED_COMPONENT}"
+    [[ -d "${GENERATED_PATH}" && ! -L "${GENERATED_PATH}" ]] || {
+      echo "ERROR: unsafe or missing generated include directory: ${GENERATED_PATH}" >&2
+      exit 66
+    }
+  done
+  GENERATED_INCLUDE_RELS+=("${PRIVATE_INCLUDE_REL}")
+  [[ -n "${LOCAL_SNAPSHOT}" ]] || {
+    LOCAL_SNAPSHOT="$(mktemp -d "${TMPDIR:-/tmp}/mwcc-inspect-input.XXXXXX")"
+    chmod 700 "${LOCAL_SNAPSHOT}"
+  }
+  while IFS= read -r -d '' GENERATED_ENTRY; do
+    [[ -d "${GENERATED_ENTRY}" && ! -L "${GENERATED_ENTRY}" ]] && continue
+    [[ -f "${GENERATED_ENTRY}" && ! -L "${GENERATED_ENTRY}" ]] || {
+      echo "ERROR: unsafe generated include input: ${GENERATED_ENTRY}" >&2
+      exit 66
+    }
+    GENERATED_REL="${GENERATED_ENTRY#${REPO_ROOT}/}"
+    valid_repo_relative_path "${GENERATED_REL}" || {
+      echo "ERROR: unsafe generated include path: ${GENERATED_REL}" >&2
+      exit 66
+    }
+    GENERATED_SEEN=0
+    for OVERLAY_DEST in "${OVERLAY_DESTS[@]}"; do
+      [[ "${OVERLAY_DEST}" != "${GENERATED_REL}" ]] || GENERATED_SEEN=1
+    done
+    [[ "${GENERATED_SEEN}" == 0 ]] || continue
+    GENERATED_SNAPSHOT="${LOCAL_SNAPSHOT}/${GENERATED_REL}"
+    snapshot_regular_file "${GENERATED_ENTRY}" "${GENERATED_SNAPSHOT}" || exit $?
+    OVERLAY_SOURCES+=("${GENERATED_SNAPSHOT}")
+    OVERLAY_DESTS+=("${GENERATED_REL}")
+    GENERATED_PARENT_RELS+=("$(dirname "${GENERATED_REL}")")
+  done < <(find -P "${GENERATED_PATH}" -mindepth 1 -print0)
+done
+
 if (( ${#OVERLAY_SOURCES[@]} > 0 )); then
   chmod 600 "${OVERLAY_SOURCES[@]}"
   OVERLAY_HASH_OUTPUT="$(shasum -a 256 "${OVERLAY_SOURCES[@]}")" || {
@@ -555,9 +599,11 @@ if (( ${#OVERLAY_SOURCES[@]} > 0 )); then
     echo "ERROR: incomplete overlay snapshot hashes" >&2
     exit 66
   }
-  LOCAL_OVERLAY_ARCHIVE="${LOCAL_SNAPSHOT}/.mwcc-inspect-overlays.tar"
+  LOCAL_OVERLAY_ARCHIVE="${LOCAL_SNAPSHOT}/.mwcc-inspect-overlays.tar.gz"
   [[ ! -e "${LOCAL_OVERLAY_ARCHIVE}" && ! -L "${LOCAL_OVERLAY_ARCHIVE}" ]] || exit 66
-  COPYFILE_DISABLE=1 tar --format=ustar -cf "${LOCAL_OVERLAY_ARCHIVE}" \
+  # Generated font includes are large and repetitive. Compress the transport
+  # while retaining the same ustar member and per-file integrity checks.
+  COPYFILE_DISABLE=1 tar --format=ustar -czf "${LOCAL_OVERLAY_ARCHIVE}" \
     -C "${LOCAL_SNAPSHOT}" "${OVERLAY_DESTS[@]}" || {
     echo "ERROR: could not archive overlay snapshot" >&2
     exit 66
@@ -994,7 +1040,7 @@ try {
     }
     if ($missing) {
       if ($policy -notin @('absent-or-file', 'absent-or-dir', 'must-absent')) {
-        throw 'required path is absent'
+        throw "required path is absent: $relative ($candidate; policy=$policy)"
       }
       continue
     }
@@ -1094,7 +1140,7 @@ assert_safe_output_directory_path() {
 }
 
 preflight_overlay_destination() {
-  local relative="$1" current="${REMOTE_REPO}" component index
+  local relative="$1" allow_missing="${2:-0}" current="${REMOTE_REPO}" component index
   local -a components
   assert_safe_directory "${REMOTE_REPO}"
   IFS='/' read -r -a components <<< "${relative}"
@@ -1110,6 +1156,9 @@ preflight_overlay_destination() {
         assert_not_reparse "${current}"
       fi
     else
+      if [[ "${allow_missing}" == 1 && ! -e "${current}" && ! -L "${current}" ]]; then
+        return 0
+      fi
       assert_safe_directory "${current}"
     fi
   done
@@ -1143,8 +1192,8 @@ prepare_overlay_checksum_manifest() {
 
 apply_overlay_archive() {
   local expected_archive_sha="$1" expected_count="$2"
-  local archive="${JOB_DIR}/overlays.${INVOCATION_ID}.tar"
-  local encoded="${JOB_DIR}/overlays.${INVOCATION_ID}.tar.base64"
+  local archive="${JOB_DIR}/overlays.${INVOCATION_ID}.tar.gz"
+  local encoded="${JOB_DIR}/overlays.${INVOCATION_ID}.tar.gz.base64"
   local line archive_hash_output actual_archive_sha members verbose member_count=0
   local expected_members="" relative
   [[ "${expected_archive_sha}" =~ ^[0-9a-f]{64}$ && "${expected_count}" -gt 0 ]] || \
@@ -1222,29 +1271,48 @@ git -C "${REMOTE_REPO}" -c advice.detachedHead=false checkout --quiet --detach "
 cd "${REMOTE_REPO}"
 REMOTE_PRIVATE_COMMAND
   for OVERLAY_DEST in "${OVERLAY_DESTS[@]}"; do
-    printf 'preflight_overlay_destination %s\n' "$(shell_quote "${OVERLAY_DEST}")"
+    if [[ "${OVERLAY_DEST}" == build/* ]]; then
+      printf 'preflight_overlay_destination %s 1\n' "$(shell_quote "${OVERLAY_DEST}")"
+    else
+      printf 'preflight_overlay_destination %s\n' "$(shell_quote "${OVERLAY_DEST}")"
+    fi
   done
   printf 'begin_reparse_batch PRE\n'
   for ((OVERLAY_INDEX = 0; OVERLAY_INDEX < ${#OVERLAY_DESTS[@]}; OVERLAY_INDEX++)); do
     OVERLAY_DEST="${OVERLAY_DESTS[OVERLAY_INDEX]}"
     REMOTE_STAGE_REL="${OVERLAY_DEST}.upload.${INVOCATION_ID}"
-    printf 'add_reparse_path_with_ancestors absent-or-file %s required-dir\n' \
-      "$(shell_quote "${OVERLAY_DEST}")"
-    printf 'add_reparse_path_with_ancestors must-absent %s required-dir\n' \
-      "$(shell_quote "${REMOTE_STAGE_REL}")"
-    printf 'add_reparse_path_with_ancestors must-absent %s required-dir\n' \
-      "$(shell_quote "${REMOTE_STAGE_REL}.base64")"
+    OVERLAY_ANCESTOR_POLICY=required-dir
+    [[ "${OVERLAY_DEST}" != build/* ]] || OVERLAY_ANCESTOR_POLICY=absent-or-dir
+    printf 'add_reparse_path_with_ancestors absent-or-file %s %s\n' \
+      "$(shell_quote "${OVERLAY_DEST}")" "${OVERLAY_ANCESTOR_POLICY}"
+    printf 'add_reparse_path_with_ancestors must-absent %s %s\n' \
+      "$(shell_quote "${REMOTE_STAGE_REL}")" "${OVERLAY_ANCESTOR_POLICY}"
+    printf 'add_reparse_path_with_ancestors must-absent %s %s\n' \
+      "$(shell_quote "${REMOTE_STAGE_REL}.base64")" "${OVERLAY_ANCESTOR_POLICY}"
   done
   if [[ "${UPLOAD_SOURCE}" != "1" ]]; then
     printf 'add_reparse_path_with_ancestors required-file "${REL_SRC}" required-dir\n'
   fi
   for PRIVATE_INCLUDE_REL in "${PRIVATE_INCLUDE_RELS[@]}"; do
-    printf 'add_reparse_path_with_ancestors required-dir %s required-dir\n' \
-      "$(shell_quote "${PRIVATE_INCLUDE_REL}")"
+    if [[ "${PRIVATE_INCLUDE_REL}" == build/* ]]; then
+      printf 'add_reparse_path_with_ancestors absent-or-dir %s absent-or-dir\n' \
+        "$(shell_quote "${PRIVATE_INCLUDE_REL}")"
+    else
+      printf 'add_reparse_path_with_ancestors required-dir %s required-dir\n' \
+        "$(shell_quote "${PRIVATE_INCLUDE_REL}")"
+    fi
   done
   printf 'add_reparse_path_with_ancestors absent-or-dir %s absent-or-dir\n' \
     "$(shell_quote "${OUTPUT_REL}")"
   printf 'flush_reparse_batch PRE\n'
+  for GENERATED_REL in "${GENERATED_INCLUDE_RELS[@]}" "${GENERATED_PARENT_RELS[@]}"; do
+    printf 'safe_mkdir_parents "${REMOTE_REPO}" %s\n' "$(shell_quote "${GENERATED_REL}")"
+  done
+  for OVERLAY_DEST in "${OVERLAY_DESTS[@]}"; do
+    if [[ "${OVERLAY_DEST}" == build/* ]]; then
+      printf 'preflight_overlay_destination %s\n' "$(shell_quote "${OVERLAY_DEST}")"
+    fi
+  done
   if (( ${#OVERLAY_SOURCES[@]} > 0 )); then
     printf 'prepare_overlay_checksum_manifest %s <<'"'"'MWCC_INSPECT_OVERLAY_CHECKSUMS_EOF'"'"'\n' \
       "${#OVERLAY_SOURCES[@]}"

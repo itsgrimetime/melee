@@ -544,7 +544,7 @@ def test_overlay_archive_restores_private_file_modes(tmp_path: Path) -> None:
     assert observed["header_mode"] == 0o600
 
 
-def test_overlay_archive_is_plain_ustar_without_copyfile_metadata(
+def test_overlay_archive_is_compressed_ustar_without_copyfile_metadata(
     tmp_path: Path,
 ) -> None:
     fixture = _private_context_fixture(tmp_path)
@@ -565,7 +565,7 @@ def test_overlay_archive_is_plain_ustar_without_copyfile_metadata(
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     recorded = record.read_text(encoding="utf-8").splitlines()
-    assert recorded[:3] == ["COPYFILE_DISABLE=1", "--format=ustar", "-cf"]
+    assert recorded[:3] == ["COPYFILE_DISABLE=1", "--format=ustar", "-czf"]
 
 
 def test_candidate_header_wins_over_active_tu_and_exact_ref(tmp_path: Path) -> None:
@@ -716,6 +716,76 @@ def test_compiler_argv_is_quoted_without_shell_reinterpretation(tmp_path: Path) 
             raise AssertionError("relative include escaped private checkout")
     output_arg = Path(observed["argv"][observed["argv"].index("-o") + 1])
     assert output_arg.is_relative_to(private_repo)
+
+
+@pytest.mark.parametrize("file_repeats", [0, 1, 50000])
+def test_generated_include_root_is_snapshotted_into_private_checkout(
+    tmp_path: Path, file_repeats: int
+) -> None:
+    fixture = _private_context_fixture(
+        tmp_path, compile_args="-i src -i build/GALE01/include"
+    )
+    generated = fixture.repo / "build/GALE01/include"
+    generated.mkdir(parents=True)
+    contents = b"#define GENERATED 42\n" * file_repeats
+    if file_repeats:
+        (generated / "nested").mkdir()
+        (generated / "nested/generated.inc").write_bytes(contents)
+    record = tmp_path / "generated-record"
+    inspector_source = fixture.inspector.read_text().split("\n", 1)[1]
+    _write_executable(
+        fixture.inspector,
+        "#!/usr/bin/env python3\n"
+        "from pathlib import Path\n"
+        "assert Path('build/GALE01/include').is_dir()\n"
+        f"Path({str(record)!r}).write_bytes("
+        + (
+            "Path('build/GALE01/include/nested/generated.inc').read_bytes())\n"
+            if file_repeats
+            else "b'empty')\n"
+        )
+        + inspector_source,
+    )
+
+    proc, output = _run_private_context(
+        fixture, tmp_path, "generated-includes", source=fixture.source
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert output.exists()
+    assert not (fixture.remote_dir / "build/GALE01/include").exists()
+    assert record.read_bytes() == (contents if file_repeats else b"empty")
+
+
+@pytest.mark.parametrize("link_kind", ["ancestor", "file", "directory"])
+def test_generated_include_symlinks_are_rejected_before_ssh(
+    tmp_path: Path, link_kind: str
+) -> None:
+    fixture = _private_context_fixture(
+        tmp_path, compile_args="-i src -i build/GALE01/include"
+    )
+    generated = fixture.repo / "build/GALE01/include"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "header.h").write_text("#define OUTSIDE 1\n")
+    if link_kind == "ancestor":
+        generated.symlink_to(outside, target_is_directory=True)
+    else:
+        generated.mkdir(parents=True)
+        if link_kind == "file":
+            (generated / "header.h").symlink_to(outside / "header.h")
+        else:
+            (generated / "nested").symlink_to(outside, target_is_directory=True)
+    ssh_log = tmp_path / "ssh-log"
+    ssh_log.mkdir()
+    fixture.env["FAKE_SSH_LOG"] = str(ssh_log)
+
+    proc, output = _run_private_context(fixture, tmp_path, "generated-symlink")
+
+    assert proc.returncode == 66
+    assert "generated include" in proc.stderr
+    assert not output.exists()
+    assert not list(ssh_log.iterdir())
 
 
 def test_inspector_uses_fresh_child_bash_with_exact_argv(tmp_path: Path) -> None:
