@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .asm_parser import AsmInstruction
+from .asm_parser import AsmInstruction, find_first_def
 from .parser import Instruction, Pass
 
 _REG_TOKEN_RE = re.compile(r"\b([rf])\d+\b")
@@ -133,6 +133,7 @@ def match_virtual_for_expected_def(
     expected_position: int,
     pre_pass: Pass,
     reg_kind: str = "r",
+    expected_prefix: list[AsmInstruction] | None = None,
 ) -> MatchResult | None:
     """Find the virtual register in `pre_pass` that occupies the position
     corresponding to `expected_ist` in the expected output.
@@ -162,6 +163,33 @@ def match_virtual_for_expected_def(
 
     if not candidates:
         return None
+
+    # Entry copies still name physical ABI inputs in both representations.
+    # Prologue scheduling can shift their positions enough that an unrelated
+    # argument copy is closer. Preserve the source identity when neither side
+    # has overwritten the input or crossed a call. Later copies must retain
+    # the ordinary register-independent matching behavior.
+    if expected_prefix is not None and target_sig[0] in {"mr", "fmr"}:
+        source = expected_ist.regs[1] if len(expected_ist.regs) == 2 else None
+        abi_inputs = range(3, 11) if reg_kind == "r" else range(1, 9)
+        calls = {"bl", "bla", "bctrl", "blrl", "bcl", "bcla"}
+        if (
+            source is not None
+            and source[0] == reg_kind
+            and source[1] in abi_inputs
+            and not any(ist.opcode in calls for ist in expected_prefix)
+            and find_first_def(expected_prefix, source[1], source[0]) is None
+        ):
+            entry_candidates = [
+                (i, ist)
+                for i, ist in candidates
+                if len(ist.regs) == 2
+                and ist.regs[1] == source
+                and not any(prev.opcode in calls for prev in instructions[:i])
+                and find_first_def(instructions[:i], source[1], source[0]) is None
+            ]
+            if entry_candidates:
+                candidates = entry_candidates
 
     # Pick the candidate whose position is closest to expected_position
     candidates.sort(key=lambda p: abs(p[0] - expected_position))

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from src.mwcc_debug.asm_parser import AsmInstruction
 from src.mwcc_debug.iter_match import (
     instr_signature,
@@ -109,6 +111,58 @@ def test_match_virtual_treats_expected_addi_zero_as_precolor_mr() -> None:
     assert result is not None
     assert result.virtual == 34
     assert result.ig_idx == 34
+
+
+@pytest.mark.parametrize(
+    ("opcode", "operands", "kind", "source"),
+    [
+        ("mr", "r31, r4", "r", 4),
+        ("addi", "r31, r4, 0x0", "r", 4),
+        ("fmr", "f31, f1", "f", 1),
+    ],
+)
+def test_entry_copy_preserves_abi_source_despite_position_shift(
+    opcode, operands, kind, source
+) -> None:
+    expected = AsmInstruction(opcode, operands, [(kind, 31), (kind, source)])
+    copy_opcode = "mr" if kind == "r" else "fmr"
+    pre = Pass(name="AFTER PEEPHOLE FORWARD")
+    block = Block(index=0, succ=[], pred=[], labels=["L0"])
+    block.instructions = [
+        _make_ist(copy_opcode, f"{kind}33,{kind}{source}", [(kind, 33), (kind, source)]),
+        _make_ist(copy_opcode, f"{kind}34,{kind}{source + 1}", [(kind, 34), (kind, source + 1)]),
+        _make_ist(copy_opcode, f"{kind}40,{kind}33", [(kind, 40), (kind, 33)]),
+    ]
+    pre.blocks.append(block)
+    result = match_virtual_for_expected_def(
+        expected, 2, pre, reg_kind=kind, expected_prefix=[]
+    )
+    assert result is not None
+    assert result.virtual == 33
+    assert result.confidence == "exact"
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        [AsmInstruction("bl", "callee", [])],
+        [AsmInstruction("li", "r4, 0", [("r", 4)])],
+    ],
+)
+def test_nonentry_copy_does_not_assume_abi_source(prefix) -> None:
+    expected = AsmInstruction("mr", "r31, r4", [("r", 31), ("r", 4)])
+    pre = Pass(name="AFTER PEEPHOLE FORWARD")
+    block = Block(index=0, succ=[], pred=[], labels=["L0"])
+    block.instructions = [
+        _make_ist("mr", "r33,r4", [("r", 33), ("r", 4)]),
+        _make_ist("mr", "r40,r37", [("r", 40), ("r", 37)]),
+    ]
+    pre.blocks.append(block)
+    result = match_virtual_for_expected_def(
+        expected, 1, pre, expected_prefix=prefix
+    )
+    assert result is not None
+    assert result.virtual == 40
 
 
 def test_match_virtual_for_expected_def_supports_fpr_destinations() -> None:

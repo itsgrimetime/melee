@@ -1625,6 +1625,7 @@ def _collect_order_target_inputs(
             match = match_virtual_for_expected_def(
                 expected_ist=expected_ist, expected_position=pos,
                 pre_pass=pre_pass, reg_kind=reg.kind,
+                expected_prefix=body[:pos],
             )
             if match is not None:
                 anchor_rows.append((pos, match.ig_idx))

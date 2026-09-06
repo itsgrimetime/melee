@@ -1481,6 +1481,7 @@ def match_iter_first(
             expected_position=pos,
             pre_pass=pre_pass,
             reg_kind=reg.kind,
+            expected_prefix=body[:pos],
         )
         if match is None:
             results.append({
