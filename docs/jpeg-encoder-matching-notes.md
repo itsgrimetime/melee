@@ -451,3 +451,70 @@ Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-07-frontend-community/`
 contains32 candidates,54 retail front-end snapshots, donor results, corrected
 permuter kit/run, remote-stage logs, public compile verification, and a verified
 195-member SHA256 archive manifest. Ordinary build passes; TU remains Linkable.
+
+## Recovered Windows Inspector output: compilation did finish
+
+This corrects the earlier interpretation of the enc6 timeout. Read-only Windows
+inspection found a384737-byte `artifact.partial` under invocation
+`c016-encoder-20260906-frontend-dir`, despite the wrapper's timeout and lack of a
+terminal record. The retrieved file contains all eight TU function sections,
+both encoder local-variable listings, and a final `Compilation finished.` marker.
+The remote41848-byte object also exists.
+
+The remote source SHA256 equals the retained local source exactly:
+`0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee`.
+The remote private HEAD is5d8814c180. Remote and downloaded artifact hashes agree:
+`678270f5ea1874cd18d5883e8dc198793700f877957645a6277b47460b493183`.
+Its command line identifies GC/1.2.5n, private source/include paths, and the
+expected TU exception/symbol options. No live processes with either invocation
+ID in their command line were found in the Windows CIM snapshot.
+
+This is useful recovered compiler evidence, **not a successful supervisor
+publication or a fabricated terminal cleanup receipt**. No receipt was created,
+no job was restarted, and no broad cleanup was performed. Issues1497/1526 now
+record the distinction: the enc6 job progressed beyond private checkout and
+completed compilation; the wrapper failed to publish the result. The precise
+supervisor failure remains unproven.
+
+The encoder snapshot contains61 local ObjObjects. `state`, tables, and ordinary
+locals precede the inlining-created temporaries in sorted address order. Its
+ENodes still refer to the `state` aggregate; the separate retail optimizer trace
+later scalarizes it to `@319`. Thus Inspector sees an earlier ownership stage.
+Heap ordering alone is not a physical-register prediction, and reordering these
+source declarations was already tested without fixing the residual. The dump's
+statement line-number fields contain implausible values; do not use those as
+source locations.
+
+New bounded source tests used the recovered ownership information:
+
+- Seven valid bit-writer aggregate variants group value, length, and/or loop
+  counter. Value/length-only forms preserve opcode names but enlarge frames to
+ 152–208 bytes; the value wrapper also reorders two `addi` operations and changes
+  the run+1 register. Counter variants perturb structure further. No gain.
+  Three initial generator outputs put a declaration after an assignment and
+  failed C89 syntax; corrected versions were compiled, and both sets are saved.
+- Three coherent plain-`int` variants cover helper types, function locals, or
+  both. Helpers alone are neutral. Whole-flow/function-local variants score
+ 99.53052%, retain frame104, and add an instruction. The26 opcode-aligned
+  register differences are therefore not a26-instruction-only residual.
+- Four follow-ups change coefficient/history/all integer work-buffer fields to
+  `int` on that whole-flow candidate. All are identical99.53052%; field types do
+  not remove the extra instruction. All source candidates were restored.
+
+Discord archive search finds2025 discussions of Doshin's custom `jchuff-nin` /
+`jdhuff-nin`, including a participant saying they could not locate their source.
+This reinforces the Nintendo-library search lead but supplies no Melee source
+identity. Other JPEG/Melee hits discuss `dolphin/jpeg/jpegdec` and THP decoding;
+those must not be conflated with this HSD coefficient encoder.
+
+Upstream96a6a6a491 (PR3369) was merged as20cd3c2052. It matches
+`grBigBlue_801E6C60`; the PR's author explicitly describes working on that TU, so
+its remaining function was left alone. Full build passes after restoring the
+encoder source. Encoder remains99.70266%, public scratchmbSPH remains available,
+and the TU remains Linkable. No upstream PR source update is warranted by these
+unsuccessful candidates.
+
+Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-07-inspector-recovered/`
+contains the full recovered dump, encoder-only excerpt, hash/ref/process checks,
+local-object summary,17 attempted compiles (14 valid candidates), Discord search
+results, final validation, and a verified74-member archive manifest.

@@ -1,0 +1,328 @@
+{
+  "function": "hsd_803B3CD8",
+  "source_sha256": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+  "artifact_sha256": "678270f5ea1874cd18d5883e8dc198793700f877957645a6277b47460b493183",
+  "artifact_bytes": 384737,
+  "remote_ref": "5d8814c18093525f573011ff5e37e97020d3c655",
+  "invocation": "c016-encoder-20260906-frontend-dir",
+  "functions": [
+    "hsd_803B3408",
+    "fn_803B376C",
+    "hsd_803B3CD8",
+    "hsd_803B46D4",
+    "hsd_803B4A2C",
+    "hsd_803B4D64",
+    "hsd_803B51C8",
+    "hsd_803B5C2C"
+  ],
+  "completion_marker": true,
+  "terminal_receipt": false,
+  "local_objects": [
+    {
+      "rank": 0,
+      "address": "0x0082DBA0",
+      "name": "state"
+    },
+    {
+      "rank": 1,
+      "address": "0x0082DC00",
+      "name": "tables"
+    },
+    {
+      "rank": 2,
+      "address": "0x0082DC60",
+      "name": "dc_code"
+    },
+    {
+      "rank": 3,
+      "address": "0x0082DCC0",
+      "name": "dc_length"
+    },
+    {
+      "rank": 4,
+      "address": "0x0082DD20",
+      "name": "ac_code"
+    },
+    {
+      "rank": 5,
+      "address": "0x0082DD80",
+      "name": "ac_length"
+    },
+    {
+      "rank": 6,
+      "address": "0x0082DDB8",
+      "name": "value"
+    },
+    {
+      "rank": 7,
+      "address": "0x0082DDF0",
+      "name": "length"
+    },
+    {
+      "rank": 8,
+      "address": "0x0082DE38",
+      "name": "run"
+    },
+    {
+      "rank": 9,
+      "address": "0x0082DE88",
+      "name": "index"
+    },
+    {
+      "rank": 10,
+      "address": "0x0082E428",
+      "name": "indexed"
+    },
+    {
+      "rank": 11,
+      "address": "0x0082E478",
+      "name": "coefficient"
+    },
+    {
+      "rank": 12,
+      "address": "0x0082E558",
+      "name": "ac_value"
+    },
+    {
+      "rank": 13,
+      "address": "0x0084AA88",
+      "name": "component"
+    },
+    {
+      "rank": 14,
+      "address": "0x0084E7F0",
+      "name": "@163"
+    },
+    {
+      "rank": 15,
+      "address": "0x0084E8A0",
+      "name": "@165"
+    },
+    {
+      "rank": 16,
+      "address": "0x0084E918",
+      "name": "@166"
+    },
+    {
+      "rank": 17,
+      "address": "0x0084E990",
+      "name": "@167"
+    },
+    {
+      "rank": 18,
+      "address": "0x0084F1D8",
+      "name": "@172"
+    },
+    {
+      "rank": 19,
+      "address": "0x0084F250",
+      "name": "@173"
+    },
+    {
+      "rank": 20,
+      "address": "0x0084F2C8",
+      "name": "@174"
+    },
+    {
+      "rank": 21,
+      "address": "0x0084FFC8",
+      "name": "@181"
+    },
+    {
+      "rank": 22,
+      "address": "0x00850B60",
+      "name": "@187"
+    },
+    {
+      "rank": 23,
+      "address": "0x00850C10",
+      "name": "@189"
+    },
+    {
+      "rank": 24,
+      "address": "0x00850C88",
+      "name": "@190"
+    },
+    {
+      "rank": 25,
+      "address": "0x00851450",
+      "name": "@195"
+    },
+    {
+      "rank": 26,
+      "address": "0x008514C8",
+      "name": "@196"
+    },
+    {
+      "rank": 27,
+      "address": "0x00851540",
+      "name": "@197"
+    },
+    {
+      "rank": 28,
+      "address": "0x00852240",
+      "name": "@204"
+    },
+    {
+      "rank": 29,
+      "address": "0x00852DD8",
+      "name": "@210"
+    },
+    {
+      "rank": 30,
+      "address": "0x00852E88",
+      "name": "@212"
+    },
+    {
+      "rank": 31,
+      "address": "0x00852F00",
+      "name": "@213"
+    },
+    {
+      "rank": 32,
+      "address": "0x00852F78",
+      "name": "@214"
+    },
+    {
+      "rank": 33,
+      "address": "0x008537C0",
+      "name": "@219"
+    },
+    {
+      "rank": 34,
+      "address": "0x00853838",
+      "name": "@220"
+    },
+    {
+      "rank": 35,
+      "address": "0x008538B0",
+      "name": "@221"
+    },
+    {
+      "rank": 36,
+      "address": "0x008545B0",
+      "name": "@228"
+    },
+    {
+      "rank": 37,
+      "address": "0x00855190",
+      "name": "@235"
+    },
+    {
+      "rank": 38,
+      "address": "0x00855208",
+      "name": "@236"
+    },
+    {
+      "rank": 39,
+      "address": "0x00855280",
+      "name": "@237"
+    },
+    {
+      "rank": 40,
+      "address": "0x00855F98",
+      "name": "@244"
+    },
+    {
+      "rank": 41,
+      "address": "0x00856010",
+      "name": "@245"
+    },
+    {
+      "rank": 42,
+      "address": "0x008566C0",
+      "name": "@249"
+    },
+    {
+      "rank": 43,
+      "address": "0x00856CF0",
+      "name": "@253"
+    },
+    {
+      "rank": 44,
+      "address": "0x00856D68",
+      "name": "@254"
+    },
+    {
+      "rank": 45,
+      "address": "0x00857418",
+      "name": "@258"
+    },
+    {
+      "rank": 46,
+      "address": "0x00857A68",
+      "name": "@262"
+    },
+    {
+      "rank": 47,
+      "address": "0x00857AE0",
+      "name": "@263"
+    },
+    {
+      "rank": 48,
+      "address": "0x00858190",
+      "name": "@267"
+    },
+    {
+      "rank": 49,
+      "address": "0x008587C0",
+      "name": "@271"
+    },
+    {
+      "rank": 50,
+      "address": "0x00858838",
+      "name": "@272"
+    },
+    {
+      "rank": 51,
+      "address": "0x00858EE8",
+      "name": "@276"
+    },
+    {
+      "rank": 52,
+      "address": "0x00859538",
+      "name": "@280"
+    },
+    {
+      "rank": 53,
+      "address": "0x008595B0",
+      "name": "@281"
+    },
+    {
+      "rank": 54,
+      "address": "0x00859C60",
+      "name": "@285"
+    },
+    {
+      "rank": 55,
+      "address": "0x0085A290",
+      "name": "@289"
+    },
+    {
+      "rank": 56,
+      "address": "0x0085A308",
+      "name": "@290"
+    },
+    {
+      "rank": 57,
+      "address": "0x0085A9B8",
+      "name": "@294"
+    },
+    {
+      "rank": 58,
+      "address": "0x0085B008",
+      "name": "@298"
+    },
+    {
+      "rank": 59,
+      "address": "0x0085B080",
+      "name": "@299"
+    },
+    {
+      "rank": 60,
+      "address": "0x0085B730",
+      "name": "@303"
+    }
+  ],
+  "interpretation": "Parsed state aggregate precedes scalarization; @319 appears only in separate retail IRO pass5. Object address ordering is not a physical-register assignment prediction."
+}
