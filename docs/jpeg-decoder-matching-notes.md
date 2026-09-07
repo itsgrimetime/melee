@@ -645,3 +645,20 @@ gain; production restored98.83817 and ninja passes. Verified runner, fresh dump,
 fidelity/pressure reports and candidate sources/diffs archived under
 2026-09-07-windows-flags-recovery. Next captures should use decoder_pcdump.ps1,
 not the generic runner that rejects the earlier unprototyped helper.
+
+## Clamp output-parameter boundaries — 2026-09-07
+
+Ten probes replace selected red/green/blue clamp calls with a u8 output-parameter
+helper, either wrapping existing jpeg_clamp or spelling its branches directly.
+The wrapper adds another inline depth and leaves calls:47.821575–59.991703,
+frames272–312. Direct branches single-channel preserve176-byte frame:
+red98.443985,green98.46473,blue98.75519. Red+green93.28216/frame168;
+all92.72199/frame168. None exceeds98.83817; all restored, ninja passes.
+
+Fresh Windows capture of direct-blue candidate succeeds in0.521s using verified
+per-TU runner; stagedsource SHA256a5066f558492a02a26d2e8005801fee7c235e31f89a3879d0343d13ae20dd43f.
+Aligned precolor bijection audit fails correctly: initial257->255 instructions,
+last precolor249->248; old133 and76 map non-bijectively to candidate75. Therefore
+this source is not a simple role renumbering and old force-phys mapping must not
+be reused. No full target allocation claim. Sources/diffs,dump,and failed mapping
+report archived in2026-09-07-clamp-output-parameters. No new PR delta.
