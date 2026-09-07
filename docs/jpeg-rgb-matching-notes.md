@@ -874,3 +874,24 @@ add frame cost. Do not repeat this full-row helper family on this baseline.
 Sources/diffs and compact stage lineage are SHA256-verified in
 2026-09-07-full-row-helper. Production remains98.7788%; the direct-row-call
 structural candidate remains preserved separately. Goal remains active.
+
+## Row-input normalization donor check — 2026-09-07
+
+Refreshed upstream/PR3350 discussion: no new RGB delta or review clue; the only
+new upstream commit is snapshot initializer work (#3395). PR3376 is a DIFFERENT
+JPEG decoder function, not an RGB donor. Checked recent mismatch patterns:
+inline-count-mask-survivor-regalloc (mnNameNew_GlyphVariantSetup), output-inline
+expression allocation, and single-return FPR coalescing. The count example
+establishes that narrow/masked inline inputs can change surviving virtuals.
+
+Tested that concrete mechanism on the row helper (input is0–3): u16/u8 formal
+is neutral98.04147%; s16/s8 regresses97.53456%; int/unsigned-int and s32 explicit
+mask add8frame bytes and score95.95392%; u16 masked gives97.90323%,frame152.
+Then tested assigning row expression back into the formal input before return:
+s32/u32 reproduce the structural candidate; u16/u8 give97.4424%,frame152.
+Restoring named luma row_offset adds8frame bytes and worsens these candidates.
+16 valid sources total, all restored, complete evidence SHA256-verified in
+2026-09-07-row-input-normalization. This donor mechanism gives no improvement
+here; do not repeat these input-width/mask/assignment-return variants.
+
+Production remains98.7788%, no unsubmitted source gain. Goal remains active.
