@@ -1013,3 +1013,24 @@ structural93.09677/91.64056/87.39632. Frames152–168; no gain. All
 sources and complete diffs retained in2026-09-07-row-loop-boundaries.
 Production source restored. These loop boundaries are not a productive way
 to obtain the needed row lifetime merge. Matching remains unfinished.
+
+## Chroma/luma sequential local reuse — 2026-09-07
+
+24 probes share s32 locals between nonoverlapping chroma/luma phases. No
+uninitialized reads, cross-store pixel reuse, or compiler forcing. Twelve
+counter/index probes against baseline and coherent structural candidate reuse
+chroma_x as luma_x, chroma_y as luma_y, chroma_index as pixel_index/luma_y,
+dst_row as luma_y, or src_row as luma_x. No gain; baseline98.110596–98.7788,
+structural97.39632–98.04147; all frame152.
+
+Twelve offset probes reuse dst_row/src_row/chroma_index for row_offset or
+column_offset, hoisting the shared declaration to function scope. Baseline
+frames shrink to144 and scores98.18894–98.5576. Structural variants start with
+both named luma offsets restored, so reuse recovers152 without padding; scores
+97.67281–98.04147. Reusing chroma_index yields assembly exactly identical to
+the preserved direct-row-call candidate (current_asm equality checked), so
+that alternative local/frame explanation does not change the row allocator
+problem. No productive sequential local-sharing lever found in these pairs.
+
+Full sources and diffs saved in2026-09-07-phase-local-reuse. Production source
+restored; ninja passes. Best remains98.7788%; no upstream PR delta.
