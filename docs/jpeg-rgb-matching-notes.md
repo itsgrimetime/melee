@@ -343,3 +343,62 @@ and built/original DOL SHA-1 remains
 `08e0bf20134dfcb260699671004527b2d6bb1a45`. Source, complete diffs, generators,
 and final verification are archived in
 `docs/matching-evidence/jpeg-rgb/2026-09-06-inline-ownership/`.
+
+## Two-role target correspondence and whole-conversion helper
+
+The corrected pixel-address candidate now has a checked GPR target
+correspondence: 264 operand occurrences across 81 virtual roots. Each included
+instruction is joined by its stable address between the precolor and final
+retail captures, then checked against ordinary candidate assembly. Target
+instruction shape is checked after aligning the known swaps at 0xd4/0xd8 and
+0x1f0/0x1f4. The commuted row add at 0xb4 is excluded; it needs a source-order
+fix. Prologue/epilogue, implicit-operand, and changed-opcode exclusions are
+listed in the result, rather than guessed.
+
+Eight mapped roles differ from target: pointer 37, index 38, and extraction /
+conversion temporaries 94,95,97,98,100,101. Extending the partial target with
+observed baseline colors for unmapped roots, the existing model can reproduce
+all 105 assignments by moving only pointer 37 and index 38 in SELECT order.
+Of 10,609 tested pairs of positions, 1,045 reach that extended target. One is
+`37 after 126`, then `38 after 121`. This demonstrates a compatible coloring on
+the recorded graph; it does **not** demonstrate source realization, resolve
+the instruction-order differences, or independently prove the unmapped target.
+
+Sixteen real-TU source probes followed:
+
+| Family | Runs | Result |
+| --- | ---: | --- |
+| Whole per-pixel chroma helper, reversed arguments, precomputed input pointer, whole chroma-x loop helper | 8 |96.92166–98.68664%; whole-loop helper adds eight frame bytes |
+| Direct named array stores with index, full expression, index helper, or repeated pointer expression | 8 |89.963135–98.133644%; index helper adds16 frame bytes |
+
+Every form preserves the two pixel reads with a chroma store between them;
+none reuses a potentially stale first pixel after the store. No source was
+retained.
+
+### Retail explanation of the whole-helper regression
+
+A new read-only retail capture of the corrected-pixel, whole-source-first
+helper reaches final scheduling for `hsd_803B3408`, with 217 final instructions
+and exit 0. All 13 PCode/coloring snapshots pass the capture repository's
+structural validator. The older decomp-scripts validator rejected the 1.2.5n
+hash because its whitelist only supports 1.2.5; inputs and whitelists were not
+altered. This is a selected-function capture, not a full compiler run.
+
+Initial, optimized, and final precolor stages have consistent instruction /
+register bijections (219,240,218 instructions). Symbol identity is not proved
+by that correspondence alone. Of 84 mapped GPR decisions, many change selection
+positions or colors. Pointer37 becomes 73 and moves from SELECT position 23 to SELECT position 2,
+receiving r5 instead of r30. Index38 becomes 72, moves from 99 to 86, and receives r22
+instead of r23. All 39 mapped FPR decisions are unchanged.
+
+This is a concrete reason the whole helper is worse: it selects the pointer
+much earlier, while the successful abstract constructions delay it. The
+captured correspondence is partial; it does not assert full graph isomorphism.
+
+Source, complete diffs, the target correspondence and search, retail captures,
+validators, and restored verification are preserved under
+`docs/matching-evidence/jpeg-rgb/2026-09-06-two-role-target/`. Ordinary restored
+matching is 98.7788%, encoder 99.70266%, and the other six TU functions 100%.
+The full build passes and built/original DOL SHA-1 is
+`08e0bf20134dfcb260699671004527b2d6bb1a45`. The TU remains Linkable; no source
+PR update is warranted.
