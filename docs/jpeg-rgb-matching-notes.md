@@ -1071,3 +1071,37 @@ row^tile^tile:97.11981%,152frame, preserves tile+sum ordering but keeps TWO
 XOR instructions and a separate sumr5/finalr26. No late simplification path
 in these probes yields both target operand order and shared row lifetime.
 Full sources/diffs retained in2026-09-07-late-simplification; source restored.
+
+## DONOR BREAKTHROUGH: row ADDs solved — 2026-09-07
+
+Operand-constrained opseq `add v0 v1 v2,add v0 v3 v0` found matched integer
+example hsd_803921B8. Fresh ordinary checkdiff confirms100%. Its source uses
+`cur_dst = dst + (s32)((u32)y*(u32)stride) + x2`, producing product+x2 followed
+by dst+sum in one register. Exact four-op RGB extract/extract/add/add query
+had no matched donor. Pointer examples and pl_800386E8 also appeared, but this
+integer donor directly informed the change.
+
+18 probes (8 donor casts/part/tile placement;10 grouping/two-local followups).
+Key form: declare tile_offset=tile_y*16+tile_x*2 at tile_x body, row_part local
+inside chroma_y body, then row_part=(chroma_y&1)*4;
+dst_row=tile_offset+row_part+(chroma_y&2)*16. No row helper or padding.
+BOTH target row adds now match EXACTLY: +b0 ADD r26,r22,r5 and +b4 ADD r26,r8,r26.
+Keep the source's left association: parenthesizing the row sum regresses.
+
+Production with existing pixel expression improves98.7788 ->98.82488,
+868bytes/frame152. Commit6c579233b8, fresh upstream PR3396 via commit0cdb5236b9.
+All seven other TU functions100%; python configure.py && ninja passes.
+TU remains Linkable because RGB is not100%; do not link prematurely.
+
+Separately preserved corrected-pixel candidate:98.087555%,217instructions,
+frame152, both row adds exact. Fresh readonly retail stages plus correspondence
+validate267 GPR operands/81virtuals, NO target contradictions, after known
+d4/d8 and1f0/1f4 scheduler transpositions. Usual implicit/prologue skipped sites
+listed in correspondence JSON; this is not full binary equality. Remaining
+changed virtuals (CANDIDATE-SPECIFIC):38:23->21,100/101/97/98:21->22,
+94/95:22->23,37:30->22. Old direct-row-call virtual74 fixed-graph obstruction
+no longer applies to this source! Do not recycle its IDs or its impossibility
+conclusion. New active structural candidate is structural-candidate.c.txt here.
+
+Complete donors/probes/fresh traces under2026-09-07-donor-row-breakthrough.
+The row blocker is resolved; next work is chroma allocation and scheduling.
