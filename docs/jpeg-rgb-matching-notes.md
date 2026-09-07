@@ -494,3 +494,25 @@ The RGB claim was released after this checkpoint; active work returns to the
 coefficient encoder's narrower register-ownership residual. The recorded RGB
 creation-order and structural hypotheses remain available for a new source
 lead rather than repeating these tested families.
+
+
+## Resumed after encoder source100 — 2026-09-07
+
+All PR3391 checks passed, including Clang and Nix. User authorized moving to
+another remaining function. Claimed hsd_803B3408 as codex-c016: no competing
+claim or RGB-specific open PR was found. This is the last residual in the
+encoder TU once PR3391 lands. Upstream was merged as 5003f7bfea; conflict
+resolution preserves the final encoder helper and upstream snapshot changes.
+
+Four source probes adapt the encoder's caller-owned-temporary technique:
+whole-body inline alone, caller-owned pixel_index, caller-owned luma_base,
+and both. Scores are respectively90.599075,91.40553,90.599075,91.40553;
+all retain instruction count but worsen instruction sequence. Merely moving
+the luma pointer owner is neutral within this family. All are restored.
+This is not evidence against a narrower inline boundary around just address
+formation; that should be assessed against the known initial-lowering
+reassociation before attempting further register-order variations.
+
+Fresh restored RGB remains98.7788%; encoder remains100%. Evidence and complete
+source/diffs are in 2026-09-07-caller-owners with verified SHA256 members.
+Active target is RGB hsd_803B3408; there is no active scratch for this pass.
