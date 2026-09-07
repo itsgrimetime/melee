@@ -461,3 +461,36 @@ ordinary diffs, full backend-v1 output, pressure report, simplify/label models,
 and verification. Restored RGB is 98.7788%, encoder 99.70266%, and the other six
 TU functions 100%. The full build passes and built/original DOL SHA-1 is
 `08e0bf20134dfcb260699671004527b2d6bb1a45`; the TU remains Linkable.
+
+## Row materialization boundaries and destination types
+
+Reinspection of the old `base - (-row)` candidate confirms that its lower
+score is not a useful row-add frontier: it combines the high-row term with
+the tile base before adding the low-row term. That differs from the target's
+completed low-plus-high row sum followed by the tile-base addition.
+
+Twenty-four more source probes were measured and restored:
+
+| Family | Runs | Result |
+| --- | ---: | --- |
+| u8/s8/u16/s16 cast around the first row sum, or narrow dst_row local | 8 | Casts add one instruction, locals add two; 98.31797% / 96.935486%, frame 152 |
+| Row-sum/full-row helpers, with and without named luminance offsets | 10 | Sum helper neutral; full helper changes grouping/allocation; no match improvement |
+| Word pointer, byte pointer, or named chroma-record destination | 6 | Same instruction bytes as the respective baseline; pointer representation alone is not the lever |
+
+Removing the named `row_offset` and `column_offset` locals from the luminance
+loop frees exactly eight frame bytes. The simple expression-only version is
+frame 144, with the same instruction count. Combining that with the full row
+helper restores frame 152 but still scores only 96.474655% (or 95.76037% with
+the corrected pixel-address tree). The frame reservation is therefore real,
+but fixing that reservation does not fix the helper's grouping or allocation.
+Narrow row types add masks despite the small runtime range; they do not create
+a free materialization boundary.
+
+The source remains 98.7788%, encoder 99.70266%, with all six other TU functions
+at 100%. The full build passes and built/original DOL SHA-1 remains
+`08e0bf20134dfcb260699671004527b2d6bb1a45`. Complete probes and verification are
+in `docs/matching-evidence/jpeg-rgb/2026-09-06-row-boundaries/`.
+The RGB claim was released after this checkpoint; active work returns to the
+coefficient encoder's narrower register-ownership residual. The recorded RGB
+creation-order and structural hypotheses remain available for a new source
+lead rather than repeating these tested families.
