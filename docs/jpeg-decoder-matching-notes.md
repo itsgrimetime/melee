@@ -241,3 +241,80 @@ Restored verification: decoder 98.81743%, other five TU functions 100%;
 `python configure.py && ninja` passes. Built and original DOL SHA-1 both
 equal `08e0bf20134dfcb260699671004527b2d6bb1a45`. The 85-member archive was
 verified against its per-member hashes. The TU remains Linkable.
+
+## Fresh allocator facts and source interactions
+
+The next pass refreshed the ordinary debug dump and ran lifetime-pressure
+against that exact source. Freshness passed with no warnings. X-offset IG65
+still selects at iteration 21 into r20, with target r15; chroma-pointer IG37
+selects at iteration 34 into r11, with target r16. The first-divergence report
+retains its earlier-unmapped-node warning: the two-node target is a focused
+diagnostic, not a complete target map. The pressure report's final holders
+of r15 are not all earlier selection events; do not interpret that list as
+a chronological explanation of the first wrong choice.
+
+### Distinguish virtual renumbering from changed allocation
+
+The padding-free grouped-row source was captured separately with cache sync
+disabled. The standard dump comparison reports differences from initial
+PCode onward, including hundreds of raw interference-edge differences.
+An explicit register correspondence explains these much more precisely:
+
+- All ten precolor passes align instruction-for-instruction under a
+  consistent, one-to-one register renaming within each pass.
+- The final precolor map sends baseline X-offset r65 to candidate r64,
+  stride r66 to r65, and chroma pointer r37 to r37.
+- All 84 mapped GPR decisions and 34 mapped FPR decisions preserve their
+  physical colors. Seven mapped GPR selection positions move by one, late
+  in the order; neither focused target's outcome improves.
+
+The comparison uses the existing dump parser and validates block/instruction
+positions, opcode and operand shapes, physical-register identity, and the
+register-map bijection. Anonymous constant names are normalized for alignment;
+this is not an independent data-equivalence or whole-graph isomorphism proof.
+Unused/unmapped allocator nodes are outside its coloring comparison. The
+ordinary instruction-byte comparison from the preceding pass remains the
+production-code evidence. Raw virtual-ID graph deltas alone should not
+motivate another source rewrite here.
+
+### Bounded source families
+
+The newly merged tournament-bracket match (#3383) combined independently
+neutral source changes. Its direct-global access technique motivated paired
+decoder tests on the baseline and padding-free grouped-row sources. Those
+eight variants add instructions and regress equally in both source layouts.
+Other bounded probes below also produced no retained percentage gain.
+
+| Family | Count | Result |
+| --- | ---: | --- |
+| Direct global buffer access at all/pixel/chroma/luma sites, both row layouts | 8 | 86.6639–89.10789%; six additional instructions |
+| RGB helper argument order, output first/last and channel permutations | 11 | Neutral 98.81743%, frame 176 |
+| RGBA u8/u16/u32/s32 records, byte arrays, actual GXColor | 7 | Byte layouts/GXColor neutral; wider layouts 97.556015–97.92946%, frame 184–192 |
+| Discarded chroma/base, chroma/luma-end, or chroma/output dependencies at three sites | 12 | Six neutral; others 89.57677–90.28216% with two/four added instructions |
+| Red/green/blue scalar-copy combinations and green struct/array ownership | 11 | Green scalar determines retained 98.81743%; other combinations 98.510376–98.65145% |
+| Clamp return type and explicit byte narrowing | 9 | int/u32/u16 retaining byte cast neutral; u8 return or removed byte cast 92.11618–93.443985% |
+
+The discarded pointer differences use pointers into the same work array;
+cross-buffer probes use equality, not pointer subtraction. These are
+diagnostic source forms inspired by the recorded mismatch pattern, not
+proposed production code. The green aggregate does not add frame storage
+in this helper; removing PAD_STACK with it incorrectly shrinks the frame to
+168. Red and blue scalar intermediates do not substitute for the green scalar.
+
+`jpeg_clamp` currently returns **s32**, with an explicit `(u8) (s32)` cast
+on the floating conversion path. It does not return u8. An initial probe
+generator assumed u8 and stopped at its source-marker assertion before
+editing or compiling; the corrected nine candidates above are the measured
+experiments. Keeping the byte cast while changing the return declaration to
+int, u32, or u16 is neutral. Narrowing the return type to u8, or removing the
+byte cast from the wide-return body, changes emitted instructions despite
+the bounded channel values. Preserve this distinction in future helper work.
+
+The 58 candidate sources/results, generators, fresh dumps, fresh pressure
+report, register correspondence and comparison script, and upstream PR
+reference are archived under
+`docs/matching-evidence/jpeg-decoder/2026-09-06-allocator-interactions/`.
+Source is restored at 98.81743%; the other five decoder functions remain
+100%. Upstream through `a392908a20` is merged, including the linked gmtoulib
+match. Full build and original DOL checksum verification pass. No decoder
+PR is warranted by these probes and its TU remains Linkable.

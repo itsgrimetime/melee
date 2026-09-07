@@ -146,3 +146,18 @@ source probe were already terminal when the ownership message was handled.
 Sources, complete checkdiff reports, generators, baseline, and diagnostic
 result are archived with a verified 67-member SHA-256 manifest under
 `docs/matching-evidence/gmtoulib/2026-09-06-ownership-handoff/`.
+
+### Upstream completion
+
+@sadkellz published [PR #3383](https://github.com/doldecomp/melee/pull/3383),
+merged as `a392908a20`. Its case-23 fix combines the `k` counter with an
+explicit assignment to `jobj2`; its case-33 fix uses the global entries array
+and slot index directly. The counter change alone was neutral in the c016
+probe, as were earlier standalone JObj-local probes: independent neutral
+experiments do not exclude a useful interaction.
+
+The merged change is now integrated into this worktree. All 49 `gmtoulib`
+functions measure 100%, the TU is Matching, and the full build verifies the
+original DOL checksum. This supersedes the unmatched-baseline sections above;
+they remain historical evidence only. Do not reopen the old c016 PR or work
+on this function again unless an actual regression appears.
