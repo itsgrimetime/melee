@@ -1,0 +1,15 @@
+{
+  "true_compiler": "1.2.5n",
+  "note": "dumps use a GC/1.1 name-spoof internally; true compiler above",
+  "src": "src/melee/mn/mnsnap.c",
+  "function": "mnSnap_80257F24",
+  "melee_root": "/Users/mike/.codex/worktrees/c016/melee",
+  "table": "/Users/mike/code/melee/tools/mwcc_retro/tables/gc_125n.json",
+  "retrowin32_pin": "11dbea5a68af21121511a6577a2d4a2f917da6dc",
+  "cadmic_pin": "bad9cea2423bed957188c930086f9dabe669d30c",
+  "exit_code": 0,
+  "produced": [
+    "hook"
+  ],
+  "missing": []
+}

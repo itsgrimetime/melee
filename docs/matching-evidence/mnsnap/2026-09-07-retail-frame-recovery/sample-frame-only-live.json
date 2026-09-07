@@ -1,0 +1,90 @@
+{
+  "stage": "final_scheduler",
+  "sequence": 21,
+  "frame_state": {
+    "arguments": {
+      "va": 5800044,
+      "head": 0,
+      "objects_sample": []
+    },
+    "locals": {
+      "va": 5799864,
+      "head": 25591632,
+      "objects_sample": [
+        {
+          "node": 25591632,
+          "next": 25591512,
+          "object": 25591576,
+          "name_ptr": 25691030,
+          "name": "@1932",
+          "stack_offset": 0,
+          "type": 25673588,
+          "size": 4
+        },
+        {
+          "node": 25591512,
+          "next": 25591392,
+          "object": 25591456,
+          "name_ptr": 25691006,
+          "name": "@1931",
+          "stack_offset": 0,
+          "type": 25673588,
+          "size": 4
+        },
+        {
+          "node": 25591392,
+          "next": 25591272,
+          "object": 25591336,
+          "name_ptr": 25690982,
+          "name": "@1930",
+          "stack_offset": 0,
+          "type": 25673588,
+          "size": 4
+        },
+        {
+          "node": 25591272,
+          "next": 25591152,
+          "object": 25591216,
+          "name_ptr": 25690958,
+          "name": "@1929",
+          "stack_offset": 0,
+          "type": 25673588,
+          "size": 4
+        },
+        {
+          "node": 25591152,
+          "next": 25591032,
+          "object": 25591096,
+          "name_ptr": 25690934,
+          "name": "@1928",
+          "stack_offset": 0,
+          "type": 25673588,
+          "size": 4
+        },
+        {
+          "node": 25591032,
+          "next": 25590912,
+          "object": 25590976,
+          "name_ptr": 25690910,
+          "name": "@1927",
+          "stack_offset": 0,
+          "type": 25673588,
+          "size": 4
+        }
+      ]
+    },
+    "temps": {
+      "va": 5766848,
+      "head": 0,
+      "objects_sample": []
+    },
+    "frame_base_size": {
+      "va": 5800140,
+      "s32": 8
+    },
+    "frame_call_args_size": {
+      "va": 5796140,
+      "s32": 144
+    }
+  }
+}

@@ -1,0 +1,72 @@
+[
+  {
+    "name": "swap-main-warning-declarations",
+    "score": 98.13447,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 74
+    }
+  },
+  {
+    "name": "main-assignment-before-warn",
+    "score": 98.13447,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 74
+    }
+  },
+  {
+    "name": "main-assignment-after-warn",
+    "score": 98.13447,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 74
+    }
+  },
+  {
+    "name": "main-assignment-first",
+    "score": 98.13447,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 74
+    }
+  },
+  {
+    "name": "remove-main-load-alias",
+    "score": 98.12519,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 77
+    }
+  }
+]

@@ -141,3 +141,33 @@ timeout before target data, launcher killed owned group, exit2. Earlier cost
 capture had same no-target symptom at90s. No frame evidence from either timeout;
 historical frame naming must not be presented as today's final object layout.
 Retained source98.13447 unchanged. Evidence in2026-09-07-warning-copy-propagation.
+
+## Current retail home ownership recovered
+
+A frame-only version of the existing retail probe, with immediate function
+progress, completes with timeout300 (the120-second run reached the target but
+did not finish). Increasing the probe sample from6 to256 captures89 locals.
+Current retained source has base8+callarea144, matching the ordinary frame.
+**main_joint owns relative44, absolute196**; warn_animjoint has raw offset0
+(no assigned home), and compiler temporary @1905 owns relative76/absolute228.
+This supersedes the historical claim that warning owns196 on the current seed.
+Raw-zero object offsets must not be reported as occupied absolute152 slots.
+Vectors are160/172, card_status184, photo_count188, zero192, warning material
+200, warning shape204, warning joint208, pagejoint212, cursor material216,
+cursor shape220, page_name224, cursor animation252. Probe evidence is diagnostic
+and has not received a new retail/debug object-fidelity promotion.
+
+Five ordinary controls based on the ownership finding: exchanging main/warning
+declarations and moving main_joint assignment before/after warning or first
+in the resource assignment group are all neutral98.13447. Removing main_load
+alias regresses98.12519. All frame400,647instructions; restored afterward.
+Simple declaration/assignment order therefore does not transfer this home.
+Next useful comparison is the direct-warning candidate's actual current retail
+home map (the named vreg survives there but ordinary offset196 still is unused),
+to distinguish a persistent main_joint reservation from a changed owner.
+
+Issue1562 updated with successful bounded workaround and claim released;
+general tooling not changed. Issue1564 records default target extraction failure
+in debug suggest frame. Supplying a sliced single-function target works, but
+returns only generic frame-equality advice, not object ownership.
+Evidence: matching-evidence/mnsnap/2026-09-07-retail-frame-recovery.

@@ -1,0 +1,8 @@
+{
+  "function": "mnSnap_80257F24",
+  "source_sha256": "bc8d4534910ee3b5f36e541c1a4a437049cf1cc8bd04b9c7f8b7270b2a3717ba",
+  "baseline_match": 98.13447,
+  "sample_capture": "frame-only final_scheduler probe; timeout300 completed; default six-object sample truncated before useful named locals",
+  "full_capture": "completed; 89 named/temporary locals sampled; main_joint raw44 => r1+196, warn_animjoint raw0 unassigned, @1905 raw76 => r1+228",
+  "production_proof": false
+}

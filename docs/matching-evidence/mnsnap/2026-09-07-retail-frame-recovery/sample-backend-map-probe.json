@@ -1,0 +1,252 @@
+{
+  "candidates": {
+    "build_adjacency_vectors": 5442560,
+    "build_interference_graph_wrapper": 5442048,
+    "build_interference_matrix": 5444240,
+    "codegen_end": 4414905,
+    "codegen_start": 4411840,
+    "colorgraph": 5038800,
+    "dataflow_marker": 5442176,
+    "final_scheduler": 4414837,
+    "pcode_pass_boundary": 4990304,
+    "real_coalesce": 5443072,
+    "simplifygraph": 5039104
+  },
+  "compiler": {
+    "family": "MWCC",
+    "retail": true,
+    "version": "GC/1.2.5n"
+  },
+  "errors": [],
+  "events": [
+    {
+      "frame_state": {
+        "arguments": {
+          "head": 0,
+          "objects_sample": [],
+          "va": 5800044
+        },
+        "frame_base_size": {
+          "s32": 8,
+          "va": 5800140
+        },
+        "frame_call_args_size": {
+          "s32": 144,
+          "va": 5796140
+        },
+        "locals": {
+          "head": 25591632,
+          "objects_sample": [
+            {
+              "name": "@1932",
+              "name_ptr": 25691030,
+              "next": 25591512,
+              "node": 25591632,
+              "object": 25591576,
+              "size": 4,
+              "stack_offset": 0,
+              "type": 25673588
+            },
+            {
+              "name": "@1931",
+              "name_ptr": 25691006,
+              "next": 25591392,
+              "node": 25591512,
+              "object": 25591456,
+              "size": 4,
+              "stack_offset": 0,
+              "type": 25673588
+            },
+            {
+              "name": "@1930",
+              "name_ptr": 25690982,
+              "next": 25591272,
+              "node": 25591392,
+              "object": 25591336,
+              "size": 4,
+              "stack_offset": 0,
+              "type": 25673588
+            },
+            {
+              "name": "@1929",
+              "name_ptr": 25690958,
+              "next": 25591152,
+              "node": 25591272,
+              "object": 25591216,
+              "size": 4,
+              "stack_offset": 0,
+              "type": 25673588
+            },
+            {
+              "name": "@1928",
+              "name_ptr": 25690934,
+              "next": 25591032,
+              "node": 25591152,
+              "object": 25591096,
+              "size": 4,
+              "stack_offset": 0,
+              "type": 25673588
+            },
+            {
+              "name": "@1927",
+              "name_ptr": 25690910,
+              "next": 25590912,
+              "node": 25591032,
+              "object": 25590976,
+              "size": 4,
+              "stack_offset": 0,
+              "type": 25673588
+            }
+          ],
+          "va": 5799864
+        },
+        "temps": {
+          "head": 0,
+          "objects_sample": [],
+          "va": 5766848
+        }
+      },
+      "sequence": 21,
+      "stage": "final_scheduler"
+    }
+  ],
+  "functions_seen": [
+    {
+      "addr": 6345436,
+      "name": "mnSnap_80253184",
+      "sequence": 1
+    },
+    {
+      "addr": 8151168,
+      "name": "mnSnap_8025329C",
+      "sequence": 2
+    },
+    {
+      "addr": 6345636,
+      "name": "mnSnap_80253640",
+      "sequence": 3
+    },
+    {
+      "addr": 6345780,
+      "name": "mnSnap_80253964",
+      "sequence": 4
+    },
+    {
+      "addr": 6345956,
+      "name": "mnSnap_80253AE4",
+      "sequence": 5
+    },
+    {
+      "addr": 6346260,
+      "name": "mnSnap_80253BE0",
+      "sequence": 6
+    },
+    {
+      "addr": 6346476,
+      "name": "fn_80253DB4",
+      "sequence": 7
+    },
+    {
+      "addr": 6346692,
+      "name": "fn_80253DE8",
+      "sequence": 8
+    },
+    {
+      "addr": 6346908,
+      "name": "fn_80253E1C",
+      "sequence": 9
+    },
+    {
+      "addr": 6347124,
+      "name": "fn_80253E5C",
+      "sequence": 10
+    },
+    {
+      "addr": 6347316,
+      "name": "mnSnap_80253E90",
+      "sequence": 11
+    },
+    {
+      "addr": 6347460,
+      "name": "mnSnap_80253F60",
+      "sequence": 12
+    },
+    {
+      "addr": 6347604,
+      "name": "mnSnap_80254014",
+      "sequence": 13
+    },
+    {
+      "addr": 8511084,
+      "name": "mnSnap_sdata2_order",
+      "sequence": 14
+    },
+    {
+      "addr": 6347804,
+      "name": "mnSnap_8025409C",
+      "sequence": 15
+    },
+    {
+      "addr": 6347948,
+      "name": "mnSnap_80254298",
+      "sequence": 16
+    },
+    {
+      "addr": 8534500,
+      "name": "mnSnap_8025441C",
+      "sequence": 17
+    },
+    {
+      "addr": 8538284,
+      "name": "mnSnap_InitDialogText",
+      "sequence": 18
+    },
+    {
+      "addr": 6348084,
+      "name": "fn_802545C4",
+      "sequence": 19
+    },
+    {
+      "addr": 6348220,
+      "name": "fn_80257D7C",
+      "sequence": 20
+    },
+    {
+      "addr": 6348364,
+      "name": "mnSnap_80257F24",
+      "sequence": 21
+    }
+  ],
+  "globals": {
+    "coalesce_alias": 5779596,
+    "interference_matrix": 5779592,
+    "interferencegraph": 5799484,
+    "n_ignodes": 5796240,
+    "pcbasicblocks": 5799028,
+    "used_vreg_fpr": 5801068,
+    "used_vreg_gpr": 5801070
+  },
+  "notes": [
+    "Probe evidence is not a backend trace and does not satisfy the struct-map gate by itself.",
+    "Events are scoped by ObjObject source name when readable at codegen_start."
+  ],
+  "pcode_instrumentation": {
+    "capabilities": [],
+    "layout_errors": [
+      "PCode.args expected offset 0x1c, got None",
+      "missing required PCodeArg struct"
+    ],
+    "proof_errors": [
+      "no promoted instrumentation proof",
+      "pcode instrumentation gate is not validated",
+      "PCode instrumentation proof must be object"
+    ],
+    "status": "unpromoted"
+  },
+  "requested_function": "mnSnap_80257F24",
+  "requested_function_matched": true,
+  "schema_version": "mwcc-retro-backend-map-probe.v1",
+  "stage_counts": {
+    "final_scheduler": 1
+  }
+}
