@@ -909,3 +909,31 @@ neutral; split-low-first98.921165; split-high-first98.94191; scalar inline helpe
 with either parameter order98.28216/frame184. Others frame176. All restored;
 ninja passes. Source/diffs and model scripts/results archived under
 2026-09-07-current-select-model.
+
+## Current red-first witness and deferred green copy — 2026-09-07
+
+Fresh Windows SCP capture validates luminance-first red expression combined with
+retained pointer inequality: sourceSHA1a8817a0dcb3a82ceee538274b4e7337d74e05681b4f37025212669faaf9525a,
+compile0.527s,942630bytes. Ten precolor passes align bijectively. Of87 mapped GPR
+decisions, only sample roles differ: old64(luminance)->new63 changes r19->r18,
+select22->23; old63(Cr)->new64 changes r18->r19,select23->22. All34FPR decisions
+unchanged. This realizes the earlier abstract sample-order swap; its ordinary
+score98.87967/frame176 is lower than retained98.962654, and source is diagnostic.
+
+Current red-first graph validates113/113 surrogate GPR decisions. Tested all16
+subsets of remaining moves (65 after125;78 after125;77 after131;79 after76).
+Only all four satisfy the inherited extended target. This remains a supplied-order
+model with partial-target extension assumptions, not source/full-match proof.
+
+Eight green-copy source probes, with/without red-first expression: move pixel.green
+copy before or after blue clamp neutral for respective baseline; reverse copy
+(pixel.green=clamp;green=pixel.green;pack green) or defer reversed copy both regress
+98.6556/frame184, or98.57262 with red-first. All restored.
+
+Captured red-first plus green-copy-after-blue candidate independently via Windows:
+SHA8df2948f59fa60a9f9b35da90de5bef594dd4fbf9323cbbdac54a9e14955b23b,compile0.525s,
+943234bytes. All ten precolor passes align bijectively with red-first baseline;
+all87mapped GPR and34FPR colors AND selection positions unchanged. The neutral
+ordinary score therefore hides no desired mapped-order movement for this candidate.
+Source/DLL restored by both remote runs; real source restored and ninja passes.
+Traces, mappings, model and sources/diffs archived in2026-09-07-red-first-green-copy.
