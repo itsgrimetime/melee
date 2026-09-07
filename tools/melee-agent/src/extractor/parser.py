@@ -61,16 +61,17 @@ class ConfigureParser:
             r'Object\(\s*(Matching|NonMatching|Equivalent|Linkable|MatchingFor\([^)]+\))\s*,\s*"([^"]+)"\s*[,)]'
         )
 
-        lines = content.split("\n")
-        for line in lines:
+        entries = re.compile(f"(?:{lib_pattern.pattern})|(?:{obj_pattern.pattern})")
+        for entry in entries.finditer(content):
+            text = entry.group(0)
             # Check for library definition
-            lib_match = lib_pattern.search(line)
+            lib_match = lib_pattern.match(text)
             if lib_match:
                 current_lib = lib_match.group(1)
                 continue
 
             # Check for Object definition
-            obj_match = obj_pattern.search(line)
+            obj_match = obj_pattern.match(text)
             if obj_match:
                 status_str = obj_match.group(1)
                 file_path = obj_match.group(2)

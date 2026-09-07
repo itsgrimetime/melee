@@ -37,6 +37,23 @@ def melee_root():
 class TestConfigureParser:
     """Test the ConfigureParser class."""
 
+    def test_multiline_object_with_extra_flags(self, tmp_path):
+        parser = ConfigureParser(tmp_path)
+        objects = parser._extract_objects_from_content('''
+            MeleeLib("first", [Object(Matching, "first.c")]),
+            MeleeLib("jpeg", [
+                Object(
+                    Linkable,
+                    "sysdolphin/baselib/hsd_3B34.c",
+                    extra_cflags=["-Cpp_exceptions on"],
+                ),
+            ]),
+        ''')
+        assert [(obj.file_path, obj.status, obj.lib) for obj in objects] == [
+            ("first.c", "Matching", "first"),
+            ("sysdolphin/baselib/hsd_3B34.c", "Linkable", "jpeg"),
+        ]
+
     def test_init(self, melee_root):
         """Test parser initialization."""
         parser = ConfigureParser(melee_root)
