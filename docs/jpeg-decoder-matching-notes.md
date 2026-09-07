@@ -875,3 +875,37 @@ remapped to current IDs, not a new forced-match verification or a complete targe
 Next model work can study the added-node neighborhood without blindly reusing
 old raw IDs. Sources, diffs and role/edge audits archived in
 2026-09-07-comparison-role-audit. No further ordinary-source gain this pass.
+
+## Current SELECT model and node ablations — 2026-09-07
+
+Existing SELECT surrogate validates113/113 current GPR decisions, zero spill
+abstentions. Sixteen abstract scenarios combine subsets of new107/108/109 with
+current versus original order of old nodes. At current old-node order, every
+subset (including none) preserves all old-node colors:17 extended-target
+differences, four changed colors versus original source. Restoring original
+old-node order and omitting new nodes exactly reproduces old colors (20 target
+differences). Keeping all three new nodes but restoring old order gives21 target
+differences. These are supplied-order SELECT replays, not recomputed simplify
+passes or claims that removing source expressions would preserve allocation.
+
+The observed old-node order changes only by promoting three output-offset terms:
+current IG114 (mullw),111 (low-bit shift) move beforeIG66; IG113 (high-bit mask/shift)
+moves beforeIG79. New107/108/109 occupy zero-based selection positions32/31/66.
+The chroma-pointer selection-index movement is consequently not an isolated
+source-role move. This refines the causal hypothesis: added temporaries change
+ordering; their direct pressure is unnecessary once that changed order is fixed.
+
+All64 subsets of the six prior abstract order moves were tested on current graph.
+Exactly two subsets satisfy the inherited extended target: five moves (omit the
+separate chroma37 move) or all six. Five-move construction:
+65 after125;63 before64;78 after125;77 after131;79 after76.
+No claim of global minimality or source realizability. Target still extends the
+inherited partial28-node map by assuming other original baseline colors correct;
+new dead nodes are unconstrained. The retained source has removed the need for
+one abstract move in this construction, while actual match stays98.962654.
+
+Six source tests of output-offset terms: move before luminance97.3195; beforeCr
+neutral; split-low-first98.921165; split-high-first98.94191; scalar inline helper
+with either parameter order98.28216/frame184. Others frame176. All restored;
+ninja passes. Source/diffs and model scripts/results archived under
+2026-09-07-current-select-model.
