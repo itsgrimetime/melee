@@ -245,3 +245,56 @@ Includes baseline/source probes, full retail allocator trace, partial PCode
 metadata, cost capture, replay inputs/code/results, refused inversion log,
 ordinary restoration, and final full-build/DOL verification. PR3377 is unchanged;
 the TU still has the separate RGB residual and stays Linkable.
+
+## Root-inversion compiler experiment and source reconstruction follow-up
+
+The retained source is still **99.70266%, 639 instructions, frame104**. This
+pass compiled 72 source candidates; none improved the baseline. All source
+and temporary tooling edits were restored. The ordinary build passed, the
+six other matched functions remain100%, RGB remains98.7788%, and the built
+DOL SHA-1 equals the original (`08e0bf20134dfcb260699671004527b2d6bb1a45`).
+
+The earlier graph relabeling model is still **not compiler-validated**. A
+temporary branch-local preflight prototype recognized alias103 by requiring
+agreement between the natural103->57 mapping, final alias report, root57's
+successful color/flags, direct pre-coloring copy, and a single class0 round.
+The prototype and existing coalesce CLI checks passed46 tests. Nevertheless,
+the scoped `103=103,57=103` experiment timed out after49 seconds, produced no
+object, and left wibo PID95126 in UEs. The dump shows both overrides applied
+and truncates within the coalesce exit line, before coloring output. This
+does not establish the precise failing backend invariant.
+
+The prototype acceptance was reverted. Existing root/alias identity is not
+sufficient evidence that the backend supports changing the representative.
+Issue1514 contains the failure and is released for tooling follow-up. Do not
+repeat the experiment by weakening the validator. Any future representative
+inversion needs backend support and independent validation of node metadata,
+graph state, and the complete alias vector. The existing local debug watchdog
+now reports an unreaped process; use a healthy diagnostic lane if further
+compiler tracing is needed. Ordinary production compilation remained usable.
+
+A diagnostic-only root-ID sweep permuted all graph references consistently.
+Work at IDs58–83 still selects first;84–100 moves later than the desired
+position;101–103 selects second. These are permutations of the captured
+baseline graph, not predictions that a source declaration rename/move will
+preserve that graph. The source tests below specifically found declaration
+position insufficient.
+
+| Source family | Candidates | Result |
+| --- | ---: | --- |
+| Pointer/aggregate initializers, pointer-return and output helpers | 10 | No gain; direct return helpers neutral, aggregate/output helpers grow or change code |
+| Ten declaration positions, aggregate member versus flat pointer | 20 | Aggregate neutral99.70266%; flat98.74022% with extra entry copy |
+| Whole encoder inline helper with pointer, state, tables, or DC-table parameters, both parameter orders | 8 | Default depth changes nested inlining;37.43662–37.81377% |
+| Same whole-body helpers at explicit inline depths4 and8 | 16 |90.241005–93.53991%; frames112–128; parameter reversal/depth8 no rescue |
+| Work pointer and existing counters or tables in one local aggregate, varying member order | 11 | Counter variants86.482–88.56338%; table variants98.33177–99.69484%; frames128–144 |
+| Flat typed/void/byte pointers, register qualification, const pointer | 7 |97.165886–98.74022%; frame104; no allocation fix |
+
+The flat-pointer report's three opcode-aligned register-only rows are not a
+three-instruction residual: its extra entry instruction shifts the raw diff.
+Its pointer still starts in r31, so it does not demonstrate the desired swap.
+
+Evidence is in `docs/matching-evidence/jpeg-encoder/2026-09-06-root-inversion-source/`:
+72 complete source candidates and ordinary checkdiff results, generators,
+baseline and failed override dumps, test logs, graph sweep, restored TU report,
+build/checksum results, and a verified257-member SHA-256 manifest. No new source
+improvement was pushed to upstream PR3377 and the TU remains Linkable.

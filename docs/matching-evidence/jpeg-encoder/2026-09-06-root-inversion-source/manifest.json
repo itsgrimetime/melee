@@ -1,0 +1,921 @@
+{
+  "function": "hsd_803B3CD8",
+  "scratch": null,
+  "module": "sysdolphin/baselib",
+  "source_head": "c31e077948510900943576f2361d0d3e5458a347",
+  "source_sha256": "b38c169edd6fe1585eb195d3bd59a4ad9ddccf4915dfdb216bda58875c6586ef",
+  "retained_source_improvement": false,
+  "retained_percent": 99.70266,
+  "retained_frame": 104,
+  "candidates": [
+    {
+      "source": "c016-enc3-owner/aggregate-initializer.c",
+      "percent": 95.7903,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-owner/const-aggregate-initializer.c",
+      "percent": 95.7903,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-owner/const-flat-initializer.c",
+      "percent": 98.74022,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-owner/const-member-initializer.c",
+      "percent": 95.7903,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-owner/flat-initializer.c",
+      "percent": 98.74022,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-owner/identity-pointer-helper.c",
+      "percent": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-owner/out-pointer-helper.c",
+      "percent": 98.33177,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      }
+    },
+    {
+      "source": "c016-enc3-owner/return-aggregate-helper.c",
+      "percent": 95.44914,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      }
+    },
+    {
+      "source": "c016-enc3-owner/return-pointer-helper.c",
+      "percent": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-owner/return-void-pointer-helper.c",
+      "percent": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/flat-JpegEncodeTablesptr-tables.c",
+      "percent": 98.74022,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/flat-PAD_STACK16.c",
+      "percent": 98.74022,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/flat-s32-index.c",
+      "percent": 98.74022,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/flat-s32-length.c",
+      "percent": 98.74022,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/flat-s32-run.c",
+      "percent": 98.74022,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/flat-s32-value.c",
+      "percent": 98.74022,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/flat-u16ptr-ac_code.c",
+      "percent": 98.74022,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/flat-u16ptr-dc_code.c",
+      "percent": 98.74022,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/flat-u8ptr-ac_length.c",
+      "percent": 98.74022,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/flat-u8ptr-dc_length.c",
+      "percent": 98.74022,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/struct-JpegEncodeTablesptr-tables.c",
+      "percent": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/struct-PAD_STACK16.c",
+      "percent": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/struct-s32-index.c",
+      "percent": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/struct-s32-length.c",
+      "percent": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/struct-s32-run.c",
+      "percent": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/struct-s32-value.c",
+      "percent": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/struct-u16ptr-ac_code.c",
+      "percent": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/struct-u16ptr-dc_code.c",
+      "percent": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/struct-u8ptr-ac_length.c",
+      "percent": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-declarations/struct-u8ptr-dc_length.c",
+      "percent": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper/all-tables-reversed.c",
+      "percent": 37.43662,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 64,
+        "frame_growth": -40
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper/all-tables.c",
+      "percent": 37.43662,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 64,
+        "frame_growth": -40
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper/pointer-reversed.c",
+      "percent": 37.558685,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 64,
+        "frame_growth": -40
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper/pointer.c",
+      "percent": 37.558685,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 64,
+        "frame_growth": -40
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper/struct-reversed.c",
+      "percent": 37.81377,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 56,
+        "frame_growth": -48
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper/struct.c",
+      "percent": 37.81377,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 56,
+        "frame_growth": -48
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper/tables-reversed.c",
+      "percent": 37.558685,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 64,
+        "frame_growth": -40
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper/tables.c",
+      "percent": 37.558685,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 64,
+        "frame_growth": -40
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/all-tables-depth4.c",
+      "percent": 90.241005,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/all-tables-depth8.c",
+      "percent": 90.241005,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/all-tables-reversed-depth4.c",
+      "percent": 90.241005,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/all-tables-reversed-depth8.c",
+      "percent": 90.241005,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/pointer-depth4.c",
+      "percent": 93.52582,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/pointer-depth8.c",
+      "percent": 93.52582,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/pointer-reversed-depth4.c",
+      "percent": 93.52582,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/pointer-reversed-depth8.c",
+      "percent": 93.52582,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/struct-depth4.c",
+      "percent": 93.53991,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/struct-depth8.c",
+      "percent": 93.53991,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/struct-reversed-depth4.c",
+      "percent": 93.53991,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/struct-reversed-depth8.c",
+      "percent": 93.53991,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/tables-depth4.c",
+      "percent": 93.52582,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/tables-depth8.c",
+      "percent": 93.52582,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/tables-reversed-depth4.c",
+      "percent": 93.52582,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      }
+    },
+    {
+      "source": "c016-enc3-whole-helper-depth/tables-reversed-depth8.c",
+      "percent": 93.52582,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      }
+    },
+    {
+      "source": "c016-enc3-packed-state/counters-work0.c",
+      "percent": 86.482,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      }
+    },
+    {
+      "source": "c016-enc3-packed-state/counters-work1.c",
+      "percent": 88.56338,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      }
+    },
+    {
+      "source": "c016-enc3-packed-state/counters-work2.c",
+      "percent": 88.56338,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      }
+    },
+    {
+      "source": "c016-enc3-packed-state/counters-work3.c",
+      "percent": 88.56338,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      }
+    },
+    {
+      "source": "c016-enc3-packed-state/counters-work4.c",
+      "percent": 88.56338,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      }
+    },
+    {
+      "source": "c016-enc3-packed-state/tables-work0.c",
+      "percent": 99.69484,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      }
+    },
+    {
+      "source": "c016-enc3-packed-state/tables-work1.c",
+      "percent": 98.33177,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 144,
+        "frame_growth": 40
+      }
+    },
+    {
+      "source": "c016-enc3-packed-state/tables-work2.c",
+      "percent": 98.33177,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 144,
+        "frame_growth": 40
+      }
+    },
+    {
+      "source": "c016-enc3-packed-state/tables-work3.c",
+      "percent": 98.33177,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 144,
+        "frame_growth": 40
+      }
+    },
+    {
+      "source": "c016-enc3-packed-state/tables-work4.c",
+      "percent": 98.33177,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 144,
+        "frame_growth": 40
+      }
+    },
+    {
+      "source": "c016-enc3-packed-state/tables-work5.c",
+      "percent": 98.33177,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 144,
+        "frame_growth": 40
+      }
+    },
+    {
+      "source": "c016-enc3-owner-qualifiers/plain-JpegWorkptr.c",
+      "percent": 98.74022,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-owner-qualifiers/plain-u8ptr.c",
+      "percent": 97.165886,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-owner-qualifiers/plain-voidptr.c",
+      "percent": 97.165886,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-owner-qualifiers/register-JpegWorkptr.c",
+      "percent": 98.74022,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-owner-qualifiers/register-const-JpegWorkptr.c",
+      "percent": 98.74022,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-owner-qualifiers/register-u8ptr.c",
+      "percent": 97.165886,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    },
+    {
+      "source": "c016-enc3-owner-qualifiers/register-voidptr.c",
+      "percent": 97.165886,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      }
+    }
+  ],
+  "forced_inversion": "watchdog timeout; no object; temporary preflight acceptance reverted; issue1514 noted and released",
+  "archive_sha256": "321843b1e45565ab36db05d0e234fd98e475aa1421a9e9857b7b4d026635d69f",
+  "files": {
+    "c016-enc3-baseline-dump.log": "fc50cc4493df7d9581dc7a51f449189426167876b72d0a0c9c0232d439923c71",
+    "c016-enc3-baseline-pcdump.txt": "b0f71941d278408636e4cac5b8a836120ef4415945dc3dea695d7172e53a622d",
+    "c016-enc3-build.log": "85668e9db604c7aee8d6a29997863a55ef0f3397b1b2502d4bf20b3186a9c1e9",
+    "c016-enc3-checksum.json": "be05b0a43d08c427dcdc4932b626708e504da8d65d8037791b6b02d27af1229f",
+    "c016-enc3-coalesce-suggestions.json": "f54d123f1fcacd0a2f86c7e077bbf26830d16af3e4e67b6295ad3e2652440113",
+    "c016-enc3-coalesce-tests.log": "6fead7d7fbbc6359a56cff1d0e8ecc5b7c0ea80bc1b6000b3ef9a83e9f7b1b6d",
+    "c016-enc3-configure.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/baseline.c": "b38c169edd6fe1585eb195d3bd59a4ad9ddccf4915dfdb216bda58875c6586ef",
+    "c016-enc3-declarations/flat-JpegEncodeTablesptr-tables.c": "649965dce6f0831e4b5853994ba779fe68c93cc5e36b872ac7ed678fae919b7f",
+    "c016-enc3-declarations/flat-JpegEncodeTablesptr-tables.json": "af14bbbc0cfe655ceb438ddf4717d1b5eb073d12ae68dde35be2faa02e8f0cb8",
+    "c016-enc3-declarations/flat-JpegEncodeTablesptr-tables.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/flat-PAD_STACK16.c": "35bbeb614ed9cba2584b93aab2bc9951c90b395e3f68ed78453b94d6709a33ec",
+    "c016-enc3-declarations/flat-PAD_STACK16.json": "03524566a670186e563870d095179de0f6a090a715308e9ffc4f1802f29664d9",
+    "c016-enc3-declarations/flat-PAD_STACK16.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/flat-s32-index.c": "f2597892da1acb2b4d8f75528c55aa47c43e0a02a38fa558cafccc814ee0bc32",
+    "c016-enc3-declarations/flat-s32-index.json": "03524566a670186e563870d095179de0f6a090a715308e9ffc4f1802f29664d9",
+    "c016-enc3-declarations/flat-s32-index.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/flat-s32-length.c": "6c35d49c35c2c97c434cda2e9fe0d9e81d114fe7e8cb0a037de09df3d7295bd1",
+    "c016-enc3-declarations/flat-s32-length.json": "03524566a670186e563870d095179de0f6a090a715308e9ffc4f1802f29664d9",
+    "c016-enc3-declarations/flat-s32-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/flat-s32-run.c": "fab82998c6c1467bb5044914081007c6c0442afaa6dc051f9f6d304c83459e44",
+    "c016-enc3-declarations/flat-s32-run.json": "03524566a670186e563870d095179de0f6a090a715308e9ffc4f1802f29664d9",
+    "c016-enc3-declarations/flat-s32-run.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/flat-s32-value.c": "7764d1a56d9c8df3ffd3e0cb9671efbed713c8cc81a568e5a4ee6e609f906211",
+    "c016-enc3-declarations/flat-s32-value.json": "03524566a670186e563870d095179de0f6a090a715308e9ffc4f1802f29664d9",
+    "c016-enc3-declarations/flat-s32-value.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/flat-u16ptr-ac_code.c": "f8edfb0fbe89f324ed4a9c526ef60fe5021534e65ed4bb4a638afbfc9d07b005",
+    "c016-enc3-declarations/flat-u16ptr-ac_code.json": "03524566a670186e563870d095179de0f6a090a715308e9ffc4f1802f29664d9",
+    "c016-enc3-declarations/flat-u16ptr-ac_code.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/flat-u16ptr-dc_code.c": "59e000f69f2c71b8f0071cde415c1b55c5a9c87eb42def6aa9e8b7d1c684f043",
+    "c016-enc3-declarations/flat-u16ptr-dc_code.json": "03524566a670186e563870d095179de0f6a090a715308e9ffc4f1802f29664d9",
+    "c016-enc3-declarations/flat-u16ptr-dc_code.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/flat-u8ptr-ac_length.c": "6bfa79718e4794f44e18fd3df964e05b16001226a68e35c0a46a24e308b06302",
+    "c016-enc3-declarations/flat-u8ptr-ac_length.json": "03524566a670186e563870d095179de0f6a090a715308e9ffc4f1802f29664d9",
+    "c016-enc3-declarations/flat-u8ptr-ac_length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/flat-u8ptr-dc_length.c": "741fa9d044b10c7222c0ff826ea0b7e60ca139bd3460f9216bd2c36a577470d3",
+    "c016-enc3-declarations/flat-u8ptr-dc_length.json": "03524566a670186e563870d095179de0f6a090a715308e9ffc4f1802f29664d9",
+    "c016-enc3-declarations/flat-u8ptr-dc_length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/results.json": "e65797de7917ceba231e3ebe92e08ef7d4755cddf41021f35499d363272e47e3",
+    "c016-enc3-declarations/struct-JpegEncodeTablesptr-tables.c": "b38c169edd6fe1585eb195d3bd59a4ad9ddccf4915dfdb216bda58875c6586ef",
+    "c016-enc3-declarations/struct-JpegEncodeTablesptr-tables.json": "7b2fcef67f0e3fe2b5e69e97269c8ca996eb31a9978debd5d664b7680bdb5461",
+    "c016-enc3-declarations/struct-JpegEncodeTablesptr-tables.log": "36910f0746d1d68ec79042a12f46a9cf805b0a1ddee9750119d68502a3f304ea",
+    "c016-enc3-declarations/struct-PAD_STACK16.c": "ea4b7296a6646008614bee63e982092cacb2b57bee29b51549a6a4fe459e5210",
+    "c016-enc3-declarations/struct-PAD_STACK16.json": "5f2cde3af6027977e22787e7ed07f5923119c4bd210083882d3ac7a4eecbaf6a",
+    "c016-enc3-declarations/struct-PAD_STACK16.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/struct-s32-index.c": "eb60033cef2a156f6b398e0591a1bdb4d6a75d33c12427ebd72fad2688ab5b21",
+    "c016-enc3-declarations/struct-s32-index.json": "5f2cde3af6027977e22787e7ed07f5923119c4bd210083882d3ac7a4eecbaf6a",
+    "c016-enc3-declarations/struct-s32-index.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/struct-s32-length.c": "8acf1e961bd5874685c535504e008d25fa66bbc3fe136fc1ff9d5fadd3f513ce",
+    "c016-enc3-declarations/struct-s32-length.json": "5f2cde3af6027977e22787e7ed07f5923119c4bd210083882d3ac7a4eecbaf6a",
+    "c016-enc3-declarations/struct-s32-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/struct-s32-run.c": "a8cfedd1a7d9fa2659eae05251c56beac93049298e788189c00a2e3c3ca01b52",
+    "c016-enc3-declarations/struct-s32-run.json": "5f2cde3af6027977e22787e7ed07f5923119c4bd210083882d3ac7a4eecbaf6a",
+    "c016-enc3-declarations/struct-s32-run.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/struct-s32-value.c": "e141e10c224ce0f96599b68fa19d1b6684deb1e711823efad554d356761a2ab8",
+    "c016-enc3-declarations/struct-s32-value.json": "5f2cde3af6027977e22787e7ed07f5923119c4bd210083882d3ac7a4eecbaf6a",
+    "c016-enc3-declarations/struct-s32-value.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/struct-u16ptr-ac_code.c": "771bb856efeacbe32bd787cebde2093180ddf2720077846885ca4b7c39047613",
+    "c016-enc3-declarations/struct-u16ptr-ac_code.json": "5f2cde3af6027977e22787e7ed07f5923119c4bd210083882d3ac7a4eecbaf6a",
+    "c016-enc3-declarations/struct-u16ptr-ac_code.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/struct-u16ptr-dc_code.c": "3c61804648d8426206b839338e8cf72514329aed53b7aed1e186864a3ad67cfb",
+    "c016-enc3-declarations/struct-u16ptr-dc_code.json": "5f2cde3af6027977e22787e7ed07f5923119c4bd210083882d3ac7a4eecbaf6a",
+    "c016-enc3-declarations/struct-u16ptr-dc_code.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/struct-u8ptr-ac_length.c": "728bd12b721a35cead64f5edbdec647722c6559b3451d06c3938e61f86b4c5c7",
+    "c016-enc3-declarations/struct-u8ptr-ac_length.json": "5f2cde3af6027977e22787e7ed07f5923119c4bd210083882d3ac7a4eecbaf6a",
+    "c016-enc3-declarations/struct-u8ptr-ac_length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations/struct-u8ptr-dc_length.c": "966614f169ba12df80d206b3ebe303ccaa2e3eeca1c71ac1bf282e411cf595b9",
+    "c016-enc3-declarations/struct-u8ptr-dc_length.json": "5f2cde3af6027977e22787e7ed07f5923119c4bd210083882d3ac7a4eecbaf6a",
+    "c016-enc3-declarations/struct-u8ptr-dc_length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-declarations-run.py": "16d7692620e7c467d8ca4ce2300ebbb6d96bfa36ecfd9b264819ee0369a7e7b3",
+    "c016-enc3-declarations.log": "e5ae3c0ce5670315faaedbbaa10bd6aca91240072ec0b3700a6dd0487f6870f3",
+    "c016-enc3-declarations.py": "16fa1b6fdd056340068b8160f091a31ec1929c7fc30ae7eb86745f749e20bb2d",
+    "c016-enc3-doctor.log": "c8bb12e7e13a33631b4275edb41a69d8635fbceaefd1899ede6b42890bfd8ea0",
+    "c016-enc3-owner/aggregate-initializer.c": "3db0374580b6479037576194b99f35cb3eb169236318a64d8a232a83088aa8b6",
+    "c016-enc3-owner/aggregate-initializer.json": "fd2850fd701177ad73de3e4959b23fc054afc550d768edd4078d5ab1deb1e6ac",
+    "c016-enc3-owner/aggregate-initializer.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner/baseline.c": "b38c169edd6fe1585eb195d3bd59a4ad9ddccf4915dfdb216bda58875c6586ef",
+    "c016-enc3-owner/const-aggregate-initializer.c": "e2c351b92fc739f73a07f2e10de72b3ee484c6435788565ef5d4c901575447ef",
+    "c016-enc3-owner/const-aggregate-initializer.json": "66ab6e2dc562661d55f8f5ff927dc52db4fdc26e2cac87386872b0dc2c5da56d",
+    "c016-enc3-owner/const-aggregate-initializer.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner/const-flat-initializer.c": "aaf0d4c75c40eae6daf96a920c0c1b2ab8b2ccb66b33d42745031d618204ced2",
+    "c016-enc3-owner/const-flat-initializer.json": "03524566a670186e563870d095179de0f6a090a715308e9ffc4f1802f29664d9",
+    "c016-enc3-owner/const-flat-initializer.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner/const-member-initializer.c": "fd3f6a7a8e4e5d640dbcbf1830a11d19288a92dbb5dff281a30da36097b6fd07",
+    "c016-enc3-owner/const-member-initializer.json": "66ab6e2dc562661d55f8f5ff927dc52db4fdc26e2cac87386872b0dc2c5da56d",
+    "c016-enc3-owner/const-member-initializer.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner/flat-initializer.c": "1e8ee5b290600481964ab3c8ff0316f903e1d68edc05e161b37e4960bb274096",
+    "c016-enc3-owner/flat-initializer.json": "af14bbbc0cfe655ceb438ddf4717d1b5eb073d12ae68dde35be2faa02e8f0cb8",
+    "c016-enc3-owner/flat-initializer.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner/identity-pointer-helper.c": "b57c6dedf3075ac5a394c2927d3876843cc7fa4873b3b63153579727ace5def3",
+    "c016-enc3-owner/identity-pointer-helper.json": "5f2cde3af6027977e22787e7ed07f5923119c4bd210083882d3ac7a4eecbaf6a",
+    "c016-enc3-owner/identity-pointer-helper.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner/out-pointer-helper.c": "fe8bf3a4a19318d5e2da2fcde88ec4453f2dc9c26e015ac27422ce944a4f5371",
+    "c016-enc3-owner/out-pointer-helper.json": "071c2f2c9c6b9b126a3b740363e24c74d0bfdcaf3577342d3c60685bc4880a93",
+    "c016-enc3-owner/out-pointer-helper.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner/results.json": "fcc47503a138b9db3445634a4e0771195c6892371f68e0455c3c325174695faa",
+    "c016-enc3-owner/return-aggregate-helper.c": "1dcdc167ead48e2ea4f66f04e06d86413d437a6995c416fec5237ef142db4b2f",
+    "c016-enc3-owner/return-aggregate-helper.json": "9bcb4fa0f5be7627283c48de7e425c7ef05b5c5b1a5b46a9b274d7d725b32f31",
+    "c016-enc3-owner/return-aggregate-helper.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner/return-pointer-helper.c": "d0899fb395b088910fa5e8e04dbd1df059bdb8071442340d41910a2fb8597b1f",
+    "c016-enc3-owner/return-pointer-helper.json": "4f9ed94e8907a437cac9cb8746cb419a612b681db8a8f61dddb89947ef8f7b8a",
+    "c016-enc3-owner/return-pointer-helper.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner/return-void-pointer-helper.c": "33d718c41abfec8d10ed3d96fdd61767ecbb4810862ce822dfa382ef22c12cfd",
+    "c016-enc3-owner/return-void-pointer-helper.json": "5f2cde3af6027977e22787e7ed07f5923119c4bd210083882d3ac7a4eecbaf6a",
+    "c016-enc3-owner/return-void-pointer-helper.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner-qualifiers/baseline.c": "b38c169edd6fe1585eb195d3bd59a4ad9ddccf4915dfdb216bda58875c6586ef",
+    "c016-enc3-owner-qualifiers/plain-JpegWorkptr.c": "649965dce6f0831e4b5853994ba779fe68c93cc5e36b872ac7ed678fae919b7f",
+    "c016-enc3-owner-qualifiers/plain-JpegWorkptr.json": "03524566a670186e563870d095179de0f6a090a715308e9ffc4f1802f29664d9",
+    "c016-enc3-owner-qualifiers/plain-JpegWorkptr.log": "6f1de68a8143489eb34b02f872b123973bbd5aac6f3d84016a4131605d7f255b",
+    "c016-enc3-owner-qualifiers/plain-u8ptr.c": "27a5dedfe01131d75c165eaf9d948d023d23d092109774b873ecd604ec523a16",
+    "c016-enc3-owner-qualifiers/plain-u8ptr.json": "b933dad777a4f97b01e2e3cf03b23bda163cc18d66a044d84ad21bba0e32db3b",
+    "c016-enc3-owner-qualifiers/plain-u8ptr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner-qualifiers/plain-voidptr.c": "843c6b89a0fe1f0bbd1ad5cb314f5b2d00b02e1727f8c733aee2da9f4ed12cb5",
+    "c016-enc3-owner-qualifiers/plain-voidptr.json": "ebe42dfdf3ca3c8a33ef5519e3747071891e443c423d29bd5e8efd950a211e39",
+    "c016-enc3-owner-qualifiers/plain-voidptr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner-qualifiers/register-JpegWorkptr.c": "b341c188c13cb4360f3c4012ad11e8a8383661ecc46774fd3e64871b1960ceb7",
+    "c016-enc3-owner-qualifiers/register-JpegWorkptr.json": "5f53dae53b567863d61afae9913bf2e39d86af1f069a44586bf949215c18fe43",
+    "c016-enc3-owner-qualifiers/register-JpegWorkptr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner-qualifiers/register-const-JpegWorkptr.c": "cb73778a11ee1eba9c24e0b3f63db8cf4af65ce78e763456522481611767fd4b",
+    "c016-enc3-owner-qualifiers/register-const-JpegWorkptr.json": "97abb888dcc09abae42997210b74423f5576ee5cbb51cd234fa264e58366bc02",
+    "c016-enc3-owner-qualifiers/register-const-JpegWorkptr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner-qualifiers/register-u8ptr.c": "1a68cabb13759876b06a0fad38483b91819458091df735dd9218d04f988a7d2b",
+    "c016-enc3-owner-qualifiers/register-u8ptr.json": "b933dad777a4f97b01e2e3cf03b23bda163cc18d66a044d84ad21bba0e32db3b",
+    "c016-enc3-owner-qualifiers/register-u8ptr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner-qualifiers/register-voidptr.c": "66522b267ddf2c8322127137a06c96fd0da559f68dc8c8f3f8921016f6e797d0",
+    "c016-enc3-owner-qualifiers/register-voidptr.json": "ebe42dfdf3ca3c8a33ef5519e3747071891e443c423d29bd5e8efd950a211e39",
+    "c016-enc3-owner-qualifiers/register-voidptr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-owner-qualifiers/results.json": "90bd9b80d115970d4bf5cfa7cef1be70bb8c008b7f55918a3b48d7a2b0704e86",
+    "c016-enc3-owner-qualifiers-run.py": "e73648e7aae90070db4bdfd738e6bf64486403918817ba40047ddf9dcbbdddfc",
+    "c016-enc3-owner-qualifiers.log": "7d53f904080223aa0027bf8fccc32814c027d32bf2289ea5a457f11f83f7b652",
+    "c016-enc3-owner.py": "6851af30bb2815c8adea5916c2845c2b45bb56f0e928d2255c7849839a656839",
+    "c016-enc3-packed-state/baseline.c": "b38c169edd6fe1585eb195d3bd59a4ad9ddccf4915dfdb216bda58875c6586ef",
+    "c016-enc3-packed-state/counters-work0.c": "147270543c386d897dc447775a6d714d6e1d77095c09a959b1025fa2da6128a4",
+    "c016-enc3-packed-state/counters-work0.json": "9912cd581c08a286ce64f598dc67ad57b33a320a045fa33c5848a65db0fc7cd7",
+    "c016-enc3-packed-state/counters-work0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-packed-state/counters-work1.c": "603fa35fa125e87421c6dd93b77685abc9f3ffe2962923bebb0f5f14260af8d1",
+    "c016-enc3-packed-state/counters-work1.json": "cd0c0b28e0c6f7a750bd1f280e503b0b75c2d85f1a0019bacc85d6ab0cf55136",
+    "c016-enc3-packed-state/counters-work1.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-packed-state/counters-work2.c": "79a468eaaa5264083f71e3cafcdf6aaa37e754bfb5ba8c757c14f3fa28027b4e",
+    "c016-enc3-packed-state/counters-work2.json": "fdb5bfac8dfe0893886d9ee961c0d26a93c0f69a3c0b5957937ab0fffe99e91a",
+    "c016-enc3-packed-state/counters-work2.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-packed-state/counters-work3.c": "013a5aefef16aa24f25e2f6953e7e3484e9f6832c8941e15eebf91004b85d889",
+    "c016-enc3-packed-state/counters-work3.json": "f45ab57e0e49e09b1d94a615339b7b83f4e48ec08d140a81d477206a64906119",
+    "c016-enc3-packed-state/counters-work3.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-packed-state/counters-work4.c": "aaeda34078f52dbcfe215c0cec4abb01a53b8937e46e514ec4b17cc55b722d8f",
+    "c016-enc3-packed-state/counters-work4.json": "a590c90f20428bb33581af913e1005cfb221a990a4bae48605ad23df9fb2a24c",
+    "c016-enc3-packed-state/counters-work4.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-packed-state/results.json": "0bcb50c73cac8e020c74cfeae594f27c02d4b6e5397b3377b3633587fb77c5d3",
+    "c016-enc3-packed-state/tables-work0.c": "7495b8307064c3d4a3ffb3a9e32be09855f36a1033970601edbbff8dafbfe388",
+    "c016-enc3-packed-state/tables-work0.json": "79889a4a32b908920bd2e1b95429b655e869df530f0de3598010e49a21ea138b",
+    "c016-enc3-packed-state/tables-work0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-packed-state/tables-work1.c": "e470ad2e520f35c2245e7f472efc7bb941c50ad5dfb022aba2bb19916c038426",
+    "c016-enc3-packed-state/tables-work1.json": "50190edb46a2efb2c123dc1a949a3f09d4bad150aa5bc2d8366e4c2e27506faf",
+    "c016-enc3-packed-state/tables-work1.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-packed-state/tables-work2.c": "925642d6e2f2a0da94700692aa5365f11636634d8fc01cddf305f69278a99c53",
+    "c016-enc3-packed-state/tables-work2.json": "6fa47a73e5351ca292b5e111c02159c121d2e0c064eeebef4a26b15ca972b489",
+    "c016-enc3-packed-state/tables-work2.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-packed-state/tables-work3.c": "e410c7061a6dfb7b1c5fa35d47dc59a826ef33523101d848157c3c913304f829",
+    "c016-enc3-packed-state/tables-work3.json": "6fa47a73e5351ca292b5e111c02159c121d2e0c064eeebef4a26b15ca972b489",
+    "c016-enc3-packed-state/tables-work3.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-packed-state/tables-work4.c": "a7fb00752f688b4638d029da8d8557ba9407a9d8d82c2b75e41fe79fffa2e8b1",
+    "c016-enc3-packed-state/tables-work4.json": "6fa47a73e5351ca292b5e111c02159c121d2e0c064eeebef4a26b15ca972b489",
+    "c016-enc3-packed-state/tables-work4.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-packed-state/tables-work5.c": "99ee9419fd034ab2c9a3daa8a8006976d367ffaf0bbb0c483581241386bccc29",
+    "c016-enc3-packed-state/tables-work5.json": "6fa47a73e5351ca292b5e111c02159c121d2e0c064eeebef4a26b15ca972b489",
+    "c016-enc3-packed-state/tables-work5.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-packed-state-run.py": "22903c3a20951496a758b3c87d408cc5745401f3d24a4c1f666a5cc679f6f899",
+    "c016-enc3-packed-state.log": "965ba03b556c3baf6cae701667cb821699cfb5cd7694e0eee3a6899a97d7998c",
+    "c016-enc3-packed-state.py": "e61fb2673fad4c45b1cf3b7240cfe60b2839f13ea653fb00a66fa57a6a328329",
+    "c016-enc3-restored.json": "0bfe1631861760257d45109510978de95762800621225bf6b08c873ab6ca84ec",
+    "c016-enc3-rgb-restored.json": "08357ccbf5a4fe8f598a83f50f69a7df076aeda9a545b247cdd3769050e75b6e",
+    "c016-enc3-root-inversion.log": "a40c83eaa708a0c17871be692505ea2927104708455b9106ed6c6f1b54682b07",
+    "c016-enc3-root-inversion.txt": "142bae5959ae3bc8a8a68b8f292a4bfb60d7fb691a8c2abd324f38bf865ee56b",
+    "c016-enc3-root-sweep.json": "2643403cc54888d6abaaf15c63f881c9743fa503bf8621f99d22f6be64b7fef6",
+    "c016-enc3-tool-tests.log": "5df8f9a57cb2aa1a5247cad5589625f1f6839b1188862db54d7f6624e8865bbc",
+    "c016-enc3-tu-report.json": "47e8879008c3c866d12430a0e0b61eec9c3a8a3d0821ef150ec8e3ba340c4860",
+    "c016-enc3-whole-helper/all-tables-reversed.c": "b11b462e22aba235e02885682edf435821db13bbf0ce92830b6b1570f9ca20ee",
+    "c016-enc3-whole-helper/all-tables-reversed.json": "475f2cce907e54e28252e84072eb2a12ec1ff58e80e8ddc02469f0568978c4bf",
+    "c016-enc3-whole-helper/all-tables-reversed.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper/all-tables.c": "5ddae598fa6ce1f431fc503bf0b4f61515ce4b7b93975720c6fec31da54e4908",
+    "c016-enc3-whole-helper/all-tables.json": "b96d3089f37cace2ea8017211dc20a13f814ed75a67779f8f855d699dcbe34e0",
+    "c016-enc3-whole-helper/all-tables.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper/baseline.c": "b38c169edd6fe1585eb195d3bd59a4ad9ddccf4915dfdb216bda58875c6586ef",
+    "c016-enc3-whole-helper/pointer-reversed.c": "64ec4dd88873aeaa0a7bd63ffea22330a7eef7f33c9b35eb412157452e4d7f3d",
+    "c016-enc3-whole-helper/pointer-reversed.json": "53eed6c19fa3d81262fc56ea8cc5ca92cd81e8543f1ac8ef30ba99a436cf108a",
+    "c016-enc3-whole-helper/pointer-reversed.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper/pointer.c": "ede3f6450e0070564a553dc2f12f50954ad40b57f8e7f685799033dae6435434",
+    "c016-enc3-whole-helper/pointer.json": "417ac2a17a2aa9b20160885baffc6ce188f1d11c3fb028b12780e507c6e7a1d6",
+    "c016-enc3-whole-helper/pointer.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper/results.json": "7fa83954183c8eb0545104de2602228e129333c783256f0683f2a62b2ba53d83",
+    "c016-enc3-whole-helper/struct-reversed.c": "359dbacefed91477fe29fc787fc3ed55ced983a3892c38374a9f10a3386eea3f",
+    "c016-enc3-whole-helper/struct-reversed.json": "cad9dea610e8eceda956b461c3f97225344145bb7a751223063b676078798ab6",
+    "c016-enc3-whole-helper/struct-reversed.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper/struct.c": "53de95b7070609e00ebb7b27427ab4b442566fd43218f5c7f780fdb05d1a9226",
+    "c016-enc3-whole-helper/struct.json": "b69cb44f4c4f4a99f10a47ec5976919220f3eab8cb05cecc2b56d1865132f95c",
+    "c016-enc3-whole-helper/struct.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper/tables-reversed.c": "634faade10fd715ad2198058f05b3b7278b94e4d4b78ebad4ddc12bf45c5ad17",
+    "c016-enc3-whole-helper/tables-reversed.json": "e13b2c586aa4d5a076fba769afd942bb732d1fea3dc0d2cf988049dfa311b0ad",
+    "c016-enc3-whole-helper/tables-reversed.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper/tables.c": "5fda2053cd2fc6373352c54276aef2eb49bcab0e2374122c75872d95deb1e97e",
+    "c016-enc3-whole-helper/tables.json": "d985f860594adecccc57966ab66e32fbb6fce5cdb76df7fb3a340904ce43594d",
+    "c016-enc3-whole-helper/tables.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/all-tables-depth4.c": "77651efeb5faf75307e866c80ff970c24de6c8b63411088006a95d02566c1444",
+    "c016-enc3-whole-helper-depth/all-tables-depth4.json": "6efa151695b84844d7d57f9538a2652702d3cc03d190639125298a4d584384e4",
+    "c016-enc3-whole-helper-depth/all-tables-depth4.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/all-tables-depth8.c": "972c14cbf184f9a71517b6a007dbe134f939b2dc6d958d3f1c045c8fcd26b8b0",
+    "c016-enc3-whole-helper-depth/all-tables-depth8.json": "71c2c382c93d97c624a29688d4af5b10c2d2de03e6ed32805b72b2fddbdf544f",
+    "c016-enc3-whole-helper-depth/all-tables-depth8.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/all-tables-reversed-depth4.c": "887613f296e00fd78f7c711c56dde06c33b2e775082a35aa8753ffabba98dea1",
+    "c016-enc3-whole-helper-depth/all-tables-reversed-depth4.json": "71c2c382c93d97c624a29688d4af5b10c2d2de03e6ed32805b72b2fddbdf544f",
+    "c016-enc3-whole-helper-depth/all-tables-reversed-depth4.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/all-tables-reversed-depth8.c": "cbe426de4de82b3e0734313bd6b6debd2bacc1977fdfab4883f6d2288d9a67aa",
+    "c016-enc3-whole-helper-depth/all-tables-reversed-depth8.json": "71c2c382c93d97c624a29688d4af5b10c2d2de03e6ed32805b72b2fddbdf544f",
+    "c016-enc3-whole-helper-depth/all-tables-reversed-depth8.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/baseline.c": "b38c169edd6fe1585eb195d3bd59a4ad9ddccf4915dfdb216bda58875c6586ef",
+    "c016-enc3-whole-helper-depth/pointer-depth4.c": "81900c75baa98c21d7affce7ad56ea8c181f9e7e1882523bab29a5af17e5c836",
+    "c016-enc3-whole-helper-depth/pointer-depth4.json": "0958c0665488fbdff1eaa6a8649daa5b2ae5b77e783009ecde0f93e089fc37f2",
+    "c016-enc3-whole-helper-depth/pointer-depth4.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/pointer-depth8.c": "632518051bfb812cda31943ef587aabb1b512daaf0bd161ff2fb5511e531d1f3",
+    "c016-enc3-whole-helper-depth/pointer-depth8.json": "96a3d06556af24867bcf8e662316035eb25679468b8e9bbddcd254b560628f6f",
+    "c016-enc3-whole-helper-depth/pointer-depth8.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/pointer-reversed-depth4.c": "6caa7ff0327faace1d8f11c88dd53be47244e6299dfc61470dd29e342ffdffbe",
+    "c016-enc3-whole-helper-depth/pointer-reversed-depth4.json": "96a3d06556af24867bcf8e662316035eb25679468b8e9bbddcd254b560628f6f",
+    "c016-enc3-whole-helper-depth/pointer-reversed-depth4.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/pointer-reversed-depth8.c": "9f0e6c25a6b30094fb97697698c4e95e42a9d5452658f14885df8481a51a4ce6",
+    "c016-enc3-whole-helper-depth/pointer-reversed-depth8.json": "96a3d06556af24867bcf8e662316035eb25679468b8e9bbddcd254b560628f6f",
+    "c016-enc3-whole-helper-depth/pointer-reversed-depth8.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/results.json": "c3d6e33a075943cd2592e0ff071a9ec9bc842b836868170cccc77a6c755e463c",
+    "c016-enc3-whole-helper-depth/struct-depth4.c": "abce0083bc35bef85bf1f75514473ecaab089548b91da7e9172a1ac8ce0e13bd",
+    "c016-enc3-whole-helper-depth/struct-depth4.json": "a2d5eed709eb7a403bad8711ec4ca279a9455fd35d48837cdeb5eccdb5ef7b7f",
+    "c016-enc3-whole-helper-depth/struct-depth4.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/struct-depth8.c": "56cc066d80596392be81caf4a5a31dfc79fce9dece01211c4a9e357eb48fa97f",
+    "c016-enc3-whole-helper-depth/struct-depth8.json": "0ccd3927d63c6976d3793e9d8ec22f340279fb1154cd01b1d9d8b155aab84c42",
+    "c016-enc3-whole-helper-depth/struct-depth8.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/struct-reversed-depth4.c": "e56813eb998cb836559cee968aeffada05737fae3762807ac4a55a0379121063",
+    "c016-enc3-whole-helper-depth/struct-reversed-depth4.json": "0ccd3927d63c6976d3793e9d8ec22f340279fb1154cd01b1d9d8b155aab84c42",
+    "c016-enc3-whole-helper-depth/struct-reversed-depth4.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/struct-reversed-depth8.c": "130619569d31dc1edc00bc24b1d8daa9a69aa7db66bc2f2ccd89ec49babb1fb9",
+    "c016-enc3-whole-helper-depth/struct-reversed-depth8.json": "0ccd3927d63c6976d3793e9d8ec22f340279fb1154cd01b1d9d8b155aab84c42",
+    "c016-enc3-whole-helper-depth/struct-reversed-depth8.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/tables-depth4.c": "62cc4649abf8e4590f36ef5410437386ee065e1028906e7786682abcc3daab73",
+    "c016-enc3-whole-helper-depth/tables-depth4.json": "101ab07214fb62529031b1342729e7ffe29beb3841c052355db423503fa48146",
+    "c016-enc3-whole-helper-depth/tables-depth4.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/tables-depth8.c": "dee80737c1a41c86d1c2110a4a32ece5321cda881fc28a5c97fe72f3a812685c",
+    "c016-enc3-whole-helper-depth/tables-depth8.json": "2d8537c14da9cbc73c7a3eda15b35fd328cebb8d41412caaec7a15761f7421b3",
+    "c016-enc3-whole-helper-depth/tables-depth8.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/tables-reversed-depth4.c": "57a66a028ce98695488c8dd63fbf29cd0d8ea5c3a8825a8766b475a210e69f53",
+    "c016-enc3-whole-helper-depth/tables-reversed-depth4.json": "2d8537c14da9cbc73c7a3eda15b35fd328cebb8d41412caaec7a15761f7421b3",
+    "c016-enc3-whole-helper-depth/tables-reversed-depth4.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth/tables-reversed-depth8.c": "beda02c537c71763bf99edefab6e393bbd279e5f5fc692aa7615de77677b6915",
+    "c016-enc3-whole-helper-depth/tables-reversed-depth8.json": "2d8537c14da9cbc73c7a3eda15b35fd328cebb8d41412caaec7a15761f7421b3",
+    "c016-enc3-whole-helper-depth/tables-reversed-depth8.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc3-whole-helper-depth-run.py": "aff3a847387f9c432d8ddd7f79b0adf0a18af35fb8081ef1d98fb78e28126e05",
+    "c016-enc3-whole-helper-depth.log": "284a3d7b7ffc641595911fc565fcadd672e0bcc4452dadaaf999170347d2447b",
+    "c016-enc3-whole-helper-run.py": "5ad34a55a704b5e7456636d619be7ff6376d17bf2d262f4cdcd955d9c4ed1f65",
+    "c016-enc3-whole-helper.log": "f2562c9739fc8a8b08b2af8c08dd1e428e4a1c498d2976dcc8da95cf925363aa",
+    "c016-enc3-whole-helper.py": "bae40347decffbcd82ded863e90e6d4bd982f4ed4f441973fe34fdb0c399a68e"
+  }
+}
