@@ -1,0 +1,8 @@
+{
+  "function": "mnSnap_80257F24",
+  "match_percent": 98.13447,
+  "source_sha256": "bc8d4534910ee3b5f36e541c1a4a437049cf1cc8bd04b9c7f8b7270b2a3717ba",
+  "archive_sha256": "b9ba90d8d67d56fef78b5916bcb8972aef8150faeb4f6bf7fe4b7b2156a8bafe",
+  "source_commit": "8a94f5de1a",
+  "pr": "https://github.com/doldecomp/melee/pull/3406"
+}
