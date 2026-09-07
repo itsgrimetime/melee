@@ -709,3 +709,38 @@ acknowledgment. The runner selected the correct Windows worktree; captured no
 candidate compiler evidence. Blocker JSON is archived. No retry or fresh virtual
 mapping claimed; next trace should first investigate staging transport. The
 ordinary-compiler gain and PR do not depend on this diagnostic capture.
+
+## Inequality spelling, placement and paired dependencies — 2026-09-07
+
+Seventeen follow-up ordinary compiles retain no further gain. Reversed operands,
+void-pointer casts, u16-pointer casts, bare inequality and placement after the Cr
+load retain98.962654/frame176. Negated equality loses the gain98.83817; placement
+after both Cr/Cb loads97.3195; comparing the final output pointer96.01245. Combining
+with luminance-first red98.87967. Thus the observed lever is sensitive to frontend
+operator spelling and placement, not simply logical equivalence.
+
+Adding a second inequality: out/luma86.82573/frame176; chroma/luma84.71369/frame184;
+out/base86.51867/frame184; scaled-X/luminance98.87967/frame176;
+scaled-X/chroma-row88.59336/frame184; chroma-row/luminance and block/luminance both
+98.87967/frame176; scaled-X/scaled-Y84.962654/frame184. Restored PR version; ninja
+passes. Full sources/diffs/scripts archived in2026-09-07-inequality-followup.
+
+Remote diagnosis: verbose SSH stalls on IPv6 before authentication; ssh -4 works.
+Even with IPv4 and --no-pull, stdin staging times out, observed runnerPID40444 with
+no compiler/git process. After it exited, forcing the CLI's existing SCP transport
+succeeded: exact sourceSHA1c459cd460a633f7fcac3c6f3bd8d39bbc0f4967f026d482fb5ca0403a7228dc,
+compile0.536s,942630bytes, source/DLL restored. For this invocation only, imported
+src.cli.debug and src.cli.debug.dump had _REMOTE_STAGE_SOURCE_STDIN_MAX_BYTES set
+zero; PATH wrappers invoke /usr/bin/ssh -4 and /usr/bin/scp -4. No shared config or
+production CLI edits. Issue1555 has the findings and request for explicit options.
+
+Fresh candidate-vs-baseline PCode has three extra instructions throughout the
+precolor passes (257->260 initially;249->252 after peephole). Block13 contains
+subf r107,r51,r37; addic r108,r107,-1; subfe r109,r108,r107. These instructions still
+exist after register coloring but disappear before final assembly. They provide
+an actual graph/lifetime dependency, not merely a role renumbering. The bijection
+checker correctly rejects alignment and yields no mapped-colorgraph result.
+Old raw virtual target IDs therefore cannot be reused. This explains why a
+side-effect-free discarded inequality can affect allocation despite not adding
+final instructions. Fresh dump and failed-bijection report are archived separately
+as compiler-evidence.tar.gz in the same evidence directory.
