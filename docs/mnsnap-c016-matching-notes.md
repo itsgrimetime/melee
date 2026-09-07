@@ -113,3 +113,31 @@ spill-home assignment rather than repeating these forms.
 
 PR3406 merged during this turn; synced upstream and restored source before
 build. Evidence and historical frame excerpt in2026-09-07-warning-home-owner.
+
+## Warning copy propagation and direct-source capture
+
+Retained precolor passes contain addi r90,r107,108; mr r34,r90; mr r98,r90
+before global optimization. r34 is used for the later warning animation load.
+AFTER VALUE NUMBERING retains these copies. AFTER COPY PROPAGATION removes
+r34/r98 copies and redirects both archive store and late load to90. Thus the
+first disappearance is before coloring. trace-copy incorrectly labels this
+coloring-coalescing because final colors happen to equalr0; issue1561 filed.
+
+Eight in-place pointer-update diagnostics (previous/next field and increment/
+decrement, with getter/direct argument) regress96.92736–97.26739/frame400 and
+alter instruction count. None retained. These cross-member pointer-arithmetic
+forms are diagnostic only, not source candidates to publish.
+
+Fresh Windows capture of prior direct-warning candidate succeeds, sourceSHA
+de94ae80fd2ee79dc47db4f7f4133a6d39b10a52aafa61e7552f744a5ccbfbe9,
+compile0.912s. BEFORE GLOBAL already definesr34 directly; it survives copy
+propagation and spills in first coloring round. Therefore merely preserving
+the named vreg does NOT solve the stack-home placement. The ordinary candidate
+still98.10664 and not retained. This corrects the overly narrow idea that the
+removed copy alone explains the offset mismatch.
+
+Attempted fresh frame capture with existing backend_map_probe_hook.py at120s:
+timeout before target data, launcher killed owned group, exit2. Earlier cost
+capture had same no-target symptom at90s. No frame evidence from either timeout;
+historical frame naming must not be presented as today's final object layout.
+Retained source98.13447 unchanged. Evidence in2026-09-07-warning-copy-propagation.
