@@ -1434,3 +1434,49 @@ no final instruction gain after recovering the source frame; this does not asser
 unchanged hidden virtual identities without a fresh trace. All sources/results
 in2026-09-07-split-chroma-pixels. Production restored; ninja passes. No new source
 change to submit upstream;100% and TU linking remain unfinished.
+
+## Late address merging breakthrough:99.400925% — 2026-09-07
+
+Revisited direct-address source97.258064 (dest-expression.c), whose fresh earlier
+retail correspondence has19 changed mapped virtuals, no contradictory operand
+mapping, and no target-color edge conflicts. Exact full simplify+SELECT replay
+verified. Single-rank scan across19 changed virtuals: moving destination53 to
+rank100.5 reduces19 misses to6. Joint5450-rank scan: destination53 rank100.5 and
+index37 rank98.5–102.5 yields0 mapped misses on unchanged graph. This is a model
+only, but identifies late creation for the compiler-generated address as a source
+lever, not just named-variable declaration order.
+
+Ten asymmetric-store address probes change only Cb or Cr address signedness or
+pointer view. Unsigned casts regress95.400925; typed arrays/char base97.258064.
+Fresh read-only retail capture of x518-unsigned-index PROVES a meaningful stage
+change despite lower score: both stores share virtual103 (object=NULL), defined
+by ADD103,121,100. The prior direct-address source shared virtual53 with a nonnull
+compiler object. Thus asymmetric signedness prevents early object-backed sharing
+and permits later backend address merging. No compiler forcing was used.
+
+Next12 probes eliminate the named index, varying six row/low/high sum orders
+and unsigned cast around sum versus low term only. High-row-low and row-high-low
+unsigned-sum forms98.870964; ROW-LOW-HIGH with unsigned low term99.400925.
+Other forms94.84792–97.02765. Both pixel loads and store/load ordering preserved;
+all152-byte frames. This source improvement follows actual compiler lowering,
+not an offline coloring score or reuse of old virtual IDs.
+
+Cleanup verifies direct indexing of JpegWork.data.x518/x618 at the actual base
+object, replacing cast-of-shifted-work-pointer. Replacing (u32)(chroma_x&1) with
+(chroma_x&1UL), then final(chroma_x&1U), retains99.400925. No temporary index or
+destination locals. Source column address uses(low*2+high*4)+src_row. Final
+clang-format source changes only hsd_803B3408. Only raw instruction differences:
++104 target add r21,r21,r26 vs current add r21,r26,r21;
++1f0/+1f4 target li r26,0 then addi r5,r5,280, current reversed. No remaining
+physical register allocation cascade in these final instruction rows. Anonymous
+float relocation names still differ in textual diffs, not new source evidence.
+
+Production source commit3b282183aa pushed to fork work branch. Clean upstream
+branch pr/jpeg-rgb-direct-chroma cherry-pick4648ec0d10; PR3397 opened:
+https://github.com/doldecomp/melee/pull/3397 . python configure.py && ninja passes;
+all seven other TU functions100. TU stays Linkable until exact RGB match verified.
+All probes, allocator-stage evidence, model winners and final source/diff archived
+in2026-09-07-late-address-breakthrough. This supersedes98.82488 as best production.
+Next focus: the commuted +104 ADD and luma entry scheduling pair, preserving the
+late shared-address lowering recovered here. Re-derive virtual correspondence
+if further allocator diagnostics are needed; old37/53 IDs are not final-source IDs.
