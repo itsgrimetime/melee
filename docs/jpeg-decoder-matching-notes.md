@@ -5,7 +5,28 @@ in [PR #3403](https://github.com/doldecomp/melee/pull/3403), clean head
 `cab0ee48b5`. Earlier sections describe the preceding baselines; see the final
 section for the discarded-pointer-comparison improvement.
 
-## Verified baseline
+## Completion — 2026-09-07
+
+Supersedes the historical baselines and open hypotheses below. fn_803B6820 is
+100% matched and hsd_3B5C.c is Matching/linked in merged upstream PR3404,
+head1c847b68720cd3dba5360e2e29258377cf3aa3fa. On notification from the independent
+matching task, stopped the duplicate combined-model search, fetched upstream,
+and merged upstream/master b7f53f2315 into this worktree. Fresh configure+ninja
+build passes the original main.dol SHA-1 check.
+
+Winning combination preserves our PR3403 pointer inequality, uses the embedded
+assignment result=(clamped=(u8)(s32)value) with u16 clamped, commutes the red
+addition to luminance-first, and passes a one-field JpegOutput context by pointer
+with the pixel offset separate. No explicit stack padding. Sequential assignment
+and cast-chain controls are not equivalent to an embedded assignment expression;
+this was a gap in our manually tested clamp representations. Helper parameter
+ownership and clamp representation must be tested together.
+
+Canonical source and public validation: https://github.com/doldecomp/melee/pull/3404.
+No further decoder search or duplicate PR is needed. Historical allocator
+models remain diagnostic evidence, not reasons to reject this verified source.
+
+## Verified baseline (historical)
 
 The source from merged PR3358 is 98.81743%, 241 instructions/964 bytes, and
 has the exact 176-byte frame. The other five functions in hsd_3B5C remain 100%.
