@@ -666,3 +666,29 @@ repeating known parentheses, declaration, or identity-helper variants.
 Final RGB98.7788%, encoder100%, full build passes. Goal remains active. Full
 frontend snapshots and27 candidate sources/results are SHA256-verified in
 2026-09-07-addass-origin. No PR or Matching flag yet.
+
+
+## Destination-address placement and row copies — 2026-09-07
+
+22 valid ordinary probes, all restored. Moving final tile+row into the chroma
+index or pointer expression, with inner row local/helper alternatives (8),
+reaches at best97.14286%; sequential index accumulation is worse. Inner full
+row expressions add8frame bytes. No retained address-placement gain.
+
+Two-view row unions (8; same s32 type, u32, int, unsigned int; separate result
+or update) do not provide a free materialization boundary. Same-type forms
+add8frame bytes and regress; unlike-type views introduce memory operations
+and2–4extra instructions. Both fields cover the same initialized32bits and
+nonnegative row values; no out-of-bounds or uninitialized alias was scored.
+
+Combined row helper with a preserved low copy or separate sum, using that
+value in the source-row calculation (6; full or removed luma row_offset),
+adds an instruction for explicit copy-first. Sum-separate changes grouping;
+source-output-first converges to the rejected97.1659% low/sum-merged candidate.
+Removing the luminance offset restores152bytes but does not repair its graph.
+
+Final RGB98.7788%, encoder100%, full build passes. Goal remains active. Evidence
+with complete source/diffs is SHA256-verified in2026-09-07-row-address-boundaries.
+The tested local row/helper/union forms provide no retained gain; further work
+should change the row-loop/data ownership reconstruction, or inspect a concrete
+front-end rewrite condition, rather than re-run these equivalent forms.
