@@ -692,3 +692,24 @@ with complete source/diffs is SHA256-verified in2026-09-07-row-address-boundarie
 The tested local row/helper/union forms provide no retained gain; further work
 should change the row-loop/data ownership reconstruction, or inspect a concrete
 front-end rewrite condition, rather than re-run these equivalent forms.
+
+## Whole-loop state and bounded permuter — 2026-09-07
+
+The plain permuter completed 1415 iterations (89 compile errors) with four
+workers and a 250-point baseline, without saving an improvement. Historical
+output-250-1 already represented the retained 98.7788% source and must not be
+counted as a new result. The run was interrupted cleanly; no worker remains.
+Installed bootstrap failed to extract this Linkable TU (issue1540); branch-local
+CLI bootstrap succeeded. No backend patches or forced scheduling were used.
+
+Eight new source probes grouped loop state in an ordinary local struct:
+all counters, all scalar state including pixel, tile/chroma counters, or luma
+state/offsets; each tested with baseline and corrected pixel-address grouping.
+These substantially alter optimization (36.25–61.41%) and frame layout. None
+was retained. They do not resolve the row-sum materialization boundary.
+
+Retained RGB98.7788%, encoder100%, full build passes. Complete source/results
+and permuter log are SHA256-verified in2026-09-07-loop-state-permuter. No new
+upstream PR or Matching flag. The active goal remains unfinished; a useful next
+step needs a concrete new row-expression/ownership hypothesis or a trace of the
+pre-IRO compound-assignment rewrite, rather than repeating scalar spellings.
