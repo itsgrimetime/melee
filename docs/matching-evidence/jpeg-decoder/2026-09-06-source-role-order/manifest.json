@@ -1,0 +1,1616 @@
+{
+  "function": "fn_803B6820",
+  "scratch": null,
+  "pr": "https://github.com/doldecomp/melee/pull/3384",
+  "head": "79f4fe5493e1bb683a264bba08381f848b599a17",
+  "retained_source_change": false,
+  "ordinary_retained_percent": 98.83817,
+  "experimental_percent": 98.75519,
+  "source_sha256": "7a2bab5a7f700557dab18399747432f3678f7fa5af0b863b51312bd1a675794a",
+  "unit_functions": [
+    {
+      "name": "hsd_803B5C4C",
+      "percent": 100.0
+    },
+    {
+      "name": "hsd_803B5D70",
+      "percent": 100.0
+    },
+    {
+      "name": "hsd_803B5EA0",
+      "percent": 100.0
+    },
+    {
+      "name": "fn_803B61B4",
+      "percent": 100.0
+    },
+    {
+      "name": "fn_803B6820",
+      "percent": 98.83817
+    },
+    {
+      "name": "hsd_803B6BE4",
+      "percent": 100.0
+    }
+  ],
+  "dol_sha1": {
+    "build/GALE01/main.dol": "08e0bf20134dfcb260699671004527b2d6bb1a45",
+    "orig/GALE01/sys/main.dol": "08e0bf20134dfcb260699671004527b2d6bb1a45"
+  },
+  "runs": [
+    {
+      "family": "sample-load-order",
+      "name": "luminance-cr-cb",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "sample-load-order",
+      "name": "luminance-cb-cr",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "sample-load-order",
+      "name": "cr-luminance-cb",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "sample-load-order",
+      "name": "cr-cb-luminance",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "sample-load-order",
+      "name": "cb-luminance-cr",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "sample-load-order",
+      "name": "cb-cr-luminance",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "sample-load-order",
+      "name": "argument-luminance",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "sample-load-order",
+      "name": "argument-cr",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "sample-load-order",
+      "name": "argument-cb",
+      "score": 94.54357,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 33
+      }
+    },
+    {
+      "family": "sample-load-order",
+      "name": "argument-luminance-cb-cr",
+      "score": 94.40249,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 184,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 34
+      }
+    },
+    {
+      "family": "color-expression-order",
+      "name": "red-luma-first",
+      "score": 98.75519,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 23
+      }
+    },
+    {
+      "family": "color-expression-order",
+      "name": "red-cr-first-product",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "color-expression-order",
+      "name": "red-both",
+      "score": 98.75519,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 23
+      }
+    },
+    {
+      "family": "color-expression-order",
+      "name": "blue-luma-first",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "color-expression-order",
+      "name": "blue-cb-first-product",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "color-expression-order",
+      "name": "blue-both",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "color-expression-order",
+      "name": "green-products-swapped",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "color-expression-order",
+      "name": "red-blue-luma-first",
+      "score": 98.75519,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 23
+      }
+    },
+    {
+      "family": "output-negation",
+      "name": "subtract-negative-row-baseline",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "output-negation",
+      "name": "subtract-negative-row-luma-first",
+      "score": 98.75519,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 23
+      }
+    },
+    {
+      "family": "output-negation",
+      "name": "subtract-negative-column-baseline",
+      "score": 98.81743,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "output-negation",
+      "name": "subtract-negative-column-luma-first",
+      "score": 98.734436,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 23
+      }
+    },
+    {
+      "family": "output-negation",
+      "name": "row-first-baseline",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "output-negation",
+      "name": "row-first-luma-first",
+      "score": 98.75519,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 23
+      }
+    },
+    {
+      "family": "output-negation",
+      "name": "nested-negative-row-baseline",
+      "score": 98.15353,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9937888198757764,
+        "line_delta": 1,
+        "hunk_count": 7
+      }
+    },
+    {
+      "family": "output-negation",
+      "name": "nested-negative-row-luma-first",
+      "score": 98.07054,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9937888198757764,
+        "line_delta": 1,
+        "hunk_count": 7
+      }
+    },
+    {
+      "family": "channel-reuse",
+      "name": "none-red-separate-blue",
+      "score": 98.672195,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 27
+      }
+    },
+    {
+      "family": "channel-reuse",
+      "name": "none-red-embedded-blue",
+      "score": 98.53112,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 168,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 31
+      }
+    },
+    {
+      "family": "channel-reuse",
+      "name": "separate-red-none-blue",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "channel-reuse",
+      "name": "separate-red-separate-blue",
+      "score": 98.672195,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 27
+      }
+    },
+    {
+      "family": "channel-reuse",
+      "name": "separate-red-embedded-blue",
+      "score": 98.53112,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 168,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 31
+      }
+    },
+    {
+      "family": "channel-reuse",
+      "name": "embedded-red-none-blue",
+      "score": 98.672195,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 27
+      }
+    },
+    {
+      "family": "channel-reuse",
+      "name": "embedded-red-separate-blue",
+      "score": 98.672195,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 27
+      }
+    },
+    {
+      "family": "channel-reuse",
+      "name": "embedded-red-embedded-blue",
+      "score": 98.53112,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 168,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 31
+      }
+    },
+    {
+      "family": "channel-reuse",
+      "name": "green-compound",
+      "score": 97.65975,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.995850622406639,
+        "line_delta": 0,
+        "hunk_count": 25
+      }
+    },
+    {
+      "family": "channel-reuse",
+      "name": "green-split",
+      "score": 97.6805,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.995850622406639,
+        "line_delta": 0,
+        "hunk_count": 25
+      }
+    },
+    {
+      "family": "green-subtraction",
+      "name": "inner-negative-add-baseline",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "green-subtraction",
+      "name": "inner-negative-add-luma-first",
+      "score": 98.75519,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 23
+      }
+    },
+    {
+      "family": "green-subtraction",
+      "name": "outer-negative-add-baseline",
+      "score": 94.82987,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9297520661157025,
+        "line_delta": 2,
+        "hunk_count": 17
+      }
+    },
+    {
+      "family": "green-subtraction",
+      "name": "outer-negative-add-luma-first",
+      "score": 94.74689,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9297520661157025,
+        "line_delta": 2,
+        "hunk_count": 16
+      }
+    },
+    {
+      "family": "green-subtraction",
+      "name": "inner-reverse-subtract-baseline",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "green-subtraction",
+      "name": "inner-reverse-subtract-luma-first",
+      "score": 98.75519,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 23
+      }
+    },
+    {
+      "family": "green-subtraction",
+      "name": "outer-reverse-subtract-baseline",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "green-subtraction",
+      "name": "outer-reverse-subtract-luma-first",
+      "score": 98.75519,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 23
+      }
+    },
+    {
+      "family": "green-subtraction",
+      "name": "negative-cr-first-baseline",
+      "score": 94.82987,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9297520661157025,
+        "line_delta": 2,
+        "hunk_count": 17
+      }
+    },
+    {
+      "family": "green-subtraction",
+      "name": "negative-cr-first-luma-first",
+      "score": 94.74689,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9297520661157025,
+        "line_delta": 2,
+        "hunk_count": 16
+      }
+    }
+  ],
+  "caveat": "Candidate realizes one role-order change. Five remaining selection-order changes are abstract model perturbations only, not source100.",
+  "members": [
+    {
+      "path": "c016-decoder-channel-reuse.py",
+      "bytes": 2025,
+      "sha256": "8796864ed46060645838821d8c34b4d1fb0a4ef44d3142a5aeed5743fa7c0757"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/baseline.c",
+      "bytes": 33786,
+      "sha256": "7a2bab5a7f700557dab18399747432f3678f7fa5af0b863b51312bd1a675794a"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/embedded-red-embedded-blue.c",
+      "bytes": 33802,
+      "sha256": "1f138524d22d20425bb95dafc972aa824e9e52ad1285ef76193169514dcfb871"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/embedded-red-embedded-blue.json",
+      "bytes": 38909,
+      "sha256": "250271969a2a683759ff1b83774ab9c598c1dde40c51c50b49f95238014e4a81"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/embedded-red-embedded-blue.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/embedded-red-none-blue.c",
+      "bytes": 33794,
+      "sha256": "baf83a5c0610201aa9bb988664d0b8448bfd70cd3b8348ef635b14cf4bd37690"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/embedded-red-none-blue.json",
+      "bytes": 35222,
+      "sha256": "a888a1ca050da2ad1239086d30a7c84717e7dda4f8fa070af8b7f8999993d532"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/embedded-red-none-blue.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/embedded-red-separate-blue.c",
+      "bytes": 33813,
+      "sha256": "c66b73aa35bb74c1665b8d80c9f196fd9b71a3c21797dffed3a5dee588710eb7"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/embedded-red-separate-blue.json",
+      "bytes": 35223,
+      "sha256": "9007490d52ab049562621bfbd7a92e27870b78ed0e31a6f6dae40bec9a2c1aa6"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/embedded-red-separate-blue.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/green-compound.c",
+      "bytes": 33808,
+      "sha256": "2996cb5cce615e4361a4aa4ba0cebc065f015dab276f93d6e84ad717e74a8968"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/green-compound.json",
+      "bytes": 35292,
+      "sha256": "47a8b253859da84caf3c59c842b6e97c02df62e473bd9cadab1dcd1c6912b91e"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/green-compound.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/green-split.c",
+      "bytes": 33803,
+      "sha256": "d38d817490611bbd47964419d4ba66977639bb36d1ccc074cda40b31c72b56dc"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/green-split.json",
+      "bytes": 35039,
+      "sha256": "df0876917af3342ad986fd21b9dd0d4e728a7b02c5d650699dae737e02843ee7"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/green-split.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/none-red-embedded-blue.c",
+      "bytes": 33794,
+      "sha256": "7671f624b72215488bb9cf1bcdebf079d64fad34457344bddd04d163f7473faa"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/none-red-embedded-blue.json",
+      "bytes": 38909,
+      "sha256": "192c10d6ffae0abd7b36477f329254ac7beb43f96cf8d7d6953ae1ee4619553c"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/none-red-embedded-blue.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/none-red-separate-blue.c",
+      "bytes": 33805,
+      "sha256": "c4d7fdb0e4279e8676b3b26e5840789570b44fc13dcf0788c826b8a22cce54bd"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/none-red-separate-blue.json",
+      "bytes": 35236,
+      "sha256": "44a430c3a19216ed3602ec98e5393fe2001c70430fcbe60e39c574119758bbc4"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/none-red-separate-blue.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/results.json",
+      "bytes": 2904,
+      "sha256": "1a871f0d1a9eeabda5735a5b11909cea46e442735263f79187322b48db6eb82e"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/separate-red-embedded-blue.c",
+      "bytes": 33813,
+      "sha256": "11e0a36557fe4399bee4ef1819b67606be1913d4fb1621a215d99fdbfac3850f"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/separate-red-embedded-blue.json",
+      "bytes": 38909,
+      "sha256": "192c10d6ffae0abd7b36477f329254ac7beb43f96cf8d7d6953ae1ee4619553c"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/separate-red-embedded-blue.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/separate-red-none-blue.c",
+      "bytes": 33805,
+      "sha256": "6387fc4621b66a64bdcfd72a8d73874a1852b3837700ce40874240cbfc388261"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/separate-red-none-blue.json",
+      "bytes": 34322,
+      "sha256": "20c349549dd460f76273aea2fa6dd6d29fe571b723f62d7de449b11df103502b"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/separate-red-none-blue.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/separate-red-separate-blue.c",
+      "bytes": 33824,
+      "sha256": "e2d41d8440494d62f7a16c281c28ec04e648df485cfe97aa0017dee4961ea748"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/separate-red-separate-blue.json",
+      "bytes": 35222,
+      "sha256": "0c8c8e65cb3084245a825ee29b5f9f08996a99f13806674a608ef7a220c21668"
+    },
+    {
+      "path": "c016-decoder-channel-reuse/separate-red-separate-blue.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-retained-pcdump.txt",
+      "bytes": 218735,
+      "sha256": "e06b15dd7dd8971fc09cbae9d71961b92087af3805872e1456d9d5eab2acbef1"
+    },
+    {
+      "path": "c016-decoder-color-expression-order.py",
+      "bytes": 1911,
+      "sha256": "ca6e4e3cb4f8629ba244511cfba0feb7f7a7b99a817b5b29a44e470f0cde98d5"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/baseline.c",
+      "bytes": 33786,
+      "sha256": "7a2bab5a7f700557dab18399747432f3678f7fa5af0b863b51312bd1a675794a"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/blue-both.c",
+      "bytes": 33786,
+      "sha256": "a0b349d69cbfd5d6b61dde0c6c03ccfe46a7e6879ecf58e8562d2094b56310da"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/blue-both.json",
+      "bytes": 34322,
+      "sha256": "d729bf2c7531ad4d0e0beedd689b9dc9f039969c142bbeb6ba48696d2f7832a8"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/blue-both.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/blue-cb-first-product.c",
+      "bytes": 33786,
+      "sha256": "47a1971e816d0103b96abd12c35d2ab8a58254d5ab0778006fc1e85f3632a93e"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/blue-cb-first-product.json",
+      "bytes": 34322,
+      "sha256": "d729bf2c7531ad4d0e0beedd689b9dc9f039969c142bbeb6ba48696d2f7832a8"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/blue-cb-first-product.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/blue-luma-first.c",
+      "bytes": 33786,
+      "sha256": "e5145ddb7c68016f0010d2a16d09d3afb8fd4ba780f198de09f2d3f05e766035"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/blue-luma-first.json",
+      "bytes": 34322,
+      "sha256": "c4d83e8608701173db422332c4928d24f9eddd0a0cc23aeeea041df739cb0aa1"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/blue-luma-first.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/green-products-swapped.c",
+      "bytes": 33786,
+      "sha256": "3376e24eb2052a10d56de6144bd759e2042a8b811adee9a3c01c0901cf76a3d8"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/green-products-swapped.json",
+      "bytes": 34322,
+      "sha256": "d729bf2c7531ad4d0e0beedd689b9dc9f039969c142bbeb6ba48696d2f7832a8"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/green-products-swapped.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/red-blue-luma-first.c",
+      "bytes": 33786,
+      "sha256": "ebbe6df9cbf929cb3f6bc7c85be3df66ea3fd80797159bd8d984dd947c154898"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/red-blue-luma-first.json",
+      "bytes": 34635,
+      "sha256": "f25c87cb2113c9e3b361151d31db7606a32d2fafe16e18a5dc74cd9b155fb8d8"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/red-blue-luma-first.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/red-both.c",
+      "bytes": 33786,
+      "sha256": "92b1ddaa45a57b4f04e7fc4ded0a865109130869324c9b33a1093983cbaf5da0"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/red-both.json",
+      "bytes": 34635,
+      "sha256": "f25c87cb2113c9e3b361151d31db7606a32d2fafe16e18a5dc74cd9b155fb8d8"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/red-both.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/red-cr-first-product.c",
+      "bytes": 33786,
+      "sha256": "0efe48c9bfd12eb96a66a56d5f83db9702a7d64136c831922d79f1632606afe7"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/red-cr-first-product.json",
+      "bytes": 34322,
+      "sha256": "c4d83e8608701173db422332c4928d24f9eddd0a0cc23aeeea041df739cb0aa1"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/red-cr-first-product.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/red-luma-first.c",
+      "bytes": 33786,
+      "sha256": "9ed52b70c1a141543442c067e2ae86d5d1b13b5dcd6f10d22fe5d71d4eb5e6eb"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/red-luma-first.json",
+      "bytes": 34383,
+      "sha256": "1aa8251122b856b590d321bd44a55406c12d7b3e329f566d7ce0ec6a438d86e8"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/red-luma-first.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-color-expression-order/results.json",
+      "bytes": 2251,
+      "sha256": "511073037e0988a1c3a3bbb771c130580242eb2962d75316f1813dba839c3eb8"
+    },
+    {
+      "path": "c016-decoder-green-subtraction.py",
+      "bytes": 1580,
+      "sha256": "8ed7db889b0c2b200593b593fccd20f7fd28926db4d93d77a65f5ee42919cc7d"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/baseline.c",
+      "bytes": 33786,
+      "sha256": "7a2bab5a7f700557dab18399747432f3678f7fa5af0b863b51312bd1a675794a"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/inner-negative-add-baseline.c",
+      "bytes": 33787,
+      "sha256": "a896075a98f4e54b7681c48e9cb9f7b744beb367cd640152d63ad34657dd13ec"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/inner-negative-add-baseline.json",
+      "bytes": 34335,
+      "sha256": "f14622ba512e443d3b53da3315977ba3c7e17346f923aecf1c8efc2644dc00d6"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/inner-negative-add-baseline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/inner-negative-add-luma-first.c",
+      "bytes": 33787,
+      "sha256": "33bf70c5874b3724172dc752b24c55c2e3c4d92d8e31c793f459e5ecd3087411"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/inner-negative-add-luma-first.json",
+      "bytes": 34635,
+      "sha256": "f25c87cb2113c9e3b361151d31db7606a32d2fafe16e18a5dc74cd9b155fb8d8"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/inner-negative-add-luma-first.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/inner-reverse-subtract-baseline.c",
+      "bytes": 33787,
+      "sha256": "f8725a099cfa9dec0cb27df046f24a9345a9e526ed62308ad047d3411dd63a56"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/inner-reverse-subtract-baseline.json",
+      "bytes": 34337,
+      "sha256": "d26b846f44842a58a5ca753146d8ecb2bf08c24a63bb551e377a1eecb54db0de"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/inner-reverse-subtract-baseline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/inner-reverse-subtract-luma-first.c",
+      "bytes": 33787,
+      "sha256": "883a3ee260c3acb3819c7fbbd8eb2c5eac905d129ef36b5bb6965d41ac4db3ff"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/inner-reverse-subtract-luma-first.json",
+      "bytes": 34635,
+      "sha256": "f25c87cb2113c9e3b361151d31db7606a32d2fafe16e18a5dc74cd9b155fb8d8"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/inner-reverse-subtract-luma-first.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/negative-cr-first-baseline.c",
+      "bytes": 33787,
+      "sha256": "882e8c22f92de98947dadbf36de81fe0c20540a9c9174f6dc20d2ccf0f7c69eb"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/negative-cr-first-baseline.json",
+      "bytes": 40463,
+      "sha256": "7cb491b9f2a4c4514919fcd444898d7aedbbe1669b66d8be21110565f0faf324"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/negative-cr-first-baseline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/negative-cr-first-luma-first.c",
+      "bytes": 33787,
+      "sha256": "abbaafa053b358ed00f668f2701675640213359c72cb6ee9eb459c4fcf1f5dcc"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/negative-cr-first-luma-first.json",
+      "bytes": 40601,
+      "sha256": "f4da3f6d15d10a47a891874075ed3c8b25966026132bf4a9b81b32e5ac992905"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/negative-cr-first-luma-first.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/outer-negative-add-baseline.c",
+      "bytes": 33787,
+      "sha256": "1549bb3a7a1dedc32b941e81ba8c291e6d47aabfd5b77be8a2e0c89fc92852d4"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/outer-negative-add-baseline.json",
+      "bytes": 40463,
+      "sha256": "7cb491b9f2a4c4514919fcd444898d7aedbbe1669b66d8be21110565f0faf324"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/outer-negative-add-baseline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/outer-negative-add-luma-first.c",
+      "bytes": 33787,
+      "sha256": "82da006c9c9b68333e572f6c2dce25d24c4759f2b858bd5e27b973602396f5a5"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/outer-negative-add-luma-first.json",
+      "bytes": 40601,
+      "sha256": "f4da3f6d15d10a47a891874075ed3c8b25966026132bf4a9b81b32e5ac992905"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/outer-negative-add-luma-first.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/outer-reverse-subtract-baseline.c",
+      "bytes": 33789,
+      "sha256": "bddfbcbaa1743d2587988842b98606e3a2cc25362107c631827ded780f8846b2"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/outer-reverse-subtract-baseline.json",
+      "bytes": 34322,
+      "sha256": "4de6b015659a73fde9d54510610c87d7b1fab8071a1ecdc8ab867619e00a592e"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/outer-reverse-subtract-baseline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/outer-reverse-subtract-luma-first.c",
+      "bytes": 33789,
+      "sha256": "71673ba9216bb0a79208f4e65c6e9694dd0af5ead37da502c18193d227714e6a"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/outer-reverse-subtract-luma-first.json",
+      "bytes": 34635,
+      "sha256": "1eb5e5df6f4576ae92751135088f3c9435a4ff9d48b7c534f0475d473e6b55ed"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/outer-reverse-subtract-luma-first.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-green-subtraction/results.json",
+      "bytes": 3007,
+      "sha256": "b3561b0e10bb3ae21e38de6465f90eb8e557b91f05a68a933a0b1e9187512e28"
+    },
+    {
+      "path": "c016-decoder-order-interactions.json",
+      "bytes": 221001,
+      "sha256": "3b9ed73b3d2b20ce168c0888f6d0e7a7a40859edaeeca4ea25a4351a7e6ab518"
+    },
+    {
+      "path": "c016-decoder-order-source-proposals.json",
+      "bytes": 67870,
+      "sha256": "83793905bf9955aecffadae6b115f28b74bddc0b77474ccc4fbf898036e0a67e"
+    },
+    {
+      "path": "c016-decoder-order-source-proposals.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-order-target.json",
+      "bytes": 664,
+      "sha256": "bcdb5dbc536deec4a251229f02f2628e056c3f51f3d693ef083c450f38d6cf48"
+    },
+    {
+      "path": "c016-decoder-order-target.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-output-negation.py",
+      "bytes": 1685,
+      "sha256": "be2b5f3c30416d9d107123eb4ba0d5244c512920ed0aef25ca999f2ea9d3350c"
+    },
+    {
+      "path": "c016-decoder-output-negation/baseline.c",
+      "bytes": 33786,
+      "sha256": "7a2bab5a7f700557dab18399747432f3678f7fa5af0b863b51312bd1a675794a"
+    },
+    {
+      "path": "c016-decoder-output-negation/nested-negative-row-baseline.c",
+      "bytes": 33761,
+      "sha256": "5980d832b1991580d283e03082c1265b0e22ec53deb7028063bdcab9a7ac47ae"
+    },
+    {
+      "path": "c016-decoder-output-negation/nested-negative-row-baseline.json",
+      "bytes": 42619,
+      "sha256": "122f35695d39c09638dd1cd52f3407162d0f0c070c287996b1780b8a954b856c"
+    },
+    {
+      "path": "c016-decoder-output-negation/nested-negative-row-baseline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-output-negation/nested-negative-row-luma-first.c",
+      "bytes": 33761,
+      "sha256": "318ceec81e88cd1dcba82fb1273feb88cbb695123ed1434b51503fd7740b462f"
+    },
+    {
+      "path": "c016-decoder-output-negation/nested-negative-row-luma-first.json",
+      "bytes": 42367,
+      "sha256": "9aa9493fcf9ad321cfb4d65bf2896ed016d64e654a4b749683c413a8de823245"
+    },
+    {
+      "path": "c016-decoder-output-negation/nested-negative-row-luma-first.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-output-negation/results.json",
+      "bytes": 2378,
+      "sha256": "71367c368bee22ccab7b5be00ffcfd2d10f34517456261612d9e5e6dbe4627de"
+    },
+    {
+      "path": "c016-decoder-output-negation/row-first-baseline.c",
+      "bytes": 33758,
+      "sha256": "fc69b7010e71bda764d35b6545e56e16c3f56a7da855562e3544a2de59083951"
+    },
+    {
+      "path": "c016-decoder-output-negation/row-first-baseline.json",
+      "bytes": 34323,
+      "sha256": "698fa63bdb6664251d74427875ac28bce2ae1afb8b20f405a6e563a6a756009e"
+    },
+    {
+      "path": "c016-decoder-output-negation/row-first-baseline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-output-negation/row-first-luma-first.c",
+      "bytes": 33758,
+      "sha256": "fb42300cb5bc46a2908b58e40ec3eada0ee73cc9a7b4cc9ef6946a48dcda4a58"
+    },
+    {
+      "path": "c016-decoder-output-negation/row-first-luma-first.json",
+      "bytes": 34635,
+      "sha256": "f25c87cb2113c9e3b361151d31db7606a32d2fafe16e18a5dc74cd9b155fb8d8"
+    },
+    {
+      "path": "c016-decoder-output-negation/row-first-luma-first.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-output-negation/subtract-negative-column-baseline.c",
+      "bytes": 33761,
+      "sha256": "f8577999433bfb5a8deb5ec05f2ee5b4d61311a22aee7c20907936f7b5a9b6a0"
+    },
+    {
+      "path": "c016-decoder-output-negation/subtract-negative-column-baseline.json",
+      "bytes": 34353,
+      "sha256": "11397f6c359d31b77c530e50958440639dc27e8ab672175949d24e6e8ae72c8b"
+    },
+    {
+      "path": "c016-decoder-output-negation/subtract-negative-column-baseline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-output-negation/subtract-negative-column-luma-first.c",
+      "bytes": 33761,
+      "sha256": "4d5e4925f28457d34a4cfa7761557f47477c566efb35f491af9ed988cb42d4b8"
+    },
+    {
+      "path": "c016-decoder-output-negation/subtract-negative-column-luma-first.json",
+      "bytes": 34667,
+      "sha256": "46bd83433cceb3060a7d00da0b4a3f3e713cf112fa5a7a427581616d448b80c9"
+    },
+    {
+      "path": "c016-decoder-output-negation/subtract-negative-column-luma-first.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-output-negation/subtract-negative-row-baseline.c",
+      "bytes": 33761,
+      "sha256": "b0c78086a364883441d59b578f054b8f51b0469a58337e4700324fcbc5de89c2"
+    },
+    {
+      "path": "c016-decoder-output-negation/subtract-negative-row-baseline.json",
+      "bytes": 34322,
+      "sha256": "c4d83e8608701173db422332c4928d24f9eddd0a0cc23aeeea041df739cb0aa1"
+    },
+    {
+      "path": "c016-decoder-output-negation/subtract-negative-row-baseline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-output-negation/subtract-negative-row-luma-first.c",
+      "bytes": 33761,
+      "sha256": "9edd4d112d80a8ec8c3bf1bd905da1f05eb88cffcba8b08f2e1a352d25bec86e"
+    },
+    {
+      "path": "c016-decoder-output-negation/subtract-negative-row-luma-first.json",
+      "bytes": 34635,
+      "sha256": "f25c87cb2113c9e3b361151d31db7606a32d2fafe16e18a5dc74cd9b155fb8d8"
+    },
+    {
+      "path": "c016-decoder-output-negation/subtract-negative-row-luma-first.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-red-owner-dump.log",
+      "bytes": 119,
+      "sha256": "352d90c50f4a690042c9f56525c64882ece87991ed51fbf64092ff804578e07a"
+    },
+    {
+      "path": "c016-decoder-red-owner-dump.py",
+      "bytes": 544,
+      "sha256": "8379167b04e8342539805a13a5dbb6a2ba2dcf43853bc00dd9410323d2559d81"
+    },
+    {
+      "path": "c016-decoder-red-owner-map.json",
+      "bytes": 36001,
+      "sha256": "f17b8e9b886879a77ba1c8b77b91b97e5b2bf843232dab0898eb3fc03dae42c5"
+    },
+    {
+      "path": "c016-decoder-red-owner-map.py",
+      "bytes": 2936,
+      "sha256": "be0441aa61f3b5d88d72bd11f2b4a26270a8fddbfc8d74100b18d45fc5c44108"
+    },
+    {
+      "path": "c016-decoder-red-owner-pcdump.txt",
+      "bytes": 218735,
+      "sha256": "0f744c62b35ef09c1b67ce55ff6453e7439f668453b9c2457f1c5a853590de4a"
+    },
+    {
+      "path": "c016-decoder-red-owner-replay.json",
+      "bytes": 27336,
+      "sha256": "c4a0db00c6ae3284e5ada7a1dc1120cd88db14e0c3c33eee50b201fc2cdea4a9"
+    },
+    {
+      "path": "c016-decoder-red-owner-replay.py",
+      "bytes": 2422,
+      "sha256": "cd715e44be4df1dcd7b98a6b00d137f84c63f0f4f735b1ec12134d023bf9c89b"
+    },
+    {
+      "path": "c016-decoder-role-order-archive.py",
+      "bytes": 3341,
+      "sha256": "dbb773f6ff05fbb066a90b778340b26ebee85121a6f7c42ec4b462d9df0e5fb3"
+    },
+    {
+      "path": "c016-decoder-role-order-attempt.log",
+      "bytes": 75,
+      "sha256": "ebad0b1379159925f75624689c8198b80676714766878e6d457927dd530ad90a"
+    },
+    {
+      "path": "c016-decoder-role-order-build.log",
+      "bytes": 337,
+      "sha256": "26d0c1527c1a8bc90f6bce23f77cf5e0836d95edf57d94c662df43bfd0b01d40"
+    },
+    {
+      "path": "c016-decoder-role-order-doctor.log",
+      "bytes": 2498,
+      "sha256": "22d616ce12ecce46c7239d04b1d059dd96f988822d45d83bfb31a55550283d44"
+    },
+    {
+      "path": "c016-decoder-role-order-final.json",
+      "bytes": 34337,
+      "sha256": "d26b846f44842a58a5ca753146d8ecb2bf08c24a63bb551e377a1eecb54db0de"
+    },
+    {
+      "path": "c016-decoder-role-order-final.log",
+      "bytes": 311,
+      "sha256": "724477eac5681d5a12977c4e939d66990ae30841b21bc92c88ac656d18198bf7"
+    },
+    {
+      "path": "c016-decoder-sample-load-order.py",
+      "bytes": 1968,
+      "sha256": "994598134e9666caf6a530d756771215ac15ff955fca587b3406b100e87784d9"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/argument-cb.c",
+      "bytes": 33753,
+      "sha256": "397bdcc21c1284e60f3edff8af36cde7f1eafd59f4b12ce1ea7c72118196cc3a"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/argument-cb.json",
+      "bytes": 44515,
+      "sha256": "9ea9a234fb415e4f33086a3c76d35d6112b9ff82f96c7c95fe3d64a5a3c4fa12"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/argument-cb.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/argument-cr.c",
+      "bytes": 33753,
+      "sha256": "f35938d625d74882eae57ddb9a49ebf21e050ed2e3421708b34c3cbf36b31a22"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/argument-cr.json",
+      "bytes": 34322,
+      "sha256": "4b5fff437eb2f502979715e8776fd339f59fbdd49f1c1e860c10cd4b65d407d0"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/argument-cr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/argument-luminance-cb-cr.c",
+      "bytes": 33673,
+      "sha256": "2c8d0dc723218165dc5cb971084bc66558612826bf669e273999ff92635d6b3e"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/argument-luminance-cb-cr.json",
+      "bytes": 46078,
+      "sha256": "dc3eb6b59e7302e5331ea688801635166a787138257ae370e92fb0cc32528b0a"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/argument-luminance-cb-cr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/argument-luminance.c",
+      "bytes": 33739,
+      "sha256": "bae82e76897763924e31ef6bbf9e2ad0206dc3759b593bea56f78e4d55b2bb53"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/argument-luminance.json",
+      "bytes": 34322,
+      "sha256": "4b5fff437eb2f502979715e8776fd339f59fbdd49f1c1e860c10cd4b65d407d0"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/argument-luminance.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/baseline.c",
+      "bytes": 33786,
+      "sha256": "7a2bab5a7f700557dab18399747432f3678f7fa5af0b863b51312bd1a675794a"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/cb-cr-luminance.c",
+      "bytes": 33786,
+      "sha256": "ab79431d1c9e33ebd658e856788f8ad7fb567ea8e77937cb32489aeed804e1d8"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/cb-cr-luminance.json",
+      "bytes": 34322,
+      "sha256": "d729bf2c7531ad4d0e0beedd689b9dc9f039969c142bbeb6ba48696d2f7832a8"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/cb-cr-luminance.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/cb-luminance-cr.c",
+      "bytes": 33786,
+      "sha256": "4d2745d73a2d4201f9524daebb14151082b591e6f434d8237748095247cc6a0a"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/cb-luminance-cr.json",
+      "bytes": 34322,
+      "sha256": "d729bf2c7531ad4d0e0beedd689b9dc9f039969c142bbeb6ba48696d2f7832a8"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/cb-luminance-cr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/cr-cb-luminance.c",
+      "bytes": 33786,
+      "sha256": "8ff8fe2eb55309130067eed3ed34954013ab0a9f1283f24c758f800df9f2d158"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/cr-cb-luminance.json",
+      "bytes": 34322,
+      "sha256": "d729bf2c7531ad4d0e0beedd689b9dc9f039969c142bbeb6ba48696d2f7832a8"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/cr-cb-luminance.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/cr-luminance-cb.c",
+      "bytes": 33786,
+      "sha256": "88622bd98dac03d006b791236ad672bfee71eeddf50a9ff98e96190a0671bb10"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/cr-luminance-cb.json",
+      "bytes": 34322,
+      "sha256": "d729bf2c7531ad4d0e0beedd689b9dc9f039969c142bbeb6ba48696d2f7832a8"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/cr-luminance-cb.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/luminance-cb-cr.c",
+      "bytes": 33786,
+      "sha256": "74af25dd6cb6ad8dc36a02d809442f5892047a0e16b6ec0d5a876b5573dc9117"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/luminance-cb-cr.json",
+      "bytes": 34322,
+      "sha256": "d729bf2c7531ad4d0e0beedd689b9dc9f039969c142bbeb6ba48696d2f7832a8"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/luminance-cb-cr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/luminance-cr-cb.c",
+      "bytes": 33786,
+      "sha256": "62faee4ffe1531ca343a07c36b633884c8267b48873c0e919366209b5d7e10a5"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/luminance-cr-cb.json",
+      "bytes": 34322,
+      "sha256": "d729bf2c7531ad4d0e0beedd689b9dc9f039969c142bbeb6ba48696d2f7832a8"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/luminance-cr-cb.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-sample-load-order/results.json",
+      "bytes": 2835,
+      "sha256": "39939ed1221dd27589ba8e6b1e4036593a27721f2e0991858ddee44e1c2ed089"
+    },
+    {
+      "path": "model-reference/colorgraph_parser.py",
+      "bytes": 14028,
+      "sha256": "a485e6152c400584de5eabba3711ab6c8f07cff685c0c599f8da2905004bb333"
+    },
+    {
+      "path": "model-reference/parser.py",
+      "bytes": 24085,
+      "sha256": "65dc84df9687e6b7b8d0d474a9f32336f1670cce1c8f53913101ef653c5499dc"
+    },
+    {
+      "path": "model-reference/tiebreak.py",
+      "bytes": 13849,
+      "sha256": "9daa3f8602822346c81d43ba85bd0ecf9435c24f6e1183ae3afa6ba78e1611a3"
+    },
+    {
+      "path": "retained-hsd_3B5C.c",
+      "bytes": 33786,
+      "sha256": "7a2bab5a7f700557dab18399747432f3678f7fa5af0b863b51312bd1a675794a"
+    }
+  ],
+  "archive_sha256": "7f9b76f1ca9f16768450469837a495e378a4daeef09206c6fe45848344afc369"
+}

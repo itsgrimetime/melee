@@ -455,3 +455,70 @@ all other five TU functions remain 100%. Both built DOLs match original SHA-1
 function is not yet 100%. Source, complete failed and retained diffs, frontend
 traces, model revalidation, remote logs, and verification are preserved under
 `docs/matching-evidence/jpeg-decoder/2026-09-06-chroma-add-order/`.
+
+## Source realizes the Cr/luminance role-order swap
+
+Putting luminance first in the red addition changes the source to:
+
+```c
+red_value = (f32) ((f64) luminance + (1.402 * (f64) cr));
+```
+
+Ordinary matching drops to **98.75519%**, with the same 241 instructions and
+176-byte frame. This candidate is experimental and was restored, not retained
+in PR #3384. Its value is a concrete source lever: the luminance and Cr sample
+roles exchange selection positions and physical registers while the arithmetic
+instruction sequence remains unchanged. Merely reordering their loads did not
+produce this effect.
+
+All ten aligned precolor passes admit a consistent register bijection. At the
+last precolor pass, old luminance IG64 maps to candidate IG63, and old Cr IG63
+maps to candidate IG64. Among 84 mapped GPR decisions, these are the only two
+with changed colors or selection positions: luminance r19 to r18 (22 to 23),
+and Cr r18 to r19 (23 to 22). All 34 mapped FPR decisions remain unchanged.
+The recorded full GPR graph is isomorphic under this mapping, including an
+identity extension for nodes not present in the instruction correspondence.
+The existing allocator model reproduces all 110 candidate GPR assignments.
+
+The candidate therefore supplies the Cr-before-luminance **role** ordering from
+the earlier six-move construction. Replaying only the five other abstract
+moves on the candidate reproduces the same extended target map:
+
+1. IG65 after IG122 (X offset).
+2. IG78 after IG122 (raw red result).
+3. IG37 after IG114 (chroma pointer).
+4. IG77 after IG128 (raw green result).
+5. IG79 after IG76 (narrowed green result).
+
+Wrong assignments after successive prefixes are 21, 13, 11, 7, 5, and 0.
+This is evidence for combining the red expression with a future X-offset
+source change, **not** a source-level 100% match. The target extension still
+assumes other baseline physical assignments should remain unchanged, and the
+five remaining order changes have not been realized in source.
+
+### Bounded follow-ups
+
+The 46 compile runs cover five families:
+
+| Family | Runs | Result |
+| --- | ---: | --- |
+| Sample-load order and loaded call arguments | 10 | All six load permutations neutral; Cb call-argument forms change instruction shape |
+| Channel expression operand order | 8 | Luminance-first red realizes the role swap; other isolated permutations neutral |
+| Output-address negative/add trees, with and without the red change | 8 | No X-offset role movement; nested negation adds an instruction |
+| Channel temporary reuse and green accumulation | 10 | Neutral or worse; some byte reuse reduces the frame to 168 bytes |
+| Green subtraction/negation trees, with and without the red change | 10 | Neutral or worse; no additional useful role-order change |
+
+The automatic `order-target` entry point refused this residual before any
+allocator-target compile because stack accesses with register-only differences
+were classified as stack-layout. Both frame sizes are 176 and there are no
+stack-offset discrepancies. This gate problem is reported as issue1520.
+The separate selection-order proposal tool worked; its no-compile suggestions
+largely repeat already tested declaration, type, and address-temporary families.
+No suggested end-pointer transform was run: the proposed endpoint needs a
+subarray-bound review before it can be considered valid C.
+
+Production source remains **98.83817%**, and all five other TU functions remain
+100%. The restored full build passes and its DOL matches the original SHA-1
+`08e0bf20134dfcb260699671004527b2d6bb1a45`. This turn's sources, diffs, graph
+correspondence, model replay, tool-gate failure, and final verification are in
+`docs/matching-evidence/jpeg-decoder/2026-09-06-source-role-order/`.
