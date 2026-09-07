@@ -102,3 +102,48 @@ These rejected source families do not prove that matching is impossible.
 A next attempt should target a specific initial-lowering dependency or a
 substantially different address/helper reconstruction, rather than more
 parentheses or a forced physical register map.
+
+## Pixel-helper and tiled-layout follow-up
+
+Merged upstream `f6c322a352` (the `lbsnap` match/link) into this worktree before
+probing. RGB remains **98.7788%, 868 bytes, frame 152**. The 53 compiled
+candidates below contain 45 valid source probes and eight excluded diagnostic
+array casts. No source change was retained.
+
+| Source family | Count | Result |
+| --- | ---: | --- |
+| Row-plus-column inline helper, s32/u32/int and reversed parameters | 6 | 97.98157–98.07373%; changes grouping but combines low column with row first, still wrong |
+| Pixel-load or pointer-return helper, with index, row/x, or separate high/low parameters | 5 | 98.02765–98.5576%; no target grouping; extra inline homes |
+| OR/XOR for disjoint column bits | 2 | 95.76037% / 98.45622%; instruction differences remain |
+| Cached index as scalar, array member, or struct member; embedded/separate/compound assignments | 12 | 95.89862–97.90323%; frame 152, but load/address sequence changes |
+| Synthetic multidimensional casts leaving row offset in the inner subscript | 8 | **Excluded:** inner indexing crosses declared row bounds; not production-source evidence |
+| Explicit pointer-addition chains | 2 | 94.03226%; one extra instruction |
+| Tiled rows of 4/8/16 pixels, row offset carried in outer index, signed/unsigned division or shifts | 9 | 90.52995–95%; no gain |
+| Narrow or register-qualified luma counter; `< 4` / `<= 3` loop tests | 7 | Narrow counters 77.866356–78.29493%; register qualifier and relational tests neutral |
+| Single destination-row expression or base-first accumulation | 2 | 96.65899%; no commutation fix |
+
+The cached-index probes intentionally still perform both pixel loads: storing
+the first chroma result could alias the input image, so reusing the first pixel
+value would not preserve the original behavior. The unsigned tiled variants
+use the existing aligned row offset, with column subscripts inside each row.
+
+The compiler static-audit setup was validated for exact GC/1.2.5n SHA-256
+`ccf4b465cec73b5aae9c5c5543dcf8cda8a62aba246f89e2e0b200d742f2e55c`:
+3,248 functions and a working native Ghidra decompiler. Inspection of the
+available `mwcc-decomp` reconstruction found pass coordination and operand
+materialization, but did **not** identify the addition-lowering routine that
+causes this residual. Many exact-1.2.5n register-origin sites remain unnamed.
+Do not treat that audit setup as a new explanation or as proof of a compiler
+bug. A useful next diagnostic would correlate these specific initial-PCode
+adds to their creation sites before further reassociation experiments.
+
+Restored ordinary checkdiff and the full build passed. All six already-matched
+TU functions remain 100%; the coefficient encoder remains 99.70266%. Built
+and original DOL SHA-1 both equal
+`08e0bf20134dfcb260699671004527b2d6bb1a45`. The TU stays Linkable; no new upstream
+PR or PR source update is warranted by this pass.
+
+Durable evidence is in
+`docs/matching-evidence/jpeg-rgb/2026-09-06-helper-layout/`: complete candidate
+sources/results, generators, baseline/final diffs, audit setup result, restored
+TU report, build/checksum evidence, and a verified 203-member SHA-256 manifest.
