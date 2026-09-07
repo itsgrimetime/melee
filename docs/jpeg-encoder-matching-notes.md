@@ -1,12 +1,16 @@
 # JPEG coefficient encoder matching notes
 
-Verified 2026-09-06 in c016. Source: `src/sysdolphin/baselib/hsd_3B34.c`.
+Verified **100% on 2026-09-07** in c016. Source: `src/sysdolphin/baselib/hsd_3B34.c`.
 
 User instruction, 2026-09-07: stay on **hsd_803B3CD8 until source100**, with no
 more function switching. Public scratch: https://decomp.me/scratch/mbSPH .
 The decoder experiments are set aside and its active claim was released.
 
-Latest follow-up: `5cdb1ad08c` removes `PAD_STACK(16)` through a real bit-length
+**Final match:** fork commit `d318e281de` reconstructs the inline component
+encoder and run helpers. Ordinary compiler verification reports zero differences,
+639 instructions and the target 104-byte frame. See the final section.
+
+Historical follow-up: `5cdb1ad08c` removes `PAD_STACK(16)` through a real bit-length
 result local, with unchanged99.70266% output. See the final section; earlier
 padding observations below describe the preceding source.
 
@@ -1013,3 +1017,51 @@ Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-07-source-work-r30/`
 contains the16 candidates and results, the unforced-r30 source/assembly,
 full retail trace, preallocation capture/hook, normalized alignment summary,
 and final verification in a SHA256-verified archive.
+
+
+## Final ordinary-source match — 2026-09-07
+
+User requested exclusive focus until 100%; no other function was selected.
+The successful reconstruction is committed as `d318e281de`, with clean PR
+counterpart `2637155278` (PR #3377). Both worktrees verify 100% with the ordinary
+production compiler. No forced registers, compiler patches, or PAD_STACK are
+part of the source proof.
+
+The successful chain:
+
+1. Move the component body into an explicit inline helper with a flat work
+   pointer. Pass its address through the byte/bit helpers. Keep AC value, run,
+   DC value, and index owned by the public wrapper.
+2. Specialize run-payload output: initialize `bit = length - 1` before `run++`.
+   This restores target instruction ordering.
+3. Declare wrapper locals in order `value, run, index, ac_value`. This fixes all
+   saved-register differences, leaving only the run-category r4/r5 pair.
+4. Specialize run bit length: pass run itself, increment the helper parameter,
+   then scan its bits. This removes the final volatile-register differences.
+5. Scope `auto_inline off` around the public wrapper, preserving its call
+   boundary without disabling the explicit helper inlines. Without this guard,
+   the encoder alone matches but its caller regresses to 97.87519%. A trial
+   `dont_inline on` instead disables needed helper expansion and is rejected.
+
+All seven previously/currently matched TU functions now report 100%, including
+`hsd_803B51C8`. RGB conversion remains 98.7788%; the TU stays Linkable. Full
+GALE01 builds pass in the work and PR trees. The unlinked build alone is not
+proof of this encoder; the fresh zero-diff object comparison is the proof.
+
+44 valid source compiles in the final search: run-payload (4), work declaration
+(6), run-cross (6), caller-order (23), and run-category (5). Three independent
+run-category spellings match 100%: reuse-increment, bit-first-reuse, and
+for-comma-reuse. The first is retained. At 100%, checkdiff classification omits
+`stack_frame_sizes`; the temporary scorer initially misreported these three
+as missing scores despite exit 0. The saved results are corrected using the
+actual match:true, score100, empty-diff outputs. Future consumers must tolerate
+optional classification fields.
+
+The fresh front-end trace of the earlier unforced-work-r30 candidate produced
+62 snapshots. @166 is its loop index, not a run-payload variable; its r31
+assignment agrees with ordinary assembly. No trace inconsistency was found.
+These IDs describe that intermediate source, not the final matching source.
+
+Evidence is preserved under
+`docs/matching-evidence/jpeg-encoder/2026-09-07-source100/`, including candidates,
+results, compiler comparisons, builds, and SHA256-verified archive members.

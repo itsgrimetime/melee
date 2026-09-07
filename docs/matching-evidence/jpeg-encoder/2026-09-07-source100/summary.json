@@ -1,0 +1,13 @@
+{
+  "function": "hsd_803B3CD8",
+  "source100": true,
+  "source_commit": "d318e281de",
+  "score": 100,
+  "source_sha256": "0fe1dcfd890288179ffa1280893b4dab885f1af6f884297079632ba04f242877",
+  "search_compiles": 44,
+  "full_build": "exit0",
+  "six_previously_matched_neighbors": "100% after scoped auto_inline off",
+  "remaining_TU_residual": "hsd_803B3408 98.7788%",
+  "selected": "run-category/reuse-increment",
+  "scorer_note": "Three 100% results repaired from original compile JSON; optional classification stack_frame_sizes was absent on exact matches."
+}
