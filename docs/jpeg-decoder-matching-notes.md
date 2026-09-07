@@ -318,3 +318,67 @@ Source is restored at 98.81743%; the other five decoder functions remain
 100%. Upstream through `a392908a20` is merged, including the linked gmtoulib
 match. Full build and original DOL checksum verification pass. No decoder
 PR is warranted by these probes and its TU remains Linkable.
+
+## Constructive select-order diagnostic and conversion boundaries
+
+The baseline GPR tiebreak model reproduces all 110 recorded decisions, with
+no truncated nodes. Keeping that interference graph unchanged, this sequence
+of abstract select-order moves reproduces the full 110-node diagnostic target:
+
+1. Move X-offset IG65 after IG122 (luminance conversion for green).
+2. Move Cr sample IG63 before luminance sample IG64.
+3. Move red clamp result IG78 after IG122.
+4. Move chroma pointer IG37 after IG114 (luminance conversion for red).
+5. Move green clamp result IG77 after IG128 (Cb conversion for blue).
+6. Move narrowed green result IG79 after blue clamp result IG76.
+
+Moves apply sequentially to the observed **selection** order, not instruction
+order. The target uses the corrected explicit GPR map above and assumes the
+other observed assignments remain unchanged. This is a constructive result
+for the existing SELECT model, not a source-realizability, simplify-order,
+retail-compiler, or 100% assembly proof. The commuted addition remains outside
+its scope. All six one-move omissions fail, leaving respectively 21, 2, 2, 4,
+3, and 5 assignment differences. That establishes local necessity within this
+specific construction, not global minimality.
+
+The 48 bounded model scenarios include nine exact target-map results. Moving
+IG65 alone after IG122 or IG120 gives r15, but swaps the luma/Cr assignment
+and leaves other differences. Moving it after stride IG66 instead gives r14.
+This explains why fixing only the first divergence is insufficient and gives
+concrete coupled lifetime targets for future source reconstruction. The saved
+script calls the existing `mwcc_debug.tiebreak` implementation; it does not
+implement a second allocator.
+
+### Source tests following those leads
+
+No retained source improvement resulted from this pass:
+
+| Family | Runs | Result |
+| --- | ---: | --- |
+| Clamp double input, wide channel locals, rounding at helper-call conversion | 10 | 94.0083–98.81743%; individual call-rounding forms neutral |
+| X quotient/scaled ownership in parameters, locals, records, before bias/groups; paired coordinates; wide channels without padding | 15 | 90.39419–98.81743%; no improved allocation |
+| Floating sample parameters at the RGB helper boundary | 8 | 90.676346–98.81743%; only Cb-to-f32 neutral |
+| Embedded/inner X-offset assignments and chroma declaration scopes | 10 | Nine neutral; embedded out_offset reuse 96.82573% |
+| Direct conditional/branch clamp expansions | 8 | 92.72199–98.59336%; frames 160–168 |
+| Wide clamp-result temporaries and wide-value/flat-blue interaction | 5 | Wide results 98.676346%; paired blue form adds three instructions, 95.29046% |
+
+There are 56 compile runs, including two equivalent chroma-inner declarations
+that differ only in whitespace; do not count those as independent hypotheses.
+Moving both red/blue rounding operations to the f32 clamp-parameter conversion
+while declaring those channel locals f64 supplies eight frame bytes. Removing
+the old PAD_STACK(8) then preserves all 241 baseline instruction bytes and the
+176-byte frame. It is another padding-free reconstruction, not a match gain;
+anonymous constant references still require the usual relocation treatment.
+The combined wide-value/flat-blue test shows that these frame effects are not
+independent arithmetic adjustments: its frame is correct but its instructions
+change. All production source was restored.
+
+Whole-function donor search peaked at 0.420 with hashed vectors and 0.976 with
+local vectors. The strongest hashed window (0.980) is a repeated load/update/
+store sequence in ftAction_800722C8's SKIP_CMD macro, not a decoder twin. The
+index still reports an old 79.88% query score; current ordinary checkdiff is
+authoritative. No donor justified a wholesale transplant.
+
+Sources, results, model inputs and implementation snapshots, explicit successful
+orders, ablations, donor outputs, and restored verification are archived under
+`docs/matching-evidence/jpeg-decoder/2026-09-06-select-order-construction/`.
