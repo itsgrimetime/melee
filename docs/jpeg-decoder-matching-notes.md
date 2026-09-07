@@ -115,6 +115,71 @@ and the full build passes the original DOL checksum. No decoder PR was reopened.
 
 ## Durable evidence
 
+### Helper and bias-loop reconstruction follow-up
+
+Upstream naming cleanup 9eab03d07a was merged before this pass. The other
+matching thread had claimed fn_8018B090; JPEG decoder work did not overlap it.
+PR3380 proposes matching lbsnap using `__rlwimi`, pending upstream review.
+Applying equivalent explicit RGB565 packing intrinsics here regressed to
+94.17013%, so that diagnostic was reverted.
+
+The corrected map still identifies X-offset IG65 as the first mapped
+divergence: select iteration 21, baseline r20, target r15, Case C. The map is
+partial, so this does not exclude an earlier unmapped cause. Advisory naming
+still misidentifies this node as luma_base; use its observed definition.
+
+Tested 43 ordinary source candidates, including the intrinsic diagnostic.
+None improved on 98.81743%; all were reverted. Candidate sources and complete
+checkdiff reports are in the committed evidence archive below.
+
+| Source family | Result |
+|---|---|
+|Return packed RGB565 from a helper|47.821575%; actual calls to jpeg_clamp remain|
+|Return group offset from a helper|Neutral 98.81743%, frame 176|
+|Return group pointer from a helper|93.497925%, frame 176|
+|Extract the complete luma-bias operation|97.86722%, frame 192|
+|Extract sample loads, address calculation, and pixel store together|92.6805%, frame 216|
+|Extract all tile groups|89.40249%, frame 280|
+|Separate color helpers, retaining nested jpeg_clamp|47.821575–59.991703%; actual clamp calls|
+|Scoped or TU-wide inline_depth(8)|Did not remove these calls or improve their scores|
+|Separate color helpers with expanded clamp, u8 return|92.72199–98.59336%; frames 160–176|
+|Separate color helpers with expanded clamp, s32 return|98.676346%; frame 168 for one channel, 160 for all three|
+|Return packed RGB565 with expanded clamps|92.72199%, frame 168|
+|Natural 64-sample indexed bias loop, int or u32 counter|98.24066%, frame 200|
+|Natural indexed bias loop, s32 counter|96.9917%, frame 200|
+|Natural bias loop using pointer post-increment|83.016594–84.51453%, frame 200|
+|Flat 256-sample bias loop|95.16598–95.22407%, frame 200|
+|Reuse existing bias counter, with or without channel temporary|98.24066%, frame 192|
+|Bias one 8x8 block through an inline helper|int: 98.676346%; s32: 97.42738%; frame 200|
+
+The extra calls are observed assembly facts, not merely a presumed inline-depth
+limit: both tested pragma placements were ineffective. Expanding the clamp
+body removes those calls, but changes the frame and allocation. Likewise,
+natural int and s32 bias loops have different unrolling, and reusing the
+existing counter removes 8 frame bytes without recovering the target frame.
+Do not classify these families as register-only experiments.
+
+Reviewed generated helper patches before applying anything. Candidate
+scalar-return-helper-0005 silently dropped the following jpeg_store_rgb565
+call, although its rejection_reason was null. It was never applied or scored;
+issue1511 records the bug. Generated padding-only extractions and wrappers
+were also not used as source evidence.
+
+A further 240-second bounded permuter run completed 1,341 iterations with
+32 compile errors. Best score remained 285, equal to the baseline; no improved
+candidate was emitted. It exited cleanly after the planned interrupt. The
+restored ordinary compile remains 98.81743%, frame 176. The other five TU
+functions remain 100%, and the full build passes the original DOL checksum.
+No decoder PR was reopened and the TU remains Linkable.
+
+Committed archive:
+`docs/matching-evidence/jpeg-decoder/2026-09-06-helper-reconstruction/`
+
+This archive supplements the earlier external evidence and includes the
+candidate generators, source variants, results, diagnostic suggestion output,
+permuter log, and restored-build verification. The manifest records hashes
+and distinguishes rejected diagnostic source from retained source.
+
 `~/.config/decomp-me/matching-evidence/jpeg-color-2026-09-06/allocator-followup/`
 
 Contains baseline source/checkdiff/dumps, automatic and manual target probes,
