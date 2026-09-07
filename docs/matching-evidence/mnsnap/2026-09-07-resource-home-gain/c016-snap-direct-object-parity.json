@@ -1,0 +1,13 @@
+{
+  "matched": true,
+  "reference": {
+    "path": "/tmp/c016-snap-direct-ordinary.o",
+    "size": 105552,
+    "sha256": "ad7d37e4b8eaabd8717872af0866bb564b36eddcfa4b302f386fdb3251afd6fb"
+  },
+  "retro": {
+    "path": "/tmp/c016-snap-direct-retail.o",
+    "size": 105552,
+    "sha256": "ad7d37e4b8eaabd8717872af0866bb564b36eddcfa4b302f386fdb3251afd6fb"
+  }
+}

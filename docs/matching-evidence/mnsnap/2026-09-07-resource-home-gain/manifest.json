@@ -1,0 +1,13 @@
+{
+  "function": "mnSnap_80257F24",
+  "old_match": 98.13447,
+  "retained_match": 98.15765,
+  "retained_source_sha256": "542798716f9634669f55e543a218e0c8df45bfd8199ff3596785242ce8111ed0",
+  "source_commit": "615cd2f5da",
+  "direct_warning_raw_object_parity": true,
+  "ordinary_probes": 8,
+  "frame_bytes": 400,
+  "neighbors_100": 18,
+  "data_matched_bytes": 1616,
+  "status": "improved, not fully matched"
+}

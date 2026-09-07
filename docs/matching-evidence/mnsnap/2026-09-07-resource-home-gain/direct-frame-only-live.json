@@ -1,0 +1,900 @@
+{
+  "stage": "final_scheduler",
+  "sequence": 21,
+  "frame_state": {
+    "arguments": {
+      "va": 5800044,
+      "head": 0,
+      "objects_sample": []
+    },
+    "locals": {
+      "va": 5799864,
+      "head": 25590808,
+      "objects_sample": [
+        {
+          "node": 25590808,
+          "next": 25590688,
+          "object": 25590752,
+          "name_ptr": 25690790,
+          "name": "@1930",
+          "stack_offset": 0,
+          "type": 25673572,
+          "size": 4
+        },
+        {
+          "node": 25590688,
+          "next": 25590568,
+          "object": 25590632,
+          "name_ptr": 25690766,
+          "name": "@1929",
+          "stack_offset": 0,
+          "type": 25673572,
+          "size": 4
+        },
+        {
+          "node": 25590568,
+          "next": 25590448,
+          "object": 25590512,
+          "name_ptr": 25690742,
+          "name": "@1928",
+          "stack_offset": 0,
+          "type": 25673572,
+          "size": 4
+        },
+        {
+          "node": 25590448,
+          "next": 25590328,
+          "object": 25590392,
+          "name_ptr": 25690718,
+          "name": "@1927",
+          "stack_offset": 0,
+          "type": 25673572,
+          "size": 4
+        },
+        {
+          "node": 25590328,
+          "next": 25590208,
+          "object": 25590272,
+          "name_ptr": 25690694,
+          "name": "@1926",
+          "stack_offset": 0,
+          "type": 25673572,
+          "size": 4
+        },
+        {
+          "node": 25590208,
+          "next": 25590088,
+          "object": 25590152,
+          "name_ptr": 25690670,
+          "name": "@1925",
+          "stack_offset": 0,
+          "type": 25673572,
+          "size": 4
+        },
+        {
+          "node": 25590088,
+          "next": 25589968,
+          "object": 25590032,
+          "name_ptr": 25690646,
+          "name": "@1924",
+          "stack_offset": 0,
+          "type": 25673572,
+          "size": 4
+        },
+        {
+          "node": 25589968,
+          "next": 25589848,
+          "object": 25589912,
+          "name_ptr": 25690622,
+          "name": "@1923",
+          "stack_offset": 0,
+          "type": 5633520,
+          "size": 4
+        },
+        {
+          "node": 25589848,
+          "next": 25589728,
+          "object": 25589792,
+          "name_ptr": 25690598,
+          "name": "@1922",
+          "stack_offset": 0,
+          "type": 25673100,
+          "size": 4
+        },
+        {
+          "node": 25589728,
+          "next": 25589608,
+          "object": 25589672,
+          "name_ptr": 25690574,
+          "name": "@1921",
+          "stack_offset": 0,
+          "type": 25672956,
+          "size": 4
+        },
+        {
+          "node": 25589608,
+          "next": 25589488,
+          "object": 25589552,
+          "name_ptr": 25690550,
+          "name": "@1920",
+          "stack_offset": 0,
+          "type": 25672956,
+          "size": 4
+        },
+        {
+          "node": 25589488,
+          "next": 25589368,
+          "object": 25589432,
+          "name_ptr": 25690526,
+          "name": "@1919",
+          "stack_offset": 0,
+          "type": 25672956,
+          "size": 4
+        },
+        {
+          "node": 25589368,
+          "next": 25589248,
+          "object": 25589312,
+          "name_ptr": 25690502,
+          "name": "@1918",
+          "stack_offset": 0,
+          "type": 25673028,
+          "size": 4
+        },
+        {
+          "node": 25589248,
+          "next": 25589128,
+          "object": 25589192,
+          "name_ptr": 25690478,
+          "name": "@1917",
+          "stack_offset": 0,
+          "type": 25673028,
+          "size": 4
+        },
+        {
+          "node": 25589128,
+          "next": 25589008,
+          "object": 25589072,
+          "name_ptr": 25690454,
+          "name": "@1916",
+          "stack_offset": 0,
+          "type": 25673028,
+          "size": 4
+        },
+        {
+          "node": 25589008,
+          "next": 25588792,
+          "object": 25588952,
+          "name_ptr": 25690430,
+          "name": "@1915",
+          "stack_offset": 0,
+          "type": 25673028,
+          "size": 4
+        },
+        {
+          "node": 25588792,
+          "next": 25588608,
+          "object": 25588736,
+          "name_ptr": 25690358,
+          "name": "@1914",
+          "stack_offset": 0,
+          "type": 25661108,
+          "size": 4
+        },
+        {
+          "node": 25588608,
+          "next": 25588424,
+          "object": 25588552,
+          "name_ptr": 25690302,
+          "name": "@1913",
+          "stack_offset": 0,
+          "type": 5633528,
+          "size": 4
+        },
+        {
+          "node": 25588424,
+          "next": 25588240,
+          "object": 25588368,
+          "name_ptr": 25690246,
+          "name": "@1912",
+          "stack_offset": 0,
+          "type": 25665924,
+          "size": 4
+        },
+        {
+          "node": 25588240,
+          "next": 25588056,
+          "object": 25588184,
+          "name_ptr": 25690190,
+          "name": "@1911",
+          "stack_offset": 0,
+          "type": 25665876,
+          "size": 4
+        },
+        {
+          "node": 25588056,
+          "next": 25587872,
+          "object": 25588000,
+          "name_ptr": 25690134,
+          "name": "@1910",
+          "stack_offset": 0,
+          "type": 5633552,
+          "size": 4
+        },
+        {
+          "node": 25587872,
+          "next": 25587688,
+          "object": 25587816,
+          "name_ptr": 25690078,
+          "name": "@1909",
+          "stack_offset": 0,
+          "type": 5633552,
+          "size": 4
+        },
+        {
+          "node": 25587688,
+          "next": 25587504,
+          "object": 25587632,
+          "name_ptr": 25690022,
+          "name": "@1908",
+          "stack_offset": 0,
+          "type": 8139376,
+          "size": 4
+        },
+        {
+          "node": 25587504,
+          "next": 25587320,
+          "object": 25587448,
+          "name_ptr": 25689966,
+          "name": "@1907",
+          "stack_offset": 0,
+          "type": 8139312,
+          "size": 4
+        },
+        {
+          "node": 25587320,
+          "next": 25587136,
+          "object": 25587264,
+          "name_ptr": 25689910,
+          "name": "@1906",
+          "stack_offset": 0,
+          "type": 5633528,
+          "size": 4
+        },
+        {
+          "node": 25587136,
+          "next": 25586952,
+          "object": 25587080,
+          "name_ptr": 25689854,
+          "name": "@1905",
+          "stack_offset": 0,
+          "type": 25663324,
+          "size": 4
+        },
+        {
+          "node": 25586952,
+          "next": 25586768,
+          "object": 25586896,
+          "name_ptr": 25689798,
+          "name": "@1904",
+          "stack_offset": 0,
+          "type": 25676580,
+          "size": 4
+        },
+        {
+          "node": 25586768,
+          "next": 25586584,
+          "object": 25586712,
+          "name_ptr": 25689742,
+          "name": "@1903",
+          "stack_offset": 0,
+          "type": 25672836,
+          "size": 4
+        },
+        {
+          "node": 25586584,
+          "next": 25586048,
+          "object": 25586528,
+          "name_ptr": 25689686,
+          "name": "@1902",
+          "stack_offset": 0,
+          "type": 25672836,
+          "size": 4
+        },
+        {
+          "node": 25586048,
+          "next": 25585576,
+          "object": 25585992,
+          "name_ptr": 25689614,
+          "name": "@1901",
+          "stack_offset": 0,
+          "type": 25672836,
+          "size": 4
+        },
+        {
+          "node": 25585576,
+          "next": 25585264,
+          "object": 25585520,
+          "name_ptr": 25689542,
+          "name": "@1900",
+          "stack_offset": 0,
+          "type": 25672836,
+          "size": 4
+        },
+        {
+          "node": 25585264,
+          "next": 25585080,
+          "object": 25585208,
+          "name_ptr": 25689486,
+          "name": "@1899",
+          "stack_offset": 0,
+          "type": 5633552,
+          "size": 4
+        },
+        {
+          "node": 25585080,
+          "next": 25584736,
+          "object": 25585024,
+          "name_ptr": 25689430,
+          "name": "@1898",
+          "stack_offset": 0,
+          "type": 5633552,
+          "size": 4
+        },
+        {
+          "node": 25584736,
+          "next": 25573256,
+          "object": 25584680,
+          "name_ptr": 25689358,
+          "name": "@1897",
+          "stack_offset": 0,
+          "type": 25664580,
+          "size": 4
+        },
+        {
+          "node": 25573256,
+          "next": 25572976,
+          "object": 25573200,
+          "name_ptr": 25688886,
+          "name": "@1884",
+          "stack_offset": 0,
+          "type": 25663132,
+          "size": 4
+        },
+        {
+          "node": 25572976,
+          "next": 25572696,
+          "object": 25572920,
+          "name_ptr": 25688830,
+          "name": "@1883",
+          "stack_offset": 0,
+          "type": 25663620,
+          "size": 4
+        },
+        {
+          "node": 25572696,
+          "next": 25571200,
+          "object": 25572640,
+          "name_ptr": 25688774,
+          "name": "@1882",
+          "stack_offset": 0,
+          "type": 25660468,
+          "size": 4
+        },
+        {
+          "node": 25571200,
+          "next": 25568864,
+          "object": 25571144,
+          "name_ptr": 25688510,
+          "name": "@1879",
+          "stack_offset": 0,
+          "type": 5633504,
+          "size": 4
+        },
+        {
+          "node": 25568864,
+          "next": 25567440,
+          "object": 25568808,
+          "name_ptr": 25688358,
+          "name": "@1876",
+          "stack_offset": 0,
+          "type": 7880352,
+          "size": 4
+        },
+        {
+          "node": 25567440,
+          "next": 25566016,
+          "object": 25567384,
+          "name_ptr": 25688230,
+          "name": "@1874",
+          "stack_offset": 0,
+          "type": 7900124,
+          "size": 4
+        },
+        {
+          "node": 25566016,
+          "next": 25564480,
+          "object": 25565960,
+          "name_ptr": 25688102,
+          "name": "@1872",
+          "stack_offset": 0,
+          "type": 7900124,
+          "size": 4
+        },
+        {
+          "node": 25564480,
+          "next": 25562704,
+          "object": 25564424,
+          "name_ptr": 25687838,
+          "name": "@1869",
+          "stack_offset": 0,
+          "type": 5633504,
+          "size": 4
+        },
+        {
+          "node": 25562704,
+          "next": 25555856,
+          "object": 25562648,
+          "name_ptr": 25687686,
+          "name": "@1868",
+          "stack_offset": 4,
+          "type": 25661108,
+          "size": 4
+        },
+        {
+          "node": 25555856,
+          "next": 25555736,
+          "object": 25555800,
+          "name_ptr": 25686766,
+          "name": "@1863",
+          "stack_offset": 0,
+          "type": 25665092,
+          "size": 4
+        },
+        {
+          "node": 25555736,
+          "next": 25555616,
+          "object": 25555680,
+          "name_ptr": 25686742,
+          "name": "@1862",
+          "stack_offset": 0,
+          "type": 5633552,
+          "size": 4
+        },
+        {
+          "node": 25555616,
+          "next": 25555496,
+          "object": 25555560,
+          "name_ptr": 25686718,
+          "name": "@1861",
+          "stack_offset": 0,
+          "type": 5633552,
+          "size": 4
+        },
+        {
+          "node": 25555496,
+          "next": 25555376,
+          "object": 25555440,
+          "name_ptr": 25686694,
+          "name": "@1860",
+          "stack_offset": 0,
+          "type": 5633552,
+          "size": 4
+        },
+        {
+          "node": 25555376,
+          "next": 25555256,
+          "object": 25555320,
+          "name_ptr": 25686670,
+          "name": "@1859",
+          "stack_offset": 0,
+          "type": 5633520,
+          "size": 4
+        },
+        {
+          "node": 25555256,
+          "next": 25555136,
+          "object": 25555200,
+          "name_ptr": 25686646,
+          "name": "@1858",
+          "stack_offset": 8,
+          "type": 6362380,
+          "size": 12
+        },
+        {
+          "node": 25555136,
+          "next": 25498760,
+          "object": 25555080,
+          "name_ptr": 25686622,
+          "name": "@1857",
+          "stack_offset": 20,
+          "type": 6362380,
+          "size": 12
+        },
+        {
+          "node": 25498760,
+          "next": 25497520,
+          "object": 25676252,
+          "name_ptr": 8140682,
+          "name": "card_status",
+          "stack_offset": 32,
+          "type": 25676236,
+          "size": 4
+        },
+        {
+          "node": 25497520,
+          "next": 25494792,
+          "object": 25676052,
+          "name_ptr": 8140618,
+          "name": "photo_count",
+          "stack_offset": 36,
+          "type": 25676036,
+          "size": 4
+        },
+        {
+          "node": 25494792,
+          "next": 25494544,
+          "object": 25675644,
+          "name_ptr": 25675630,
+          "name": "zero",
+          "stack_offset": 40,
+          "type": 5633520,
+          "size": 4
+        },
+        {
+          "node": 25494544,
+          "next": 25494456,
+          "object": 25675564,
+          "name_ptr": 6414830,
+          "name": "i",
+          "stack_offset": 0,
+          "type": 5633520,
+          "size": 4
+        },
+        {
+          "node": 25494456,
+          "next": 25494368,
+          "object": 25675508,
+          "name_ptr": 8138146,
+          "name": "arrows_matanim",
+          "stack_offset": 0,
+          "type": 25675492,
+          "size": 4
+        },
+        {
+          "node": 25494368,
+          "next": 25494280,
+          "object": 25675420,
+          "name_ptr": 8138354,
+          "name": "warn_animjoint",
+          "stack_offset": 48,
+          "type": 25675404,
+          "size": 4
+        },
+        {
+          "node": 25494280,
+          "next": 25494192,
+          "object": 25675332,
+          "name_ptr": 8138426,
+          "name": "warn_matanim",
+          "stack_offset": 52,
+          "type": 25675316,
+          "size": 4
+        },
+        {
+          "node": 25494192,
+          "next": 25494104,
+          "object": 25675244,
+          "name_ptr": 8138498,
+          "name": "warn_shapeanim",
+          "stack_offset": 56,
+          "type": 25675228,
+          "size": 4
+        },
+        {
+          "node": 25494104,
+          "next": 25494016,
+          "object": 25675156,
+          "name_ptr": 8136970,
+          "name": "main_animjoint",
+          "stack_offset": 0,
+          "type": 25675140,
+          "size": 4
+        },
+        {
+          "node": 25494016,
+          "next": 25493928,
+          "object": 25675068,
+          "name_ptr": 8138290,
+          "name": "warn_joint",
+          "stack_offset": 60,
+          "type": 25675052,
+          "size": 4
+        },
+        {
+          "node": 25493928,
+          "next": 25493840,
+          "object": 25674980,
+          "name_ptr": 8138218,
+          "name": "arrows_shapeanim",
+          "stack_offset": 0,
+          "type": 25674964,
+          "size": 4
+        },
+        {
+          "node": 25493840,
+          "next": 25493752,
+          "object": 25674892,
+          "name_ptr": 8138074,
+          "name": "arrows_animjoint",
+          "stack_offset": 0,
+          "type": 25674876,
+          "size": 4
+        },
+        {
+          "node": 25493752,
+          "next": 25493664,
+          "object": 25674804,
+          "name_ptr": 8138002,
+          "name": "arrows_joint",
+          "stack_offset": 0,
+          "type": 25674788,
+          "size": 4
+        },
+        {
+          "node": 25493664,
+          "next": 25493576,
+          "object": 25674716,
+          "name_ptr": 8137730,
+          "name": "page_joint",
+          "stack_offset": 64,
+          "type": 25674700,
+          "size": 4
+        },
+        {
+          "node": 25493576,
+          "next": 25493488,
+          "object": 25674628,
+          "name_ptr": 8137522,
+          "name": "sub_animjoint",
+          "stack_offset": 0,
+          "type": 25674612,
+          "size": 4
+        },
+        {
+          "node": 25493488,
+          "next": 25493400,
+          "object": 25674540,
+          "name_ptr": 8137594,
+          "name": "sub_matanim",
+          "stack_offset": 0,
+          "type": 25674524,
+          "size": 4
+        },
+        {
+          "node": 25493400,
+          "next": 25493312,
+          "object": 25674452,
+          "name_ptr": 8137658,
+          "name": "sub_shapeanim",
+          "stack_offset": 0,
+          "type": 25674436,
+          "size": 4
+        },
+        {
+          "node": 25493312,
+          "next": 25493224,
+          "object": 25674364,
+          "name_ptr": 8137458,
+          "name": "photo_joint",
+          "stack_offset": 0,
+          "type": 25674348,
+          "size": 4
+        },
+        {
+          "node": 25493224,
+          "next": 25493136,
+          "object": 25674276,
+          "name_ptr": 8137186,
+          "name": "csr_joint",
+          "stack_offset": 0,
+          "type": 25674260,
+          "size": 4
+        },
+        {
+          "node": 25493136,
+          "next": 25493048,
+          "object": 25674188,
+          "name_ptr": 8137250,
+          "name": "csr_animjoint",
+          "stack_offset": 100,
+          "type": 25674172,
+          "size": 4
+        },
+        {
+          "node": 25493048,
+          "next": 25492960,
+          "object": 25674100,
+          "name_ptr": 8137322,
+          "name": "csr_matanim",
+          "stack_offset": 68,
+          "type": 25674084,
+          "size": 4
+        },
+        {
+          "node": 25492960,
+          "next": 25492872,
+          "object": 25674012,
+          "name_ptr": 8137386,
+          "name": "csr_shapeanim",
+          "stack_offset": 72,
+          "type": 25673996,
+          "size": 4
+        },
+        {
+          "node": 25492872,
+          "next": 25492784,
+          "object": 25673924,
+          "name_ptr": 8137042,
+          "name": "main_matanim",
+          "stack_offset": 0,
+          "type": 25673908,
+          "size": 4
+        },
+        {
+          "node": 25492784,
+          "next": 25492696,
+          "object": 25673836,
+          "name_ptr": 8137114,
+          "name": "main_shapeanim",
+          "stack_offset": 0,
+          "type": 25673820,
+          "size": 4
+        },
+        {
+          "node": 25492696,
+          "next": 25492608,
+          "object": 25673748,
+          "name_ptr": 8136906,
+          "name": "main_joint",
+          "stack_offset": 44,
+          "type": 25673732,
+          "size": 4
+        },
+        {
+          "node": 25492608,
+          "next": 25492520,
+          "object": 25673660,
+          "name_ptr": 8013366,
+          "name": "archive",
+          "stack_offset": 0,
+          "type": 25673644,
+          "size": 4
+        },
+        {
+          "node": 25492520,
+          "next": 25492432,
+          "object": 25673588,
+          "name_ptr": 7290966,
+          "name": "text",
+          "stack_offset": 0,
+          "type": 25673572,
+          "size": 4
+        },
+        {
+          "node": 25492432,
+          "next": 25492344,
+          "object": 25673516,
+          "name_ptr": 6408550,
+          "name": "proc",
+          "stack_offset": 0,
+          "type": 25673500,
+          "size": 4
+        },
+        {
+          "node": 25492344,
+          "next": 25492256,
+          "object": 25673444,
+          "name_ptr": 25664654,
+          "name": "thumb_root_ptr",
+          "stack_offset": 0,
+          "type": 25673428,
+          "size": 4
+        },
+        {
+          "node": 25492256,
+          "next": 25492168,
+          "object": 25673356,
+          "name_ptr": 25673318,
+          "name": "slot_jobj_ptr",
+          "stack_offset": 0,
+          "type": 25673340,
+          "size": 4
+        },
+        {
+          "node": 25492168,
+          "next": 25492080,
+          "object": 25673236,
+          "name_ptr": 25673198,
+          "name": "move_jobj_ptr",
+          "stack_offset": 0,
+          "type": 25673220,
+          "size": 4
+        },
+        {
+          "node": 25492080,
+          "next": 25491992,
+          "object": 25673116,
+          "name_ptr": 8010022,
+          "name": "jobj2",
+          "stack_offset": 0,
+          "type": 25673100,
+          "size": 4
+        },
+        {
+          "node": 25491992,
+          "next": 25491904,
+          "object": 25673044,
+          "name_ptr": 6339630,
+          "name": "gobj",
+          "stack_offset": 0,
+          "type": 25673028,
+          "size": 4
+        },
+        {
+          "node": 25491904,
+          "next": 25491816,
+          "object": 25672972,
+          "name_ptr": 6401486,
+          "name": "jobj",
+          "stack_offset": 0,
+          "type": 25672956,
+          "size": 4
+        },
+        {
+          "node": 25491816,
+          "next": 25491504,
+          "object": 25672852,
+          "name_ptr": 8142490,
+          "name": "snap",
+          "stack_offset": 0,
+          "type": 25672836,
+          "size": 4
+        },
+        {
+          "node": 25491504,
+          "next": 25491416,
+          "object": 25672780,
+          "name_ptr": 25672750,
+          "name": "main_load",
+          "stack_offset": 0,
+          "type": 25672764,
+          "size": 4
+        },
+        {
+          "node": 25491416,
+          "next": 0,
+          "object": 25672668,
+          "name_ptr": 25672638,
+          "name": "page_name",
+          "stack_offset": 76,
+          "type": 25672652,
+          "size": 4
+        }
+      ]
+    },
+    "temps": {
+      "va": 5766848,
+      "head": 0,
+      "objects_sample": []
+    },
+    "frame_base_size": {
+      "va": 5800140,
+      "s32": 8
+    },
+    "frame_call_args_size": {
+      "va": 5796140,
+      "s32": 144
+    }
+  }
+}

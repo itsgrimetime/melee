@@ -171,3 +171,28 @@ general tooling not changed. Issue1564 records default target extraction failure
 in debug suggest frame. Supplying a sliced single-function target works, but
 returns only generic frame-equality advice, not object ownership.
 Evidence: matching-evidence/mnsnap/2026-09-07-retail-frame-recovery.
+
+## Resource spill homes fixed: 98.15765%
+
+Fresh direct-warning retail trace completed. Main_joint still owns relative44
+(absolute196), while named warn_animjoint gets relative48 (absolute200); all
+following resource locals shift4. Raw compiled object parity against the
+ordinary direct-warning compile is exact:105552bytes, SHA256
+ad7d37e4b8eaabd8717872af0866bb564b36eddcfa4b302f386fdb3251afd6fb.
+
+Eight combined controls then removed the early main_joint alias entirely,
+using either direct field or getter at the main model load, separate/embedded,
+with direct/getter warning argument. The winning direct-warning + separate
+main_load=&snap->main_joint scores98.15765; embedded main getter ties. Choose
+the simpler separate field spelling. Other six regress98.12519 or lower.
+Unused warning getter removed, whitespace cleaned; ordinary score unchanged.
+All resource-pointer homes now match: warning196,material200,shape204,joint208,
+page212,cursor material216/shape220,page name224, strings228..244,cursor anim248.
+Frame400 and647instructions preserved. Store scheduling still differs in the
+early archive setup. Eighteen neighbors100 and1616databytes100. Configure/ninja
+pass; TU remainsLinkable and initializer incomplete.
+
+Source commit615cd2f5da; fresh clean PR branch codex/mnsnap-resource-homes,
+worktree /tmp/melee-c016-snap-resource-pr, source commit6304289df5. Push every
+further gain to this PR while open. Previous3406 merged. Evidence in
+matching-evidence/mnsnap/2026-09-07-resource-home-gain.
