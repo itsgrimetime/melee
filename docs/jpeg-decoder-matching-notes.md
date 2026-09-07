@@ -602,3 +602,22 @@ Thus encoder's late-sharing source lever does not immediately improve decoder.
 All restored; ninja passes. Sources/diffs in2026-09-07-direct-address-resume.
 The extract get command could not find this static function despite its symbol
 and report entry; issue1552 filed. Source and checkdiff remain usable.
+
+## Diagnostic resume failures and fallback — 2026-09-07
+
+Fresh stage capture with the previously successful RGB CaptureSession hook
+reaches fn_803B6820 then GDB aborts(SIGABRT), no stage streams. Issue1553 filed;
+functions.jsonl confirms target was reached, so not a static-name filter miss.
+Windows current isolated runner instead fails prototype checking at earlier
+fn_803B61B4 line340, before target, compileexit2; stock DLL restored. Issue1554
+filed. Local ordinary build/checkdiff still passes. Neither failed capture is
+valid allocator evidence and no target artifact from those runs was scored.
+
+Recovered preserved clamp-result retail backend from committed archive and ran
+supported lifetime-pressure for65:15,37:16,78:16,77:17,79:17. It is readable but
+freshness unknown, ownership unattributed, scope suggestions low confidence.
+Existing target mapping/six-move construction remains hypothesis evidence rather
+than source proof. Report and GDB failure log saved in2026-09-07-diagnostic-resume.
+Next actionable diagnostic repair: remote prototype flag/context parity or
+bounded retail capture avoiding GDB hook abort; manual source/checkdiff remains
+available. No production changes,98.83817 baseline retained.
