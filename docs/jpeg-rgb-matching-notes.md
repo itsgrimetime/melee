@@ -1294,3 +1294,25 @@ The source-term donor is therefore not a complete transfer of the row fix:
 it slightly changes allocation but leaves the destination ADD wrong. Do not
 promote its percentage as a pure-register frontier. Complete sources/diffs in
 2026-09-07-column-term-donor. Production restored98.82488.
+
+## Automated order-search route audit — 2026-09-07
+
+Inspected current simplify-order/select-order-search CLI and implementation.
+Both accept pcdump baselines; neither exposes a retail backend-trace runner.
+Source candidate compilation in mwcc_debug/diff_capture.py invokes `debug dump
+local`. Revalidated actual local process95126:UEs,elapsed9h50m. The guarded local
+runner must not be bypassed. Healthy retail backend/snapshot lane remains usable;
+this limits one automation route, not all progress on the match.
+
+Filed shared feature1549 with reusable runner/artifact-adapter requirements and
+ordinary checkdiff stop/validation criteria. Separate remote metadata issue1545
+remains relevant. Also found existing open1446/1288: select-order search can
+report false physical-target hits after virtual IDs change.1446's concrete
+example compares baseline pointer91 with candidate index91 while pointer moved92,
+and actual match regresses. This is directly relevant to our deliberate rank/
+numbering hypothesis. A future automated rank search must derive fresh operand/
+virtual correspondence for each candidate; never reuse target37/38 blindly.
+
+No candidate compiler was launched through the unsafe route and no source was
+changed. Existing manual retail correspondence path still works. Production
+remains98.82488; PR3396 merged; exact match and TU linking remain unfinished.
