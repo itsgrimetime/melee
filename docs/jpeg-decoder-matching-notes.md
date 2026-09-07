@@ -825,3 +825,24 @@ Each compiler stages a unique PID source; real source was unchanged by the searc
 No debug-DLL scoring or forced registers. Import, target-fidelity report, search
 log and four helper source/diffs archived in2026-09-07-block-helper-permuter.
 Current source remains98.962654; no new PR delta.
+
+## Type interactions and early dependencies — 2026-09-07
+
+Eighteen ordinary probes against retained pointer-inequality baseline, no gains.
+Green scalar int/s32/u32:98.6556/frame184; u16:97.82987/frame184. Individual pixel
+fields widened: red u16:98.94191/frame176, red u32:98.42738/frame184; green u16/u32:
+98.82158/frame184/192; blue u16:98.23651/frame176,u32:98.095436/frame184. Red-u16
+changes exactly one instruction line: +268 clrlwi r28,r28,24 becomes mask16, with
+no allocation change. It is not a useful role-movement lead.
+
+Discarded inequalities before bias: dst/base97.71784; width/y and x/y96.908714.
+After bias: all three96.556015. Before outer loop: aligned_width/y and
+aligned_width/width98.13278. All eight retain176-byte frame. Unlike pixel-loop
+X comparisons, these were intended to perturb neighboring values before the
+X-offset definition; no source win resulted.
+
+Exploratory web search of exact JPEG coefficients and GitHub code search
+`"1.7718" "0.0012"` found no matching code result (not an exhaustive absence
+claim). Generic YCbCr formula results do not justify a donor reconstruction.
+Retained source restored; ninja passes. Sources/diffs/scripts archived under
+2026-09-07-type-early-interactions.
