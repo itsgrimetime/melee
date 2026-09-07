@@ -764,3 +764,44 @@ rule with a coherent row-sum ownership boundary, not blind parenthesis sweeps.
 
 Evidence and four full source/diff candidates are SHA256-verified in
 2026-09-07-expression-complexity. Source restored; no PR delta or Matching flag.
+
+## Direct row-call structural candidate — 2026-09-07
+
+NEW NEXT STARTING POINT: docs/matching-evidence/jpeg-rgb/2026-09-07-direct-row-call/structural-candidate.c.txt
+(full TU,98.04147%,152-byte frame). It uses an inline row-sum helper with a named
+sum result, then `dst_row = tile_offset + jpeg_row_sum(chroma_y)` and corrected
+pixel addressing. Removing the luma row_offset local recovers the helper's
+8-byte reservation. Unlike the old97.1659% helper, this preserves both the
+correct row operand order and distinct virtuals for extraction and sum.
+
+Read-only retail PCode: at0xa8 low=83, at0xac high=84;0xb0 ADD74,83,84;
+0xb4 ADD40,67,74. Target requires74:r26 (currentr5), while40 alreadyr26.
+The graph has no74–40 interference; sharingr26 is legal.74 is simplified at
+index86 and40 at21;74 currently takes available volatiler5. This is a separate
+short-lived result, NOT the old merged-low contradiction.
+
+Same-address precolor/final correspondence checks267 GPR operands,82virtuals,
+with NO contradictory target assignments.217 instruction shapes align after
+the known0xd4/d8 and0x1f0/f4 scheduling swaps. Skipped implicit/rewritten nodes
+are explicitly listed; this is not a complete binary match or proof that every
+allocator target is feasible. Desired changed colors:
+74:26,38:21,101:22,102:22,98:22,99:22,95:23,96:23,37:22.
+Do not reuse this map on another candidate without renewed correspondence.
+
+Lifetime-pressure was run on the fresh backend trace. It has no reliable first
+def/live intervals/source attribution and flags incomplete allocator state for74.
+Other reported holders describe final interfering colors, not necessarily the
+causal first SELECT blocker (known limitation). Use full captured before/after
+coloring snapshots for order/coalescing analysis; avoid source suggestions that
+pretend to have attribution.
+
+Eight direct helper forms and four tile-parameter helper forms tested. Direct
+return expression yields96.17512%; named helper result/full frame97.820274%;
+no-row offset98.04147%. Moving tile addition inside helper scores95.53917–
+97.14286%, no improvement. Original production baseline remains98.7788%.
+The new candidate is retained separately for allocation work, not submitted as
+a percentage improvement. All evidence, sources, full retail stages and backend
+trace are SHA256-verified in2026-09-07-direct-row-call.
+
+Normal frontend IRO dump consumed CPU for90+seconds without a trace; stopped
+only that emulator, reported issue1542. Read-only hooks/full backend still work.

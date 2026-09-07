@@ -1,0 +1,899 @@
+{
+  "function": "hsd_803B3408",
+  "source_head": "491f1fd24bb451b8d3eaf07f4ff3c3bb37459a61",
+  "production_percent": 98.7788,
+  "structural_candidate_percent": 98.04147,
+  "candidate": "structural-candidate.c.txt",
+  "finding": "Correct row-add operand order and grouping, distinct high/sum virtuals. 267 checked GPR operands map to82 virtuals without conflicting targets, after two scheduling transpositions. Not an exact match.",
+  "correspondence": {
+    "valid_complete_coloring_target": true,
+    "conflicts": [],
+    "scope": "Same-address precolor/final PCode correspondence validated against ordinary candidate assembly. Known two instruction transpositions aligned manually; row addition included. Conflicts invalidate the combined target assignment map. Unmapped nodes are not target proof.",
+    "checked_gpr_operands": 267,
+    "mapped_virtuals": 82,
+    "skipped": [
+      {
+        "offset": "0x0",
+        "reason": "No same-address precolor instruction"
+      },
+      {
+        "offset": "0xc",
+        "reason": "No same-address precolor instruction"
+      },
+      {
+        "offset": "0x38",
+        "reason": "PCode/assembly implicit operand count differs"
+      },
+      {
+        "offset": "0x40",
+        "reason": "PCode/assembly implicit operand count differs"
+      },
+      {
+        "offset": "0x44",
+        "reason": "PCode/assembly implicit operand count differs"
+      },
+      {
+        "offset": "0x48",
+        "reason": "Opcode changed after precolor"
+      },
+      {
+        "offset": "0x4c",
+        "reason": "PCode/assembly implicit operand count differs"
+      },
+      {
+        "offset": "0x50",
+        "reason": "Opcode changed after precolor"
+      },
+      {
+        "offset": "0x54",
+        "reason": "PCode/assembly implicit operand count differs"
+      },
+      {
+        "offset": "0x58",
+        "reason": "PCode/assembly implicit operand count differs"
+      },
+      {
+        "offset": "0x60",
+        "reason": "PCode/assembly implicit operand count differs"
+      },
+      {
+        "offset": "0x68",
+        "reason": "PCode/assembly implicit operand count differs"
+      },
+      {
+        "offset": "0x6c",
+        "reason": "PCode/assembly implicit operand count differs"
+      },
+      {
+        "offset": "0x7c",
+        "reason": "Opcode changed after precolor"
+      },
+      {
+        "offset": "0x1d0",
+        "reason": "Opcode changed after precolor"
+      },
+      {
+        "offset": "0x358",
+        "reason": "No same-address precolor instruction"
+      },
+      {
+        "offset": "0x35c",
+        "reason": "No same-address precolor instruction"
+      },
+      {
+        "offset": "0x360",
+        "reason": "No same-address precolor instruction"
+      }
+    ],
+    "target_assignments": {
+      "64": 10,
+      "75": 0,
+      "76": 6,
+      "77": 4,
+      "79": 0,
+      "78": 5,
+      "117": 4,
+      "61": 31,
+      "80": 0,
+      "45": 25,
+      "118": 4,
+      "49": 28,
+      "128": 0,
+      "81": 5,
+      "82": 5,
+      "43": 24,
+      "48": 27,
+      "66": 9,
+      "42": 7,
+      "60": 5,
+      "86": 6,
+      "138": 5,
+      "85": 21,
+      "39": 29,
+      "83": 22,
+      "84": 5,
+      "74": 26,
+      "40": 26,
+      "67": 8,
+      "52": 6,
+      "58": 22,
+      "87": 21,
+      "89": 5,
+      "90": 5,
+      "91": 5,
+      "55": 5,
+      "47": 30,
+      "57": 23,
+      "38": 21,
+      "101": 22,
+      "102": 22,
+      "98": 22,
+      "99": 22,
+      "95": 23,
+      "96": 23,
+      "92": 21,
+      "37": 22,
+      "104": 21,
+      "54": 21,
+      "111": 5,
+      "112": 5,
+      "108": 5,
+      "109": 5,
+      "105": 21,
+      "106": 21,
+      "114": 5,
+      "51": 30,
+      "50": 29,
+      "71": 6,
+      "69": 7,
+      "115": 5,
+      "116": 5,
+      "139": 26,
+      "119": 5,
+      "72": 5,
+      "46": 26,
+      "122": 21,
+      "123": 23,
+      "121": 21,
+      "124": 22,
+      "125": 22,
+      "53": 22,
+      "132": 23,
+      "133": 23,
+      "129": 23,
+      "130": 23,
+      "126": 22,
+      "127": 22,
+      "135": 23,
+      "136": 23,
+      "63": 11,
+      "62": 12
+    },
+    "changed_assignments": {
+      "74": [
+        5,
+        26
+      ],
+      "38": [
+        23,
+        21
+      ],
+      "101": [
+        21,
+        22
+      ],
+      "102": [
+        21,
+        22
+      ],
+      "98": [
+        21,
+        22
+      ],
+      "99": [
+        21,
+        22
+      ],
+      "95": [
+        22,
+        23
+      ],
+      "96": [
+        22,
+        23
+      ],
+      "37": [
+        30,
+        22
+      ]
+    },
+    "sites": {
+      "64": [
+        "0x4",
+        "0x74",
+        "0x348",
+        "0x348"
+      ],
+      "75": [
+        "0x8",
+        "0x10"
+      ],
+      "76": [
+        "0x10",
+        "0x14",
+        "0x14",
+        "0x2c"
+      ],
+      "77": [
+        "0x18",
+        "0x1c",
+        "0x1c",
+        "0x24"
+      ],
+      "79": [
+        "0x20",
+        "0x30",
+        "0x30",
+        "0x34"
+      ],
+      "78": [
+        "0x24",
+        "0x3c"
+      ],
+      "117": [
+        "0x28",
+        "0x5c"
+      ],
+      "61": [
+        "0x2c",
+        "0x34",
+        "0x94",
+        "0x1fc",
+        "0x23c",
+        "0x348"
+      ],
+      "80": [
+        "0x34",
+        "0x3c"
+      ],
+      "45": [
+        "0x3c",
+        "0x74"
+      ],
+      "118": [
+        "0x5c",
+        "0x118",
+        "0x1e8"
+      ],
+      "49": [
+        "0x64",
+        "0x340",
+        "0x340",
+        "0x344"
+      ],
+      "128": [
+        "0x70",
+        "0xf4",
+        "0x110",
+        "0x128",
+        "0x16c",
+        "0x180",
+        "0x190",
+        "0x238",
+        "0x244",
+        "0x258",
+        "0x2ac",
+        "0x2c0",
+        "0x2d0"
+      ],
+      "81": [
+        "0x74",
+        "0x78"
+      ],
+      "82": [
+        "0x78",
+        "0x80"
+      ],
+      "43": [
+        "0x80",
+        "0xd0",
+        "0x20c",
+        "0x294",
+        "0x310",
+        "0x310"
+      ],
+      "48": [
+        "0x84",
+        "0x32c",
+        "0x32c",
+        "0x330"
+      ],
+      "66": [
+        "0x88",
+        "0x1dc",
+        "0x338",
+        "0x338"
+      ],
+      "42": [
+        "0x8c",
+        "0x90",
+        "0xa0",
+        "0xa8",
+        "0xac",
+        "0x1c0",
+        "0x1c0",
+        "0x1c4"
+      ],
+      "60": [
+        "0x90",
+        "0x94"
+      ],
+      "86": [
+        "0x94",
+        "0xa4"
+      ],
+      "138": [
+        "0x98",
+        "0x9c"
+      ],
+      "85": [
+        "0xa0",
+        "0xa4"
+      ],
+      "39": [
+        "0xa4",
+        "0xc4"
+      ],
+      "83": [
+        "0xa8",
+        "0xb0"
+      ],
+      "84": [
+        "0xac",
+        "0xb0"
+      ],
+      "74": [
+        "0xb0",
+        "0xb4"
+      ],
+      "40": [
+        "0xb4",
+        "0x104"
+      ],
+      "67": [
+        "0xb4",
+        "0x334",
+        "0x334"
+      ],
+      "52": [
+        "0xb8",
+        "0xbc",
+        "0xc0",
+        "0xd8",
+        "0x120",
+        "0x120"
+      ],
+      "58": [
+        "0xbc",
+        "0xc4",
+        "0xdc"
+      ],
+      "87": [
+        "0xc0",
+        "0xc8"
+      ],
+      "89": [
+        "0xc4",
+        "0xc8"
+      ],
+      "90": [
+        "0xc8",
+        "0xcc"
+      ],
+      "91": [
+        "0xcc",
+        "0xd0"
+      ],
+      "55": [
+        "0xd0",
+        "0xd4",
+        "0x154"
+      ],
+      "47": [
+        "0xd4",
+        "0xe0",
+        "0xec",
+        "0xf8"
+      ],
+      "57": [
+        "0xd8",
+        "0xdc"
+      ],
+      "38": [
+        "0xdc",
+        "0x104",
+        "0x104",
+        "0x10c"
+      ],
+      "101": [
+        "0xe0",
+        "0xe4"
+      ],
+      "102": [
+        "0xe4",
+        "0xe8"
+      ],
+      "98": [
+        "0xec",
+        "0xf0"
+      ],
+      "99": [
+        "0xf0",
+        "0x100"
+      ],
+      "95": [
+        "0xf8",
+        "0xfc"
+      ],
+      "96": [
+        "0xfc",
+        "0x11c"
+      ],
+      "92": [
+        "0x10c",
+        "0x118"
+      ],
+      "37": [
+        "0x118",
+        "0x150",
+        "0x1b8"
+      ],
+      "104": [
+        "0x14c",
+        "0x150"
+      ],
+      "54": [
+        "0x154",
+        "0x158",
+        "0x164",
+        "0x170"
+      ],
+      "111": [
+        "0x158",
+        "0x15c"
+      ],
+      "112": [
+        "0x15c",
+        "0x160"
+      ],
+      "108": [
+        "0x164",
+        "0x168"
+      ],
+      "109": [
+        "0x168",
+        "0x178"
+      ],
+      "105": [
+        "0x170",
+        "0x174"
+      ],
+      "106": [
+        "0x174",
+        "0x188"
+      ],
+      "114": [
+        "0x1b4",
+        "0x1b8"
+      ],
+      "51": [
+        "0x1cc",
+        "0x31c",
+        "0x31c",
+        "0x320"
+      ],
+      "50": [
+        "0x1d4",
+        "0x308",
+        "0x308",
+        "0x30c"
+      ],
+      "71": [
+        "0x1d8",
+        "0x1dc",
+        "0x314",
+        "0x314"
+      ],
+      "69": [
+        "0x1d8",
+        "0x324",
+        "0x324"
+      ],
+      "115": [
+        "0x1dc",
+        "0x1e0"
+      ],
+      "116": [
+        "0x1e0",
+        "0x1e8"
+      ],
+      "139": [
+        "0x1e4",
+        "0x1ec"
+      ],
+      "119": [
+        "0x1e8",
+        "0x1f0"
+      ],
+      "72": [
+        "0x1f0",
+        "0x290",
+        "0x2fc",
+        "0x300",
+        "0x300"
+      ],
+      "46": [
+        "0x1f4",
+        "0x1f8",
+        "0x200",
+        "0x210",
+        "0x210",
+        "0x214",
+        "0x254",
+        "0x274",
+        "0x274"
+      ],
+      "122": [
+        "0x1f8",
+        "0x1fc",
+        "0x214",
+        "0x23c"
+      ],
+      "123": [
+        "0x1fc",
+        "0x204",
+        "0x23c",
+        "0x260"
+      ],
+      "121": [
+        "0x200",
+        "0x204",
+        "0x254",
+        "0x260"
+      ],
+      "124": [
+        "0x204",
+        "0x208",
+        "0x260",
+        "0x26c"
+      ],
+      "125": [
+        "0x208",
+        "0x20c",
+        "0x26c",
+        "0x294"
+      ],
+      "53": [
+        "0x20c",
+        "0x218",
+        "0x224",
+        "0x230",
+        "0x294",
+        "0x298",
+        "0x2a4",
+        "0x2b0"
+      ],
+      "132": [
+        "0x218",
+        "0x21c",
+        "0x298",
+        "0x29c"
+      ],
+      "133": [
+        "0x21c",
+        "0x220",
+        "0x29c",
+        "0x2a0"
+      ],
+      "129": [
+        "0x224",
+        "0x228",
+        "0x2a4",
+        "0x2a8"
+      ],
+      "130": [
+        "0x228",
+        "0x22c",
+        "0x2a8",
+        "0x2b8"
+      ],
+      "126": [
+        "0x230",
+        "0x234",
+        "0x2b0",
+        "0x2b4"
+      ],
+      "127": [
+        "0x234",
+        "0x24c",
+        "0x2b4",
+        "0x2c8"
+      ],
+      "135": [
+        "0x288",
+        "0x28c",
+        "0x2f4",
+        "0x2f8"
+      ],
+      "136": [
+        "0x28c",
+        "0x290",
+        "0x2f8",
+        "0x2fc"
+      ],
+      "63": [
+        "0x34c",
+        "0x34c"
+      ],
+      "62": [
+        "0x350",
+        "0x350"
+      ]
+    }
+  },
+  "candidates": [
+    {
+      "name": "local-direct-full",
+      "score": 96.17512,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "name": "local-direct-no-row",
+      "score": 96.17512,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "name": "local-local-full",
+      "score": 97.820274,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    },
+    {
+      "name": "local-local-no-row",
+      "score": 98.04147,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "name": "expression-direct-full",
+      "score": 96.17512,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "name": "expression-direct-no-row",
+      "score": 96.17512,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "name": "expression-local-full",
+      "score": 97.820274,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    },
+    {
+      "name": "expression-local-no-row",
+      "score": 98.04147,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "name": "local-return-full",
+      "score": 95.53917,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    },
+    {
+      "name": "local-return-no-row",
+      "score": 95.76037,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "name": "local-update-full",
+      "score": 96.92166,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    },
+    {
+      "name": "local-update-no-row",
+      "score": 97.14286,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    }
+  ],
+  "tool_issue": 1542,
+  "files": {
+    "c016-rgb-direct-row-call/local-local-full.json": "9f8768d0ceb10db5fd8cc38fd899e20d46dc771e72e0cbbfe2576b5fc2b8f1de",
+    "c016-rgb-direct-row-call/local-local-no-row.c": "5e405f9532537bc57802811d4c907029d3582e833cb2e5034c876272ab0d39ab",
+    "c016-rgb-direct-row-call/local-direct-no-row.c": "2b06a321ec84119a7ef55b4e9eabb6a7c204bcfe616b80e9c4abe9f760c71a3b",
+    "c016-rgb-direct-row-call/local-local-no-row.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-direct-row-call/expression-local-full.json": "71ccd0156ad876a3f7558d77519557b1d5a47671d0b2d9068a4684c2d877e059",
+    "c016-rgb-direct-row-call/expression-direct-no-row.c": "ed3fdd32b50ba2e9fcf3a690737cd5abf125129f1775788f34f7d9978328f3e4",
+    "c016-rgb-direct-row-call/expression-direct-full.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-direct-row-call/local-direct-full.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-direct-row-call/results.json": "4cc6d6199400efa8073ed3f8952b17a80fa234f361ee29d3a72487766f88d84b",
+    "c016-rgb-direct-row-call/local-local-full.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-direct-row-call/local-direct-full.c": "63b5e03ee6eac1a636bd46aaaa374de0f805f6ab69e13d26b9fb6d7368dc8a82",
+    "c016-rgb-direct-row-call/expression-local-no-row.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-direct-row-call/expression-direct-full.json": "a72ed3654133d7e16f090df80d5c5cabdf1194f7cb886bd019ca60dfdf978645",
+    "c016-rgb-direct-row-call/expression-local-full.c": "8beda12fcc5f01f2e9af814f6624b93555537a7a5bd27095a3e604ac109364d3",
+    "c016-rgb-direct-row-call/local-local-no-row.json": "26adbe7a53cfc1e60a820a8d502ff01a6279108c4b8a99d443785de7723d80c0",
+    "c016-rgb-direct-row-call/expression-direct-full.c": "adfdcc273ca4fa44770787e4aa330ba7788b29ee77723831c270875e427f78bf",
+    "c016-rgb-direct-row-call/expression-local-full.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-direct-row-call/local-direct-no-row.json": "573c00a2d55c321b504d67d2b654f2545ff9ac594057d74c809b965f0afb6a64",
+    "c016-rgb-direct-row-call/expression-local-no-row.json": "db57b96261d1e466440211210c7f81416f02bd897a3f1ba368d389cd6658c05a",
+    "c016-rgb-direct-row-call/expression-direct-no-row.json": "1b154547730105f4f05288382d12e41baab3508de780ab3f453ecbffdcc0b76a",
+    "c016-rgb-direct-row-call/local-direct-no-row.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-direct-row-call/expression-direct-no-row.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-direct-row-call/local-direct-full.json": "078748ea14fe58ec2ecf087ac540cda6f84ad3fee21b58851db463f9f942bfef",
+    "c016-rgb-direct-row-call/expression-local-no-row.c": "ad83852e36e4bf6da8aadbb231e04d0104b598a67bff9d2650701fcf99c5c9f7",
+    "c016-rgb-direct-row-call/local-local-full.c": "8510fbe9411f23932894f5c95e5db9438b9f72beee2dfcd7330fd8880c4b8ea8",
+    "c016-rgb-tile-param-call/local-return-no-row.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-tile-param-call/results.json": "1a7e26b200d802782d1aaec9449ca09a5c2a1e66607f79b4db7455622976d177",
+    "c016-rgb-tile-param-call/local-update-full.c": "426955567155e2b123827a4ab2a440b0fc9e5db5460f5da233b9f70a59f93ab1",
+    "c016-rgb-tile-param-call/local-return-full.json": "47a18fc20e11b0e2a6ebdb7b8240a0de937524a9facfeba00a902617cf2919b9",
+    "c016-rgb-tile-param-call/local-update-full.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-tile-param-call/local-return-no-row.c": "e9ddbceea933a85afd072c47de07b8db4dfbb78fdf2997da7040676cac5ab0ec",
+    "c016-rgb-tile-param-call/local-update-no-row.json": "a03404df379b5753929bd4972d6a319eb8c731efbe5ba5fdbf2d2042e13ceed1",
+    "c016-rgb-tile-param-call/local-update-no-row.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-tile-param-call/local-update-full.json": "c48440cc1f96bae754c4b9bd0ae1844cec4199f17ec23b33805430fecd1323e3",
+    "c016-rgb-tile-param-call/local-return-no-row.json": "2b810f527eadf498f6909b21b7a44cccda0ce575f569c11c29e9a36a0d34cb13",
+    "c016-rgb-tile-param-call/local-return-full.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-tile-param-call/local-update-no-row.c": "d5907749580e3a0ad0dca3666b7ddfa4ed82852c5df8ea43c348f8624fff68fe",
+    "c016-rgb-tile-param-call/local-return-full.c": "5ecfb7ca158f4f08ad6c23800bbdd641dbf2e6e81cd1933cda3c31beebed5064",
+    "c016-rgb-direct-call-stages/provenance.json": "39b198d5394549fbf74f5b04732ebeaf7c1c032e487de2005482a241dca55110",
+    "c016-rgb-direct-call-stages/launch.log": "a08e040608129dbe0057a257e742dbe140ec86fb007d2aca8e6b780c75d9aa77",
+    "c016-rgb-direct-call-stages/creation/allocator-0001.json": "ffdb566a58dc9982524f51ea04d16e2d8fc96b69f8c97f6e76d9a0e334d8cdc7",
+    "c016-rgb-direct-call-stages/creation/pcode-creations-0001-register_coloring.json": "5fa3feb6a6618f5bf1a883989b4c755926d00c9a704488f5a8d1b01a6dca659d",
+    "c016-rgb-direct-call-stages/creation/coloring-0001-fpr-01-after.json": "768952ee56d59600d66c717f078907559bc00d783f67a6702a317c6e02f8d9d4",
+    "c016-rgb-direct-call-stages/creation/pcode-creations-0001-post_allocation_peephole.json": "942dcf4b66f1bb44527468e4ad5c71469bb0652f0ad49ff74cb57a92fe7eaeb8",
+    "c016-rgb-direct-call-stages/creation/capture-complete.json": "f0d8dcbf2aa163a6c2c05ed6b81b838230d7357593c2be1c94d42174508715c5",
+    "c016-rgb-direct-call-stages/creation/functions.jsonl": "4dbc40400de4309b4126010ba6562099da22d658eb4feaa15dde815e56520432",
+    "c016-rgb-direct-call-stages/creation/coloring-0001-gpr-01-after.json": "ad1a1ffa9b85f95ed4db991c3a822afc21af01c069760156022b9e6841e9711d",
+    "c016-rgb-direct-call-stages/creation/pcode-0001-initial.json": "8bfd037d9f089f83e93c47035af0b7ba58cacd5f17ce8e402127383b802357a1",
+    "c016-rgb-direct-call-stages/creation/pcode-creations-0001-epilogue_prologue.json": "c24e2db8425a147be96632057d2e2f4f493183579648a67061cdd2af4ff9eb1c",
+    "c016-rgb-direct-call-stages/creation/pcode-creations-0001-allocator.json": "77c13978b334721611c3137979d91c053c6ab95469a444115aca22b64df6c0d3",
+    "c016-rgb-direct-call-stages/creation/pcode-creations-0001-final.json": "9ac1f78059ffad85d55d3157756d68766b75ba4c581693809a50336504fef2ce",
+    "c016-rgb-direct-call-stages/creation/pcode-0001-epilogue_prologue.json": "e1002fac10a3b31f189f3bc1ad09fda42a02a51b0e277b6c6b6cc8203df95edc",
+    "c016-rgb-direct-call-stages/creation/pcode-0001-optimized.json": "e10c0a4ba05167fa05ab7c8e4187722e3dcae61c3fe5899eac34d5e5b9e17aeb",
+    "c016-rgb-direct-call-stages/creation/coloring-0001-fpr-01-before.json": "ad040e40f3c4af2851ef0a0fe01f51106a7b2077ce8f5a4a72842a3e4685c0ff",
+    "c016-rgb-direct-call-stages/creation/pcode-creations-0001-forward_peephole.json": "889559cd014702686f532cbe4b633b35757edaadb9b389f6c3ad394596f51435",
+    "c016-rgb-direct-call-stages/creation/code-motion-0001.json": "2d9ce93c9568eeafeac676a5a1a6e1839db92e587f15097966d0084fa3cd33e2",
+    "c016-rgb-direct-call-stages/creation/pcode-creations-0001-optimized.json": "29b2385058964c17f95d52817b11430add427984872875261fad2b16f860e54c",
+    "c016-rgb-direct-call-stages/creation/pcode-0001-post_allocation_peephole.json": "1187ce561e3a38eb0cbaa74137c4a631d1b73da17d4ec7b6adf09520c64d5fc0",
+    "c016-rgb-direct-call-stages/creation/pcode-0001-forward_peephole.json": "5977081075726c3553e40f9d29096a018a30869d232bfb3e0ca30201897e0978",
+    "c016-rgb-direct-call-stages/creation/pcode-creations-0001-initial.json": "c030cb34bd0bc4b4a3b87aada5d15b93aa260f9c730195c836deac1d92c856f0",
+    "c016-rgb-direct-call-stages/creation/pcode-0001-register_coloring.json": "e4e1d1e977f5460bcac5a933fc5f76e40728c171008cf25d48ca0b01100a8c3f",
+    "c016-rgb-direct-call-stages/creation/pcode-creations-0001-scheduled.json": "c202937127b890ba42b74fead3aec91d9221c67515d3896cfe1fc76c917bbd4b",
+    "c016-rgb-direct-call-stages/creation/pcode-0001-final.json": "bf16030cad6c87450693510cc655ea177582458ac5aa1cc081a1f107a35ba643",
+    "c016-rgb-direct-call-stages/creation/pcode-creations-0001-epilogue_merge.json": "77234e3be323ac44aea2aa14e88a8636db6017ec988e4c2b964d099dcf7b8f3f",
+    "c016-rgb-direct-call-stages/creation/coloring-0001-gpr-01-before.json": "db5511081ebc1b0061507f78dd3caa2da3ca353d87de88dad43cadfa141c0ce3",
+    "c016-rgb-direct-call-stages/creation/pcode-0001-scheduled.json": "84ba9943f6e7bbc342ee2c03be6aefe5609b623c7d054c77e4c45f5fc491f788",
+    "c016-rgb-direct-call-stages/creation/pcode-0001-epilogue_merge.json": "2533ebf58e4b442136a22b4f37c84c3df1a525dd7f2a3abe5780402147f07b5d",
+    "c016-rgb-direct-call-backend/backend-onepass-summary.json": "f6276802843896c7e9d38e1226a1b4c4eba3c1b51a867619ba0673e98f7b13d6",
+    "c016-rgb-direct-call-backend/launch.log": "eb81b661fb61940ab2a1fbf828347b8efff02b68652b4bd7427824c1436b5685",
+    "c016-rgb-direct-call-backend/backend-trace.v1.json": "d95fa47af9cd07748109dd9afe3c9af7120bee30f6eef75bf7aee8bb2e768295",
+    "c016-rgb-direct-call-backend/backend-pcode-events.v1.json": "4dd06df82edf6ef2c705259b5e774fe7e2567c82c854546c870ee8a65a12e48f",
+    "c016-rgb-direct-call-backend/backend-object-events.v1.json": "3b76bfafac10fdb8d56ee848475ea3e8231e3c94ffd5c1d241e8b131b3a237d1",
+    "c016-rgb-direct-call-backend/backend-events.v1.jsonl": "20b8e230a8161613ff45929e0973bb638d5ba07654e377c3274d12bcc450e873",
+    "c016-rgb-direct-call-backend/regalloc-summary.txt": "c1adf4a7fdfc2c42c077de909523924f8067afb3329e5301165532759d030df6",
+    "c016-rgb-direct-call-backend/backend-summary.txt": "dc8ef83d39c8c2b1cb4502f18beaff747061f7bede389f52cc1de9f7d5b2aa66",
+    "c016-rgb-tile-iro/iro-50-before-rebuildcondexpressions.txt": "f258559883371d1ae257ae74cb7fd1d072c7ae50a5f5863c1043cb425975e32c",
+    "c016-rgb-tile-iro/iro-21-before-iro-copyandconstantpropagation.txt": "b518b7af74d44a76153096ee1dc88462e6a9bdd5651e3ad50180668f573d7f6e",
+    "c016-rgb-tile-iro/iro-45-iro-dojumpchaining.txt": "4f5dab79e7c16ff368d26a874717d9ae17c8291f13456eb8ca79b59070c9cd92",
+    "c016-rgb-tile-iro/iro-12-after-iro-loopunroller.txt": "a7dfed305f7e0d67bf7d53407234ef1ddbfaf4c42baca65feec64df1b9d41a16",
+    "c016-rgb-tile-iro/iro-35-iro-rangepropagateinfnode.txt": "11bfdb438ed0ff5bfbf40efd9e2530a792ed4042c780cff3b163a3c699f0d3ae",
+    "c016-rgb-tile-iro/iro-15-second-pass-iro-copyandconstantpropagation-iro-constantfoldi.txt": "fd5f0b48587c7d015abd0bdd502dc9d1d951755b5f5780c128bcea34b10a27fa",
+    "c016-rgb-tile-iro/iro-24-iro-evaluateconditionals.txt": "ca57419a66ccc3a5f377e1c49456b968ef2aca66518786e7503336357072c4fe",
+    "c016-rgb-tile-iro/iro-47-after-iro-copyandconstantpropagation.txt": "f274ecb81feee700bb898d3111edc167da0cc5c5df159ac28f781cfbcd475e06",
+    "c016-rgb-tile-iro/iro-32-iro-evaluateconditionals.txt": "4041fe858dee37188aca91e32ea8687d444c6a3efd2d0addb6b86e39f1e4dda8",
+    "c016-rgb-tile-iro/provenance.json": "3e5ef7bdb7731353a9a49a61b9cc41b1668e2961ebbe4587945546a3e4947a91",
+    "c016-rgb-tile-iro/iro-40-second-pass-iro-copyandconstantpropagation-iro-constantfoldi.txt": "a8b78e9f0d794d88b8d0528613800c748df9dff176e66952ea5c08b9cb989e03",
+    "c016-rgb-tile-iro/launch.log": "a0ffd29513fb70bdd7677a3c42eb92ca8d354adb18e52fd5a320c1a3ba1ba6fa",
+    "c016-rgb-tile-iro/iro-27-iro-removelabels.txt": "876c9aa0fedab43c6da1d16246ba617009138e17f6efc4b0d4b3a210ee9212fc",
+    "c016-rgb-tile-iro/iro-08-iro-expressionpropagation.txt": "086879a75507cbcbb0da5a98141a1a86c956cdcb87eca26e9d3ca0ff321f1917",
+    "c016-rgb-tile-iro/iro-38-iro-constantfolding.txt": "0bb2db4ceaae6ceebeda540474e9325d515778350994273aba64c43ae152d7a8",
+    "c016-rgb-tile-iro/iro-16-iro-commonsubs.txt": "657ef6e82a78b2713fa90e7666152bc3cf85befc80b3b9434e7e5a59ebb3f600",
+    "c016-rgb-tile-iro/iro-23-iro-usedef.txt": "b5a0f9c0de4cd8184f98c848ecc35832e23638065d972f540762c00214bba842",
+    "c016-rgb-tile-iro/iro-51-before-rewritebitfieldtemps.txt": "cbd2d1d327b0159346d64ce57098312c33ffc4794bc6b8c776a9775921d75b71",
+    "c016-rgb-tile-iro/iro-03-iro-removelabels.txt": "bf602bd51a8007d0a87792dd968c6f48fcfd233b012b9b95c320068073720724",
+    "c016-rgb-tile-iro/iro-30-after-iro-copyandconstantpropagation.txt": "87427c1a84cc97657155d06e6e26f47084808aafc1748def27452c923a5e0ff4",
+    "c016-rgb-tile-iro/iro-48-iro-usedef.txt": "437797a1a5e70127f890370bd1ce2b8ba20fe32d7629440f207a24fbf7a23b3b",
+    "c016-rgb-tile-iro/iro-17-iro-removeunreachable.txt": "d350fa6e124d3d58e1441126973e52a93f769ae1a032958cc7cfa6ffe59fed72",
+    "c016-rgb-tile-iro/iro-49-iro-evaluateconditionals.txt": "3b90845909dc0bfd990c17163667fec1ead4d5384c72680239b06a7cf53b1246",
+    "c016-rgb-tile-iro/iro-31-iro-usedef.txt": "b2339f2bd4f6f930f543f5cfb563aa49072cdb382f6c8e36aa54bce656b8ead4",
+    "c016-rgb-tile-iro/iro-29-before-iro-copyandconstantpropagation.txt": "73eecb20c3de71e1f345c8f8673445e8690f72369413823e671d53d546f7d329",
+    "c016-rgb-tile-iro/iro-18-iro-removeredundantjumps.txt": "1ab6d10b3d9e98fbac2376240091dd4979be446b58166e901a2dda39966b2686",
+    "c016-rgb-tile-iro/iro-34-copy-and-constant-propagation.txt": "d778d61e5b563b59ccd119d4408dfe05ce9651ac1e8abc98bdb7a6bb5b1eba3c",
+    "c016-rgb-tile-iro/iro-37-after-iro-usedef.txt": "baf5fe48515d005c8bf0d11718d1f9bcee7fe214e2b42ed2504e5906b22dca03",
+    "c016-rgb-tile-iro/iro-07-iro-rangepropagateinfnode.txt": "2427234e722a981f01ab499b6690142522581e5e5390148cb53a50549144e62d",
+    "c016-rgb-tile-iro/iro-22-after-iro-copyandconstantpropagation.txt": "d7668301a4ed91a250fc2af36b2eb283174e2d8831f8d4e9432382d5a3a4abc3",
+    "c016-rgb-tile-iro/iro-26-iro-removeredundantjumps.txt": "c72ad9442ccc7818cea660d6245e1bdbe1f6c516b2b801cfa6a0190b7f7c1d81",
+    "c016-rgb-tile-iro/iro-02-iro-removeredundantjumps.txt": "a2e469e45ea8baa9e2fcfdc709afa7bc41f782f266c2127b5ed241298ecc890a",
+    "c016-rgb-tile-iro/iro-52-after-rewritebitfieldtemps.txt": "f0f27dfdfd5e4955ba525fb024e6fb9ac6928dd2efc98fe688981054064c853b",
+    "c016-rgb-tile-iro/iro-00-iro-buildflowgraph.txt": "cec402f62074e72d996b78db76fee6ebab603a7897cae1f468da4528635ea64a",
+    "c016-rgb-tile-iro/iro-05-iro-scalarizeclassdatamembers.txt": "ca63976ffbb4ade2ff6629447bc9a7961efcc485fce8cd96aaa7beb946e8c58c",
+    "c016-rgb-tile-iro/iro-06-copy-and-constant-propagation.txt": "e56f568f833b25553b5834161ae795a7c67a74991c7eee612d71a444222dae33",
+    "c016-rgb-tile-iro/iro-summary.txt": "655f8728fe519990bed93b74a7646fa416f1661435cd77e47201f7c5db1bdd3e",
+    "c016-rgb-tile-iro/iro-09-after-iro-usedef.txt": "883da44e4f50cdee429b6ec7580f4450373f271abdd72b53e04b7995767b791e",
+    "c016-rgb-tile-iro/iro-43-iro-removeredundantjumps.txt": "3ec8d05cf6b37e18bab572a53bea9e31d08bacc1a51d51ca633d162c052096ff",
+    "c016-rgb-tile-iro/iro-39-after-iro-findloops.txt": "b77186e16fbe9b8f9333abb2610acbc063e2ae87b77464a5a214d98d51874866",
+    "c016-rgb-tile-iro/iro-trace.txt": "eabf7d1946760252fb5055f85914203e4e2f650e1ddbbd6b40c6187209231569",
+    "c016-rgb-tile-iro/iro-14-after-iro-findloops.txt": "a160fa6b9e89be3b65447ca8864bbb3652f227bbe301e4cdca59df04ba7e2a49",
+    "c016-rgb-tile-iro/iro-20-iro-dojumpchaining.txt": "4dfb44fe731d7bccb1a85b90adfc397d1de456de928a0fa8127b9806f7f4f445",
+    "c016-rgb-tile-iro/iro-25-iro-removeunreachable.txt": "64615ecf04aad9c3795e3c4318da5e2f43b95e50edfa4eb252953971e38f7607",
+    "c016-rgb-tile-iro/iro-44-iro-removelabels.txt": "c473edc89e5ba119af6c0c9477a3f2f1a3d49edc0343543c0f9c4219038f21b7",
+    "c016-rgb-tile-iro/iro-33-iro-scalarizeclassdatamembers.txt": "bbe7bb3fbfa136b49d006b429388ab9faf1bbd3668b12eca0dca277833768731",
+    "c016-rgb-tile-iro/iro-04-iro-buildflowgraph-1.txt": "25e4bfaf19f9ace9b446af8be827874f0544bd2a8eac32b2e5796f5e27378b89",
+    "c016-rgb-tile-iro/iro-46-before-iro-copyandconstantpropagation.txt": "e7c049b8028f0d0a6e4e4431ea448d3ce933a9e661c059fd99310fe1c8f9de87",
+    "c016-rgb-tile-iro/iro-19-iro-removelabels.txt": "f39f288d19bae2269aabe308f8259c72652c32a20fb3eca7e89cf5d6d4ac700e",
+    "c016-rgb-tile-iro/iro-10-iro-constantfolding.txt": "226fa413e84505b1ce05788c92b750d2afa1f316e06fa9edba6b39be8353208c",
+    "c016-rgb-tile-iro/iro-36-iro-expressionpropagation.txt": "bd1661b40eb8475754e39420e91c22100054ab00b27f6841ebf17e57fef6a37c",
+    "c016-rgb-tile-iro/iro-13-before-iro-findloops.txt": "f85c9eabe303494ba80b578d6ad4a23fee71f7f66f942d2b11d3a8f879809f52",
+    "c016-rgb-tile-iro/iro-42-iro-removeunreachable.txt": "3bb964fe896ba58ed9333f364d148f206eea388d98612e0c7449201ea2a8fbce",
+    "c016-rgb-tile-iro/iro-11-before-iro-loopunroller.txt": "39bc85f7424f5a0d0dd2a1d82cdc5ad60eb2be144ced41f0e87ce7e7c5ab4de8",
+    "c016-rgb-tile-iro/iro-53-after-iro-optimizer.txt": "1735b4cd04fa4a536c1e65ac6ce81236b8ae61f6d813321c06af3f1822e74624",
+    "c016-rgb-tile-iro/iro-01-iro-removeunreachable.txt": "4b00b30f1e5a2aa9f1ae7fd5d6c7509c9ee05c38524b9b1418887176005c7ba9",
+    "c016-rgb-tile-iro/iro-28-iro-dojumpchaining.txt": "3cc9936d06c4155a8097e2ba86c961b407dfcf474a09ded72fdb5cd50160a05f",
+    "c016-rgb-tile-iro/iro-41-iro-commonsubs.txt": "72a573ce8adc281357cfad45baa236125d8d13b04f843f3d6828ade7715f858a",
+    "c016-rgb-direct-row-call.py": "76326798673c0efa97183a1812c76a74e3f89c7e0ba8ed8440e117520114ce0e",
+    "c016-rgb-tile-param-call.py": "6714a985e02bbc56f165a8457353d07d6a4f60b3695ee41d5ef35154d127e276",
+    "c016-rgb-direct-call-correspondence.py": "84d26f1602fec7d666c9f98eff7c5ac8412f07ab9a60097e09bb21f631e2060b",
+    "c016-rgb-direct-call-correspondence.json": "497eb8bcdc66a7aadab6757f5a690e81d0e5b83617da4983f341474af3130634",
+    "c016-rgb-direct-call-pressure.json": "56314f0dd50616bc48e3ac132fdeff25e61b3933623f8e6f5b4e5994019f5354",
+    "c016-rgb-direct-call-capture.py": "c8297c3b043d5f55a9bea8e904caf15971149a2455ce19f60025659c9394f8ef",
+    "c016-rgb-direct-call-backend.py": "017ce71c44843c6daa6103e1b85dc4b00873015d7fb22304ee07c7e06680c424",
+    "c016-rgb-tile-iro-run.py": "919f6d2afc7675ccf37389dc5cc20ec4dd7d1965177687f8c888538aa00b8a1f"
+  },
+  "archive_sha256": "80a587cc43e3db08172a5a78d1ade7d72e3026eac35cfcb4cf1d3cdf93a2255a"
+}
