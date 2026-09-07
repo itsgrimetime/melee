@@ -1,0 +1,8 @@
+{
+  "old_decisions": 110,
+  "new_decisions": 110,
+  "assignments_identical": true,
+  "select_order_identical": true,
+  "differences": {},
+  "scope": "Recorded GPR IDs, observed colors and selection order; not full graph equality or source realization of target map."
+}

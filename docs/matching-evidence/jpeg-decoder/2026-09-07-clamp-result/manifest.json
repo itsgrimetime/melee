@@ -1,0 +1,189 @@
+{
+  "function": "fn_803B6820",
+  "module": "sysdolphin/baselib",
+  "source_commit": "5401bbeed8",
+  "pr_commit": "515f95abfe",
+  "retained_percent": 98.83817,
+  "retained_change": "jpeg_clamp s32 result local replaces PAD_STACK(8); no percentage gain",
+  "runs": [
+    {
+      "family": "c016-dec8-frame",
+      "name": "clamp-s32-pad1",
+      "score": 98.6971,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 184,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 30
+      }
+    },
+    {
+      "family": "c016-dec8-frame",
+      "name": "clamp-s32-pad0",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "c016-dec8-frame",
+      "name": "clamp-u8-pad1",
+      "score": 98.6971,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 184,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 30
+      }
+    },
+    {
+      "family": "c016-dec8-frame",
+      "name": "clamp-u8-pad0",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "c016-dec8-frame",
+      "name": "call-rounding-no-pad",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "c016-dec8-result-scope",
+      "name": "top-s32",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "c016-dec8-result-scope",
+      "name": "top-u8",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "c016-dec8-result-scope",
+      "name": "branch-u8-implicit",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    }
+  ],
+  "archive_sha256": "a66baeabd3760ca06fe56759e7b41c19d4f08ea95c60ed8898fd7cd45c24f11c",
+  "files": {
+    "c016-dec8-allocator-comparison.json": "17b440aae0f845cabea535d7b84d88d213a406a7dcc5de8adca1a362b6e48549",
+    "c016-dec8-baseline.json": "d729bf2c7531ad4d0e0beedd689b9dc9f039969c142bbeb6ba48696d2f7832a8",
+    "c016-dec8-before.json": "d729bf2c7531ad4d0e0beedd689b9dc9f039969c142bbeb6ba48696d2f7832a8",
+    "c016-dec8-before.o": "34250e0b6673b160516c5acb797dbeacf5734f8113dccd728148422a40fe2e36",
+    "c016-dec8-build.log": "8b0bf5a7c72bfb86d9257f1b181526a7c3dae6c60082c011fc4cea7f32f2b2b4",
+    "c016-dec8-ci.json": "9bc4d7d5d5b6dc4ff0ff97b40aceba09f2e38cb8ea28122a0528c91e0b4e5b96",
+    "c016-dec8-final-build.log": "a1ff11e03f177080f2fe3a3b2173ffb824f2e282dde5d9b055c703b7ccefd654",
+    "c016-dec8-final.json": "42250f611b98d5530ff3893029ed4c1a0593c73bbc94ea2bbc7043ce96e860ec",
+    "c016-dec8-frame.py": "2f9e8ca39429c10f093666ce4e3245c8363ea31100ff2d97071369666d2a8704",
+    "c016-dec8-frame/baseline.c": "7a2bab5a7f700557dab18399747432f3678f7fa5af0b863b51312bd1a675794a",
+    "c016-dec8-frame/call-rounding-no-pad.c": "ec74d64d09d130187628a5cb97380c75ff17d245fa7fad491c8aa5b5eedd2671",
+    "c016-dec8-frame/call-rounding-no-pad.json": "c42d5e4c6456f862fdddf86c9198ea8e98821c3b2ab4df29cc3e024d90033676",
+    "c016-dec8-frame/call-rounding-no-pad.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-dec8-frame/clamp-s32-pad0.c": "8b8a2422ca877f06c856ebd698b557a59901d6719edc28fd9bb0eb44a9c08945",
+    "c016-dec8-frame/clamp-s32-pad0.json": "561714c053cf8527ac0a2a664e73fe10d8e5726b68758d825ea4c97d5461f30a",
+    "c016-dec8-frame/clamp-s32-pad0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-dec8-frame/clamp-s32-pad1.c": "4e99fb57d186d24fb05e307a0826416a3e970e0be52800c506e7ef494dcb9b06",
+    "c016-dec8-frame/clamp-s32-pad1.json": "2d073a3f1b67ff5375d18d8914b40f1f8ad71bcaa10f8733099e9ccd20067847",
+    "c016-dec8-frame/clamp-s32-pad1.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-dec8-frame/clamp-u8-pad0.c": "183d811a049852ac30650a07fd7e4280f5984e551e08a850e7f311c552041d62",
+    "c016-dec8-frame/clamp-u8-pad0.json": "561714c053cf8527ac0a2a664e73fe10d8e5726b68758d825ea4c97d5461f30a",
+    "c016-dec8-frame/clamp-u8-pad0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-dec8-frame/clamp-u8-pad1.c": "f966853bd2d2c506e61bae033a5a12a0a6eacabc29fb48a982e5ffa6e27d4af3",
+    "c016-dec8-frame/clamp-u8-pad1.json": "2d073a3f1b67ff5375d18d8914b40f1f8ad71bcaa10f8733099e9ccd20067847",
+    "c016-dec8-frame/clamp-u8-pad1.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-dec8-frame/results.json": "2123980c0b08f0637031fe0b57a0126fe5151f9875bae6cfeac5d819638f9dc2",
+    "c016-dec8-object-verification.json": "eaf58ce3a8a5f5d934f240ac8c6771fed8421c97319f754897fce00f317a7741",
+    "c016-dec8-post-trace-build.log": "8b0bf5a7c72bfb86d9257f1b181526a7c3dae6c60082c011fc4cea7f32f2b2b4",
+    "c016-dec8-pr-body.md": "2554e5018573b5e08ba2fbee97ddf314cad1cdbc9aa002141f42f819cdfbf9c1",
+    "c016-dec8-pr-build.log": "964626286287e6865a0af3933b007cfe7233fc107e0d29f0792cc277ce6becdd",
+    "c016-dec8-result-scope.py": "32e8feac5a00d7699141f248e210876bba868958d4fc07ef3a161a327c9f987f",
+    "c016-dec8-result-scope/baseline.c": "7a2bab5a7f700557dab18399747432f3678f7fa5af0b863b51312bd1a675794a",
+    "c016-dec8-result-scope/branch-u8-implicit.c": "306424009d31031a7247810094694c8a95523d4c87392fc2694cccab71068e97",
+    "c016-dec8-result-scope/branch-u8-implicit.json": "42250f611b98d5530ff3893029ed4c1a0593c73bbc94ea2bbc7043ce96e860ec",
+    "c016-dec8-result-scope/branch-u8-implicit.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-dec8-result-scope/results.json": "857d43cf99102ca12b91c3896b8bf83bd176da0919e0b21e039f7ecc97fbfff3",
+    "c016-dec8-result-scope/top-s32.c": "647506384c571d617eb2407bc08db81d9e6ac048d24da845dece1a97ebd28c83",
+    "c016-dec8-result-scope/top-s32.json": "42250f611b98d5530ff3893029ed4c1a0593c73bbc94ea2bbc7043ce96e860ec",
+    "c016-dec8-result-scope/top-s32.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-dec8-result-scope/top-u8.c": "e3a02ee3e2351c3552fc298819bf446d6a2ad4844f9948bb022025b7b99a5184",
+    "c016-dec8-result-scope/top-u8.json": "42250f611b98d5530ff3893029ed4c1a0593c73bbc94ea2bbc7043ce96e860ec",
+    "c016-dec8-result-scope/top-u8.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-dec8-retail.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-dec8-retail/backend-events.v1.jsonl": "e48c563d8c410fa7c64ba46658cf65cd610ff0baa0a2c3a39cefea43d00fd922",
+    "c016-dec8-retail/backend-object-events.v1.json": "8a8e2d702dc15c3bb81216a58dc19121663fc36f864a90674f5847ab4984e1bb",
+    "c016-dec8-retail/backend-onepass-summary.json": "0b7bdd7c8360b30e7cdefa7094fabc61a64a6ce92ce882a01973032c59449379",
+    "c016-dec8-retail/backend-pcode-events.v1.json": "d856d4295c5dffa5183e012b3a2e1e3555821bb29edbc34984fcea1af8b31995",
+    "c016-dec8-retail/backend-summary.txt": "d09940c82ef5bc307c0c2e014c817f5bf25e67f3f950223c9c2bb7411f2e400e",
+    "c016-dec8-retail/backend-trace.v1.json": "6af92c3f9534871418943df6c2e27d153f094f1d99ce462de53b04963cd90c49",
+    "c016-dec8-retail/launch.log": "3aafc701df50fd21eb5f39a27bcc37d03eee4279c0e32f2a6c52b4e5647be023",
+    "c016-dec8-retail/regalloc-summary.txt": "b07bd09c86854737e6e8c962273352e32af3ffa7fdb17cf040388d630c872aa3",
+    "c016-dec8-retained.json": "42250f611b98d5530ff3893029ed4c1a0593c73bbc94ea2bbc7043ce96e860ec",
+    "c016-dec8-retained.o": "66a0b6e3a04b5073f868dd114c619831c01df6b797cdcea1bc8b6a3b0cbb4233",
+    "c016-dec8-validation.json": "0a2f3cf48c29314dcd6becedfd3c19cca55ec986424fcf64ef05cce5ae0123d3",
+    "c016-dec8-verify-objects.py": "aba041ecb95f5bd4d15351fb764cb1aceab5cfac3ec7c202b43c15621ae1d243",
+    "c016-decoder-chroma-retained-pcdump.txt": "e06b15dd7dd8971fc09cbae9d71961b92087af3805872e1456d9d5eab2acbef1"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "primary": {
+    "head": "5401bbeed8537a6f447f9acb2e9077ac9180c2d4",
+    "functions": {
+      "hsd_803B5C4C": 100.0,
+      "hsd_803B5D70": 100.0,
+      "hsd_803B5EA0": 100.0,
+      "fn_803B61B4": 100.0,
+      "fn_803B6820": 98.83817,
+      "hsd_803B6BE4": 100.0
+    },
+    "sha1": {
+      "orig/GALE01/sys/main.dol": "08e0bf20134dfcb260699671004527b2d6bb1a45",
+      "build/GALE01/main.dol": "08e0bf20134dfcb260699671004527b2d6bb1a45"
+    }
+  },
+  "pr": {
+    "head": "515f95abfee0f1f9fe647f2be06124df3575875d",
+    "functions": {
+      "hsd_803B5C4C": 100.0,
+      "hsd_803B5D70": 100.0,
+      "hsd_803B5EA0": 100.0,
+      "fn_803B61B4": 100.0,
+      "fn_803B6820": 98.83817,
+      "hsd_803B6BE4": 100.0
+    },
+    "sha1": {
+      "orig/GALE01/sys/main.dol": "08e0bf20134dfcb260699671004527b2d6bb1a45",
+      "build/GALE01/main.dol": "08e0bf20134dfcb260699671004527b2d6bb1a45"
+    }
+  }
+}

@@ -522,3 +522,67 @@ Production source remains **98.83817%**, and all five other TU functions remain
 `08e0bf20134dfcb260699671004527b2d6bb1a45`. This turn's sources, diffs, graph
 correspondence, model replay, tool-gate failure, and final verification are in
 `docs/matching-evidence/jpeg-decoder/2026-09-06-source-role-order/`.
+
+## Retained clamp result local removes PAD_STACK
+
+Retained source commit5401bbeed8, clean PR3384 commit515f95abfe. A local result
+in `jpeg_clamp` supplies the eight stack bytes previously reserved explicitly:
+
+```c
+static inline s32 jpeg_clamp(f32 value)
+{
+    s32 result;
+
+    if (value < 0.0f) {
+        return 0;
+    }
+    if (255.0f < value) {
+        return 255;
+    }
+    result = (u8) (s32) value;
+    return result;
+}
+```
+
+Removing `PAD_STACK(8)` from `fn_803B6820` with this local retains **98.83817%,
+241 instructions/964 bytes, frame176**. This is a source reconstruction
+improvement, not a percentage gain or a claim that all registers match.
+The return type and byte narrowing remain unchanged. The earlier alternative
+using wide red/blue channel locals also preserves this baseline, but the
+retained result local requires fewer changes to the source.
+
+Eight candidate runs test s32/u8 result locals with padding kept/removed,
+branch-local versus function-local declaration, implicit byte narrowing, and
+the earlier call-rounding reconstruction against the retained chroma addition.
+Keeping both the local and padding grows the frame to184. Removing padding
+with either local type or placement preserves the baseline. The function-local
+s32 declaration was retained for the existing wide return type.
+
+Verification compares the complete TU objects at the same post-checkdiff stage:
+all non-debug section bytes, sizes, flags and alignment agree; all relocations
+agree after mapping renamed anonymous constants to their actual section,
+offset, size and bytes. Initial source diff listings showed five renamed
+anonymous constants; those names alone were not treated as equivalent.
+A comparison between a raw Ninja object and a post-checkdiff object exposed
+symbol/section canonicalization differences, so the final comparison uses
+symmetric processing stages. The archive includes both final compared objects
+and the verification implementation/results.
+
+Both primary and clean PR worktrees build successfully. The other five TU
+functions remain100%; the TU stays Linkable. PR3384 was pushed and its title
+and description updated to include the padding removal. CI was still running
+at this checkpoint; later verification below records the observed final state.
+
+A fresh supported retail GC/1.2.5n backend capture completed on the retained
+source. All110 recorded GPR IDs, physical assignments, and selection positions
+agree with the preceding chroma-improved debug dump. The trace also records48
+FPR decisions. This comparison does not assert full graph equality or realize
+the abstract target ordering; it establishes that removing padding did not
+solve or perturb the observed GPR allocation. The existing target roles remain
+relevant to the next matching pass.
+
+Evidence is in
+`docs/matching-evidence/jpeg-decoder/2026-09-07-clamp-result/`: eight source
+candidates, both compared objects, full object/relocation verification, fresh
+retail trace, GPR comparison, primary/PR build and original-DOL verification,
+and a per-member SHA256 archive manifest.
