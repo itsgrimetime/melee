@@ -1207,3 +1207,26 @@ IDs. These evaluation boundaries add no new codegen behavior to pursue.
 Production restored98.82488; complete sources/diffs archived in
 2026-09-07-chroma-store-boundaries. PR3396 is now MERGED upstream. No further
 source gain; full matching and TU linking remain unfinished.
+
+## Chroma scalar-record promotion — 2026-09-07
+
+18 probes:8 local records for index/destination/both and field/scope order;
+4 luma-row-home followups;6 variants compute Cb in a local before first record
+index assignment, with full/removed luma offsets. Both pixel loads and the
+Cb-store/second-read ordering remain preserved. No production gain.
+
+Index-only record with luma row local removed gives98.087555/frame152 and exact
+instruction-row equality to the coherent scalar seed. Fresh readonly trace,
+267 GPR operands/81 mapped virtuals, no contradictions: index moves38->73,
+pointer stays37; same eight physical mismatches. Thus scalar record promotion
+DOES change index numbering, but not enough to reach the successful rank range.
+
+Cb-value-before-record source does not postpone that promotion. Fresh second
+trace on index/no-luma-offsets again gives index73, pointer37 and the SAME eight
+mapped mismatches. The specific hypothesis that first field access following
+FP conversion would create index near conversion virtuals100+ is falsified by
+this source pair. Do not continue shuffling these statement boundaries on that
+assumption. Named Cb is optimized away; full variants reserve160/168 frames.
+Destination/both record variants96.76037–96.98157 and add homes; neither field
+order nor pixel/row scope helps. Full sources/diffs and both captured stages
+archived in2026-09-07-chroma-records. Production restored98.82488.
