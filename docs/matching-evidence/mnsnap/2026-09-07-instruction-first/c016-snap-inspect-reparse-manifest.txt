@@ -1,0 +1,15 @@
+required-dir	.
+required-dir	src
+required-dir	src/melee
+required-dir	src/melee/mn
+required-file	src/melee/mn/mnsnap.c
+required-dir	src/MSL
+required-dir	extern
+required-dir	extern/dolphin
+required-dir	extern/dolphin/include
+required-dir	build
+required-dir	build/GALE01
+required-dir	build/GALE01/include
+absent-or-dir	build/GALE01/src
+absent-or-dir	build/GALE01/src/melee
+absent-or-dir	build/GALE01/src/melee/mn

@@ -1,0 +1,44 @@
+[
+  {
+    "name": "getter",
+    "score": 98.14374,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 68
+    }
+  },
+  {
+    "name": "embedded-getter",
+    "score": 98.14374,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 68
+    }
+  },
+  {
+    "name": "embedded-field",
+    "score": 98.15765,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 65
+    }
+  }
+]

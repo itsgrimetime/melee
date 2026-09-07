@@ -1,0 +1,11 @@
+{
+  "function": "mnSnap_80257F24",
+  "baseline_match": 98.15765,
+  "source_sha256": "542798716f9634669f55e543a218e0c8df45bfd8199ff3596785242ce8111ed0",
+  "inspector_invocation": "c016-snap-frontend-20260907-b",
+  "inspector_exact_ref": "c984348f9660e1eca2ad93cc9a4c99b4cb224490",
+  "inspector_sha256": "243a76f36732c2cd1b70ca06c694c6418a04837dae4718af0aa996800a0da58a",
+  "priority": "instruction ordering before isolated register swaps",
+  "probe_count": 3,
+  "retained_changes": false
+}

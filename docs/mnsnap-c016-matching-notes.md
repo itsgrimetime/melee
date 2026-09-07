@@ -262,3 +262,38 @@ not captured for these rejected forms. Nine source probes total this pass.
 Historical review links issue1565 to earlier1544 (same unsafe generated address
 rewrite); recurrence noted in queue. PR3407 unchanged, no new source gain.
 Evidence in matching-evidence/mnsnap/2026-09-07-archive-name-ownership.
+
+## Instruction-first priority and recovered front-end inspection
+
+USER STEERING: prioritize matching instruction sequence before isolated register
+swaps. Both streams have647 instructions and identical opcode inventory. A
+coarse opcode-only alignment differs in archive10c..170 and thumbnail5c4..5d4
+(lis earlier than target). This is not full semantic instruction equivalence.
+Defer isolated arrows coloring experiments.
+
+Current page pointer42 stays among early field-address assignments through COPY
+PROPAGATION/CODE MOTION. AFTER INSTRUCTION SCHEDULING moves its definition next
+to string724 and the csr_shape argument store. Coloring adds page_joint spill
+throughr0 following the r0 outgoing store32. Target usesr4 for early page address
+and spill after outgoing store24. This is an observed current-source pass
+transition, not proof of the target compiler's unseen intermediate state.
+
+Independent callee audit: lbArchive_LoadSections has va_list GPR count2
+(lis r0,512 at+38; store+6c) and first va_arg+8c returns name, supporting the
+existing two-fixed-argument signature. A third fixed name is not justified.
+
+Inspector a failed PRE because worktree-doctor downgraded branch wrapper,
+removing generated include provisioning. Missing build/GALE01/include confirmed
+onremote; child_reaped=true. Restoring HEAD wrapper (and doctor-edited debugDLL
+source) preserves existing validations and fixes it. Invocation b succeedsexit0,
+publishes889KB full-TU ENodes with initializer and both variable lists. Issue1526
+updated. Do not reapply doctor downgrade or claim Windows/fetch unavailable.
+
+Frontend shows FORCELOAD for main joint/shape getter arguments, ordinary local
+page_joint, and embedded page_name assignment. Three page controls (getter with
+existing alias, embedded getter assignment, embedded direct field assignment)
+score98.14374/98.14374/98.15765 respectively, allframe400. All have exactly the
+same opcode order as retained source; no instruction-order gain and none kept.
+Next useful evidence is the scheduler dependency/priority cause for page address
+motion; isolated ForceLoad introduction did not solve it.
+Evidence: matching-evidence/mnsnap/2026-09-07-instruction-first.
