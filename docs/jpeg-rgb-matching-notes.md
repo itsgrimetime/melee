@@ -554,3 +554,42 @@ a precise starting point, not a source100 verdict.
 Evidence: docs/matching-evidence/jpeg-rgb/2026-09-07-row-reconstruction/.
 Final ordinary verification: RGB98.7788%, coefficient encoder100%; full build
 passes. Stay on RGB; no source improvement was pushed to the upstream PR.
+
+
+## Row candidate disproved as a coloring-only target — 2026-09-07
+
+Goal remains match hsd_803B3408, open PR, and link the TU. PR3391 was verified
+merged as3e19efe8a885de8ca35d525d2c978aff5e580c1c. RGB remains claimed by
+codex-c016; snapshot initializer work belongs to codex-d82d.
+
+Fresh read-only stage capture through final scheduling completed for
+row-frame/corrected-no-row.c. Same-address precolor/final PCode correspondence
+was checked against ordinary assembly, with known0xd4/0xd8 and0x1f0/0x1f4
+transpositions aligned. Unlike the older mapping,0xb4 is included.
+
+The attempted target mapping contradicts itself at0xb0/0xb4: virtual74 must
+be r22 for the low-bit extraction/input but r26 for the row-sum output/input.
+Thus the row helper coalesces roles which the target keeps separate. The saved
+correspondence explicitly has valid_complete_coloring_target:false and lists
+all conflicts; its combined target_assignments must NOT be used as a proven
+force-phys target. This supersedes treating the candidate as a register-only
+frontier. Neither abstract renumbering nor register permutation alone can
+solve its low/sum lifetime split.
+
+13 valid ordinary follow-ups: output/local row-sum boundaries (5), and paired
+source/destination-row helpers using pointers or struct return, raw/shared low
+term, either assignment order (8). No improvement retained. out-update returns
+the corrected-pixel98.04147% baseline including the reversed0xb4 operands;
+local-update separates low/sum but also reverses0xb4. Paired pointer forms
+score96.036865–96.77419%; struct forms add32frame bytes and10instructions.
+Every variant is restored. No caller/coloring override or unsafe memory access
+is used as matching proof.
+
+Next source reconstruction must simultaneously preserve the completed row
+sum and prevent its merge with the extraction value, while retaining tile+sum
+operand order. The checked correspondence makes this a concrete precolor
+constraint, rather than another physical-register declaration-order sweep.
+
+Final restored RGB98.7788%, encoder100%; full build passes. Full stage/creation
+capture, partial correspondence with contradictions, sources and diffs are
+SHA256-verified in 2026-09-07-row-correspondence. No source100 or PR/link claim.

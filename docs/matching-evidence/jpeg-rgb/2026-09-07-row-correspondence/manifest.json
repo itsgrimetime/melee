@@ -1,0 +1,271 @@
+{
+  "compiles": 13,
+  "runs": [
+    {
+      "name": "out-return",
+      "score": 95.76037,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9400921658986175,
+        "line_delta": 0,
+        "hunk_count": 18
+      }
+    },
+    {
+      "name": "out-update",
+      "score": 98.04147,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9861751152073732,
+        "line_delta": 0,
+        "hunk_count": 16
+      }
+    },
+    {
+      "name": "local-two",
+      "score": 95.53917,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.9400921658986175,
+        "line_delta": 0,
+        "hunk_count": 36
+      }
+    },
+    {
+      "name": "local-update",
+      "score": 97.14286,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9861751152073732,
+        "line_delta": 0,
+        "hunk_count": 18
+      }
+    },
+    {
+      "name": "local-assign",
+      "score": 95.76037,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9400921658986175,
+        "line_delta": 0,
+        "hunk_count": 18
+      }
+    },
+    {
+      "name": "dst-first-pointers-raw",
+      "score": 96.17512,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9216589861751152,
+        "line_delta": 0,
+        "hunk_count": 17
+      }
+    },
+    {
+      "name": "dst-first-pointers-shared",
+      "score": 96.77419,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9400921658986175,
+        "line_delta": 0,
+        "hunk_count": 16
+      }
+    },
+    {
+      "name": "dst-first-struct-raw",
+      "score": 85.62673,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 184,
+        "frame_growth": 32
+      },
+      "structural": {
+        "opcode_similarity": 0.8513513513513513,
+        "line_delta": 10,
+        "hunk_count": 11
+      }
+    },
+    {
+      "name": "dst-first-struct-shared",
+      "score": 85.62673,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 184,
+        "frame_growth": 32
+      },
+      "structural": {
+        "opcode_similarity": 0.8513513513513513,
+        "line_delta": 10,
+        "hunk_count": 11
+      }
+    },
+    {
+      "name": "src-first-pointers-raw",
+      "score": 96.036865,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9216589861751152,
+        "line_delta": 0,
+        "hunk_count": 16
+      }
+    },
+    {
+      "name": "src-first-pointers-shared",
+      "score": 96.036865,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9216589861751152,
+        "line_delta": 0,
+        "hunk_count": 16
+      }
+    },
+    {
+      "name": "src-first-struct-raw",
+      "score": 87.6129,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 184,
+        "frame_growth": 32
+      },
+      "structural": {
+        "opcode_similarity": 0.8558558558558559,
+        "line_delta": 10,
+        "hunk_count": 11
+      }
+    },
+    {
+      "name": "src-first-struct-shared",
+      "score": 87.6129,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 184,
+        "frame_growth": 32
+      },
+      "structural": {
+        "opcode_similarity": 0.8558558558558559,
+        "line_delta": 10,
+        "hunk_count": 11
+      }
+    }
+  ],
+  "files": {
+    "c016-rgb-row-split/local-update.json": "e41735d262ee26dae8dd06512f6770cefdddd5d8762fb9b740a6ce3712976d1d",
+    "c016-rgb-row-split/out-update.c": "1180d7d82b39e2dcc173be37d5a74ff7058af18ff1069aa3fe2f2e1427b3b5e6",
+    "c016-rgb-row-split/local-assign.json": "5d954161606551ac0e1dcebbab6ea616291d805533dc6516af87f775f80b9491",
+    "c016-rgb-row-split/results.json": "ac9a3cba3f60f6f333cd2a53f940f8ff9b326799b177dc95e204582cbc45f9c8",
+    "c016-rgb-row-split/local-two.json": "fd74747bfafd6809cc97d1299903008a08e292a2af702577b60fd3896ecf62d7",
+    "c016-rgb-row-split/local-assign.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-split/local-assign.c": "f02282ce4f5de8b961ae1f27c636c4c9ff16c92d7b1b2c8df128867fd6c975c6",
+    "c016-rgb-row-split/out-return.json": "7470c5ef23a985648ef1df9b78358024a007a1bf4b02515b5fe9716ed3b832eb",
+    "c016-rgb-row-split/out-update.json": "c97d2404817a8e9ea36343544d5d964f0d18ff250839f5018e44b5584c9a63a0",
+    "c016-rgb-row-split/out-return.c": "b58fff5e767a7dbb43e45fec2f1d292f36339cf3b46135036389a14f522178a3",
+    "c016-rgb-row-split/out-return.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-split/local-update.c": "aac92818bf4fea88209e5026cd6ae998cb7d28ec01b197c82e346c561f4eaa2f",
+    "c016-rgb-row-split/local-two.c": "97e84ce18f8c61f66d403ad0e8769c0afd5ccc4ee1b282a08eef7276db9c211d",
+    "c016-rgb-row-split/local-two.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-split/out-update.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-split/local-update.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-split.py": "09643ee021ba803b237d16ee6ac7d032c4e8c6c7ceef5dba557b14148f63bd7c",
+    "c016-rgb-row-pair/src-first-pointers-shared.c": "355cdb80efef99db3684bfb4d33874e2b82d149ef1c8349e98b740f89ec525f0",
+    "c016-rgb-row-pair/dst-first-pointers-shared.c": "c13ea515553b274666003324ae9b0cd2f6463e39ad437d4935c2884c7c4fc9c4",
+    "c016-rgb-row-pair/dst-first-struct-shared.c": "1a149189686763a17bcdc73f3f510a8da84680c28dcdb8d0ff805dc0a672c202",
+    "c016-rgb-row-pair/dst-first-struct-raw.c": "58b99aac9cbaabe49dcc0454e60771bec71de761acb2bf97661605458f86209c",
+    "c016-rgb-row-pair/src-first-pointers-shared.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-pair/src-first-struct-raw.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-pair/dst-first-pointers-raw.c": "03d7d108858aa38f32ffbf7affb505765424ff4231781428c1abc5ef3d5606fd",
+    "c016-rgb-row-pair/src-first-struct-raw.json": "606a98a28d9c36a780b17d64f7ad31fdde62b58054758cc4740eca0cc1127205",
+    "c016-rgb-row-pair/src-first-pointers-shared.json": "cf683e437496dcb04e1b223254867cc80beba786c41aa6f78ea5db2d089cdd3f",
+    "c016-rgb-row-pair/dst-first-pointers-shared.json": "2f86c5cede4154e9f4b482ebe4ec712054555ffe1dffc234f09ee4bd70e1af89",
+    "c016-rgb-row-pair/results.json": "b2f9dc7ac2d7e72d919fa372acf7ca2a6803d8ffcaf8a54dfcb1aa2b23f46a23",
+    "c016-rgb-row-pair/dst-first-pointers-raw.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-pair/dst-first-struct-shared.json": "8703bd6b5258c4770c4767fd4ec53c5b9c1b8483283bdf94a2a832172ab66c6f",
+    "c016-rgb-row-pair/src-first-struct-shared.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-pair/dst-first-struct-shared.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-pair/dst-first-pointers-shared.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-pair/src-first-pointers-raw.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-pair/dst-first-struct-raw.json": "f2c4a16d6f7dd3187fd98c94431bbb75710f99a2f9d4b7edf5387d082c5ba847",
+    "c016-rgb-row-pair/dst-first-pointers-raw.json": "4cbb85828e955ba6891a88e48df0544d85b906880a552d53d45b57757961ca10",
+    "c016-rgb-row-pair/src-first-pointers-raw.json": "eb744c0bee562c5c273a0ab6a99621f622daddbe923fd59a2ebf24df628064a9",
+    "c016-rgb-row-pair/src-first-struct-shared.c": "78908f873f73c608d26b59a3d55cc4a6fbd49a2966d75db51744a6437a37e4d3",
+    "c016-rgb-row-pair/dst-first-struct-raw.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-pair/src-first-pointers-raw.c": "da92b0d6ecd8beaa0894aa879e39ade004d34e36d2f5897fa3ceba99415029d6",
+    "c016-rgb-row-pair/src-first-struct-shared.json": "5e05f2ee24c499530a3eb80ace0dc880b546587de2190dbef3dd488fb79a1410",
+    "c016-rgb-row-pair/src-first-struct-raw.c": "d7fb004bdfb6e226fefb3491c0d0d5320371a79c56c0d246c405a73f80ad8b45",
+    "c016-rgb-row-pair.py": "869defc54c1471ea3b14cb5ce79cc2199f09c00ccb520d143f3f3f24bdccfc45",
+    "stages/provenance.json": "39b198d5394549fbf74f5b04732ebeaf7c1c032e487de2005482a241dca55110",
+    "stages/launch.log": "5a0db6fdf5bab2b48349f238edf9fd9c9beb2c524734b9b4604e37d46488e1f3",
+    "stages/creation/allocator-0001.json": "28e87c1a83c5de5f3540564db206f5fa47a75f6b5daf1d11426a8a76e93fca1a",
+    "stages/creation/pcode-creations-0001-register_coloring.json": "b5c4883c48f654e6cee037b1cde6a109cec5d0c6cf5df78e03109c5a347847ab",
+    "stages/creation/coloring-0001-fpr-01-after.json": "1fa288861af50ddc6558d2219ca1417f261141d8dcdf510ebbfc500a564a2427",
+    "stages/creation/pcode-creations-0001-post_allocation_peephole.json": "fbbdbbc18868b996649335a83a02d291fca21f11fb8ff24a6fd684209f8a142f",
+    "stages/creation/capture-complete.json": "4eb6d5d7d05d1e17ff4af957e534b77966b986958f091d689dd5f890d6deb844",
+    "stages/creation/functions.jsonl": "24ba8d88d076217d0feac532c0168a5070aaf1ab576b67ff7da217c72562fa23",
+    "stages/creation/coloring-0001-gpr-01-after.json": "0275fcdd54047b80bfe2e9e99491e1a5c9aad0d951a8cc517463960035f0cec7",
+    "stages/creation/pcode-0001-initial.json": "186903486b6980278ad0994a4752e41652973ad9ddf21b31763fa444f2ef7d71",
+    "stages/creation/pcode-creations-0001-epilogue_prologue.json": "c6bcb2e4eb29ac6c4d17d85418165378e614df7ba6513716e0d8cf7a76e09645",
+    "stages/creation/pcode-creations-0001-allocator.json": "9906393500bd5fc3ce5ebd4bd622c50b198242da9d63e6ddbb8a7116a25bdfcf",
+    "stages/creation/pcode-creations-0001-final.json": "c687fed6841c6a99faf6cbc46e83ceafac32e75d5f16947d400360894719b492",
+    "stages/creation/pcode-0001-epilogue_prologue.json": "253777f037d3c86c87e7af3869f2d51df5a6320b37d3c31818c1aa93c7f7760d",
+    "stages/creation/pcode-0001-optimized.json": "041b15de3c023ec40a677854acc0713490318cbfe92c49dbd086b9cb666b6842",
+    "stages/creation/coloring-0001-fpr-01-before.json": "2a736919cb82565c3cc83cbc5eba6feb3f75551e922d6e36615566130cee4d8d",
+    "stages/creation/pcode-creations-0001-forward_peephole.json": "db43501930af30bdb4aa01b3cdceaefd1f3600325a34b078b828cb175e819e95",
+    "stages/creation/code-motion-0001.json": "c7ce56b181dff496282004728560dfdc4929cbc0dfd0ce16c0a2d3bfdd95eb78",
+    "stages/creation/pcode-creations-0001-optimized.json": "32c7da82d051a6ba2cf3c94fb3745554a8f16556f668fc72e343db756a877586",
+    "stages/creation/pcode-0001-post_allocation_peephole.json": "892bc717d028e456f3751f16d6065bf0284bd3f6fdedcac644e44d0d6e86ed33",
+    "stages/creation/pcode-0001-forward_peephole.json": "df56fd1728e760556a512174f53912d4783d08bc0d5dd7d710c8e9cd1bf4aa08",
+    "stages/creation/pcode-creations-0001-initial.json": "a73f2efddb34151541f86091a8fbb462612ff2c506c3df9c91dbff7a80fb7f1c",
+    "stages/creation/pcode-0001-register_coloring.json": "d7c8390ecbfbb735fdf961a67a26dc1d89fcda485feea607d7f759027ea7e136",
+    "stages/creation/pcode-creations-0001-scheduled.json": "40a6c95b9a45aa623ca5ffc74f281402a6608053828bf1bdf20d377a91488e0c",
+    "stages/creation/pcode-0001-final.json": "de8c1e60a87d1655dbe67158b2c0fe64835b298a8999b1aeb1f4c716c1b3d151",
+    "stages/creation/pcode-creations-0001-epilogue_merge.json": "c319142fdddf688c955eb6020b09e733cfa802f2f8a69f7e8e79bbc69c89d197",
+    "stages/creation/coloring-0001-gpr-01-before.json": "aea77417cb6605e74e76312027fca3b370438496243bda79ce6e74454a326a9b",
+    "stages/creation/pcode-0001-scheduled.json": "d9c57a4a8f876e5a412c3931ceef79b5a22329be99ec0cc24abb9d69ae09d95b",
+    "stages/creation/pcode-0001-epilogue_merge.json": "a3bd64f0aca4142344550d1f938f3090d00c7769263f32688abf6a8b232c8f6f",
+    "c016-rgb-row-correspondence.py": "f2cbbd14d6f213c55088c99ec732d95f97cf350e8f728f7c164823ff534f6edc",
+    "c016-rgb-row-correspondence.json": "2ba21bb45f5a22e78d160f0bd410641805be081824b20c888c9c76db625525c0",
+    "c016-rgb-row-correspondence.log": "1469427b674939a9bd87974154a306e5f2c38518a5e2595463305bbd08898a1e",
+    "c016-rgb-split-final.json": "4a8acb6b6d1c8950d4a86257b3864d798c2c06425fd8815b56c6fb5b54543887",
+    "c016-rgb-split-final.log": "2b9b10573d578fcde9c4e23ad48901c9e1da00356fa32155a16fd683cf9ed514",
+    "c016-rgb-split-encoder.json": "f944fe28b7ac2165bcab019d612d1cee447df129351ab410a698b5440f4079f4",
+    "c016-rgb-split-encoder.log": "8d4e1964cf803e8ac4b76e58fd6dd090304fb5875b0146817f40616c75ee699b",
+    "c016-rgb-split-build.log": "e89699577a86447d9c69b31a04811ed23ada19be50069ca9e64e71cbdcae3913",
+    "c016-rgb-stages-hook.py": "7d594a4925481eb5a1f16ac903b340565521e2313759bfebdcc46225c027ba49"
+  },
+  "archive_sha256": "5348e33b948fdf7ecf78aed6277e0d7441d1de9ef64d9766b3b8b9874528465a"
+}
