@@ -1,0 +1,782 @@
+{
+  "scope": "Earlier baseline only. Owner identification; not fresh final offsets.",
+  "source": {
+    "function": "mnSnap_80257F24",
+    "mwcc_command": "build/compilers/GC/1.2.5n/mwcceppc.exe -nowraplines -cwd source -Cpp_exceptions off -proc gekko -fp        hardware -align powerpc -nosyspath -fp_contract on -O4,p -multibyte        -enum int -nodefaults -inline auto -pragma \"cats off\" -pragma        \"warn_notinlined off\" -RTTI off -str reuse -DBUILD_VERSION=0        -DVERSION_GALE01 -DMUST_MATCH -maxerrors 1 -msgstyle std -warn off        -requireprotos -i src -i src/MSL -i extern/dolphin/include -i        build/GALE01/include -lang=c -sym on -c src/melee/mn/mnsnap.c -o build/GALE01/src/melee/mn/mnsnap.o",
+    "mwcc_command_hash": "sha256:5b19a2d1e3288eb5745ca2f0a74b4fef78a2d8b5b0781f3996cce9e6b594c77a",
+    "tu": "src/melee/mn/mnsnap.c"
+  },
+  "frame": {
+    "base_size_bytes": 8,
+    "call_args_size_bytes": 144,
+    "objects": [
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1925",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c500"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1924",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c500"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1923",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c500"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1922",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c500"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1921",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c500"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1920",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c500"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1919",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c500"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1918",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x55f5f0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1917",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c328"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1916",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c298"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1915",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c298"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1914",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c298"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1913",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c2e0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1912",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c2e0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1911",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c2e0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1910",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c2e0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1909",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x7b70a8"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1908",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x1869738"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1907",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x55f5f8"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1906",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186a6c0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1905",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186a690"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1904",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x55f610"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1903",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x55f610"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1902",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x7b7068"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1901",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x55f5f8"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1900",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186cff8"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1899",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186d088"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1898",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c220"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1897",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c220"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1896",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c220"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1895",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c220"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1894",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x55f610"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1893",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x55f610"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1892",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186a100"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1879",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x1869f28"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1878",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x18694b8"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1875",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x55f5e0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1872",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x714448"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1870",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 4,
+        "type": "type@0x719138"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1868",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x719138"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1865",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x55f5e0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1864",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 8,
+        "type": "type@0x1869738"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1859",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186a300"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1858",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186a360"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1857",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x55f610"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1856",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x55f610"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1855",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x55f610"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1854",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x55f5f0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1853",
+        "provenance": "frame_locals",
+        "size": 12,
+        "stack_offset": 12,
+        "type": "type@0x60f0e0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "@1852",
+        "provenance": "frame_locals",
+        "size": 12,
+        "stack_offset": 24,
+        "type": "type@0x60f0e0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "photo_count",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 36,
+        "type": "type@0x186cea0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "zero",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 40,
+        "type": "type@0x55f5f0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "i",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x55f5f0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "arrows_matanim",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186cc80"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "warn_animjoint",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 44,
+        "type": "type@0x186cc28"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "warn_matanim",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 48,
+        "type": "type@0x186cbd0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "warn_shapeanim",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 52,
+        "type": "type@0x186cb78"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "main_animjoint",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186cb20"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "warn_joint",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 56,
+        "type": "type@0x186cac8"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "arrows_shapeanim",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186ca70"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "arrows_animjoint",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186ca18"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "arrows_joint",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c9c0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "page_joint",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 60,
+        "type": "type@0x186c968"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "sub_animjoint",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c910"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "sub_matanim",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c8b8"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "sub_shapeanim",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c860"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "photo_joint",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c808"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "csr_joint",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c7b0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "csr_animjoint",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 96,
+        "type": "type@0x186c758"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "csr_matanim",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 64,
+        "type": "type@0x186c700"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "csr_shapeanim",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 68,
+        "type": "type@0x186c6a8"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "main_matanim",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c650"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "main_shapeanim",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c5f8"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "main_joint",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c5a0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "archive",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c548"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "text",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c500"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "proc",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c4b8"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "thumb_root_ptr",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c470"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "slot_jobj_ptr",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c418"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "move_jobj_ptr",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c3a0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "jobj2",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c328"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "gobj",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c2e0"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "jobj",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c298"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "snap",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c220"
+      },
+      {
+        "area": "locals",
+        "confidence": "observed",
+        "name": "main_load",
+        "provenance": "frame_locals",
+        "size": 4,
+        "stack_offset": 0,
+        "type": "type@0x186c1d8"
+      }
+    ],
+    "provenance": "frame_locals",
+    "source_stage": "final_scheduler"
+  }
+}

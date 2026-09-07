@@ -1,8 +1,8 @@
 # Snapshot initializer continuation
 
 Current retained baseline: **98.13447%**, source8a94f5de1a, PR3406 head9f1bdc6bbf
-on codex/mnsnap-initializer-spill. PR worktree /tmp/melee-c016-snap-pr. Push all
-further source improvements to this PR while it remains open. Historical
+on codex/mnsnap-initializer-spill. PR3406 merged as006b50d24c and was synced here;
+the next source gain needs a new PR. Historical
 98.06646 references below precede the page-name spill correction.
 
 Active function mnSnap_80257F24, src/melee/mn/mnsnap.c. Baseline98.06646%,
@@ -88,3 +88,28 @@ ownership of unused home196 and spill-home placement; do not repeat plain
 warning pointer aliases. Initializer still structurally/scheduling mismatched,
 not allocator-only. Full captures, probes, corrected-parser analysis and retained
 ordinary diff archived in2026-09-07-page-name-spill.
+
+## Warning home ownership controls
+
+Read prior task's d82d-snap-init-final/retail/backend-trace.v1.json: frame base8,
+call area144, named warn_animjoint relative44 => absolute196. This historical
+capture establishes the earlier named owner; it is not a fresh capture of the
+retained source's home list. The current ordinary output never accesses196 and
+loads warning animation via228 even at the final AddAnimAll call (+934).
+
+Five explicit write-back forms: embedded getter assignment neutral98.13447;
+embedded field assignment98.10664; output-parameter getter returning assignment
+98.10664; separate output assignment and return98.037094/frame408; nested named
+return assignment98.10664. Others frame400. Removing the earlier assignment
+was part of each test; all values are assigned before use.
+
+Six type controls: HSD_AnimJoint**, void* const*, const void**, with original
+getter or direct archive argument. Getter forms98.13447, direct98.10664, all400.
+Six page-comparison partners instead of snap: warning animation/material/shape,
+main joint/animation, page joint. Main joint98.12519; others98.13447, all400.
+No retained changes. These17 controls do not support a simple alias/type/use
+repair of the slot owner. Next inspect value-numbering/copy-propagation and
+spill-home assignment rather than repeating these forms.
+
+PR3406 merged during this turn; synced upstream and restored source before
+build. Evidence and historical frame excerpt in2026-09-07-warning-home-owner.
