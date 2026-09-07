@@ -957,3 +957,21 @@ code. No reason to pursue this guard timing family further.
 Complete source/diffs SHA256-verified in2026-09-07-final-row-output. Production
 restored98.7788%, no new PR delta; direct-row-call structural candidate remains
 separately preserved. Goal remains active.
+
+## Row pointer update and final pointer-return boundaries — 2026-09-07
+
+Eight ordinary compiler probes, all restored. Build the row destination pointer
+from buffer+row sum first, then update it by tile offset, and index columns from
+that pointer. Byte and word forms, direct row expression or named sum, converge
+to88.24424%/88.02765%,frame152/160. The byte form keeps arithmetic within the
+work object's byte representation; word reinterpretation is diagnostic only,
+not a newly established array-layout contract. Neither is a source candidate.
+
+Separately, keep scalar dst_row but pass &dst_row to a const-pointer input helper
+that RETURNS tile+*row, with direct or named result and luma offset local variants.
+Scores95.53917–95.76037%,frame152/160. Unlike the earlier output-only/guarded
+helpers this has no null test or destination write inside the helper, but still
+fails to preserve target code. No pointer boundary gain.
+
+Complete sources/diffs SHA256-verified in2026-09-07-row-pointer-boundaries.
+Production restored98.7788%, build passes. Goal remains active, no PR delta.

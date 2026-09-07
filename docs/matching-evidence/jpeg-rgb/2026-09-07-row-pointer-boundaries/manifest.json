@@ -1,0 +1,119 @@
+{
+  "function": "hsd_803B3408",
+  "source_head": "eeb376c1ec0a2079b6b5421d7e3b3b66e219403c",
+  "retained_percent": 98.7788,
+  "source_improvement": false,
+  "candidates": [
+    {
+      "family": "row-pointer-update",
+      "name": "s32-direct",
+      "score": 88.24424,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "row-pointer-update",
+      "name": "s32-sum-local",
+      "score": 88.02765,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    },
+    {
+      "family": "row-pointer-update",
+      "name": "u8-direct",
+      "score": 88.24424,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "row-pointer-update",
+      "name": "u8-sum-local",
+      "score": 88.02765,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    },
+    {
+      "family": "final-pointer-return",
+      "name": "direct-full",
+      "score": 95.76037,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "final-pointer-return",
+      "name": "direct-no-row",
+      "score": 95.76037,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "final-pointer-return",
+      "name": "local-full",
+      "score": 95.53917,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    },
+    {
+      "family": "final-pointer-return",
+      "name": "local-no-row",
+      "score": 95.76037,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    }
+  ],
+  "files": {
+    "c016-rgb-row-pointer-update/s32-direct.json": "379979f06bbddd882ab3d407d6e45a9d07d1d06de79f197bdb8735ec354e7ba8",
+    "c016-rgb-row-pointer-update/u8-sum-local.json": "1a73b09b4c2567158439f073eac5d3d494f5e1b40173be1ddd39163bcf1abf10",
+    "c016-rgb-row-pointer-update/s32-sum-local.json": "1a73b09b4c2567158439f073eac5d3d494f5e1b40173be1ddd39163bcf1abf10",
+    "c016-rgb-row-pointer-update/results.json": "9a970ef5ba6c4f6a5cdc843fc2d726e4c8cb7a56dec82837611aefd5923ebd1d",
+    "c016-rgb-row-pointer-update/u8-sum-local.c": "36e770b289d8d33955d58b7dcb877bf0d9193a975a36d81eec4d786744b2fbf4",
+    "c016-rgb-row-pointer-update/u8-sum-local.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-pointer-update/s32-sum-local.c": "b6c41b80b35b766f68bddbf9da08b0aa231ea5b9f9c4505a3ef140bddeef3f9f",
+    "c016-rgb-row-pointer-update/s32-direct.c": "80084bab530d8fae04f43285c9ca27a19984e74b5ee78a9e571e68a0397afb8d",
+    "c016-rgb-row-pointer-update/u8-direct.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-pointer-update/u8-direct.json": "98c1eb9107672beb7c2ea5432c8d95306375374c3020e54d94158f98025b6f1c",
+    "c016-rgb-row-pointer-update/s32-sum-local.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-pointer-update/s32-direct.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-pointer-update/u8-direct.c": "10b8edab35352d00248515fbceed863fc7e194d979e9a7c186643f3bdd33eaf3",
+    "c016-rgb-row-pointer-update.py": "b9e94b7fca1db5538d5212682b37845d57a1cf6e893367f5d0170890f50a8fe9",
+    "c016-rgb-final-pointer-return/direct-full.json": "49e07ebd5c23c18b37d0bb83d586567e0bcb9f662a46e7b8fd930e265e613de7",
+    "c016-rgb-final-pointer-return/direct-no-row.c": "ea043d50a2f248ae89b5a8079995179b83c5a0b4df4254da27a4c1813f630193",
+    "c016-rgb-final-pointer-return/local-full.json": "25755b369d50544444201b81aa32120633aa20ecbe9c13fceddae63ac2bfa719",
+    "c016-rgb-final-pointer-return/direct-full.c": "e7f1dbded075ccf1cf0136b1a30244a06e2e52f4799d9768297cf7a3b908ecce",
+    "c016-rgb-final-pointer-return/results.json": "eb4f4c6031f2d536e7a568f66fcbf59e15d576715cd8501a3d6564c3ba420c69",
+    "c016-rgb-final-pointer-return/direct-full.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-final-pointer-return/direct-no-row.json": "e8ad765c37b9402d70cb170093aa7d9989b20b44e019da0dc945fdbe6dea3955",
+    "c016-rgb-final-pointer-return/local-no-row.c": "c515acc585a4cc4668dac9438d8093bf3eddd5b42b1426807a528b8ceae010d5",
+    "c016-rgb-final-pointer-return/local-no-row.json": "784b638fb720f862e8071355fbddb40f87d2d9561301e21f3cc738bf3a8f5d71",
+    "c016-rgb-final-pointer-return/local-no-row.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-final-pointer-return/local-full.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-final-pointer-return/direct-no-row.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-final-pointer-return/local-full.c": "b152a110b8f279e1d6e5af96f8897956b66ce8bba117903036145662b9ae2352",
+    "c016-rgb-final-pointer-return.py": "8dc790555b2f1d31023463cdab88e612a8ef2c65d1de554c43bc9cb7847c0447"
+  },
+  "archive_sha256": "581551c1cf5190987c5382fa80e76f0928e6c07840c540b6add8a2b32e178eed"
+}
