@@ -1126,7 +1126,7 @@ chroma target colors ARE reachable by ordering alone.
 19 ordinary source probes:11 index/destination type/scope/expression changes,
 8 index-inline caller/local/frame variants. Scalar int/u32 types, pointer view
 casts, and most scopes retain98.087555; direct pointer expression97.258064,
-function-scope pointer97.39632. Index helper variants95.7235,frames152–168.
+function-scope pointer97.39632. Index helper variants95.7235–95.935486,frames152–168.
 No new source gain. These test the NEW row-fixed candidate; do not count earlier
 old-row failures as equivalent graph evidence. No forced compiler mutation.
 
