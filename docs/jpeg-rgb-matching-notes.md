@@ -1480,3 +1480,36 @@ in2026-09-07-late-address-breakthrough. This supersedes98.82488 as best producti
 Next focus: the commuted +104 ADD and luma entry scheduling pair, preserving the
 late shared-address lowering recovered here. Re-derive virtual correspondence
 if further allocator diagnostics are needed; old37/53 IDs are not final-source IDs.
+
+## Post-breakthrough source shapes — 2026-09-07
+
+Starting strictly from99.400925/PR3397,51 probes test the two remaining instruction
+sites without relying on earlier source graphs. Fifteen independent Cb/Cr index
+parenthesizations (left-associative row-first versus row+(low+high),column+row,
+row+(high+low)) regress90.036865–97.00461. Recovered late sharing is sensitive
+to grouping, not just unsigned arithmetic.
+
+Six luma base forms: typed x118 array, s32-element pointer arithmetic in three
+orders, index-first pointer addition, byte-base-offset. Typed/element/index-first
+forms99.179726/frame160; grouped element-index97.31336/frame160; byte-base-offset
+99.400925/frame152. None resolves the luma scheduling pair.
+
+Twelve named low/high/both chroma column-term probes, row-first/column-first,
+with/without luma row local. Low-only row-first99.28571 introduces a low/high
+register exchange but still commutes+104; column-first96.24424. High/both row-first
+99.400925, column-first97.00461. No improvement or ADD fix.
+
+Twelve unsigned-term probes move unsignedness to dst_row or the high column term
+across six term orders. Several unsigned-row forms retain99.400925, even
+column-first spelling, but exact instruction diff still has commuted+104 and
+luma1f0/1f4 swap. Others95.32258–99.354836. Thus textual term order is not final
+ADD order; early expression canonicalization remains relevant.
+
+Six final row-complexity probes expand the existing row arithmetic at Cb,Cr,or
+both store sites, row-first versus grouped-column-first. One-store expansion
+85.39171–85.41475, both96.10599–96.129036. This does not preserve late address
+sharing/row lowering and gives no gain. No probe retained; production restored,
+ninja passes. All sources, compile-producing diffs and runners archived in
+2026-09-07-post-breakthrough-source-shapes. Next diagnostics should inspect the
+current final source's actual ADD construction/optimization stage before more
+parenthesis sweeps; old virtual identities are not proof on this new source.
