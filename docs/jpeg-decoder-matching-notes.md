@@ -662,3 +662,20 @@ last precolor249->248; old133 and76 map non-bijectively to candidate75. Therefor
 this source is not a simple role renumbering and old force-phys mapping must not
 be reused. No full target allocation claim. Sources/diffs,dump,and failed mapping
 report archived in2026-09-07-clamp-output-parameters. No new PR delta.
+
+## Output address parameters — 2026-09-07
+
+Four ordinary source probes tested inline output parameters for the group pointer
+or X offset. All add eight stack bytes (frame 184 vs target 176): complete pointer
+calculation 92.28631%, precomputed offsets and row/stride forms 96.72614%, X-offset
+output alone 98.6971%. None is retained. Unlike the previously tested returned
+pointer/offset helpers, these explicitly pass the address of the caller local.
+No compiler allocation claims are inferred from their lower match scores.
+
+The existing lifetime-layout tool was also queried with the fresh verified
+Windows baseline and helper-inline-lifetime focus, without compiling probes.
+It offers only generic declaration/type/scope probes; specialized helper families
+have no supported pattern, and jpeg_store_rgb565 is too complex for its pure
+expression inliner. This is a tool coverage limitation, not proof that helper
+reconstruction cannot work. Sources, ordinary checkdiff results, and diagnostic
+JSON are archived in 2026-09-07-output-address-parameters. Baseline restored.
