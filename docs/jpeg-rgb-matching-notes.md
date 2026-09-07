@@ -593,3 +593,33 @@ constraint, rather than another physical-register declaration-order sweep.
 Final restored RGB98.7788%, encoder100%; full build passes. Full stage/creation
 capture, partial correspondence with contradictions, sources and diffs are
 SHA256-verified in 2026-09-07-row-correspondence. No source100 or PR/link claim.
+
+
+## Natural row lifetime extensions — 2026-09-07
+
+30 valid ordinary source compiles, all restored:
+
+- Sharing the low-row value with source-row calculation (s32/int/u32,
+  scaled as4 or32, before/after destination row) gives94.60829–96.29032%.
+  Keeping a meaningful later use does not preserve target instruction shape.
+- Isolating only final tile+row_sum in an add helper (direct/result local,
+  argument order, parameter mutation; full/no luminance row local) gives
+  95.53917–97.1659%. Row-update converges to the previously rejected
+  coalesced-low candidate; simpler return forms undo the complete-sum boundary.
+- Scalar row represented as array[1] or single-field struct gives97.14286%
+  on corrected-pixel source, with high extraction and sum sharing the same
+  register and reversed final operands. Paired src/dst row records regress
+  and add8frame bytes. Arrays are indexed only within declared bounds.
+
+The node-set-split and coalesce-search CLI interfaces were audited. They use
+single-color-per-IG or pair-coalescing targets; the rejected candidate has a
+one-IG/two-target-color contradiction. Do not pretend either desired color
+alone represents a complete valid target, or pass the conflicting map to a
+force-phys scorer. No new compiler override was invoked.
+
+This closes these specific row lifetime/helper/aggregate forms without a
+retained percentage gain. A broader use/temporary ownership reconstruction
+must be evaluated against the low/sum distinction and full instruction stream,
+not scored as a simple register permutation. RGB remains98.7788%, coefficient
+encoder100%, full build passes. Evidence is SHA256-verified under
+2026-09-07-row-lifetime-source. Goal remains active; no PR/link yet.
