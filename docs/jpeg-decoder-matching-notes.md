@@ -1013,3 +1013,40 @@ XY record92.40249 with or without width reuse. Restoring row alias while keeping
 width reuse gives X95.74689 and XY93.9585, frame176. The row-removal control itself
 regresses, so do not blame the entire initial regression on record shape.
 All candidate source restored; ninja succeeds.
+
+## Fresh retail costs close the simplify replay gap — 2026-09-07
+
+Executed helper-only and joint target/helper permuter imports using the verified
+retail compile script. Both baselines score250. Combined run1099 iterations,
+136 compile errors, minimum250; no improved outputs. SIGINT cleanly stopped the
+owned process. This bounded search does not exhaust helper source possibilities.
+
+Standard debug retro backend capture on current retained source succeeds (exit0).
+Fresh verify-backend against current Windows dump:805 equal,0 different,
+69 retail-only. The custom-stage failure did not block this standard capture.
+
+Important table semantics: debug SIMPLIFY GRAPH walks the returned linked list
+after simplifygraph. It is not a chronological removal trace, and its degrees
+are final snapshot values. Used existing mwcc-decomp/tools/coloring_model.py
+instead of implementing another simulator. Initial adapter uses observed retail
+edges and coalescing roots, but assumes zero spill costs. It agrees for the first
+79 removals, then chooses147 instead of compiler66 at a jam; only99/113colors.
+An artificial preference for66 reproduces113/113 but is only a hypothesis.
+
+Reused existing c016-retail-cost-hook.py with SnapshotReader for an independent
+read-only retail capture on this TU; exit0, both register classes captured.
+With actual costs, the existing full simplify+select model reproduces the entire
+observed order and113/113GPR choices, with no forced ordering or synthetic costs.
+One potential-spill choice: IG66, dynamic degree40, captured cost17, ratio0.425.
+This is the simplify heuristic's removal choice, not an actual emitted spill.
+The ordinary source and176-byte frame are unchanged. The now-validated model
+can evaluate rank/degree hypotheses through the actual jam rather than merely
+replaying a supplied desired SELECT order.
+
+Bounded single-node rank32.5..149.5 and permanent-degree -10..10 probes for
+65,63,78,77,79,66 yield no full target solution. These are abstract hypotheses;
+the target still extends a partial map with retained colors, excluding added
+dead107/108/109. They are not source-realizability or complete-target proofs.
+Evidence, both search imports, cost hook, and model adapters/results archived in
+2026-09-07-retail-cost-replay. Worktree doctor refreshed two tooling files from
+shared master; restored those automatic changes, preserving branch's versions.
