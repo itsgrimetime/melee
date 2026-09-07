@@ -1,5 +1,10 @@
 # JPEG decoder color conversion: fn_803B6820
 
+Current retained source: **98.83817%**, committed as `94db8b8d65` and submitted
+in [PR #3384](https://github.com/doldecomp/melee/pull/3384), clean head
+`535a768bd1`. The final section records the chroma-addition improvement.
+Earlier baseline sections below describe the preceding 98.81743% source.
+
 ## Verified baseline
 
 The source from merged PR3358 is 98.81743%, 241 instructions/964 bytes, and
@@ -382,3 +387,71 @@ authoritative. No donor justified a wholesale transplant.
 Sources, results, model inputs and implementation snapshots, explicit successful
 orders, ablations, donor outputs, and restored verification are archived under
 `docs/matching-evidence/jpeg-decoder/2026-09-06-select-order-construction/`.
+
+## Retained chroma-addition improvement
+
+The following expression raises ordinary matching from 98.81743% to
+**98.83817%** while preserving all other instruction bytes:
+
+```c
+chroma = base + (((chroma_row + chroma_column) -
+                  (-((block / 2) << 5))) * 4);
+```
+
+At +0x1cc, the emitted add changes from `add r11,r11,r15` to
+`add r11,r15,r11`: the low-column term now precedes the high-row term,
+as in the target. The signed remainder still precedes the signed division.
+There are still 241 instructions/964 bytes and a 176-byte frame. This is
+the subtract-negative lever documented in MATCHING_GUIDE section 6, applied
+to the **outer high term**. The previously rejected `row - (-low - high)`
+form is a different tree and does not produce this improvement.
+
+### Frontend evidence and rejected alternatives
+
+Two successful retail frontend captures, baseline and `(row + low) + high`,
+each contain 54 optimizer snapshots. In the baseline, copy propagation
+substitutes the remainder expression for chroma_column at snapshot 06;
+its remaining assignment is gone by snapshot 09 (UseDef). The final tree
+is `low + (row + high)`. The reassociated candidate ends as
+`high + (row + low)`, explaining its division-first lowering. IRO linear
+listing order is not emitted evaluation order: follow the expression edges.
+Both groupings are already visible in the initial flowgraph, so do not
+attribute the association itself to the later copy-propagation pass.
+
+Twelve low/high coordinate-record or array variants, raw or scaled, preserve
+the rejected reassociation (96.975105% with padding, 97.11618% without it).
+Ten expression-boundary probes tested subtraction, integer casts, a narrow
+pair, and a diagnostic pointer round trip. Only outer subtraction of the
+negative high term improved matching. Three valid spelling follow-ups show
+that multiplying by -32, or negating the quotient before multiplication,
+adds instructions; parenthesizing the negation preserves 98.83817%.
+An additional negative-left-shift diagnostic was compiled but is excluded
+from valid source evidence: it shifts a negative signed value. It was never
+retained. The pointer round trip was also diagnostic, not proposed PR code.
+
+### Allocation state after the improvement
+
+A fresh dump of the retained source has exactly the same 110-node recorded
+GPR graph, precolored neighbors, selection order, and observed assignments
+as the previous baseline. The changed add operand order is already present
+in the first PCode pass. The existing six-step abstract order replays to the
+same target map under the validated model; it remains a diagnostic, not a
+source realization. The old source-specific node IDs were revalidated here,
+not assumed to survive the edit. The source still needs its GPR cascade fixed.
+
+### Remote inspection and verification
+
+Windows accepted SSH and initialized invocation
+`inspect-24ade80b72d832b1894b2449`, but could not fetch exact fork commit
+`cbbaf705f7`. The wrapper waited until its 300-second deadline, returned 125,
+and reported missing terminal cleanup proof. An exact-invocation cancellation
+retry returned 124 with the same missing proof. No inspector dump was produced;
+no new remote job was launched after that failure. The reproduction was added
+to existing issue1497. The two local retail frontend captures both exited 0.
+
+The working branch and clean PR branch independently build successfully;
+all other five TU functions remain 100%. Both built DOLs match original SHA-1
+`08e0bf20134dfcb260699671004527b2d6bb1a45`. The TU remains Linkable because the
+function is not yet 100%. Source, complete failed and retained diffs, frontend
+traces, model revalidation, remote logs, and verification are preserved under
+`docs/matching-evidence/jpeg-decoder/2026-09-06-chroma-add-order/`.

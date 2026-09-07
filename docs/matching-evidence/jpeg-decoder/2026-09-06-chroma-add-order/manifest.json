@@ -1,0 +1,1721 @@
+{
+  "function": "fn_803B6820",
+  "scratch": null,
+  "pr": "https://github.com/doldecomp/melee/pull/3384",
+  "retained_source_change": true,
+  "validation": {
+    "source_head": "94db8b8d6575f5289513d7b402e24004eec99b6d",
+    "pr_head": "535a768bd139cf77e2c046d843b069e3d4c49115",
+    "source_sha256": "7a2bab5a7f700557dab18399747432f3678f7fa5af0b863b51312bd1a675794a",
+    "before": 98.81743,
+    "after": 98.83817,
+    "frame": 176,
+    "instructions": 241,
+    "units": {
+      "working": [
+        {
+          "name": "hsd_803B5C4C",
+          "percent": 100.0
+        },
+        {
+          "name": "hsd_803B5D70",
+          "percent": 100.0
+        },
+        {
+          "name": "hsd_803B5EA0",
+          "percent": 100.0
+        },
+        {
+          "name": "fn_803B61B4",
+          "percent": 100.0
+        },
+        {
+          "name": "fn_803B6820",
+          "percent": 98.83817
+        },
+        {
+          "name": "hsd_803B6BE4",
+          "percent": 100.0
+        }
+      ],
+      "clean_pr": [
+        {
+          "name": "hsd_803B5C4C",
+          "percent": 100.0
+        },
+        {
+          "name": "hsd_803B5D70",
+          "percent": 100.0
+        },
+        {
+          "name": "hsd_803B5EA0",
+          "percent": 100.0
+        },
+        {
+          "name": "fn_803B61B4",
+          "percent": 100.0
+        },
+        {
+          "name": "fn_803B6820",
+          "percent": 98.83817
+        },
+        {
+          "name": "hsd_803B6BE4",
+          "percent": 100.0
+        }
+      ]
+    },
+    "checksums": {
+      "working": {
+        "build/GALE01/main.dol": "08e0bf20134dfcb260699671004527b2d6bb1a45",
+        "orig/GALE01/sys/main.dol": "08e0bf20134dfcb260699671004527b2d6bb1a45"
+      },
+      "clean_pr": {
+        "build/GALE01/main.dol": "08e0bf20134dfcb260699671004527b2d6bb1a45",
+        "orig/GALE01/sys/main.dol": "08e0bf20134dfcb260699671004527b2d6bb1a45"
+      }
+    },
+    "model": {
+      "ordinary_before": 98.81743,
+      "ordinary_after": 98.83817,
+      "instruction_changes": [
+        {
+          "offset": "+1cc",
+          "before": "+1cc: 7d 6b 7a 14",
+          "after": "+1cc: 7d 6f 5a 14"
+        }
+      ],
+      "gpr_graph_and_select_order_equal": true,
+      "g1_correct": 110,
+      "g1_total": 110,
+      "existing_abstract_order_replays": true,
+      "moves": [
+        [
+          65,
+          "after",
+          122
+        ],
+        [
+          63,
+          "before",
+          64
+        ],
+        [
+          78,
+          "after",
+          122
+        ],
+        [
+          37,
+          "after",
+          114
+        ],
+        [
+          77,
+          "after",
+          128
+        ],
+        [
+          79,
+          "after",
+          76
+        ]
+      ],
+      "scope": "No source realization of the abstract order. Equality covers recorded select-order graph, precolored neighbors, observed colors, and completeness; not uncaptured retail optimizer internals."
+    }
+  },
+  "candidates": [
+    {
+      "family": "pair",
+      "name": "xy-record-raw-keep",
+      "score": 96.975105,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 184,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 28
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "pair",
+      "name": "xy-record-raw-remove",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "pair",
+      "name": "xy-record-scaled-keep",
+      "score": 96.975105,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 184,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 28
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "pair",
+      "name": "xy-record-scaled-remove",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "pair",
+      "name": "yx-record-raw-keep",
+      "score": 96.975105,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 184,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 28
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "pair",
+      "name": "yx-record-raw-remove",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "pair",
+      "name": "yx-record-scaled-keep",
+      "score": 96.975105,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 184,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 28
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "pair",
+      "name": "yx-record-scaled-remove",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "pair",
+      "name": "array-raw-keep",
+      "score": 96.975105,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 184,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 28
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "pair",
+      "name": "array-raw-remove",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "pair",
+      "name": "array-scaled-keep",
+      "score": 96.975105,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 184,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 28
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "pair",
+      "name": "array-scaled-remove",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "barriers",
+      "name": "subtract-negative-high",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "barriers",
+      "name": "subtract-negative-low",
+      "score": 97.13693,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "barriers",
+      "name": "inner-subtract-negative-high",
+      "score": 98.71369,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 23
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "barriers",
+      "name": "inner-subtract-negative-low",
+      "score": 97.095436,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "barriers",
+      "name": "unsigned-pair",
+      "score": 98.71369,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 23
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "barriers",
+      "name": "int-pair",
+      "score": 98.71369,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 23
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "barriers",
+      "name": "unsigned-row-low",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "barriers",
+      "name": "int-row-low",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "barriers",
+      "name": "narrow-pair",
+      "score": 98.42323,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9979296066252588,
+        "line_delta": 1,
+        "hunk_count": 11
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "barriers",
+      "name": "pointer-roundtrip-pair",
+      "score": 98.71369,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 23
+      },
+      "valid_source_evidence": true,
+      "caveat": "Diagnostic pointer round trip only, not proposed PR source."
+    },
+    {
+      "family": "spelling",
+      "name": "negative-product",
+      "score": 96.493774,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9730848861283644,
+        "line_delta": 1,
+        "hunk_count": 10
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "spelling",
+      "name": "negative-quotient",
+      "score": 97.05394,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9730848861283644,
+        "line_delta": 1,
+        "hunk_count": 10
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "spelling",
+      "name": "parenthesized-negation",
+      "score": 98.83817,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      },
+      "valid_source_evidence": true
+    },
+    {
+      "family": "spelling",
+      "name": "negative-shift",
+      "score": 97.05394,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9730848861283644,
+        "line_delta": 1,
+        "hunk_count": 10
+      },
+      "valid_source_evidence": false,
+      "rejected_reason": "Left shift of a negative signed value; never retained."
+    }
+  ],
+  "remote_inspector": {
+    "invocation": "inspect-24ade80b72d832b1894b2449",
+    "result": "exact-ref fetch failure, wrapper timeout125, cleanup retry124 lacks terminal proof",
+    "issue": 1497,
+    "dump_produced": false
+  },
+  "members": [
+    {
+      "path": "c016-decoder-chroma-archive.py",
+      "bytes": 4450,
+      "sha256": "a5860084a34426f7764f8763467fac1632a67b8ecc28f22803de6c2a1cf97081"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers.py",
+      "bytes": 1842,
+      "sha256": "50dc021ab00a250df6e969bd0e40645270d274d11623397dc2bd52cce694acd6"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/baseline.c",
+      "bytes": 33715,
+      "sha256": "3b2df073814983b43393b09890c85ea4de0cccd0fb906383a2f4a04bb3f51e3c"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/inner-subtract-negative-high.c",
+      "bytes": 33672,
+      "sha256": "d8076b3d746f9de876771a02df8ae45e466afb7d3938c568dcad5aeb994ef374"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/inner-subtract-negative-high.json",
+      "bytes": 34464,
+      "sha256": "fd1199bd3d36494bbb69d71d57f498e1501f85963277e9718822ea945641cd5f"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/inner-subtract-negative-high.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/inner-subtract-negative-low.c",
+      "bytes": 33672,
+      "sha256": "e023e56c178045cf5cb534b27c07c458bdf2488df90bfaa89323915ce99996f7"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/inner-subtract-negative-low.json",
+      "bytes": 34545,
+      "sha256": "4551cf0e9a6b2efe3f84f915ecd022298b522d8e230cc2c0f67f30edf0d9cc54"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/inner-subtract-negative-low.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/int-pair.c",
+      "bytes": 33677,
+      "sha256": "cf25ac602866d207165d677c8a2d5587582253a44d50d91513ef94382c63e1be"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/int-pair.json",
+      "bytes": 34450,
+      "sha256": "df998e33238d452ff737806ed2e92796ed1f0fac2262172b831bc3c92e0b8dd8"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/int-pair.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/int-row-low.c",
+      "bytes": 33677,
+      "sha256": "a6c22479f4522805a469eecd381940bf2c3b81829b8ccce018db6709cc7daf4b"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/int-row-low.json",
+      "bytes": 34210,
+      "sha256": "c48433b85a7f7c26968861f79983dda3e4902af31918f247ab1e410a52f8ed16"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/int-row-low.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/narrow-pair.c",
+      "bytes": 33677,
+      "sha256": "81c584e74d14f2470562eeeee416f876235becd9d14d53e23bbdf73c30578204"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/narrow-pair.json",
+      "bytes": 40048,
+      "sha256": "5e3c8f1982d1493204ac39c1c49c9c889da65d6fe42ddbe4a9ea6e1c085bab7c"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/narrow-pair.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/pointer-roundtrip-pair.c",
+      "bytes": 33685,
+      "sha256": "2caa11a70dc878a9159eb788aee13804f6dc5f207de090f52af0c641b91ac4d9"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/pointer-roundtrip-pair.json",
+      "bytes": 34465,
+      "sha256": "47b2e718a0a3350c5423a5d662d013d92f464c52ac92ee50887b15f08bb9a335"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/pointer-roundtrip-pair.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/results.json",
+      "bytes": 2904,
+      "sha256": "73edc1637c7c424cbda0eab126cc826bf1c9f710cfdc812f5574b190f42b776c"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/subtract-negative-high.c",
+      "bytes": 33672,
+      "sha256": "b7c1b683db80a69f08063494eaeeb88b165af718c7bdcacab79ebf63f2da40a0"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/subtract-negative-high.json",
+      "bytes": 34336,
+      "sha256": "68d9cf6a11958dfabf4bead93d8e085d091433a6c67f5b7a9c0724688cdb637f"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/subtract-negative-high.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/subtract-negative-low.c",
+      "bytes": 33672,
+      "sha256": "e40e87d3ee12d30da83ffbba3c45fa2954500da6292352ed67e3ca381d7280e5"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/subtract-negative-low.json",
+      "bytes": 34462,
+      "sha256": "9fcb2c713925f819273dcb045ebdff396afacf19be6664940bd02cd4cbca7ba3"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/subtract-negative-low.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/unsigned-pair.c",
+      "bytes": 33689,
+      "sha256": "24267bc94b14d82e35cb10d809ec2771ac7b65375505b583de4b74dc747e90d6"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/unsigned-pair.json",
+      "bytes": 34465,
+      "sha256": "02d00dd81b5f8067feb1d9e08af585ed1597f9a9925e09e30f238b7d71851cce"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/unsigned-pair.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/unsigned-row-low.c",
+      "bytes": 33689,
+      "sha256": "f792e155f3f6c87dea0ff5038cc0196905358473624dfd1a1341e90d45cabde2"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/unsigned-row-low.json",
+      "bytes": 34462,
+      "sha256": "5f8bfe169536c012c4e132025ddbf67fbfaf850be9a3275280ca2f8f0d7a2e9c"
+    },
+    {
+      "path": "c016-decoder-chroma-barriers/unsigned-row-low.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-build.log",
+      "bytes": 337,
+      "sha256": "26d0c1527c1a8bc90f6bce23f77cf5e0836d95edf57d94c662df43bfd0b01d40"
+    },
+    {
+      "path": "c016-decoder-chroma-capture.py",
+      "bytes": 585,
+      "sha256": "3c3cd33af4c71120a53165a0c90bb6d275b8c4073d73b4125cb10d89a1f62c0c"
+    },
+    {
+      "path": "c016-decoder-chroma-doctor.log",
+      "bytes": 2498,
+      "sha256": "53c3fb76785db775add567768bb0a531e1aa4c52751c895bc5ec2282f48101e8"
+    },
+    {
+      "path": "c016-decoder-chroma-final-build.log",
+      "bytes": 337,
+      "sha256": "26d0c1527c1a8bc90f6bce23f77cf5e0836d95edf57d94c662df43bfd0b01d40"
+    },
+    {
+      "path": "c016-decoder-chroma-final.json",
+      "bytes": 34322,
+      "sha256": "d729bf2c7531ad4d0e0beedd689b9dc9f039969c142bbeb6ba48696d2f7832a8"
+    },
+    {
+      "path": "c016-decoder-chroma-final.log",
+      "bytes": 311,
+      "sha256": "5fbc03fd8d42c09848459f5be05ea7c77141c0ee7f151be4f58d3c5c1936b04b"
+    },
+    {
+      "path": "c016-decoder-chroma-inspect-cleanup.log",
+      "bytes": 176,
+      "sha256": "7463ea7958084248fe2e5fe537ee137246051dd1db6ca41498f4c822039af27e"
+    },
+    {
+      "path": "c016-decoder-chroma-inspect.log",
+      "bytes": 1204,
+      "sha256": "d3aa7a478f3c3a66a89c9f932a8a584b597e69e1ab2ed6a6efff1901cebfcce4"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-00-iro-buildflowgraph.txt",
+      "bytes": 28813,
+      "sha256": "fc9dea26b274ee8d4beaaba49fd426709546acb65244afd438c184509100e18d"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-01-iro-removeunreachable.txt",
+      "bytes": 28784,
+      "sha256": "d241084b3687393afee34a88c586d1fe8ea2a125d6ce684474c1ab848d1b1b3e"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-02-iro-removeredundantjumps.txt",
+      "bytes": 28659,
+      "sha256": "ab2e281a45a17b4ceb22c42e83fdc678cddc6aa5984f68e3561e619e7bc4ffe2"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-03-iro-removelabels.txt",
+      "bytes": 28471,
+      "sha256": "7cc9c3c5f5a652d155b0cee43e441010e2711f18c840f0416a7a1947365bd4f2"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-04-iro-buildflowgraph-1.txt",
+      "bytes": 26237,
+      "sha256": "455ae82c6a07eeeeec576255393ab8c39cb8b55b7f1836c967fc0263a0a27cf1"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-05-iro-scalarizeclassdatamembers.txt",
+      "bytes": 30775,
+      "sha256": "2e1973846eeb2627f7b60f53572605138530608d970f6366e13a86099483a94c"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-06-copy-and-constant-propagation.txt",
+      "bytes": 27363,
+      "sha256": "28807785cb5b4d375ad69b7efac8ae5a5f191cdac95dad1f253d4d67a9ea84aa"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-07-iro-rangepropagateinfnode.txt",
+      "bytes": 27359,
+      "sha256": "486157be013b32324a93eb56326fdadd1f8d4ecf38b14fb2ddad8610bbcf6dd5"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-08-iro-expressionpropagation.txt",
+      "bytes": 27425,
+      "sha256": "3f373f339117c2f55a7ab87e1ef430d0ec1d3e4a9a03f7357eb393eb5cdcf280"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-09-after-iro-usedef.txt",
+      "bytes": 26606,
+      "sha256": "d6a88c346c37248715ee129708f652bed96c88140b2214946c09d3b73c9ce159"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-10-iro-constantfolding.txt",
+      "bytes": 26609,
+      "sha256": "0d5f50fbe995172eddfd5ddc08c3315075a5c08489b9b5c8a6c5ee1207de879d"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-11-before-iro-loopunroller.txt",
+      "bytes": 29502,
+      "sha256": "5855e209e856473357cf667b58c85ed6f27e311f25ed2b455abc1163ec690080"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-12-after-iro-loopunroller.txt",
+      "bytes": 26171,
+      "sha256": "4e8637a012b047cf0d1cb5529c81e26bd5897be778fd2ed61edf6fcb2dbf64d0"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-13-before-iro-findloops.txt",
+      "bytes": 40381,
+      "sha256": "c7687473750dee3e6be1370ed46f42c3913c84844b7f9b79f1edfb640958fa03"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-14-after-iro-findloops.txt",
+      "bytes": 34419,
+      "sha256": "3ed293dc449c58812c0a84a92b35f8baf5b812df1a834ec5a91943dae6833008"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-15-second-pass-iro-copyandconstantpropagation-iro-constantfoldi.txt",
+      "bytes": 33461,
+      "sha256": "5db3c78c418673286fa86e2e9a2b8f0402e5856e19f835236a1dc5095bdc56dd"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-16-iro-commonsubs.txt",
+      "bytes": 33734,
+      "sha256": "d8027f5a6a15e6d79ed3892156676c60814f67034fc60436fb69ce615ece5dd0"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-17-iro-removeunreachable.txt",
+      "bytes": 33226,
+      "sha256": "621e14a56dfa0bbf6c76dd3fde49c64d7e141bc60fc4fa3d8a46f94afb6fa0ad"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-18-iro-removeredundantjumps.txt",
+      "bytes": 33229,
+      "sha256": "cc85e92054fe0f7168704fddff49beaa7a729658f58998092e23b149ebf80832"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-19-iro-removelabels.txt",
+      "bytes": 33221,
+      "sha256": "cec0b9c2c4cef993227fe72475f420257bab7af6449da1692dcba64e571a4df1"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-20-iro-dojumpchaining.txt",
+      "bytes": 33223,
+      "sha256": "807a6fa42536555671d2ce922ef10b261c068bda29a7201da017d0a8e61ea454"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-21-before-iro-copyandconstantpropagation.txt",
+      "bytes": 34045,
+      "sha256": "55851f7f365dd28a8fb64e008a467f44d491503934ed67bf522d2db6735e80d6"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-22-after-iro-copyandconstantpropagation.txt",
+      "bytes": 33239,
+      "sha256": "842ee3fb84e472b80f93aa16f8a98434ee98e9cf2889b6a00d07dcdf2568bb4b"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-23-iro-usedef.txt",
+      "bytes": 33129,
+      "sha256": "7dca15ce2a8e693259319e2084db441b0a89a3d93c3d52b77d987ff3f0d88e14"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-24-iro-evaluateconditionals.txt",
+      "bytes": 33143,
+      "sha256": "d515e81d7f0df8dd65ec8a9116705979a18f384f65aadd2674d8bf7c9adba27e"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-25-iro-removeunreachable.txt",
+      "bytes": 33104,
+      "sha256": "1a0182b2c49fe8ca5806ebd759b2957ee04268f123c3019e5e62cfad965d52fd"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-26-iro-removeredundantjumps.txt",
+      "bytes": 33107,
+      "sha256": "0f2d65c17283992dee60621d8a8673a9bdbab61f56fdf3933cba51eafb6530b2"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-27-iro-removelabels.txt",
+      "bytes": 33099,
+      "sha256": "5876ca81d2ac3ef588a24f5fb9f5395c773ccd1278d2517846fadc3707a7183a"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-28-iro-dojumpchaining.txt",
+      "bytes": 33101,
+      "sha256": "5f99795652b9fcb7d24a72f5251bc227cc8dcff06e534b7e171fc5fcb6d8f6a0"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-29-before-iro-copyandconstantpropagation.txt",
+      "bytes": 33916,
+      "sha256": "171796244b78ef5a6c276f5fefe85f77f829ff07c3a75656ad386e83ef0a19ad"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-30-after-iro-copyandconstantpropagation.txt",
+      "bytes": 33119,
+      "sha256": "5c11ca65ab79d91ac47ca8fff91a9f473226980ade4b6e685fe41981be6cfba6"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-31-iro-usedef.txt",
+      "bytes": 33093,
+      "sha256": "65c61ee5ab4e76e816e611acf66fe143cf1f8a3691bfc21c34e943c782033eb2"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-32-iro-evaluateconditionals.txt",
+      "bytes": 33125,
+      "sha256": "616613fd235cd688b110bca5ed24a8a7d3b9c009ff3a1c448d4e5284de08caa1"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-33-iro-scalarizeclassdatamembers.txt",
+      "bytes": 36793,
+      "sha256": "ab5640c3d69f729480ccbd70bbb76ad693f6f0bee54a9d91fd9cb78e036ea6d7"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-34-copy-and-constant-propagation.txt",
+      "bytes": 35355,
+      "sha256": "14c0f46352eb3979d346fb994dfdbf808c4287f37c72e45a46d990d5507d4b85"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-35-iro-rangepropagateinfnode.txt",
+      "bytes": 35351,
+      "sha256": "0bc45d96262be0aec820ca12aa517bef72eaefa471a31b45f530500f205493e7"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-36-iro-expressionpropagation.txt",
+      "bytes": 35309,
+      "sha256": "7077e29eb545c4f1803f412a14c9437e31b1f1e2f8101d78642e73516f972710"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-37-after-iro-usedef.txt",
+      "bytes": 35055,
+      "sha256": "45949e076ad65936344ff751daa6a033bc4b3e4d55f75001d0697008307be26b"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-38-iro-constantfolding.txt",
+      "bytes": 35058,
+      "sha256": "14ea4e0adc7ac10776a7f202b261c8071edbc7c5bda9d43bd6ae9a42fafc13a3"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-39-after-iro-findloops.txt",
+      "bytes": 35816,
+      "sha256": "7e8688ff7530f1638e845e072d958492e7ec7a3904989f4c5f8a22690646a4bd"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-40-second-pass-iro-copyandconstantpropagation-iro-constantfoldi.txt",
+      "bytes": 35314,
+      "sha256": "eb2c4faf1bb91b3c3e41f5dfcdde5a5eadd60dc1f36a390b1c89ea28b5c4c91b"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-41-iro-commonsubs.txt",
+      "bytes": 35406,
+      "sha256": "003a0fe0b60acfaeabf53178c53f5a27baf584af0ae987b2b8f5053e383f8861"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-42-iro-removeunreachable.txt",
+      "bytes": 34804,
+      "sha256": "7f1fea968ace39097ce858cba7e630d7e21fe0d9b61fb6193730d063a9641382"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-43-iro-removeredundantjumps.txt",
+      "bytes": 34807,
+      "sha256": "2dde4551208219bbfb704402b82aa5fe19f50766ddbb136d89700a38321b6c72"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-44-iro-removelabels.txt",
+      "bytes": 34799,
+      "sha256": "4e2968555418337368fdb718cafcc68dcaa757d39cd2b5a9095ee291813bf98b"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-45-iro-dojumpchaining.txt",
+      "bytes": 34801,
+      "sha256": "b87361a484243d38bc2b7b92520ecf00e71da9e535140a897c36dce4652f4da6"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-46-before-iro-copyandconstantpropagation.txt",
+      "bytes": 35599,
+      "sha256": "1585c7c4cdcc4c3251a553074c666649f74e3bbd3839bc0be3ae7756825b87fd"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-47-after-iro-copyandconstantpropagation.txt",
+      "bytes": 34840,
+      "sha256": "22ee7d4bb87e21f428b9fba8d9f457c5f094c3f6d4ec70cac67d9db50c0aacfe"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-48-iro-usedef.txt",
+      "bytes": 34814,
+      "sha256": "3fd9c8b990152bf9542b017cd95f482b8cab126a356e77af007f75c6357723c2"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-49-iro-evaluateconditionals.txt",
+      "bytes": 34906,
+      "sha256": "6592ba990dd1f7ececa5a7e50b196f329b8d8966fa4ca839d218e3765081ba23"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-50-before-rebuildcondexpressions.txt",
+      "bytes": 34827,
+      "sha256": "5e0a060cc5dac5cfe214f531829c729217ab3f9a207dbe15892c67c8a87433ed"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-51-before-rewritebitfieldtemps.txt",
+      "bytes": 34825,
+      "sha256": "13b09d43a03bfc32d2438cc883ef19df3d56a869796d155bf6743d760e5e0717"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-52-after-rewritebitfieldtemps.txt",
+      "bytes": 34824,
+      "sha256": "1383578709f5b2fcf15d3318ff9582c5974cfdcdcacd9ccf69a976bf8f4f39be"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-53-after-iro-optimizer.txt",
+      "bytes": 34817,
+      "sha256": "b634239b7c5f628f0820f8142b2b9b2aead7a9e2a6d55b78e0d686000a6961db"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-summary.txt",
+      "bytes": 9702,
+      "sha256": "495b878dd044a9ddd846c792b3f6b1de4bb9d2d164a838f1e0732bc2857b194b"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/iro-trace.txt",
+      "bytes": 1776308,
+      "sha256": "a53e732cb97fac58b49a8b51e8426064c95a1cf0323eefa3343c9a1c29db5ee3"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/launch.log",
+      "bytes": 2689,
+      "sha256": "1a8949a8b2c297a58c00a44316c9139008d1bcd32c23036e3ab827ecdc1f533f"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-baseline/provenance.json",
+      "bytes": 510,
+      "sha256": "81c378f1e57fdfd94d961823584d07cefdb4623867f0742d6ee8b8a4e4ad8152"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-00-iro-buildflowgraph.txt",
+      "bytes": 28813,
+      "sha256": "7f094ebe89143401a71874183bcba8af1782a44437294d13ed6cd2e731562173"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-01-iro-removeunreachable.txt",
+      "bytes": 28784,
+      "sha256": "c52ba1260bd78663573f2adf75aeb16e0f4b781bfa6f6976b9a31031c4815ead"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-02-iro-removeredundantjumps.txt",
+      "bytes": 28659,
+      "sha256": "60ecaa08a6a1daa0b58f41dcf74f1d8181310c97c182f60c65a7a9ba844208d6"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-03-iro-removelabels.txt",
+      "bytes": 28471,
+      "sha256": "eeb24ae3ab0b5e49c8cd1726e906f86835ddde00229d67999732138f57251949"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-04-iro-buildflowgraph-1.txt",
+      "bytes": 26237,
+      "sha256": "a8108d91657ebaf045fe5ad58e23152e766ba583f4adb2ef311c01c8f176d284"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-05-iro-scalarizeclassdatamembers.txt",
+      "bytes": 30775,
+      "sha256": "f214ebc697f9a358b5d937092d012a08592256e655979a17f657a55e2f892be3"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-06-copy-and-constant-propagation.txt",
+      "bytes": 27363,
+      "sha256": "0806c1b945f73b14b6906916bc49023c9d088b0247b9c1ff49a9492a25a0d16d"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-07-iro-rangepropagateinfnode.txt",
+      "bytes": 27359,
+      "sha256": "4f06f3aabc9a7245c650da8c0ab3f5d5060eae5a4be42618f0ac302a9e48a539"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-08-iro-expressionpropagation.txt",
+      "bytes": 27425,
+      "sha256": "b699d59be0b7386a3c0071f5f8da2ca51a7af90718adce0ea4fa5aacbbd03f27"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-09-after-iro-usedef.txt",
+      "bytes": 26606,
+      "sha256": "0ce6550bb7457de85c7557a0e19fcf31f2d41ba6daa398b7e539579f3a37ab0c"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-10-iro-constantfolding.txt",
+      "bytes": 26609,
+      "sha256": "08469ff195fdcc411314745b9930f81b48bdef0af34d76db05e4a4ab02f4a293"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-11-before-iro-loopunroller.txt",
+      "bytes": 29502,
+      "sha256": "11677bc8965d259cd1da363608c9d3e3bb9c1497d732bea7c3c526fca0519120"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-12-after-iro-loopunroller.txt",
+      "bytes": 26171,
+      "sha256": "1c5cd71fd7f91fcc0fdedc35a6a5bd4b776ed42389b420e4b5bf2212b74d2e81"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-13-before-iro-findloops.txt",
+      "bytes": 40381,
+      "sha256": "401cbbf3bac611d90a4c5b77f619c959ee056eb0425e1532669d06484bc4aca7"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-14-after-iro-findloops.txt",
+      "bytes": 34418,
+      "sha256": "4acd730d3087007a50c2e1d3dd0a67217a2e118695993c10fc7634a7cf302327"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-15-second-pass-iro-copyandconstantpropagation-iro-constantfoldi.txt",
+      "bytes": 33460,
+      "sha256": "0c960a336e9bae478974f666351c4a4662674e6858c91feb17d22c8a9dad37a4"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-16-iro-commonsubs.txt",
+      "bytes": 33733,
+      "sha256": "acf966ec34cca6bb368d5d24eaedba6daffff4ab526bfa9b92274fb404c86639"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-17-iro-removeunreachable.txt",
+      "bytes": 33226,
+      "sha256": "74c0ae60b75d2e7d30fd95f7810e00e49cf64d7e10eed405b4067a1368639c62"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-18-iro-removeredundantjumps.txt",
+      "bytes": 33229,
+      "sha256": "fd1c84367453563dca40788ce934f1f1fb36b3d9aff627f6f8700fc731873251"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-19-iro-removelabels.txt",
+      "bytes": 33221,
+      "sha256": "1d529b06076ac03e69c5804c22ab2f0fb13a772fe2cb9b71c0974fbdc6a6a522"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-20-iro-dojumpchaining.txt",
+      "bytes": 33223,
+      "sha256": "d18af2ac2742a1bb472f0bf9afda38e3afa7ed5370bff0c72f539ba4a1d21c13"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-21-before-iro-copyandconstantpropagation.txt",
+      "bytes": 34045,
+      "sha256": "9fde137f0599b6fcc6d9c8c92ebaa9fbf3f5249a7d8cdf99b03116e39b5b9856"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-22-after-iro-copyandconstantpropagation.txt",
+      "bytes": 33239,
+      "sha256": "17bf4b9f5acb693a1bcb67e5ec8ccaafe2aba913b887da5cfc16e465fcbb0e32"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-23-iro-usedef.txt",
+      "bytes": 33129,
+      "sha256": "93a41b112dfd163513fd464ba95028ae551241cac906f64cc826aa758651467a"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-24-iro-evaluateconditionals.txt",
+      "bytes": 33143,
+      "sha256": "1fc5543924f89280c97b8518bbc97b34cb9bad7c65cc3351f58b4390b7284c2b"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-25-iro-removeunreachable.txt",
+      "bytes": 33104,
+      "sha256": "0e4a289fcf32ec7ea3bb24d6d0670459bdc0f066f736e1184009156805d58f5c"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-26-iro-removeredundantjumps.txt",
+      "bytes": 33107,
+      "sha256": "8f8f75e52d7ecef676130c45819db87d0ec0f3ff239e9011192aaa1b9b9fd1b4"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-27-iro-removelabels.txt",
+      "bytes": 33099,
+      "sha256": "6c8e0bdfbafd5185aa407ca9610bdb2d24ecc09226f1631038ca34027ee992b0"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-28-iro-dojumpchaining.txt",
+      "bytes": 33101,
+      "sha256": "505c42610f5fed213572591c86ea2c1729568704d9ce4d47cfe2378c0d03e483"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-29-before-iro-copyandconstantpropagation.txt",
+      "bytes": 33916,
+      "sha256": "cd270ac8d26b3057cc317d72ef70fe9842f23aa565da3f0bca4c8577c965dc4f"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-30-after-iro-copyandconstantpropagation.txt",
+      "bytes": 33119,
+      "sha256": "beaff56ed442a0e0cce8c04990a323dc17e400c5a4945323a90dc39028ad5c2e"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-31-iro-usedef.txt",
+      "bytes": 33093,
+      "sha256": "76d50f547f043f5dd8e58c10aa6802d81ad6aeb3fbf5a29f9bf18eb9cb7d1632"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-32-iro-evaluateconditionals.txt",
+      "bytes": 33125,
+      "sha256": "6e7528d5a93779da085f47d766dcaa5dd9ab1f5f94c0e3ef98f1fa03bdfc9965"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-33-iro-scalarizeclassdatamembers.txt",
+      "bytes": 36793,
+      "sha256": "69b69b64ebdf5b0d79199363b2e82b38e64e55244a0825154876dde6bc5da37e"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-34-copy-and-constant-propagation.txt",
+      "bytes": 35355,
+      "sha256": "9f6c3515ecb2140559dfb1c1a02ac5e123f148f394252cada60c167973d75d69"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-35-iro-rangepropagateinfnode.txt",
+      "bytes": 35351,
+      "sha256": "815da9cd9d1ca66a8ce650c7ad40eb3b09ed64084f56b418ea99b9158f9db9e4"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-36-iro-expressionpropagation.txt",
+      "bytes": 35309,
+      "sha256": "4efe0bc7f790b96eda5e02fc73f24c38a6b371a6ff515673ec939b1ffe5e2319"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-37-after-iro-usedef.txt",
+      "bytes": 35055,
+      "sha256": "775521cecdcd1dfe7f5cd4b5e3eca4eaf80dda67e521406a2ef7fc173ab7d33f"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-38-iro-constantfolding.txt",
+      "bytes": 35058,
+      "sha256": "1b0908c08b799d9e1901d6ccea36e0244bf447aafc5b45c3d6851fb1d1fa97e8"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-39-after-iro-findloops.txt",
+      "bytes": 35816,
+      "sha256": "5728561a424810202ef4fd35d1fa395d4660d11978df7986783d12d7e4c7833e"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-40-second-pass-iro-copyandconstantpropagation-iro-constantfoldi.txt",
+      "bytes": 35314,
+      "sha256": "9b9832bc1c28934f002a62453227b577f31d6a1227f36869ec4e3f49d4f94434"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-41-iro-commonsubs.txt",
+      "bytes": 35406,
+      "sha256": "b895af851c863e2a7a76577371bc891166c3e33928d653367f1cfab6fcbd858a"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-42-iro-removeunreachable.txt",
+      "bytes": 34804,
+      "sha256": "5377dc20b9e35dfda8a73d880b4a50693bd29bbc1c8ecac5afff92910c6d5c76"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-43-iro-removeredundantjumps.txt",
+      "bytes": 34807,
+      "sha256": "8fa159935912835f51138e5285720c06858f9d0c9e5a42be6f341240b7370092"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-44-iro-removelabels.txt",
+      "bytes": 34799,
+      "sha256": "2b0a90c03e8393fbb866a1963885e32edddc5e41a5501956068782adfe3935c1"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-45-iro-dojumpchaining.txt",
+      "bytes": 34801,
+      "sha256": "11fdfe12ee6146246d1c28fe273280aa4320a21c13750fbf05ace0481c644a7e"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-46-before-iro-copyandconstantpropagation.txt",
+      "bytes": 35599,
+      "sha256": "204d61a5165fcad2d2c36d9317914de38f75e8d507f279c4f740e839b1186a56"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-47-after-iro-copyandconstantpropagation.txt",
+      "bytes": 34840,
+      "sha256": "114e5f54a1fd3da198d723e4aed7468ec4fb445ad13a2b65c55c76e16eab2896"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-48-iro-usedef.txt",
+      "bytes": 34814,
+      "sha256": "6b59c84f2ce1dfba51bde2dedd6ed90e296e1a9be802a5de692c35616cb30f81"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-49-iro-evaluateconditionals.txt",
+      "bytes": 34906,
+      "sha256": "40631ac4cf27723b91645e9d09d17eeae201ce0e5dbfcb5e78814e139ea222ae"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-50-before-rebuildcondexpressions.txt",
+      "bytes": 34827,
+      "sha256": "7956c66d2e60ee2306c386611471fc3bba775ecb55173776d6004bef21eac1a4"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-51-before-rewritebitfieldtemps.txt",
+      "bytes": 34825,
+      "sha256": "0a774401f02ba426fa99d2ca284e3cabef08eb5b0d30851b200dea647856f390"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-52-after-rewritebitfieldtemps.txt",
+      "bytes": 34824,
+      "sha256": "4689c73206bd9d9a6d8f7a8ef7605e7005787df778e5172f27d4b939bd742249"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-53-after-iro-optimizer.txt",
+      "bytes": 34817,
+      "sha256": "c1367b3f8185c9307d17ea979b9da77a38adb773767e1b7f9455f106d590bb23"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-summary.txt",
+      "bytes": 9702,
+      "sha256": "495b878dd044a9ddd846c792b3f6b1de4bb9d2d164a838f1e0732bc2857b194b"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/iro-trace.txt",
+      "bytes": 1776305,
+      "sha256": "be5aa6e3e363ffbb944808096db4cd61d1d07c051a060fad3d9ab989bc8fbb3c"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/launch.log",
+      "bytes": 2697,
+      "sha256": "ad75cfa34a1c043818ad93dd0b57602fd9676a6d73aae44f10148e7028e44bc2"
+    },
+    {
+      "path": "c016-decoder-chroma-iro-reassociated/provenance.json",
+      "bytes": 510,
+      "sha256": "81c378f1e57fdfd94d961823584d07cefdb4623867f0742d6ee8b8a4e4ad8152"
+    },
+    {
+      "path": "c016-decoder-chroma-mismatch-pattern.json",
+      "bytes": 1797,
+      "sha256": "0fa714552f0eb42ee58cbdda27884b5d9bc8cce10c85d2f7c61095a0a50fa5d2"
+    },
+    {
+      "path": "c016-decoder-chroma-model-check.json",
+      "bytes": 839,
+      "sha256": "f964470970c7c856fc2dd883904620e6abc0cf290a70e03a09321c7911772fef"
+    },
+    {
+      "path": "c016-decoder-chroma-model-check.py",
+      "bytes": 2011,
+      "sha256": "de4aad9eab2f273c9bda677280d85bfc0cdd1f08d168e2fcab2abdcafed252c9"
+    },
+    {
+      "path": "c016-decoder-chroma-pair.py",
+      "bytes": 2246,
+      "sha256": "712a0a1d512200edd3a35659cb7a6269f2b14bd73cf08efe09e89eff1e365ad1"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/array-raw-keep.c",
+      "bytes": 33727,
+      "sha256": "6dbdeca0d3ae364f34097a54da70dfd4e6716bfa5d7b5cb62a586eb7673efbd6"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/array-raw-keep.json",
+      "bytes": 37198,
+      "sha256": "2cf6afd3bf6d07f9fe1e441121c5812a0a3c16674aec31ceb27e6624ad730285"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/array-raw-keep.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/array-raw-remove.c",
+      "bytes": 33709,
+      "sha256": "640f8f75aafe75fb441081b4c3e72440f3d11f1edd189bb44ae47efd694afda9"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/array-raw-remove.json",
+      "bytes": 33762,
+      "sha256": "029fa7c8907a773d182f61a32a3e895b21a05e8f7227f6ded14b3278b3243ca6"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/array-raw-remove.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/array-scaled-keep.c",
+      "bytes": 33725,
+      "sha256": "9f25b09d628c1010fe258ea5ad60e5313bafb1906da1619bd71879af5c0c9589"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/array-scaled-keep.json",
+      "bytes": 37198,
+      "sha256": "2cf6afd3bf6d07f9fe1e441121c5812a0a3c16674aec31ceb27e6624ad730285"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/array-scaled-keep.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/array-scaled-remove.c",
+      "bytes": 33707,
+      "sha256": "e95ada04ae85f13ac3fb9103b4eb9ac0dc308643f9819d698527966dd8dcdb92"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/array-scaled-remove.json",
+      "bytes": 33762,
+      "sha256": "029fa7c8907a773d182f61a32a3e895b21a05e8f7227f6ded14b3278b3243ca6"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/array-scaled-remove.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/baseline.c",
+      "bytes": 33715,
+      "sha256": "3b2df073814983b43393b09890c85ea4de0cccd0fb906383a2f4a04bb3f51e3c"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/results.json",
+      "bytes": 3587,
+      "sha256": "118b9fd1129619e44fa8c1a03e78afa5c5780b86f5632d73c951e126dccf65a9"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/xy-record-raw-keep.c",
+      "bytes": 33737,
+      "sha256": "4b098eb3ab9bfa4da49efa229694a5731642111e09010c164eba4e4d3169d9eb"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/xy-record-raw-keep.json",
+      "bytes": 37184,
+      "sha256": "9ef350455ab0c331f920894ede608137cc4ad902d8ad6bff7022ddec0e0aabe5"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/xy-record-raw-keep.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/xy-record-raw-remove.c",
+      "bytes": 33719,
+      "sha256": "68a200b5f3f1c0349b127bb778ed4e3f83e844b2dbacdfa30d58c2e2ceb48ffe"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/xy-record-raw-remove.json",
+      "bytes": 33762,
+      "sha256": "029fa7c8907a773d182f61a32a3e895b21a05e8f7227f6ded14b3278b3243ca6"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/xy-record-raw-remove.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/xy-record-scaled-keep.c",
+      "bytes": 33735,
+      "sha256": "5dde952343097893f0a77ff0c55b0188ffd657f71772a2f9d5ee9e982f6e2e2f"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/xy-record-scaled-keep.json",
+      "bytes": 37198,
+      "sha256": "2cf6afd3bf6d07f9fe1e441121c5812a0a3c16674aec31ceb27e6624ad730285"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/xy-record-scaled-keep.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/xy-record-scaled-remove.c",
+      "bytes": 33717,
+      "sha256": "acc0af5a64371c9c7bf452ff413c085b31274d824943f4f0d6606fe9415c368f"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/xy-record-scaled-remove.json",
+      "bytes": 33762,
+      "sha256": "029fa7c8907a773d182f61a32a3e895b21a05e8f7227f6ded14b3278b3243ca6"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/xy-record-scaled-remove.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/yx-record-raw-keep.c",
+      "bytes": 33737,
+      "sha256": "7d366c3bbf8eb1b41eb6f45d342525f689a5c0b08d5816fc4fa17b30ae31a1dc"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/yx-record-raw-keep.json",
+      "bytes": 37198,
+      "sha256": "2cf6afd3bf6d07f9fe1e441121c5812a0a3c16674aec31ceb27e6624ad730285"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/yx-record-raw-keep.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/yx-record-raw-remove.c",
+      "bytes": 33719,
+      "sha256": "0e664f45a26889f50b6ee563efd61d1813c15bb2964dc68bc49ab897e40c5a74"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/yx-record-raw-remove.json",
+      "bytes": 33762,
+      "sha256": "029fa7c8907a773d182f61a32a3e895b21a05e8f7227f6ded14b3278b3243ca6"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/yx-record-raw-remove.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/yx-record-scaled-keep.c",
+      "bytes": 33735,
+      "sha256": "9fa0254cf689d5125ae38dd9ee4ad8699f40b1997e4271d8861ea230dd11f91e"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/yx-record-scaled-keep.json",
+      "bytes": 37198,
+      "sha256": "2cf6afd3bf6d07f9fe1e441121c5812a0a3c16674aec31ceb27e6624ad730285"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/yx-record-scaled-keep.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/yx-record-scaled-remove.c",
+      "bytes": 33717,
+      "sha256": "cdaa982533443b5c1832dcff34e77ae166efe0c699531b69ba66e5d576fd452f"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/yx-record-scaled-remove.json",
+      "bytes": 33762,
+      "sha256": "029fa7c8907a773d182f61a32a3e895b21a05e8f7227f6ded14b3278b3243ca6"
+    },
+    {
+      "path": "c016-decoder-chroma-pair/yx-record-scaled-remove.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-pr-build.log",
+      "bytes": 3263,
+      "sha256": "770cf607c04f9a7b529cc33cc9b069b0708ed9c2838690b78367f63d85691b25"
+    },
+    {
+      "path": "c016-decoder-chroma-pr-doctor.log",
+      "bytes": 3099,
+      "sha256": "c274ff0388894de62c4f407bb4b3f72fa0c888db90146494c59428b688b82468"
+    },
+    {
+      "path": "c016-decoder-chroma-pr-status.json",
+      "bytes": 196,
+      "sha256": "907d5961d54ab63cc0e8405ccc19491dc1eb934ca181234091aa0aca880b03bf"
+    },
+    {
+      "path": "c016-decoder-chroma-pr.md",
+      "bytes": 541,
+      "sha256": "217dd8e0bf555ac5e335886051a2542e78ae89701c114d8dda47d0da1f3973d7"
+    },
+    {
+      "path": "c016-decoder-chroma-retained-dump.log",
+      "bytes": 170,
+      "sha256": "4c2e06e583132a82817e1f6d2bed5cf0af9ccf85d7dc810e7dd4a81bd5060890"
+    },
+    {
+      "path": "c016-decoder-chroma-retained-pcdump.txt",
+      "bytes": 218735,
+      "sha256": "e06b15dd7dd8971fc09cbae9d71961b92087af3805872e1456d9d5eab2acbef1"
+    },
+    {
+      "path": "c016-decoder-chroma-retained.json",
+      "bytes": 34322,
+      "sha256": "d729bf2c7531ad4d0e0beedd689b9dc9f039969c142bbeb6ba48696d2f7832a8"
+    },
+    {
+      "path": "c016-decoder-chroma-retained.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-spelling.py",
+      "bytes": 1449,
+      "sha256": "9d7daed8b5b5ac850b18f50938cfb6a2160be43a6206d37453061b8d22977458"
+    },
+    {
+      "path": "c016-decoder-chroma-spelling/baseline.c",
+      "bytes": 33715,
+      "sha256": "3b2df073814983b43393b09890c85ea4de0cccd0fb906383a2f4a04bb3f51e3c"
+    },
+    {
+      "path": "c016-decoder-chroma-spelling/negative-product.c",
+      "bytes": 33672,
+      "sha256": "ade7b5040959738dbca65ef352fbdc4590701fc087ebde875b67779fa18f47eb"
+    },
+    {
+      "path": "c016-decoder-chroma-spelling/negative-product.json",
+      "bytes": 40214,
+      "sha256": "34ea75dc4c36180dca41569989e8a03ffec6418fecad97beabcab817f111687e"
+    },
+    {
+      "path": "c016-decoder-chroma-spelling/negative-product.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-spelling/negative-quotient.c",
+      "bytes": 33672,
+      "sha256": "d61d64202eee27591c9c81f862a91a61d7ededa20a9bab3f0b4c641ac4320111"
+    },
+    {
+      "path": "c016-decoder-chroma-spelling/negative-quotient.json",
+      "bytes": 39963,
+      "sha256": "02a8ab5adbb6099e5c717333ca20b0f52b5c58ad10b1967fe0dc7ef04357f012"
+    },
+    {
+      "path": "c016-decoder-chroma-spelling/negative-quotient.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-spelling/negative-shift.c",
+      "bytes": 33672,
+      "sha256": "742d5063ea4ff7dbf980b3f56d240e36da8b8228ff9f6c48f8b5a6decf16169e"
+    },
+    {
+      "path": "c016-decoder-chroma-spelling/negative-shift.json",
+      "bytes": 40213,
+      "sha256": "6d911482b66d5695f8c569b32903481bd2fc41e774eef59fd35eb500c89a4654"
+    },
+    {
+      "path": "c016-decoder-chroma-spelling/negative-shift.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-spelling/parenthesized-negation.c",
+      "bytes": 33674,
+      "sha256": "71a9dc2afa6e940641d0a14898a25f562cb93d30c86549bb5e7bd4c527b296b1"
+    },
+    {
+      "path": "c016-decoder-chroma-spelling/parenthesized-negation.json",
+      "bytes": 34337,
+      "sha256": "3e51af877458e6d00621b2e78cffc1af0360dc4aa82b88cf94386fa579e730db"
+    },
+    {
+      "path": "c016-decoder-chroma-spelling/parenthesized-negation.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-chroma-spelling/results.json",
+      "bytes": 1178,
+      "sha256": "7f13c19a28fccd5158a891c3afb699cb7e43230c64241a5f6c52afdd3e2eeade"
+    },
+    {
+      "path": "c016-decoder-chroma-verification.json",
+      "bytes": 2563,
+      "sha256": "ad6f1e9e53375c42deae53148a26b47645dc25f72cc90866389ed9a83c9c8721"
+    },
+    {
+      "path": "c016-decoder-current-pcdump.txt",
+      "bytes": 219197,
+      "sha256": "31941af4f4d320d67a70af6d36e6aab6b972ffcaf7274ef57a780065235b3460"
+    },
+    {
+      "path": "c016-decoder-float-baseline.json",
+      "bytes": 34322,
+      "sha256": "0f0f5b7fa5ab2e78a9b7486f0800522ad8484393f72ccdbc7d48ac7700767f13"
+    },
+    {
+      "path": "c016-decoder-order-interactions.json",
+      "bytes": 221001,
+      "sha256": "3b9ed73b3d2b20ce168c0888f6d0e7a7a40859edaeeca4ea25a4351a7e6ab518"
+    },
+    {
+      "path": "iro-reassociated-source.c",
+      "bytes": 33671,
+      "sha256": "da1fee12ad353536567bd40edae507d49791896604a4ad23d7c50da452afad17"
+    },
+    {
+      "path": "model-reference/colorgraph_parser.py",
+      "bytes": 14028,
+      "sha256": "a485e6152c400584de5eabba3711ab6c8f07cff685c0c599f8da2905004bb333"
+    },
+    {
+      "path": "model-reference/tiebreak.py",
+      "bytes": 13849,
+      "sha256": "9daa3f8602822346c81d43ba85bd0ecf9435c24f6e1183ae3afa6ba78e1611a3"
+    },
+    {
+      "path": "retained-hsd_3B5C.c",
+      "bytes": 33786,
+      "sha256": "7a2bab5a7f700557dab18399747432f3678f7fa5af0b863b51312bd1a675794a"
+    }
+  ],
+  "archive_sha256": "62247dea7d1dfa0f92ecc02dde626003cfa6adde1a848f94567bf07811fba1b0"
+}
