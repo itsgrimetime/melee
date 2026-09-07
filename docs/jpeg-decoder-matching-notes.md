@@ -973,3 +973,43 @@ order move. Named-local ownership here changes frame reservation without the
 needed allocation effect. Remote source/DLL restored; production source restored
 and ninja passes. Sources/diffs and fresh trace/mapping archived under
 2026-09-07-clamp-owner-transfer.
+
+## Coverage audit — 2026-09-07
+
+User requested an audit before more variations. Upstream PR3403 is merged;
+worktree merge41563a3270 includes it. No new production improvement here.
+
+Prioritized remaining gaps:
+
+1. Automated helper-body search: current permuter settings specify only
+   func_name=fn_803B6820. Installed candidate.py defaults randomize_fn_names to
+   that function and iterates only selected bodies. The973-iteration run did
+   not directly randomize jpeg_clamp or jpeg_store_rgb565. Existing settings
+   key randomize_funcs supports helper names independently of scored func_name.
+   Extensive manual helper tests do not exhaust this combined search. Next use
+   helper-only and joint searches on the verified import; validate gains in TU.
+2. Explain simplify ordering: recorded tables include degree/arraySize/flags,
+   but the successful abstract model replays supplied SELECT order. It does
+   not recompute simplify or explain why source chooses that order. Compare
+   the inequality witness and parent at the earliest mapped simplify divergence
+   to distinguish graph effects from traversal/priority inputs. Also audit all
+   target operands: the current four-move construction still inherits partial
+   target assumptions and is not a complete target proof.
+3. Fresh standard retail backend capture of current inequality source:
+   the790-equal/0-different comparison covers the prior clamp-result baseline.
+   Issue1553 remains open but describes a custom stage-hook GDB abort, not a
+   demonstrated failure of every standard backend path. Windows debug captures
+   work with scoped IPv4/SCP and correct TU flags. Issue1240 still limits proof
+   promotion; candidate diagnostics remain useful but are not production proof.
+4. Secondary leads: no recorded decoder test of named color constants versus
+   literals, a known mismatch-DB pattern. Lower priority because FPRs already
+   agree and real data layout/relocations must be preserved. Prior findw takes
+   each donor's best window; strongest hit was generic bias code. It does not
+   establish thorough conversion/clamp-region donor coverage.
+
+Coordinate-record controls also failed: removing row alias alone94.33195/frame176;
+X record plus removal92.904564/frame184, with width reuse93.04565/frame176;
+XY record92.40249 with or without width reuse. Restoring row alias while keeping
+width reuse gives X95.74689 and XY93.9585, frame176. The row-removal control itself
+regresses, so do not blame the entire initial regression on record shape.
+All candidate source restored; ninja succeeds.
