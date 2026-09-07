@@ -1,0 +1,871 @@
+{
+  "summary": {
+    "function": "hsd_803B3CD8",
+    "retained_percent": 99.70266,
+    "source100": false,
+    "source_changes_retained": false,
+    "source_sha256": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "valid_compiles": 35,
+    "compile_attempts": 35,
+    "findings": [
+      "Read-only preallocation capture binds baseline @319 to57, first41; alternate @344 to50, first34. ac_value33 is below first in both.",
+      "Baseline and alternate 320-node/2655-edge graphs have different degree histograms; they are not just register-ID permutations."
+    ],
+    "validation": {
+      "frame": 104,
+      "instructions": 639,
+      "register_only_differences": 38,
+      "full_build": "exit0",
+      "matched_neighbors": 6
+    },
+    "compiler_reference_commit": "35c0e0fab7c5945789a534ac6a8d739044a960e2",
+    "compiler_reference_scope": "High-level reconstruction, binary match unmeasured; raw field values observed independently.",
+    "tool_issue_note": 1535
+  },
+  "runs": [
+    {
+      "family": "caller-tables",
+      "name": "ac_code",
+      "score": 98.403755,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9992169146436961,
+        "line_delta": 1,
+        "hunk_count": 33
+      },
+      "regdiff": 50,
+      "work_load": "+018: 3b a4 00 00 \taddi    r29,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "caller-tables",
+      "name": "ac_length",
+      "score": 98.403755,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9992169146436961,
+        "line_delta": 1,
+        "hunk_count": 33
+      },
+      "regdiff": 50,
+      "work_load": "+018: 3b a4 00 00 \taddi    r29,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "caller-tables",
+      "name": "ac_code-ac_length",
+      "score": 98.403755,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9992169146436961,
+        "line_delta": 1,
+        "hunk_count": 33
+      },
+      "regdiff": 50,
+      "work_load": "+018: 3b a4 00 00 \taddi    r29,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "caller-tables",
+      "name": "ac_value-ac_code",
+      "score": 98.62285,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 91
+      },
+      "regdiff": 136,
+      "work_load": "+018: 3b a4 00 00 \taddi    r29,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "caller-tables",
+      "name": "ac_value-ac_length",
+      "score": 98.62285,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 91
+      },
+      "regdiff": 136,
+      "work_load": "+018: 3b a4 00 00 \taddi    r29,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "caller-tables",
+      "name": "ac_value-ac_code-ac_length",
+      "score": 98.62285,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 91
+      },
+      "regdiff": 136,
+      "work_load": "+018: 3b a4 00 00 \taddi    r29,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "caller-tables",
+      "name": "ac_value-ac_code-ac_length-run",
+      "score": 98.56808,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 96
+      },
+      "regdiff": 142,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "caller-tables",
+      "name": "ac_value-ac_code-ac_length-run-index",
+      "score": 98.56808,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 96
+      },
+      "regdiff": 142,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "caller-locals",
+      "name": "length-as-added",
+      "score": 98.56808,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 96
+      },
+      "regdiff": 142,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "caller-locals",
+      "name": "value-as-added",
+      "score": 99.1471,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 67
+      },
+      "regdiff": 90,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "caller-locals",
+      "name": "length-value-as-added",
+      "score": 99.1471,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 67
+      },
+      "regdiff": 90,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "caller-locals",
+      "name": "length-value-coefficient-as-added",
+      "score": 99.1471,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 67
+      },
+      "regdiff": 90,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "caller-locals",
+      "name": "length-value-coefficient-indexed-as-added",
+      "score": 99.1471,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 67
+      },
+      "regdiff": 90,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "caller-locals",
+      "name": "length-value-coefficient-indexed-tables-as-added",
+      "score": 99.1471,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 67
+      },
+      "regdiff": 90,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "caller-locals",
+      "name": "length-value-coefficient-indexed-tables-dc_code-dc_length-as-added",
+      "score": 99.13928,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 68
+      },
+      "regdiff": 90,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "caller-locals",
+      "name": "length-value-coefficient-indexed-tables-dc_code-dc_length-original",
+      "score": 99.32707,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 54
+      },
+      "regdiff": 71,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "component-prefix",
+      "name": "work-state-out-local",
+      "score": 97.98748,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      },
+      "structural": {
+        "opcode_similarity": 0.9976580796252927,
+        "line_delta": 3,
+        "hunk_count": 33
+      },
+      "regdiff": 52,
+      "work_load": "+018: 3b 64 00 00 \taddi    r27,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "component-prefix",
+      "name": "work-state-out-direct",
+      "score": 97.98748,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.9976580796252927,
+        "line_delta": 3,
+        "hunk_count": 33
+      },
+      "regdiff": 52,
+      "work_load": "+018: 3b 64 00 00 \taddi    r27,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "component-prefix",
+      "name": "work-work-return-local",
+      "score": 98.169014,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 110
+      },
+      "regdiff": 172,
+      "work_load": "+018: 3b a4 00 00 \taddi    r29,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "component-prefix",
+      "name": "work-work-return-direct",
+      "score": 98.16119,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 111
+      },
+      "regdiff": 172,
+      "work_load": "+018: 3b a4 00 00 \taddi    r29,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "component-prefix",
+      "name": "state-state-out-local",
+      "score": 99.02973,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 68
+      },
+      "regdiff": 95,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "component-prefix",
+      "name": "state-state-out-direct",
+      "score": 99.02191,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 69
+      },
+      "regdiff": 95,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "prefix-arguments",
+      "name": "value-work-length",
+      "score": 99.02973,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 68
+      },
+      "regdiff": 95,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "prefix-arguments",
+      "name": "length-value-work",
+      "score": 99.02973,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 68
+      },
+      "regdiff": 95,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "prefix-arguments",
+      "name": "length-work-value",
+      "score": 99.02973,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 68
+      },
+      "regdiff": 95,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "prefix-arguments",
+      "name": "work-value-length",
+      "score": 99.02973,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 68
+      },
+      "regdiff": 95,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "prefix-arguments",
+      "name": "work-length-value",
+      "score": 99.02973,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 68
+      },
+      "regdiff": 95,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "embedded-base-use",
+      "name": "member-coef-lvalue",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "embedded-base-use",
+      "name": "member-coef-address",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "embedded-base-use",
+      "name": "member-indexed-word-lvalue",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "embedded-base-use",
+      "name": "member-jmp-address",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "embedded-base-use",
+      "name": "flat-coef-lvalue",
+      "score": 98.73239,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.9929632525410477,
+        "line_delta": 1,
+        "hunk_count": 1
+      },
+      "regdiff": 3,
+      "work_load": "+00c: 38 04 00 00 \taddi    r0,r4,0"
+    },
+    {
+      "family": "embedded-base-use",
+      "name": "flat-coef-address",
+      "score": 98.73239,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.9929632525410477,
+        "line_delta": 1,
+        "hunk_count": 1
+      },
+      "regdiff": 3,
+      "work_load": "+00c: 38 04 00 00 \taddi    r0,r4,0"
+    },
+    {
+      "family": "embedded-base-use",
+      "name": "flat-indexed-word-lvalue",
+      "score": 98.73239,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.9929632525410477,
+        "line_delta": 1,
+        "hunk_count": 1
+      },
+      "regdiff": 3,
+      "work_load": "+00c: 38 04 00 00 \taddi    r0,r4,0"
+    },
+    {
+      "family": "embedded-base-use",
+      "name": "flat-jmp-address",
+      "score": 98.73239,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.9929632525410477,
+        "line_delta": 1,
+        "hunk_count": 1
+      },
+      "regdiff": 3,
+      "work_load": "+00c: 38 04 00 00 \taddi    r0,r4,0"
+    }
+  ],
+  "archive_sha256": "d0c57be39ad3d3fc4d06e7621e2483890999639e479ed54a9531b7fcc078b3cc",
+  "files": {
+    "c016-enc16-archive.py": "ca62934bfe88e561656c49112f5a558062a8e272db3448a5a399b5edd024afff",
+    "c016-enc16-attempt-record.json": "8bcbac4b00adfd482e63ac2353c720174b88eabf74e14d17a57ed3ae98b0b8d0",
+    "c016-enc16-build.log": "020aacb3cf4f245c70da8f9a82332a06d95f01b473bd6cc44c62c31b3a4b94c5",
+    "c016-enc16-caller-locals.py": "f15e87df99e6a881b7c5053d9f63a5ddb3beb70f4bcd126dc2d210e40cc834e4",
+    "c016-enc16-caller-locals/baseline.c": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "c016-enc16-caller-locals/length-as-added.c": "11269aad9155ce0276c665a5575de1016dabb8ac111fbc6f417fbda0c52178e8",
+    "c016-enc16-caller-locals/length-as-added.json": "2ad5bb0436613116cddfc7b64941055a974f8585c15785a5b64796fa097098f3",
+    "c016-enc16-caller-locals/length-as-added.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-locals/length-value-as-added.c": "f4b891627a9f204c0ebe0cb37382539f8e008565b8c87ca23d7570760657906f",
+    "c016-enc16-caller-locals/length-value-as-added.json": "85e89942305883538cd87c50b0642aa5291423c97bcc7addbe58f8ffffe8a56d",
+    "c016-enc16-caller-locals/length-value-as-added.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-locals/length-value-coefficient-as-added.c": "b040cc93dfa4f41741eceb30448b96e425250e47a91151a8af36036a3c05a9f2",
+    "c016-enc16-caller-locals/length-value-coefficient-as-added.json": "85e89942305883538cd87c50b0642aa5291423c97bcc7addbe58f8ffffe8a56d",
+    "c016-enc16-caller-locals/length-value-coefficient-as-added.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-locals/length-value-coefficient-indexed-as-added.c": "39097a3f408715025d8ad0a5b082494a57da5dc3cdd746e4fdb6054caa3cce23",
+    "c016-enc16-caller-locals/length-value-coefficient-indexed-as-added.json": "85e89942305883538cd87c50b0642aa5291423c97bcc7addbe58f8ffffe8a56d",
+    "c016-enc16-caller-locals/length-value-coefficient-indexed-as-added.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-locals/length-value-coefficient-indexed-tables-as-added.c": "b700b2aa7211831213bbfbd765ae40dbf80accd42a54b96a860902b7919810d8",
+    "c016-enc16-caller-locals/length-value-coefficient-indexed-tables-as-added.json": "85e89942305883538cd87c50b0642aa5291423c97bcc7addbe58f8ffffe8a56d",
+    "c016-enc16-caller-locals/length-value-coefficient-indexed-tables-as-added.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-locals/length-value-coefficient-indexed-tables-dc_code-dc_length-as-added.c": "c9e761cf843629341f80c8e780649b316cf26b8313cd410ceed5153de589706a",
+    "c016-enc16-caller-locals/length-value-coefficient-indexed-tables-dc_code-dc_length-as-added.json": "db0fb1207fd8b50bf5080d7e71640c133b103fd22a1987549e08977d5980bef1",
+    "c016-enc16-caller-locals/length-value-coefficient-indexed-tables-dc_code-dc_length-as-added.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-locals/length-value-coefficient-indexed-tables-dc_code-dc_length-original.c": "6c852bc3d4739815c60aecd25f7652edc1cf70f6eef317682bd8e52c72c27bfc",
+    "c016-enc16-caller-locals/length-value-coefficient-indexed-tables-dc_code-dc_length-original.json": "e0651553a9e0306363b841ed294d99e8c168297751fb29cbb1c044153ee9e795",
+    "c016-enc16-caller-locals/length-value-coefficient-indexed-tables-dc_code-dc_length-original.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-locals/results.json": "f48166dceb138165d931d6d29b3ef4636a66db7db10a2e4967b1eee377793b61",
+    "c016-enc16-caller-locals/value-as-added.c": "811a6328fd59c10657213ba0c6163a05bc5ed6cdf76c75f60e2baa7c6e11869b",
+    "c016-enc16-caller-locals/value-as-added.json": "74418d26463a8f5b20d6592e5192df6136816cfbabcdfc70ad845dccc82989e9",
+    "c016-enc16-caller-locals/value-as-added.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-tables.py": "2cf8a6b1a1907aa944cdbe1ab74cca57527c8f164c8a22eda4319f1ca431629b",
+    "c016-enc16-caller-tables/ac_code-ac_length.c": "3927b0ab13e8252ba3d80037b65ec5c2229753110c2f32f0faef71d59beab8e6",
+    "c016-enc16-caller-tables/ac_code-ac_length.json": "14b580b23576220202317c3ca3989dc53bc831ac2a542499f615d061d0294bc4",
+    "c016-enc16-caller-tables/ac_code-ac_length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-tables/ac_code.c": "9782a78ff679875f247894c407d3390fb8749eb84b86e27e1cd0c98a1251a92c",
+    "c016-enc16-caller-tables/ac_code.json": "70f2ae7d2a15a1b19def1e400cb351948fee9d28e9cf314a9525158f86bb715b",
+    "c016-enc16-caller-tables/ac_code.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-tables/ac_length.c": "205ef3640e98648a21073fae448e828fa4e4dcd1044ddcd4ab9b561473c41608",
+    "c016-enc16-caller-tables/ac_length.json": "14b580b23576220202317c3ca3989dc53bc831ac2a542499f615d061d0294bc4",
+    "c016-enc16-caller-tables/ac_length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-tables/ac_value-ac_code-ac_length-run-index.c": "b0c1befcd69bc6b143ad6a2bf7342c0ed89ba5baa8c85f12e5458ff70e6303c5",
+    "c016-enc16-caller-tables/ac_value-ac_code-ac_length-run-index.json": "2ad5bb0436613116cddfc7b64941055a974f8585c15785a5b64796fa097098f3",
+    "c016-enc16-caller-tables/ac_value-ac_code-ac_length-run-index.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-tables/ac_value-ac_code-ac_length-run.c": "556e997ba82e597b1a6bb485aa1322b9fb035741c43ed376b0189e808b012fd1",
+    "c016-enc16-caller-tables/ac_value-ac_code-ac_length-run.json": "b2c735086cf13b201e423a168a57ed402e43a5f165256b90c8970d4424df1a61",
+    "c016-enc16-caller-tables/ac_value-ac_code-ac_length-run.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-tables/ac_value-ac_code-ac_length.c": "e15cbdbfd01b1238ce1221baf4c18ff8ec73cf282740d1a28dd4de0659f065f8",
+    "c016-enc16-caller-tables/ac_value-ac_code-ac_length.json": "730cc604e2bab7ea9dbaf9447194cde55a7f6f96926823cad810992bad8e40d3",
+    "c016-enc16-caller-tables/ac_value-ac_code-ac_length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-tables/ac_value-ac_code.c": "d99a1b868ecdffe23a57f2f48fadaa4fe5f2c7fbdf6bbddc36a1dd50b400cc9c",
+    "c016-enc16-caller-tables/ac_value-ac_code.json": "008613379943a1bc8d97e30f6f41550564182d8944f7413b9553d0a3f7e75e8d",
+    "c016-enc16-caller-tables/ac_value-ac_code.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-tables/ac_value-ac_length.c": "aea5561ed2267a33b97c7579bee4f2938a3b33c8bf26ffdef2612e73803f6c66",
+    "c016-enc16-caller-tables/ac_value-ac_length.json": "730cc604e2bab7ea9dbaf9447194cde55a7f6f96926823cad810992bad8e40d3",
+    "c016-enc16-caller-tables/ac_value-ac_length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-caller-tables/baseline.c": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "c016-enc16-caller-tables/results.json": "f5f2ca803633f937a1eed40718d06122b4dff5a9d8a16239a175fed5d1c998ca",
+    "c016-enc16-component-prefix.py": "380b20d432079a270f29687559bd011ca1a7bf0cf6f6b5cfe9fc5bd11ca39f8c",
+    "c016-enc16-component-prefix/baseline.c": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "c016-enc16-component-prefix/results.json": "2ccff00fd6d3b23fb1baee3839c53578b4c021340aadd60d864e8f62902c0df0",
+    "c016-enc16-component-prefix/state-state-out-direct.c": "48b67b58f7230b401b390402becc6122831331762c409128e7bae5ee505181e7",
+    "c016-enc16-component-prefix/state-state-out-direct.json": "9fabbae769df15076157fe1dbaefdddf25897186c674642c63390d27eced1163",
+    "c016-enc16-component-prefix/state-state-out-direct.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-component-prefix/state-state-out-local.c": "e7c4c9a04ef4ef7c55a770fc159d1fd910572b19e7f7d865c9aa2caa4a1e9dc8",
+    "c016-enc16-component-prefix/state-state-out-local.json": "5015290edfc968201a7cfac4be0a65135704eeb4c5b7c11eea7b50f9ae5610de",
+    "c016-enc16-component-prefix/state-state-out-local.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-component-prefix/work-state-out-direct.c": "7188ba3b08b9f39024f9101d52aa0300b6e8a52d7de7597c37f29db711901872",
+    "c016-enc16-component-prefix/work-state-out-direct.json": "6aea0b60dc38be17f39bf914f09ca13c280503c6e3f502df92ff58d2059f88d8",
+    "c016-enc16-component-prefix/work-state-out-direct.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-component-prefix/work-state-out-local.c": "7e607f60287887b568796894600cb0e15aa1c821eef17169cb64b1a55cd198be",
+    "c016-enc16-component-prefix/work-state-out-local.json": "bb1ac8ea5e541b4b2c93b01be0cbe54c75ac2506eec054f951b0d8f237d7d2f0",
+    "c016-enc16-component-prefix/work-state-out-local.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-component-prefix/work-work-return-direct.c": "921b6c723bb0f74e878d807c988b9ab535e589c4bf696b8d2f5305549466e65b",
+    "c016-enc16-component-prefix/work-work-return-direct.json": "5b7f527276f9cab1eb43a78f253ee619202e0547f1cc191704b6488f7c007bc2",
+    "c016-enc16-component-prefix/work-work-return-direct.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-component-prefix/work-work-return-local.c": "96f53bce873f32334912c31bfbf637b96bb2c2ef94c4d35e55da1c13d73eeb1c",
+    "c016-enc16-component-prefix/work-work-return-local.json": "460a10c93c41d5a6128bf4089604368172e1c6e834ac3a046899dbdfc0f11b19",
+    "c016-enc16-component-prefix/work-work-return-local.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-doshin-symbols.txt": "805de955246bd2e2fa5f410783161ba646d1ac846b7f34a78e2afaa461c49ae4",
+    "c016-enc16-embedded-base-use.py": "09c9b318e1f2e8a71a0c463f4dc7875a7d72ff4c5804b53e35d7497a5e30b802",
+    "c016-enc16-embedded-base-use/baseline.c": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "c016-enc16-embedded-base-use/flat-coef-address.c": "71b849e53729bccaa09c2244c3934435bdb54110b8534f918a53228504731e46",
+    "c016-enc16-embedded-base-use/flat-coef-address.json": "7380f214160e730eaf1fce43b8808dd90f780701300cee9fd2bbbbb8f58ddff3",
+    "c016-enc16-embedded-base-use/flat-coef-address.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-embedded-base-use/flat-coef-lvalue.c": "30e1427073ca8e9ae66dd27bbb481a3f460b366c8a33b9b1c4fc6acefdd51f3f",
+    "c016-enc16-embedded-base-use/flat-coef-lvalue.json": "21e0572ca944f97ecdd92c4d5ebca4db69a3ce67f363f54351d893fe8a4e3fa3",
+    "c016-enc16-embedded-base-use/flat-coef-lvalue.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-embedded-base-use/flat-indexed-word-lvalue.c": "482e016c72e9d0951f872a8742e38b51aaef40960dcab4c5f96b189533f24444",
+    "c016-enc16-embedded-base-use/flat-indexed-word-lvalue.json": "7380f214160e730eaf1fce43b8808dd90f780701300cee9fd2bbbbb8f58ddff3",
+    "c016-enc16-embedded-base-use/flat-indexed-word-lvalue.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-embedded-base-use/flat-jmp-address.c": "0ca48be773c6ff38c130fe5d788221234fbc36ec45be3a863ff456a9caefaf1b",
+    "c016-enc16-embedded-base-use/flat-jmp-address.json": "7380f214160e730eaf1fce43b8808dd90f780701300cee9fd2bbbbb8f58ddff3",
+    "c016-enc16-embedded-base-use/flat-jmp-address.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-embedded-base-use/member-coef-address.c": "92ef421099af3043328839f6c2e15c68414c78b45f7a33ef4b7e2c2d591c1f09",
+    "c016-enc16-embedded-base-use/member-coef-address.json": "f00093bbbbb97f050c82b2e7da67af279101277662c6b78096bbab029e377ee5",
+    "c016-enc16-embedded-base-use/member-coef-address.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-embedded-base-use/member-coef-lvalue.c": "7c144e9c7c05c0cb84987591a45761414fbd0ebf467c38a444af7bc96a9503d0",
+    "c016-enc16-embedded-base-use/member-coef-lvalue.json": "f00093bbbbb97f050c82b2e7da67af279101277662c6b78096bbab029e377ee5",
+    "c016-enc16-embedded-base-use/member-coef-lvalue.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-embedded-base-use/member-indexed-word-lvalue.c": "3c591fb336ac1a1173ca99f63ef09809b0e5deb281bb10e5f29f723f0504afe9",
+    "c016-enc16-embedded-base-use/member-indexed-word-lvalue.json": "f00093bbbbb97f050c82b2e7da67af279101277662c6b78096bbab029e377ee5",
+    "c016-enc16-embedded-base-use/member-indexed-word-lvalue.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-embedded-base-use/member-jmp-address.c": "5273830d4832baa3cfbc5d82affd657cdef634406998b3c4a93827b226916d71",
+    "c016-enc16-embedded-base-use/member-jmp-address.json": "f00093bbbbb97f050c82b2e7da67af279101277662c6b78096bbab029e377ee5",
+    "c016-enc16-embedded-base-use/member-jmp-address.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-embedded-base-use/results.json": "8ec009907b2621481d4277d909a4d713b36bc72f6a98fc2526862478634f85fe",
+    "c016-enc16-encode-block-search.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "c016-enc16-final.json": "814f84955ba929b875d4a5ac5e1a86cf683c2621ad93236a8ff4120776516180",
+    "c016-enc16-final.log": "599b1baa813c1e71e8176975c0fde08f4bcd63011e449d9e66f6424fb6600bdc",
+    "c016-enc16-graph-isomorphism.json": "93bc5c43184c61aeee47d90227d83fba580d7732c3c2ef93640cb9b83e279652",
+    "c016-enc16-graph-isomorphism.py": "04d7b7cbd701e8bdd8c117b0d2393c4b6b4d86217f4be03ab021a4406e20ab50",
+    "c016-enc16-issue-note.json": "8a2ed2875208a67451177b4d25f0f199a689595aade9482f3aa3d80260e12785",
+    "c016-enc16-jchuff-search.json": "ed6b97556f491f6795f7c8ac204933ed8530becceeeac2f468245e7820ad4609",
+    "c016-enc16-object-hook.py": "966a0603640b07d7989b11ad4af37a3ad7356994f0f095e26e8a7d1b8e8b1168",
+    "c016-enc16-object-results.json": "7cf7b05f616213c2507fa6f975b4a708377ae45c44a2b5e27501c1f618b5ff54",
+    "c016-enc16-object-run.py": "44fd689be400ad02f3e926186612dd6e7a6b6da7312d5b014698efac83074c36",
+    "c016-enc16-object-summary.json": "f3483dd8808258d503f0d1fae765bdc787fc8f0ab3f8f74d47689dcf04ceb3cb",
+    "c016-enc16-object-summary.py": "fed3a4e815bb4225e443ab4ed1c812d23d5d26f89117020d5e7d55e6122e3605",
+    "c016-enc16-objects-base.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-objects-base/launch.log": "2c49dd57da20d9e2a0ffdfcde02f44156efcb3f6df8828b86bce8c3010c2a901",
+    "c016-enc16-objects-base/preallocation-objects.json": "a7b4d96af8b60c7421cf16d8d2af91dbdeb104a2fd7b7e107bb688a9b2d64658",
+    "c016-enc16-objects-base/provenance.json": "6fc9abbe7c11563b11c1ec8c0f0cb685949266b58750d5bc4d48dfd37ae4506d",
+    "c016-enc16-objects-outer.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-objects-outer/launch.log": "a222d7be015c3fe27b5f96bafcc20713506fee9ba4e2fe7c4f7f66fcc4755d24",
+    "c016-enc16-objects-outer/preallocation-objects.json": "7ea62fb7e0272bedd25b258b03c84ea017f11078c81d7b5c23ffbf726f5912ec",
+    "c016-enc16-objects-outer/provenance.json": "6fc9abbe7c11563b11c1ec8c0f0cb685949266b58750d5bc4d48dfd37ae4506d",
+    "c016-enc16-outer-retail.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-outer-retail.py": "551c8d9ac630f5ae8e26707240ecb447016d543b36738600c622d228db3739e5",
+    "c016-enc16-outer-retail/backend-events.v1.jsonl": "2eadbffb79f2ab6ad1a6aff518607d36e2b032b5b85ccc5fe202f7791c3db0e2",
+    "c016-enc16-outer-retail/backend-object-events.v1.json": "7d7788fc32e77a07c443052b1c810a21d0f305c19b12df48bceb621c01e317cd",
+    "c016-enc16-outer-retail/backend-onepass-summary.json": "ff796a0464775ba4b837ab55dcd567df90d34ab0553e0db49c2234ad9dfc1105",
+    "c016-enc16-outer-retail/backend-pcode-events.v1.json": "062fa170cf3a3e5761e11f9180c19d6957d9d1ef63d3204457435786a202db62",
+    "c016-enc16-outer-retail/backend-summary.txt": "c4e0bbfb01ef4df1570297f6a4d04e58cdbfef42a23139afc41a90a50108ee51",
+    "c016-enc16-outer-retail/backend-trace.v1.json": "f0d9f14bb3480df8eeee36d4d74516a2456e5d7a6cb6133c4861a32f8d10faf8",
+    "c016-enc16-outer-retail/launch.log": "428b01ec431d37d8c12a169f720ad552649c465e6f34aec82b92b1c087e282b7",
+    "c016-enc16-outer-retail/regalloc-summary.txt": "101d6d0866f81674390acaa23eb53c526ed08e8f4b8d04a0147fe6562d8340f2",
+    "c016-enc16-prefix-arguments.py": "0038dd8de22216e70ae74ff6c83382f8638dbb023f9d520d1f985e076622dcb0",
+    "c016-enc16-prefix-arguments/baseline.c": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "c016-enc16-prefix-arguments/length-value-work.c": "bd95e6d5aadf45ba776a04a5ae932a424957a2936ceb5316c35e6e3eee3a928a",
+    "c016-enc16-prefix-arguments/length-value-work.json": "f728ddf5faa959d9eff2707f61d7b46726ac4f59939bbe7ef3f3df41fe84f246",
+    "c016-enc16-prefix-arguments/length-value-work.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-prefix-arguments/length-work-value.c": "7f5b045b5f0879a277e164679d60754d298e7c74dc816a4a2d15230fba281a99",
+    "c016-enc16-prefix-arguments/length-work-value.json": "f728ddf5faa959d9eff2707f61d7b46726ac4f59939bbe7ef3f3df41fe84f246",
+    "c016-enc16-prefix-arguments/length-work-value.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-prefix-arguments/results.json": "a62dbe470d10562de268cb0bf2c6339cbc060a69e6ffc1f648f38d12432afdd7",
+    "c016-enc16-prefix-arguments/value-work-length.c": "1b6823cc26caefdeba1e7e2d4e1a3053649074653d5846e55500085f35874847",
+    "c016-enc16-prefix-arguments/value-work-length.json": "aefc406296a9cfa3169ef05c82b1369e9f9f7087b14b4c9c9ec211fffee2c427",
+    "c016-enc16-prefix-arguments/value-work-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-prefix-arguments/work-length-value.c": "4e1da6f96392943b2026a4b5bc9fa77e4127d9ad71276f1bc584927ced03a25e",
+    "c016-enc16-prefix-arguments/work-length-value.json": "f728ddf5faa959d9eff2707f61d7b46726ac4f59939bbe7ef3f3df41fe84f246",
+    "c016-enc16-prefix-arguments/work-length-value.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-prefix-arguments/work-value-length.c": "66c0b558b22b0705fcd7939ab0014162113df15cf34ead40bbfb3a0f377aae90",
+    "c016-enc16-prefix-arguments/work-value-length.json": "f728ddf5faa959d9eff2707f61d7b46726ac4f59939bbe7ef3f3df41fe84f246",
+    "c016-enc16-prefix-arguments/work-value-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc16-units.json": "b17c9d7b0da6cbe3b6a1680e0f48401337a6a2195dc23703e0ad7be7bcedab5d",
+    "compiler-reference/include/mwcc/backend_types.h": "9fa83f045a7830957f8c01a6137d30a8d84394563355e75f0704d447a48e5e16",
+    "compiler-reference/src/backend/CodeGen.c": "d8d5f482237642bbc30cf09fd4e35dff3531302f929587bd09ca5e13e183c401",
+    "compiler-reference/src/backend/Registers.c": "040bcd368e82e23c573c801ab4cd14696e0db16b23dd11397449e8e661be7015",
+    "prior-inputs/c016-enc11-state-pointer/both.c": "e1b1f03b551379f9b3d7771d2eec785196e609ef3e42f3419d03ed90b951bbd7",
+    "prior-inputs/c016-enc15-outer-homes/ac_value-direct-result.c": "fc6b0cc46e7c8e0f4ca2463603912072ca123b74e6299a864586c9446d548701",
+    "prior-inputs/c016-enc15-outer-homes/ac_value-direct-result.json": "328346c9ca7caf798b418250a7cfc6106d94b97eadf568b23b8cf26dbc342a63",
+    "prior-inputs/c016-enc15-outer-homes/none-direct-result.c": "a860ffba5caadebd45db4b41341d7339b84b1429e67c9273efc3a67f2686a6fc",
+    "prior-inputs/c016-enc4-retail/backend-trace.v1.json": "71b1cce4546e9786664a3576815b250574c39739b07743eb26d333ce6d83fd44",
+    "prior-inputs/c016-enc5-frontend/iro-04-iro-buildflowgraph-1.txt": "5ded6663275a91694f9422d8c85e74945c037b0c0045c9fa90f68256f02933c1",
+    "prior-inputs/c016-enc5-frontend/iro-05-iro-scalarizeclassdatamembers.txt": "4103555536fafcbb1da579425240f7778d2f65d49eefdcdc311216771ee3febc"
+  }
+}

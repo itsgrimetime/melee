@@ -856,3 +856,97 @@ contains all46 candidates, generators/results, both graph checks, PR status,
 and final verification in a SHA256-verified archive. Stay on this encoder;
 the alternate outer-inline form is a measured reconstruction branch to reason
 from, not a replacement for the current best source.
+
+## Direct preallocation bindings and the alternate helper graph
+
+Focus remains **hsd_803B3CD8 until source100**. No source change was retained:
+ordinary compilation remains99.70266%,639 instructions, frame104,38
+register-only differences. This continuation adds measured source-object
+bindings and35 valid source probes, rather than treating equal graph sizes
+as evidence of equivalent allocation problems.
+
+A new full retail trace of the previous caller-AC-value outer-inline candidate
+completes with320 GPR nodes,2655 edges. Its leading decisions are52/r31,
+51/r30,50/r29,101/r28,100/r27. The work-address merge is105->50; the two AC
+table roles take r31/r30 before work takes r29. The ordinary source for this
+trace is `c016-enc15-outer-homes/ac_value-direct-result.c`, not the baseline.
+Normal `backend-object-events.v1.json` still contains zero events and no
+capabilities; source attribution must not be inferred from an empty sidecar.
+
+A bounded, read-only GDB hook captures the preallocation object lists before
+and after0x437230. It neither changes compiler data nor calls linkname helpers.
+Both baseline and alternate runs match the requested function, finish normally,
+and report no reader errors. The raw objects and register-info bytes are saved.
+The field layout comes from the high-level compiler reconstruction and is
+checked against contiguous observed allocation slots and the existing retail
+traces; this is diagnostic evidence, not a production-match claim.
+
+| Observed preallocation return | Baseline | Outer helper with caller AC value |
+| --- | ---: | ---: |
+| Assigned GPR object slots |32..101 (70)|32..103 (72)|
+| First merge-eligible slot |41|34|
+| Named `ac_value` slot |33|33|
+| Work optimizer object/slot |@319 /57|@344 /50|
+
+Baseline named `ac_value`, `coefficient`, `indexed`, `index`, `run`, `length`,
+`value`, and `tables` occupy33..40. The original table-selection locals and
+state aggregate have no assigned slot; optimizer temporaries carry their
+values. The @319 binding agrees with the earlier IRO scalarization snapshot.
+In the alternate, `ac_value` is the only named caller local in the local list.
+Its33 slot is below34, directly supporting the earlier observation that moving
+it to the caller restores the protected coefficient copy. The @344 work role
+uses its observed slot, the105->50 merge, and ordinary physical uses; this does
+not pretend that the normal trace supplied a source-location field.
+
+The entry snapshot still contains bounds from the preceding function. Use the
+preallocation-return first bound for this function; its last bound has not yet
+grown to cover later lowering temporaries. Issue1535 now includes these
+observations and raw capture locations.
+
+The two full interference graphs are **not isomorphic**, despite equal counts.
+Their degree histograms differ: baseline has one degree46 node and one degree126
+node, whereas the alternate has degree47 and125 nodes. Physical-register node
+degrees are unchanged. The baseline affected nodes are95 (@187) and37 (`run`);
+the alternate ones are90 (@209) and100 (@167). A separate color-preserving WL
+comparison also rejects equivalence. These facts do not prove that exactly
+one edge moved; more rewrites could preserve the other degree counts. The
+baseline root-ID replay therefore cannot predict the alternate by renaming
+register IDs alone.
+
+35 valid ordinary source candidates, all restored:
+
+- Eight caller-owned AC table/scalar combinations in the outer helper recover
+  frame104 in several cases. Best98.62285%,136 register differences. Keeping
+  run in the caller changes work from r29 to r31, but does not produce r30.
+- Eight additional caller-local combinations and original declaration order
+  reach99.32707%, frame96. Correct opcode shape alone does not resolve the
+  remaining71 register differences or the frame.
+- Six helpers encompass **all initialization, both DC and AC table selection,
+  and the complete DC encoding phase**, leaving the AC loop in the caller.
+  This extends the earlier DC helper, which did not own the full entry prefix.
+  Work return versus shared-state output and direct versus local category
+  returns were tested. Best99.02973%, frame104,95 register differences. All
+  helpers fully inline; longjmp remains the only call.
+- All five alternative bit-writer parameter orders on that shared-state prefix
+  reproduce99.02973% exactly.
+- Eight initialized embedded base uses (discarded coefficient/word lvalue or
+  member address, flat/member work owner) do not remove the flat pointer's
+  extra copy. Member forms reproduce the baseline; flat forms98.73239%, frame96.
+  These diagnostics do not read an uninitialized local or propose discarded
+  expressions as production design.
+
+A fresh public code search for `jchuff-nin` still returns only the Doshin split
+file. Its symbols separate encode_one_block(0x2B4) and emit_bits(0x17C), but
+provide no source body or proof that this encoder shares their implementation.
+The additional bounded encode_one_block/jchuff query returns no results; this
+is not an exhaustive donor or provenance conclusion.
+
+Final ordinary checkdiff, full TU report, and full GALE01 build pass after
+restoration. Six matched neighbors remain100%, RGB remains98.7788%, and source
+SHA256 remains0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee.
+No better source was available to update PR3377 or scratchmbSPH.
+
+Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-07-preallocation-objects/`
+contains35 complete candidates, new retail trace, both raw object-list captures,
+validation/comparison scripts, reference layouts, bounded search observations,
+and restored build/checkdiff results in a verified archive.

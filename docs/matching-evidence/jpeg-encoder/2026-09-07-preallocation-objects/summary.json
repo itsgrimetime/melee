@@ -1,0 +1,23 @@
+{
+  "function": "hsd_803B3CD8",
+  "retained_percent": 99.70266,
+  "source100": false,
+  "source_changes_retained": false,
+  "source_sha256": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+  "valid_compiles": 35,
+  "compile_attempts": 35,
+  "findings": [
+    "Read-only preallocation capture binds baseline @319 to57, first41; alternate @344 to50, first34. ac_value33 is below first in both.",
+    "Baseline and alternate 320-node/2655-edge graphs have different degree histograms; they are not just register-ID permutations."
+  ],
+  "validation": {
+    "frame": 104,
+    "instructions": 639,
+    "register_only_differences": 38,
+    "full_build": "exit0",
+    "matched_neighbors": 6
+  },
+  "compiler_reference_commit": "35c0e0fab7c5945789a534ac6a8d739044a960e2",
+  "compiler_reference_scope": "High-level reconstruction, binary match unmeasured; raw field values observed independently.",
+  "tool_issue_note": 1535
+}
