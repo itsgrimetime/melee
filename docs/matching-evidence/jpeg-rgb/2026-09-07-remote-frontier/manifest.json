@@ -1,0 +1,30 @@
+{
+  "function": "hsd_803B3408",
+  "source_head": "c18e39235ba33793dc7e2db3bb8adb8330f3630c",
+  "production_percent": 98.7788,
+  "candidate_percent": 98.04147,
+  "candidate_sha256": "5e405f9532537bc57802811d4c907029d3582e833cb2e5034c876272ab0d39ab",
+  "remote_host": "nzxt-local",
+  "remote_compile_exit": 0,
+  "remote_compile_seconds": 0.583,
+  "pcdump_bytes": 2036217,
+  "fidelity": {
+    "equal": 60,
+    "retail_only": 208,
+    "debug_only": 0,
+    "different": 0,
+    "not_comparable": 0
+  },
+  "fidelity_scope": "Only comparable facts; not complete parity or a production matching proof. Input trace and staged candidate are explicitly selected; current production source was not used for this comparison.",
+  "tool_issue": 1545,
+  "local_dll_lane": "Still unsafe: PID95126 observed UEs; no guard override applied.",
+  "coalesce_result": "No direct copy edge74->40; forced-coalesce rejected. Missing detailed colorgraph node decisions; generic source probes emitted only. No forced mutation performed.",
+  "files": {
+    "c016-rgb-remote-frontier-pcdump.txt": "58ba51b9c7743ccedf8918ae870c7f30fcb2b326b3afd55a66447fb072c31566",
+    "c016-rgb-remote-coalesce.json": "bca9521b29c0e901a5a63d62d41f114893c262fc1617d8210894a622847595a6",
+    "c016-rgb-remote-coalesce-search.json": "d13f47c30a55092dc8fa97158e58db4118367308b4867f95e7d12e57a0d6541f",
+    "c016-rgb-remote-fidelity/backend-fidelity.json": "58ac1983638cb8bf22abaff69fdb77fc273b92d0f1d0f021c5f6d47e3f2511b5",
+    "c016-rgb-remote-fidelity/backend-fidelity.txt": "3dc4e59149e9c1a61fd982e99bf5cc02c43b5b7b7e1e31727d8a601fcd6889bb"
+  },
+  "archive_sha256": "607bb64b81c810961de2718f6c2c8f753565ee1bcdbb7bf1b32c4f0783d058f3"
+}

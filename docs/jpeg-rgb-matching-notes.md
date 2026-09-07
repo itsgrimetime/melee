@@ -915,3 +915,28 @@ These pointer-storage forms change allocation but provide no retained gain.
 
 Complete source/diffs SHA256-verified in2026-09-07-chroma-pointer-lifetime.
 Source restored; production98.7788%, goal remains active with no new PR delta.
+
+## Windows diagnostics recovered for structural candidate — 2026-09-07
+
+The remote Windows path is AVAILABLE. `debug dump remote` streamed the coherent
+candidate from build/verification/hsd3408/direct-row-call.c using --unit-source
+src/sysdolphin/baselib/hsd_3B34.c. It created the branch-specific remote worktree,
+compiled successfully in0.583s, emitted2036217bytes, restored staged source and
+stock DLL. SHA2565e405f9532537bc57802811d4c907029d3582e833cb2e5034c876272ab0d39ab
+matches the local candidate. Direct /tmp source is rejected by repo containment;
+staging an ignored build/verification copy is the supported path.
+
+Compared the remote dump against the EXISTING retail trace for this exact
+candidate:60equal,208retail-only,0different. This is agreement for comparable
+facts, not complete parity or matching proof. Local DLL lane remains unsafe:
+old PID95126 stillUEs; no override/bypass attempted.
+
+`debug suggest coalesce -V74=40` on fresh remote dump reports no direct copy/
+identity edge and lacks detailed colorgraph decision nodes74/40. Forced merge
+is correctly rejected. Issue1545 records the remote diagnostic metadata gap.
+`coalesce-search --no-compile-probes` can read interference/IR and emits generic
+local-order/type/pointer-loop probes, but no scored/specific coalescing fix.
+Do not apply linear end-pointer/induction advice to this tiled, nonuniform
+address mapping without proving semantic equivalence. No generated probe or
+forced allocator mutation was run. Full outputs SHA256-verified in
+2026-09-07-remote-frontier. Production untouched98.7788%; goal remains active.
