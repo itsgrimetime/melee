@@ -623,3 +623,46 @@ must be evaluated against the low/sum distinction and full instruction stream,
 not scored as a simple register permutation. RGB remains98.7788%, coefficient
 encoder100%, full build passes. Evidence is SHA256-verified under
 2026-09-07-row-lifetime-source. Goal remains active; no PR/link yet.
+
+
+## Front-end compound-assignment origin — 2026-09-07
+
+A fresh unmodified-retail frontend dump of retained RGB completed with46
+snapshots. In iro-00 (after BuildflowGraph), source `dst_row = tile + dst_row`
+is already EADDASS93,88 (node94): the dst_row operand is marked assigned+used.
+In iro-45 it remains EADDASS151,146 (node152). Thus operand reversal is not a
+register-coloring or late scheduling artifact. The exact earliest parser/
+pre-IRO rewrite pass has not been captured; do not claim which earlier pass
+introduced it merely because it is present in the first snapshot.
+
+The previously saved corrected-pixel creation trace independently shows final
+row ADD at0x6507d4 emitted at0x4a0c87 by Operands_ForceGPR. Its same-item
+combiner entry is already leftGPR40(row), rightGPR73(tile), caller0x4b8511.
+All saved stages retain sum-first ordering. The frontend evidence explains why
+spelling the source tile-first did not preserve that order.
+
+27 ordinary probes, all restored: s64/u64 intermediate casts/locals (16),
+single-field row-record return/output helpers (4), and casts/identity accessors
+to disrupt ADDASS recognition (7). Wide variants retain one unwanted
+instruction. Record return forms add instructions/frame bytes. Identity
+helpers remain the corrected-pixel98.04147% baseline; result local adds8frame
+bytes. int/u32 casts and unsigned identity change grouping and regress96.17512%.
+No source improvement retained.
+
+Donor search was refreshed using local semantic and hashed-window indexes.
+Semantic index has44613functions; nearest results include THP quantization,
+libm rem_pio2, and unrelated MP4 rendering functions. The inspected THP source
+uses quantization-table scaling, not RGB565 tile conversion. Best hashed
+window remains0.588. Web searches for GC/RGB565/HAL/JPEG arithmetic found no
+verified source twin; ordinary JPEG color coefficients alone are not ancestry
+proof. No external donor was transplanted.
+
+Next useful reconstruction should avoid updating the same dst_row object:
+consider computing the final destination row inside the destination-address
+expression or accessor and letting invariant motion place it. This must be
+measured against the preserved previous inline/address attempts, rather than
+repeating known parentheses, declaration, or identity-helper variants.
+
+Final RGB98.7788%, encoder100%, full build passes. Goal remains active. Full
+frontend snapshots and27 candidate sources/results are SHA256-verified in
+2026-09-07-addass-origin. No PR or Matching flag yet.
