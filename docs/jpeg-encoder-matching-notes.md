@@ -1023,7 +1023,9 @@ and final verification in a SHA256-verified archive.
 
 User requested exclusive focus until 100%; no other function was selected.
 The successful reconstruction is committed as `d318e281de`, with clean PR
-counterpart `2637155278` (PR #3377). Both worktrees verify 100% with the ordinary
+counterpart `f05ca420b1` in [PR #3391](https://github.com/doldecomp/melee/pull/3391).
+PR #3377 had already merged; #3391 contains only the final matching change
+on fresh upstream/master. Both worktrees verify 100% with the ordinary
 production compiler. No forced registers, compiler patches, or PAD_STACK are
 part of the source proof.
 
@@ -1065,3 +1067,9 @@ These IDs describe that intermediate source, not the final matching source.
 Evidence is preserved under
 `docs/matching-evidence/jpeg-encoder/2026-09-07-source100/`, including candidates,
 results, compiler comparisons, builds, and SHA256-verified archive members.
+
+Final delivery: PR #3391 is open and ready for review. Fresh upstream-based
+verification remains 100%, all six previously matched neighbors remain100%,
+and full build/checksum passes. Source100 evidence and learnings are committed
+and pushed on the fork work branch. The public scratch still has the prior
+99.70266% source; local-server discovery failed during the attempted sync.
