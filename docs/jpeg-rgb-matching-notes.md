@@ -1187,3 +1187,23 @@ preserved. Full models/probes in2026-09-07-simplify-rank-frontier. Production
 restored98.82488. Next source question: how to make both index and destination
 compiler temporaries created near color-conversion lowering, while preserving
 exact ADD operand order and both source loads.
+
+## Chroma store evaluation boundaries — 2026-09-07
+
+14 probes target late temporary creation at the Cb store. Six embedded pointer/
+last-index/all-index assignment forms use LHS or RHS-comma boundaries. LHS forms
+98.087555/frame152; pointer RHS97.036865/frame160; other RHS90.03226/frame160.
+RHS probes use an independently formed LHS address to avoid an unsequenced read
+of the pointer assigned on the RHS. Both pixel loads remain; no alias assumption.
+
+Eight inline store helper forms pass color value and offset in both argument
+orders, with named/direct index and full/removed luma row local. Named-index
+97.258064, direct-index95.96774; allframe152. Filtered full instruction rows of
+value-first/local/full helper equal the prior direct-destination variant exactly.
+Embedded-pointer LHS instruction rows equal the coherent donor seed exactly.
+This is final instruction-output equivalence, not a claim of identical virtual
+IDs. These evaluation boundaries add no new codegen behavior to pursue.
+
+Production restored98.82488; complete sources/diffs archived in
+2026-09-07-chroma-store-boundaries. PR3396 is now MERGED upstream. No further
+source gain; full matching and TU linking remain unfinished.
