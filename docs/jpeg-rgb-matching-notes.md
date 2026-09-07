@@ -1157,3 +1157,33 @@ score equally98.156685 but raw current_asm lists differ; equal score is not
 byte-identity proof. Preserve the earlier coherent donor structural candidate
 as primary. No forced changes; source restored and all evidence archived in
 2026-09-07-direct-chroma-addresses.
+
+## Simplify-input rank frontier — 2026-09-07
+
+Current coherent row-fixed graph: pointer37 and index38 both flags2, same as
+conversion temporaries; flag2 is NOT a named-local discriminator. Object pointer
+is populated for37/38 and zero for conversion temps. Initial neighbor counts
+pointer31/index28, before captured removals; captured degree4/3 are final state.
+Do not confuse them with initial simplify degrees.
+
+Exact105-web baseline replay verified again. Prior arbitrary SELECT-order
+success alone did not show how SIMPLIFY could produce it. New offline tests
+vary its scan ranks while preserving graph edges and costs. Coarse49rank pairs
+best1miss. Degree-only81pairs(-4..4) best8misses. Joint rank-index/abstract pointer
+degree tests reach0misses with degree delta-3 and index rank101.5+, but that is
+an abstract degree hypothesis, not an actual edge or source transformation.
+
+More useful: fine5450pair rank-only grid reaches ZERO mapped target misses with
+pointer37 rank103.5 and index38 rank101.5 (several adjacent pairs work). Graph,
+color pools, costs and degree rules unchanged. Both virtuals need creation/rank
+positions among conversion temporaries, not just reversed local declarations.
+This is still OFFLINE, no compiler forcing or source-realizability proof. It
+strengthens the target beyond arbitrary SELECT replay: ordinary recovered
+simplify+SELECT itself can yield these target colors with changed scan ranks.
+
+Eight low-first/direct chroma-index source forms with arithmetic before/after
+first pixel load score97.97235–98.087555,frame152, no production gain. Both loads
+preserved. Full models/probes in2026-09-07-simplify-rank-frontier. Production
+restored98.82488. Next source question: how to make both index and destination
+compiler temporaries created near color-conversion lowering, while preserving
+exact ADD operand order and both source loads.
