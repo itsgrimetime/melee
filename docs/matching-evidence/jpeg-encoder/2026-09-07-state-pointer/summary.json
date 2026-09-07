@@ -1,0 +1,58 @@
+{
+  "function": "hsd_803B3CD8",
+  "retained_percent": 99.70266,
+  "retained_source_sha256": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+  "attempts": 50,
+  "valid_attempts": 50,
+  "retained_source_changes": false,
+  "retail_comparison": {
+    "field_equality": {
+      "class_id": true,
+      "class_name": true,
+      "coalesce": true,
+      "color_decisions": true,
+      "edges": true,
+      "nodes": true,
+      "non_allocatable_state": true,
+      "registers": true,
+      "select_order": true,
+      "simplify_order": true
+    },
+    "before_counts": {
+      "nodes": 320,
+      "edges": 2655,
+      "color_decisions": 283
+    },
+    "after_counts": {
+      "nodes": 320,
+      "edges": 2655,
+      "color_decisions": 283
+    },
+    "scope": "Recorded retail GPR class at colorgraph return plus recorded decisions/orders; not a comparison of all earlier compiler passes."
+  },
+  "public_family": {
+    "method": "Read-only browser Family tab, followed by sync fetch of both members",
+    "members": [
+      {
+        "slug": "mbSPH",
+        "owner": "itsgrimetime",
+        "score": 190,
+        "max_score": 63900
+      },
+      {
+        "slug": "yajTB",
+        "owner": "itsgrimetime",
+        "score": 190,
+        "max_score": 63900
+      }
+    ],
+    "better_family_member": false
+  },
+  "tool_issue": 1533,
+  "validation": {
+    "ordinary_compile": "99.70266%, frame104, 38 register-only differences",
+    "ninja": "exit0",
+    "source100": false
+  },
+  "excluded": "Raw Cloudflare challenge responses and empty failed CLI suggestions are deliberately excluded."
+}

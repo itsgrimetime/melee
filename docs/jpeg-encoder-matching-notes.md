@@ -583,3 +583,68 @@ same source spelling.
 Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-07-focused-source/`
 contains all candidates and results, generators, a PR source diff, final
 checkdiff/build evidence, a run summary, and a verified206-member SHA256 archive.
+
+## State-pointer experiment: recorded retail allocator state is identical
+
+Focus remains **hsd_803B3CD8 until source100**. This continuation retained no
+source change: ordinary compilation remains **99.70266%, frame104, 639
+instructions, 38 register-only differences**, and the full build passes.
+
+The most useful new experiment passes `JpegEncoderState*` through both output
+helpers instead of passing `state.work`. The local state still contains only
+the work pointer. Both mutable and const state-pointer forms compile exactly
+like the retained source. Passing the state pointer only through write_bits,
+then extracting work for write_byte, instead adds copies and grows the frame.
+
+A fresh supported retail backend capture of the both-layers variant completed.
+Comparing its **entire recorded GPR class** against the preceding retained
+retail trace gives equality for every class field: 320 nodes, 2655 edges,
+coalesce mappings, all 283 color decisions, selection/simplification orders,
+register pools, and non-allocatable state. The compiler command hashes also
+agree. This is stronger than instruction similarity alone, but it is scoped
+to the recorded allocator state at colorgraph return plus decisions/orders.
+It does **not** prove that all preceding passes were identical or identify the
+precise earlier pass at which the source forms converged. The interface change
+alone does not move the observed coalesced representative or allocation order.
+
+50 valid ordinary source candidates were compiled and restored:
+
+| Family | Count | Result |
+| --- | ---: | --- |
+| Coefficient/history pointer as owner, flat/member and direct/recovered-parent accesses | 8 | 95.73–96.01%, additional address operations and larger frames |
+| State pointer through both helpers or bits-only, mutable/const | 4 | Both layers neutral; bits-only97.22691%, frame136 |
+| Sequenced comma/self-assignment owner forms and loop initializers | 10 | No gain; preserves sequence points rather than relying on unsequenced writes |
+| Dedicated Huffman emitter owning table lookups and bit loop, DC-only/all calls, input/order variations | 8 | All identical to baseline |
+| State/local/helper renames and legal helper definition-order changes | 5 | All identical to baseline |
+| Bit-mask/test helper in scan, writer, or both | 9 | Same38 register differences; frames112–224 |
+| Compact Huffman code/length locals and signed code-table view | 6 | No gain; compact pair preserves frame104 but increases register differences to82 |
+
+The Huffman-emitter variants preserve the helper nesting depth by including the
+bit loop in the new helper. The narrow code variants apply only to Huffman
+codes, not arbitrary signed coefficient payloads. The signed table view casts
+back to u16, preserving the original16 code bits. These are real source tests,
+not register-forced models.
+
+The public scratch was checked through authenticated `sync fetch` and its
+browser Family view. There are two family members, mbSPH and yajTB, both owned
+by itsgrimetime and both at score190/63900. No better family member was found;
+this does not claim there are no independently created scratches elsewhere.
+The temporary inspection tab was closed. Production `scratch search` failed
+with403 even though `sync fetch` succeeded; issue1533 records missing auth
+routing and excessively verbose challenge output. Raw challenge responses are
+excluded from committed evidence. The existing unreaped local debug process
+95126 was confirmed still present; it was not killed or bypassed. The supported
+retail tracing lane remains usable.
+
+Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-07-state-pointer/`
+contains all50 candidates, comparison code and both full retail traces, public
+scratch summaries/source, ordinary verification, and a verified190-member
+SHA256 archive. PR3377 and scratchmbSPH keep the existing best source.
+
+Next distinct source hypothesis: extract the complete DC encoding phase
+(table selection, difference/category, history update, Huffman/payload output),
+with explicit ownership of its work reference. Earlier DC ownership probes
+covered read/save operations; Huffman probes covered output/table lookups.
+They do not exhaust the complete-phase boundary. Check actual inline expansion
+and frame before interpreting any register score, and keep AC source behavior
+and all runtime data references intact.
