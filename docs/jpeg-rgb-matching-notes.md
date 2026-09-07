@@ -895,3 +895,23 @@ Restoring named luma row_offset adds8frame bytes and worsens these candidates.
 here; do not repeat these input-width/mask/assignment-return variants.
 
 Production remains98.7788%, no unsubmitted source gain. Goal remains active.
+
+## Chroma condition and shared destination storage — 2026-09-07
+
+14 ordinary candidates on retained baseline and direct-row structural candidate.
+Moving chroma_index and/or destination pointer setup into the for-condition
+(comma assignments, analogous to existing luma loop) regresses87.39–90.82%.
+Only local arithmetic/pointer formation runs at the terminating condition; no
+extra pixel load/store. These are valid but clearly wrong loop shapes.
+
+Sharing destination storage across chroma/luma while keeping their original
+address expressions is DISTINCT from the earlier common JpegWork-pointer probe
+that rewrote luma addressing. A union of JpegWork*/s32* (each field read only
+after writing that same field) gives96.96% baseline,96.76% structural. A single
+void* with explicit casts for accesses gives98.27189% baseline,97.39632%
+structural,frame152. Tile-y scope is neutral to function scope; tile-x scope
+improves to98.59447% baseline/97.88019% structural. Still below retained score.
+These pointer-storage forms change allocation but provide no retained gain.
+
+Complete source/diffs SHA256-verified in2026-09-07-chroma-pointer-lifetime.
+Source restored; production98.7788%, goal remains active with no new PR delta.

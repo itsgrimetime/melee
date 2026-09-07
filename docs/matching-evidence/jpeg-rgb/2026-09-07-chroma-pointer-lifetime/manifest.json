@@ -1,0 +1,199 @@
+{
+  "function": "hsd_803B3408",
+  "source_head": "fa31bd5bc6943c8d464f991144cc455008048d8f",
+  "retained_percent": 98.7788,
+  "source_improvement": false,
+  "candidates": [
+    {
+      "family": "chroma-condition",
+      "name": "baseline-index",
+      "score": 89.88019,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "chroma-condition",
+      "name": "baseline-both",
+      "score": 87.39171,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "chroma-condition",
+      "name": "baseline-direct-pointer",
+      "score": 87.39171,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "chroma-condition",
+      "name": "structural-index",
+      "score": 90.82488,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "chroma-condition",
+      "name": "structural-both",
+      "score": 88.31336,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "chroma-condition",
+      "name": "structural-direct-pointer",
+      "score": 88.31336,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "pointer-storage",
+      "name": "baseline-union",
+      "score": 96.95853,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "pointer-storage",
+      "name": "baseline-void",
+      "score": 98.27189,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "pointer-storage",
+      "name": "structural-union",
+      "score": 96.76037,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    },
+    {
+      "family": "pointer-storage",
+      "name": "structural-void",
+      "score": 97.39632,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "pointer-storage-scope",
+      "name": "baseline-tile-y",
+      "score": 98.27189,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "pointer-storage-scope",
+      "name": "baseline-tile-x",
+      "score": 98.59447,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "pointer-storage-scope",
+      "name": "structural-tile-y",
+      "score": 97.39632,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "pointer-storage-scope",
+      "name": "structural-tile-x",
+      "score": 97.88019,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    }
+  ],
+  "files": {
+    "c016-rgb-chroma-condition/structural-both.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-chroma-condition/baseline-index.c": "2471d6a0edd39b2f179b661002cde8a64562549eec34417a8612b31a883c0d93",
+    "c016-rgb-chroma-condition/structural-both.json": "29bda27293f0f673cd40f2662cb9608d20d963517d44269c4b3ae8afa4097abb",
+    "c016-rgb-chroma-condition/structural-both.c": "b95eced1092045232cda8cb49d9dda6bb63533c25c9a1d92a9f485763e93b471",
+    "c016-rgb-chroma-condition/baseline-direct-pointer.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-chroma-condition/baseline-index.json": "77644ea2dba22b65685fed0820a152b4a474acf2df43522a81ac25e71249336c",
+    "c016-rgb-chroma-condition/structural-index.c": "9ae937abd551a624388fe6655e305a98025df00d318d358a5cc6b2dc4b14bd16",
+    "c016-rgb-chroma-condition/structural-direct-pointer.json": "1ceb8a290d25a820750eea3046d686d12ff3b4b4858df575959da492a852955d",
+    "c016-rgb-chroma-condition/results.json": "451497145e8b23bb0e411421975f3ee689356e49dcb25a2c4f087f7bae664afe",
+    "c016-rgb-chroma-condition/structural-index.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-chroma-condition/structural-index.json": "911438d692d1b8cbe7e280dfee2e877c0602c48352dfdab7cc81228e21dc52f1",
+    "c016-rgb-chroma-condition/baseline-index.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-chroma-condition/structural-direct-pointer.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-chroma-condition/baseline-both.json": "71e4a565226c49b7ce63ac1186211eb10af2ad441a0752c210e434229c188865",
+    "c016-rgb-chroma-condition/baseline-direct-pointer.json": "1bf3ff7fee2cff153b57af729c5671cb0deaf577466252b3c39e7246265fd3f1",
+    "c016-rgb-chroma-condition/baseline-direct-pointer.c": "db14a47dd73a47e85a50cb4e7090947259c924e6c89a65559daeaeac361b3ddf",
+    "c016-rgb-chroma-condition/baseline-both.c": "c0719770d2963b9887421b14025d1b22d86d3ac0c166fa9030da0a5662e76943",
+    "c016-rgb-chroma-condition/baseline-both.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-chroma-condition/structural-direct-pointer.c": "f822fcb1b7ff64c49c7058339b0795e62d22e7b247484e3e9aa2cf6ab07158b8",
+    "c016-rgb-chroma-condition.py": "be932c0e13f79964dc1fa5dbc81553268bba619c3769791e309f0d2125524727",
+    "c016-rgb-pointer-storage/structural-void.json": "8eba5c1c6a2cd5f146ab581c49a881e49f4ae79e37a42e90e7261dadea572018",
+    "c016-rgb-pointer-storage/results.json": "9130200857ebc7eb7d986aabef2ce564683b5fcf501dd90a54f264d8560d3ac5",
+    "c016-rgb-pointer-storage/structural-union.json": "de598ca3b6116cb624fcb01a366bd78cfe0da8f86fa5ea6d9ca800dd27cb5c74",
+    "c016-rgb-pointer-storage/baseline-union.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-pointer-storage/baseline-void.c": "d3eacbad2110e5313c7f703364d54a73620a628b352dfe72b86d54029ffa677d",
+    "c016-rgb-pointer-storage/structural-void.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-pointer-storage/baseline-union.json": "ae25e67b8f8a17d2725902eccbce55292d8e095273a88a90c671ec2b80d939c7",
+    "c016-rgb-pointer-storage/baseline-void.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-pointer-storage/structural-union.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-pointer-storage/structural-union.c": "79b849e7232adc2331d8ff1e0602914801fb769dd7581d51cf5d2bffb096f6e3",
+    "c016-rgb-pointer-storage/structural-void.c": "b8abc496b2982fe8622f14a6bc2bd40dd57f6d3c22ce2f052111969bccec7b00",
+    "c016-rgb-pointer-storage/baseline-void.json": "98c7f7ce57413b3eba8bcd061a8186c2d3c89cb9124b27a3f8f0ea79edf96073",
+    "c016-rgb-pointer-storage/baseline-union.c": "b35aa939d9e10495e8ea97a9db24e4e38322698c01b59b6c2eef04effe009d34",
+    "c016-rgb-pointer-storage.py": "ece7c4e761592742a560d314cae1a464872127fa46570a93eb4e93680aec5b6f",
+    "c016-rgb-pointer-storage-scope/baseline-tile-x.c": "1234c0bcea09ca951298ff08fa7689187abb6fe349ba2d320a17a49a2826c1ce",
+    "c016-rgb-pointer-storage-scope/structural-tile-y.c": "92ce90514108d884c58ad456c803c0b8a2cf2de66260122da42aec5d5489537b",
+    "c016-rgb-pointer-storage-scope/structural-tile-x.json": "239b69933bfc7795a0c302afef32b6c3decac867ae05ee232950677e7bf4cf2a",
+    "c016-rgb-pointer-storage-scope/results.json": "41f531371394af4c53221495cf77690cb201c82d5eb3d5b117fd9d372ddb78ac",
+    "c016-rgb-pointer-storage-scope/structural-tile-y.json": "6ba6cce6aea3e4f9c9a98a0969129ca77b2747e6c0e1ace0ae6891fca6536997",
+    "c016-rgb-pointer-storage-scope/baseline-tile-y.json": "7183739f9d083fad2ce8d807e0fa18bbd913af24ee9948913cecb8c31c22de52",
+    "c016-rgb-pointer-storage-scope/baseline-tile-x.json": "7fee43dea92cbd42aa5f55334149d43ac75861453b5490f34b62f6a4c2e399db",
+    "c016-rgb-pointer-storage-scope/structural-tile-x.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-pointer-storage-scope/structural-tile-y.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-pointer-storage-scope/baseline-tile-y.c": "8fc7c16dac1a3ae412e295310761fc82840c97bff384a2e290b4f953f14135d1",
+    "c016-rgb-pointer-storage-scope/baseline-tile-y.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-pointer-storage-scope/baseline-tile-x.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-pointer-storage-scope/structural-tile-x.c": "f9d6922a50ec5af48e0c5ba4f87ad15f9e73b71d1c9b6378a6f2f5543d440b1a",
+    "c016-rgb-pointer-storage-scope.py": "f188a6cfd1ad304acc3b3ec69915c26ccbebe1453b57f90c3b85637578504b0d"
+  },
+  "archive_sha256": "d486ed523fa463ccc06ab786f953e39f2d35599bf9429fe1f47d6a8ecc4c2d4c"
+}
