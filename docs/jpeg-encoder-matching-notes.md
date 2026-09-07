@@ -164,3 +164,84 @@ the hook was bypassed for those merge commits only.
 Follow-up CI check: every applicable job for PR3377 head `116e620820` passed,
 including Nix, native, clang, diff/link/test, and all style jobs. Pages/wiki
 publication jobs were skipped as expected for the PR workflow.
+
+## Retail allocation and owner follow-up
+
+Baseline remains 99.70266%, 639 instructions, frame104. No source improvement
+was retained. This pass compiled 51 candidates: 50 valid source probes and one
+invalid unsequenced-assignment probe explicitly excluded from matching evidence.
+
+The standard retail backend command completed and observed all283 GPR color
+decisions. IG57 selects first into r31; IG216 selects second into r30. The
+retail/debug comparison has1311 equal fields,37 retail-only entries, and104
+differences, all of the latter being missing debug simplify-order entries.
+It reports no differing observed physical assignments. This is allocator
+evidence, not a claim that all tracing capabilities are complete: the early
+PCode boundary was rejected, the final-scheduler fallback captured639
+instructions, and operand instrumentation remains partial.
+
+The alleged spill has a concrete reporting cause. In mwcc_debug.c the simplify
+hook tests flags&0x08 and prints SPILLED, while the same file defines0x08 as
+COALESCE_ROOT and0x01 as SPILLED. Retail reports IG57 colored. Issue1503 now
+contains this diagnosis. There is no actual spill or fallback selection in the
+validated baseline replay below.
+
+A read-only retail cost/graph capture reused the existing mnitemsw hook and
+pinned GC/1.2.5n compiler. IG57 has four coalesced-away table-address neighbors:
+107/109 merge into DC-code root61;111/113 merge into DC-length root60. Together
+with eleven fixed physical neighbors they account for its final degree15.
+Its cost is0, but that cost is irrelevant here because normal simplification
+completes without fallback.
+
+Replaying the retail scan algorithm from the captured graph reproduces every
+one of the283 recorded selections, including all three scans. Scan1 removes
+260 nodes; scan2 removes22; scan3 removes only57. These are one-based scan
+numbers; JSON uses zero-based indices. Removing one, two, or three of the four
+table edges leaves57 first-selected. Removing all four makes it select17th,
+which explains why simply delaying pointer initialization overshoots the
+desired order.
+
+A hypothetical relabeling of root57 and alias103, preserving every graph edge
+and flag, produces the desired leading selection sequence216,103,101. This
+is a precise next hypothesis: change ownership of the shared address while
+preserving its entry definition and uses. It is **not a compiler-validated
+intervention or source match**. The scoped force-coalesce inversion was refused
+before compilation because alias103 has no standalone color decision. The
+alias is present in the observed graph; issue1514 records the limitation. No
+guard was bypassed and no forced object was produced.
+
+Ordinary source probes, all restored:
+
+- Direct-global longjmp/byte/bit helpers:95.241005%, frame136.
+- Work wrapper passed by value:86.11268%, frame192. Byte-writer error wrapper:
+  96.76526%, frame192.
+- Named run+1 temporary at function or loop scope:99.22535%, frame104.
+  Register-qualified pointer wrapper:neutral.
+- All21 individual embedded copies at the seven bit-writing calls (value,
+  length, or work argument): neutral or worse. Every variant keeps the entry
+  work pointer in r31. This does not establish failure of combined windows.
+- Work initialization after tables:neutral; after DC-code selection:98.763695%,
+  r31; after DC-length or AC selections:98.341156%, r26. All have frame104.
+- DC-code/length wrappers, combined or reversed, and selector helpers:
+  99.69484%, frame112. Wrapping all four tables gives frame120 and the same
+  score. The38 register differences remain.
+- Repeated direct global addresses with no named work owner:93.53677%,
+  frame128, with or without the unused state declaration.
+- A first-use assignment on one side of subtraction read the uninitialized
+  pointer on the other side. Its97.666664% score is invalid evidence. The
+  corrected sequenced-comma and direct-global-right versions are98.6072% and
+  97.165886%, both frame104.
+- Pointer array, state array, or array member:neutral99.70266%, frame104.
+  Integer-address owner:98.54773%, frame104.
+
+The generated select-order plan was reviewed but not compiled: its synthetic
+IG216 attribution led to unrelated byte-index spelling probes. The observed
+definition is run+1, and the manually authored run-count probes tested that
+actual source relationship instead.
+
+Committed evidence and per-candidate results:
+`docs/matching-evidence/jpeg-encoder/2026-09-06-retail-owner/`.
+Includes baseline/source probes, full retail allocator trace, partial PCode
+metadata, cost capture, replay inputs/code/results, refused inversion log,
+ordinary restoration, and final full-build/DOL verification. PR3377 is unchanged;
+the TU still has the separate RGB residual and stays Linkable.
