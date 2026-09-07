@@ -586,3 +586,19 @@ Evidence is in
 candidates, both compared objects, full object/relocation verification, fresh
 retail trace, GPR comparison, primary/PR build and original-DOL verification,
 and a per-member SHA256 archive manifest.
+
+## Resumed after RGB encoder completion — 2026-09-07
+
+User redirected work here after upstream PR3399 completed hsd_803B3408 and linked
+hsd_3B34. Merged upstream into c016 as b1c5824798; resolved RGB source to upstream
+exactly. Local report verifies all eight RGB TU functions100 and Matching config.
+Claimed fn_803B6820; fresh ordinary checkdiff confirms98.83817. Snapshot work has
+another local matching process and is intentionally not modified here.
+
+Four direct chroma array probes remove named shifted chroma pointer, using the
+original index expression in work.cr/work.cb on the actual base. Neither/both
+unsigned index casts retain98.83817; asymmetric cr-only/cb-only casts96.618256.
+Thus encoder's late-sharing source lever does not immediately improve decoder.
+All restored; ninja passes. Sources/diffs in2026-09-07-direct-address-resume.
+The extract get command could not find this static function despite its symbol
+and report entry; issue1552 filed. Source and checkdiff remain usable.
