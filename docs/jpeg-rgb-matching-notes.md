@@ -1264,3 +1264,16 @@ new numerical improvement. All four for-based moved-base outputs still show
 is preserved. Moving luma setup around these source loop boundaries is not a
 repair of that residual. Source restored98.82488; archive in
 2026-09-07-luma-loop-forms. Goal remains active.
+
+## RGB channel inline boundaries on row-fixed source — 2026-09-07
+
+Eight probes factor per-channel RGB565 extraction into separate inline helpers:
+u16/s32 input, s32/f32 result, chroma-only/all including luma. Coefficients and
+expression association unchanged; both source reads remain around Cb store.
+Every variant97.866356%; frames176(chroma) or192(all), up from152. After excluding
+stack-reference/prologue/epilogue instructions, complete instruction text and
+register operands equal the coherent scalar seed for ALL eight variants. This
+is a scoped non-stack comparison, not full object equivalence or proof that
+virtual IDs are identical. No needed physical-allocation change was obtained;
+helper homes account for the visible stack growth. No source retained.
+Full sources/diffs in2026-09-07-channel-inline; production restored98.82488.
