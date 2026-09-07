@@ -633,6 +633,14 @@ void mnSnap_80254014(void)
 #pragma pop
 #endif
 
+/// @todo .sdata2 order hack
+#ifdef MUST_MATCH
+static void mnSnap_sdata2_order(void)
+{
+    (void) -6.9F;
+}
+#endif
+
 /// Configures the Yes/No dialog button positions based on language setting.
 void mnSnap_8025409C(s32 dlg_type)
 {
@@ -859,7 +867,7 @@ static UNINITIALIZED_RETURN(s32) mnSnap_8025441C(u64 buttons)
     }
 }
 
-static inline void mnSnap_InitDialogText(void)
+static void mnSnap_InitDialogText(void)
 {
     HSD_Text* t;
     if (mnSnap_804A0A10.dlg_text != NULL) {
@@ -975,28 +983,28 @@ static inline void mnSnap_UpdateSelectionCursor(mnSnap_State* snap_state)
     }
 }
 
-static inline void mnSnap_RefreshSlotAnimations(int i, s32 byte_off,
+static inline void mnSnap_RefreshSlotAnimations(int i, s32* byte_off,
                                                 const s32* active_slot)
 {
     f32 t;
-    for (; i < 2; i++, byte_off += 8) {
+    for (; i < 2; i++, (*byte_off) += 8) {
         if (mnSnap_804A0A10.card_status[i] != 0) {
             if (*active_slot == i) {
                 t = 1.0F;
             } else {
                 t = 0.0F;
             }
-            HSD_JObjReqAnimAll(M2C_FIELD((u32) &mnSnap_804A0A10 + byte_off,
+            HSD_JObjReqAnimAll(M2C_FIELD((u32) &mnSnap_804A0A10 + (*byte_off),
                                          HSD_JObj**,
                                          offsetof(mnSnap_State, slot_a_jobj)),
                                t);
         } else {
-            HSD_JObjReqAnimAll(M2C_FIELD((u32) &mnSnap_804A0A10 + byte_off,
+            HSD_JObjReqAnimAll(M2C_FIELD((u32) &mnSnap_804A0A10 + (*byte_off),
                                          HSD_JObj**,
                                          offsetof(mnSnap_State, slot_a_jobj)),
                                2.0F);
         }
-        HSD_JObjAnimAll(M2C_FIELD((u32) &mnSnap_804A0A10 + byte_off,
+        HSD_JObjAnimAll(M2C_FIELD((u32) &mnSnap_804A0A10 + (*byte_off),
                                   HSD_JObj**,
                                   offsetof(mnSnap_State, slot_a_jobj)));
     }
@@ -1012,9 +1020,6 @@ static inline s32 mnSnap_ReadCardStatus(s32 slot)
 /// and dialog confirmations via a large switch on snap->state.
 void fn_802545C4(void)
 {
-    /* Matching WIP: the 3566-instruction stream and 0x1B8-byte frame agree.
-     * 26 instruction lines still differ in GPR operands. The shared scalar
-     * wrapper and frame padding remain provisional matching constructs. */
     struct {
         int index;
     } cursor;
@@ -1029,7 +1034,7 @@ void fn_802545C4(void)
     HSD_JObj* jobj;
     HSD_JObj* jobj2;
     Vec3* translate;
-    /* Preserve the original 0x1B8-byte frame while this remains unmatched. */
+    /* Preserve the original frame; the local stack layout remains unknown. */
     PAD_STACK(304);
     buttons = (mn_804A04F0.buttons = mn_80229624(4));
     HSD_JObjAnimAll(mnSnap_804A0A10.select_jobj);
@@ -1269,37 +1274,14 @@ void fn_802545C4(void)
             {
                 sfxMove();
                 *active_slot = 1;
-                mnSnap_RefreshSlotAnimations(0, 4, active_slot);
+                byte_off = 4;
+                mnSnap_RefreshSlotAnimations(0, &byte_off, active_slot);
 
             } else if (((1 == slot) && (*card_status != 0)) && (buttons & 4)) {
                 sfxMove();
                 *active_slot = 0;
                 byte_off2 = 4;
-                for (cursor.index = 0; cursor.index < 2;
-                     cursor.index++, byte_off2 += 8)
-                {
-                    if (mnSnap_804A0A10.card_status[cursor.index] != 0) {
-                        if (*active_slot == cursor.index) {
-                            t = 1.0F;
-                        } else {
-                            t = 0.0F;
-                        }
-                        HSD_JObjReqAnimAll(
-                            *((HSD_JObj**) ((((u32) (&mnSnap_804A0A10)) +
-                                             byte_off2) +
-                                            0x98)),
-                            t);
-                    } else {
-                        HSD_JObjReqAnimAll(
-                            *((HSD_JObj**) ((((u32) (&mnSnap_804A0A10)) +
-                                             byte_off2) +
-                                            0x98)),
-                            2.0F);
-                    }
-                    HSD_JObjAnimAll(*((
-                        HSD_JObj**) ((((u32) (&mnSnap_804A0A10)) + byte_off2) +
-                                     0x98)));
-                }
+                mnSnap_RefreshSlotAnimations(0, &byte_off2, active_slot);
 
             } else if ((slot >= 0) && (buttons & 0x200)) {
                 if (mnSnap_804A0A10.card_status[slot] != 1) {
@@ -1733,7 +1715,7 @@ void fn_802545C4(void)
         break;
 
     case 11: {
-        cursor.index = 0;
+        state = 0;
         if (mnSnap_804A0A10.timer != 0) {
             HSD_JObjAnimAll(mnSnap_804A0A10.submenu_jobj);
             mnSnap_804A0A10.timer -= 1;
@@ -1752,12 +1734,12 @@ void fn_802545C4(void)
                     mnSnap_80253E90(mnSnap_804A0A10.active_slot);
                 }
                 mnSnap_804A0A10.cur_page = -1;
-                cursor.index = 4;
+                state = 4;
             } else {
                 lbAudioAx_80024030(3);
             }
         } else if (buttons & 0x20) {
-            cursor.index = 6;
+            state = 6;
             sfxBack();
         } else if (buttons & 0xCF) {
             result = mnSnap_80253BE0(buttons, &mnSnap_804A0A10.move_idx,
@@ -1768,11 +1750,11 @@ void fn_802545C4(void)
                 mnSnap_UpdateSelectionCursor(&mnSnap_804A0A10);
                 if ((mnSnap_804A0A10.move_idx / 4) == mnSnap_804A0A10.cur_page)
                 {
-                    jobj2 = mnSnap_804A0A10.move_jobj;
+                    jobj = mnSnap_804A0A10.move_jobj;
                     translate = &mnSnap_804A0A10
                                      .thumb_jobjs[mnSnap_804A0A10.move_idx % 4]
                                      ->translate;
-                    HSD_JObjSetTranslate(jobj2, translate);
+                    HSD_JObjSetTranslate(jobj, translate);
                     HSD_JObjClearFlagsAll(mnSnap_804A0A10.move_jobj,
                                           JOBJ_HIDDEN);
                 } else {
@@ -1794,8 +1776,8 @@ void fn_802545C4(void)
                 }
             }
         }
-        if (cursor.index != 0) {
-            mnSnap_804A0A10.state = cursor.index;
+        if (state != 0) {
+            mnSnap_804A0A10.state = state;
             HSD_JObjReqAnimAll(mnSnap_804A0A10.submenu_jobj, 0.0F);
             HSD_JObjAnimAll(mnSnap_804A0A10.submenu_jobj);
             mnSnap_ShowSubmenu(&mnSnap_804A0A10);
@@ -2508,9 +2490,19 @@ static inline void mnSnap_InitPageText(HSD_Text** text)
     (*text)->pos_z = 17.0F;
 }
 
+static inline void** mnSnap_GetMainJoint(mnSnap_State* snap)
+{
+    return &snap->main_joint;
+}
+
 static inline void** mnSnap_GetMainShapeAnim(mnSnap_State* snap)
 {
     return &snap->main_shapeanim;
+}
+
+static inline void** mnSnap_GetWarnAnimJoint(mnSnap_State* snap)
+{
+    return &snap->warn_animjoint;
 }
 
 /// Creates five thumbnail joints using the spacing between two markers.
@@ -2520,18 +2512,16 @@ mnSnap_CreateThumbnails(mnSnap_State* snap, HSD_JObj** thumb_root_ptr,
                         void** sub_matanim, void** sub_shapeanim)
 {
     HSD_JObj* jobj2;
-    HSD_JObj* marker;
     f32 step_z;
     f32 step_y;
     f32 step_x;
     s32 i;
-    Vec3 start_pos;
     Vec3 end_pos;
+    Vec3 start_pos;
 
     /* Get thumbnail start/end positions */
     HSD_JObjGetTranslation(snap->thumb_start, &start_pos);
-    marker = snap->thumb_end;
-    HSD_JObjGetTranslation(marker, &end_pos);
+    HSD_JObjGetTranslation(snap->thumb_end, &end_pos);
     step_x = end_pos.x - start_pos.x;
     step_y = end_pos.y - start_pos.y;
     step_z = end_pos.z - start_pos.z;
@@ -2606,12 +2596,14 @@ void mnSnap_80257F24(void)
         photo_count[1] = zero;
     }
     snap->card_status[0] = zero;
-    mnSnap_GetCardStatus(snap)[1] = zero;
+    {
+        s16* card_status = mnSnap_GetCardStatus(snap);
+        card_status[1] = zero;
+    }
     archive = mn_804D6BB8;
 
-    main_joint = &snap->main_joint;
-    main_animjoint = &snap->main_animjoint;
     main_matanim = &snap->main_matanim;
+    main_animjoint = &snap->main_animjoint;
     main_shapeanim = &snap->main_shapeanim;
     csr_joint = &snap->csr_joint;
     csr_animjoint = &snap->csr_animjoint;
@@ -2631,9 +2623,11 @@ void mnSnap_80257F24(void)
     warn_matanim = &snap->warn_matanim;
     warn_shapeanim = &snap->warn_shapeanim;
 
+    main_joint = &snap->main_joint;
+
     lbArchive_LoadSections(
-        archive, main_joint, "MenMainConSn_Top_joint", main_animjoint,
-        "MenMainConSn_Top_animjoint", main_matanim,
+        archive, mnSnap_GetMainJoint(snap), "MenMainConSn_Top_joint",
+        main_animjoint, "MenMainConSn_Top_animjoint", main_matanim,
         "MenMainConSn_Top_matanim_joint", mnSnap_GetMainShapeAnim(snap),
         "MenMainConSn_Top_shapeanim_joint", csr_joint,
         "MenMainSubSn_Top_joint", csr_animjoint, "MenMainSubSn_Top_animjoint",
@@ -2647,7 +2641,7 @@ void mnSnap_80257F24(void)
         arrows_animjoint, "MenMainLoadSn_Top_animjoint", arrows_matanim,
         "MenMainLoadSn_Top_matanim_joint", arrows_shapeanim,
         "MenMainLoadSn_Top_shapeanim_joint", warn_joint,
-        "MenMainWarCmn_Top_joint", warn_animjoint,
+        "MenMainWarCmn_Top_joint", mnSnap_GetWarnAnimJoint(snap),
         "MenMainWarCmn_Top_animjoint", warn_matanim,
         "MenMainWarCmn_Top_matanim_joint", warn_shapeanim,
         "MenMainWarCmn_Top_shapeanim_joint\0\0\0\0\0\0", 0);
@@ -2655,7 +2649,7 @@ void mnSnap_80257F24(void)
     /* Main GObj */
     gobj = GObj_Create(6, 7, 0x80);
     snap->main_gobj = gobj;
-    main_load = &snap->main_joint;
+    main_load = main_joint;
     jobj = HSD_JObjLoadJoint((HSD_Joint*) *main_load);
     HSD_GObjObject_80390A70(gobj, HSD_GObj_JObjKind, jobj);
     GObj_SetupGXLink(gobj, (GObj_RenderFunc) fn_80253DB4, 4, 0x80);
