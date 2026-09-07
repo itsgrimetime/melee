@@ -1,0 +1,176 @@
+{
+  "function": "hsd_803B3408",
+  "source_head": "89318d9fd16a92253125c8cbc59b871801044211",
+  "retained_percent": 98.7788,
+  "source_improvement": false,
+  "obstruction": {
+    "function": "hsd_803B3408",
+    "candidate": "local-local-no-row",
+    "virtual": 74,
+    "desired_phys": 26,
+    "unblocked_lower_volatile": 5,
+    "all_virtual_neighbors_target_mapped": true,
+    "neighbors": [
+      {
+        "virtual": 1,
+        "root": 1,
+        "target_phys": 1
+      },
+      {
+        "virtual": 3,
+        "root": 3,
+        "target_phys": 3
+      },
+      {
+        "virtual": 42,
+        "root": 42,
+        "target_phys": 7
+      },
+      {
+        "virtual": 43,
+        "root": 43,
+        "target_phys": 24
+      },
+      {
+        "virtual": 45,
+        "root": 45,
+        "target_phys": 25
+      },
+      {
+        "virtual": 48,
+        "root": 48,
+        "target_phys": 27
+      },
+      {
+        "virtual": 49,
+        "root": 49,
+        "target_phys": 28
+      },
+      {
+        "virtual": 61,
+        "root": 61,
+        "target_phys": 31
+      },
+      {
+        "virtual": 62,
+        "root": 62,
+        "target_phys": 12
+      },
+      {
+        "virtual": 63,
+        "root": 63,
+        "target_phys": 11
+      },
+      {
+        "virtual": 64,
+        "root": 64,
+        "target_phys": 10
+      },
+      {
+        "virtual": 65,
+        "root": 62,
+        "target_phys": 12
+      },
+      {
+        "virtual": 66,
+        "root": 66,
+        "target_phys": 9
+      },
+      {
+        "virtual": 67,
+        "root": 67,
+        "target_phys": 8
+      },
+      {
+        "virtual": 85,
+        "root": 85,
+        "target_phys": 21
+      },
+      {
+        "virtual": 86,
+        "root": 86,
+        "target_phys": 6
+      },
+      {
+        "virtual": 118,
+        "root": 118,
+        "target_phys": 4
+      },
+      {
+        "virtual": 128,
+        "root": 128,
+        "target_phys": 0
+      }
+    ],
+    "conclusion": "On this fixed graph and mapped target coloring, r5 is never blocked at selection of74. Selection-order changes alone cannot choose r26 under the verified lowest-available SELECT rule. Need graph/lifetime/coalescing change.",
+    "caveat": "Necessary condition, not proof of a source fix. Prior correspondence still has explicitly skipped instruction operands."
+  },
+  "candidates": [
+    {
+      "name": "combined",
+      "score": 96.9447,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    },
+    {
+      "name": "sequential",
+      "score": 93.36405,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "name": "pointer",
+      "score": 93.36405,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "name": "inner-local",
+      "score": 96.9447,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    },
+    {
+      "name": "inner-update",
+      "score": 96.9447,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    }
+  ],
+  "files": {
+    "c016-rgb-row-lifetime-call/combined.json": "ed1b6f1e9d7f5fa41c7c89c7cbb7659c61f32e5a8382ebb8e33916f16fc31a0a",
+    "c016-rgb-row-lifetime-call/combined.c": "57a95571644548452d1f39ea09cec5115a36eb4f928a90b41648343513f67d3b",
+    "c016-rgb-row-lifetime-call/inner-local.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-lifetime-call/sequential.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-lifetime-call/inner-update.c": "e86142036ffbb80328110a7a013d23cc762936223f330e5cd3213ffa6677aaa7",
+    "c016-rgb-row-lifetime-call/results.json": "3691908ed5559e83005e23ae1f11070799a4b67d45caae8909bc6ebe7e53e2eb",
+    "c016-rgb-row-lifetime-call/inner-local.c": "960501fbecc29202598bd61cbb5d379a86b66e4ac4ce422c89407fdcea0039d4",
+    "c016-rgb-row-lifetime-call/pointer.c": "81c70d6ddf9dd13c31d090713fc8b7b43799f879401540b06cd15364adfd9bf3",
+    "c016-rgb-row-lifetime-call/inner-update.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-lifetime-call/combined.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-lifetime-call/inner-local.json": "d9941242ba18aed8057b587dffd95ec107759cf07415ac01300d967b221ee066",
+    "c016-rgb-row-lifetime-call/sequential.json": "2cc0890d455e50c665b47bac602e12fe417d6acdf71ac793602b0c27abc4c955",
+    "c016-rgb-row-lifetime-call/pointer.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-lifetime-call/sequential.c": "66485844b4c68eb8ca6a109638f2a641b5af8385101e20b13f8e57d7f9424695",
+    "c016-rgb-row-lifetime-call/pointer.json": "7c552a3be42bfcc7bd66bf86e89e0c9b9d79e3ae7d6fbdf18e71c63427a213b2",
+    "c016-rgb-row-lifetime-call/inner-update.json": "31eae2e64a2c82c540c98bf058fc5d85cf8e5c6c77a93833beda7edadb3d7db9",
+    "c016-rgb-row-lifetime-call.py": "90db0636b6344d1e44bc0c0ff6b795a27e0d26aa242c679a00eb75a47e281a7a",
+    "c016-rgb-row-order-obstruction.json": "e8874bdcb9b2cf7140b90773e4b8a67c61d504b8a5407f7fe76605d3631fe1f6"
+  },
+  "archive_sha256": "0fc0049689b0fe61eb0e359be02ce8d6fb85252fd6f3844e46d81976f60797e8"
+}

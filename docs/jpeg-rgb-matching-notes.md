@@ -829,3 +829,27 @@ allocation probes for this compiler configuration; none were wasted here.
 Evidence is SHA256-verified in2026-09-07-helper-ownership. Production remains
 98.7788%; the direct-row-call candidate remains the next structural starting
 point. Exact matching, a new source-improvement PR and TU linking remain open.
+
+## Fixed-graph SELECT-order obstruction — 2026-09-07
+
+For direct-row-call virtual74, EVERY virtual neighbor is covered by the derived
+target map. None has target physicalr5. The fixed neighbors are1,3. Consequently
+r5 remains unblocked for74 under ANY selection order consistent with these
+final target colors. The verified lowest-available SELECT rule cannot select
+r26 while r5 is available. This is stronger than merely observing different
+simplify indices: declaration/order-only searches on this exact graph cannot
+solve74. A real graph/lifetime/coalescing change is required. It does not show
+which source transformation will cause that change. Complete neighbor ledger
+and target mappings are archived in2026-09-07-row-order-obstruction.
+
+Five new helper-result lifetime placements move tile+row into the chroma loop:
+combined index, sequential accumulation, pointer expression, inner local and
+inner local update. Scores93.36405–96.9447%,frames152/160, all restored. The
+inner-update generator initially put a statement before a declaration; corrected
+that C89 ordering and compiled the corrected candidate. No invalid compile is
+counted as matching evidence. No retained source gain. These loop-placement
+spellings do not supply the required lifetime extension/coalescing.
+
+The next source work should alter ownership across a larger helper/loop boundary
+or inspect where the return-result copy disappears. Avoid pure SELECT-order
+search and re-running the now exhausted direct/cast/output/inner-row variants.
