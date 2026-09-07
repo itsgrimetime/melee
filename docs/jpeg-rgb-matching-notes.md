@@ -516,3 +516,41 @@ reassociation before attempting further register-order variations.
 Fresh restored RGB remains98.7788%; encoder remains100%. Evidence and complete
 source/diffs are in 2026-09-07-caller-owners with verified SHA256 members.
 Active target is RGB hsd_803B3408; there is no active scratch for this pass.
+
+
+## Row parameter reuse and a combined structural candidate — 2026-09-07
+
+30 new valid ordinary compiles: chroma caller ownership (8), row helper
+parameter reuse (10), luminance offset/frame combinations (6), and row-return
+ownership (6). All are preserved and restored; best retained remains98.7788%.
+Whole-conversion caller-owned chroma_dest/chroma_index variants score
+90.230415–90.71429 and do not repair the body.
+
+A useful new structural candidate is row-frame/corrected-no-row.c (97.1659%).
+Its helper computes `low += high; return tile + low;`, passing extracted low,
+high, and tile terms. This produces the target low/high extraction order,
+low+high followed by tile+sum operand ordering. The corrected chroma pixel
+expression also retains high+row followed by low+result. Removing only the
+luminance row_offset local recovers the target152-byte frame; removing both
+row and column locals gives identical output. No padding is introduced.
+
+The target additions are now present, but register allocation and scheduling
+remain different. The helper result uses separate physical registers across
+its two adds, whereas the target reuses one; do not call this a full structural
+or register-only match. The luma li/addi order also remains wrong. Alternative
+final-result locals/reused parameters do not improve the combined candidate;
+some restore an unwanted160-byte frame or undo addition grouping.
+
+A fresh supported retail backend trace of corrected-no-row completes exit0,
+with105 GPR and48 FPR color decisions. All decision colors agree with their
+node records. The pressure explorer successfully imports it in inventory mode.
+However, first-definition, live intervals, and source attribution are still
+unavailable, so it does not establish which new IG IDs belong to source
+variables. Old pointer37/index38 target maps must not be reused without a
+fresh PCode/source correspondence. No forced color or compiler override was
+used. This candidate and trace give the next source/allocator reconstruction
+a precise starting point, not a source100 verdict.
+
+Evidence: docs/matching-evidence/jpeg-rgb/2026-09-07-row-reconstruction/.
+Final ordinary verification: RGB98.7788%, coefficient encoder100%; full build
+passes. Stay on RGB; no source improvement was pushed to the upstream PR.
