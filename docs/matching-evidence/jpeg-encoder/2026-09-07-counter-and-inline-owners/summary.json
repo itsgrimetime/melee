@@ -1,0 +1,20 @@
+{
+  "function": "hsd_803B3CD8",
+  "retained_percent": 99.70266,
+  "source100": false,
+  "source_changes_retained": false,
+  "source_sha256": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+  "valid_compiles": 46,
+  "compile_attempts": 46,
+  "offline_graph_cases": 528,
+  "offline_scope": "Single added run-payload edge or deleted work edge. No compiler mutation and no source ceiling conclusion.",
+  "validation": {
+    "frame": 104,
+    "instructions": 639,
+    "register_only_differences": 38,
+    "full_build": "exit0",
+    "matched_neighbors": 6
+  },
+  "pr3377_head": "5d8814c18093525f573011ff5e37e97020d3c655",
+  "finding": "Outer shared-state helper removes duplicate work copies but loses coefficient mr. Caller-owned AC value restores the copy; no source score gain."
+}

@@ -797,3 +797,62 @@ Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-07-coalesce-eligibility/`
 contains candidates, the new full flat trace, both bounds probes and hooks,
 the baseline trace/comparison, offline model, compiler source references and
 their revision, and final verification in a SHA256-verified archive.
+
+## Counter ownership and a combined outer-inline reconstruction
+
+Focus remains **hsd_803B3CD8 until source100**. The retained ordinary source is
+still99.70266%,639 instructions, frame104, and38 register-only differences.
+This continuation compiled46 valid source candidates; none improved the best
+source, and all were restored. The preceding coalescing-window findings and
+201-member verified archive were committed/pushed as006ba255af.
+
+| Source family | Count | Result |
+| --- | ---: | --- |
+| Run, index, or length as int, u32, unsigned int, u16, or u8 |15| Int neutral; unsigned changes comparisons; narrow types add conversions or change frame |
+| Independent scalar/one-element-array aggregate owners for run, length, index, or DC value |8| Regressions with additional instructions; no desired work-register change |
+| Separate AC length, or separate run/AC category lengths |2| AC-only neutral; splitting all categories adds8 frame bytes with the same38 register differences |
+| Work member as void/byte/word/const pointer or pointer to array, cast back at use |7| All98.54773%, frame104; additional instruction/lowering differences |
+| Whole encoder inline combined with shared-state pointers through both output helpers, local/pointer/value owner and const variants |8| Six pointer/local forms98.39593%, frame120; by-value forms93.53991%, frame128 |
+| Same outer-inline source with direct bit-length return, and individually caller-owned AC value, coefficient, run, length, or index |6| Caller AC value/coefficient restores required copy; still lower scores, frame112 and more register differences |
+
+The combined helper experiment addresses a concrete failure of the earlier
+whole-encoder inline: passing the same state object through both output helper
+layers removes its three duplicate work-pointer copies near the AC loop.
+All new helpers fully inline (longjmp is the only remaining call). However,
+the combined form loses the required `mr r22,r0` after loading/testing an AC
+coefficient, schedules run+1 before the length decrement, and assigns the work
+pointer r29. It has638 instructions, not639; the diff tool's positive
+`line_delta: 1` is not evidence of an inserted instruction. Its98.39593% and
+frame120 remain worse than the retained source.
+
+Changing the bit-length helper from a branch-local result to a direct return
+reduces that alternate frame by8, to112, without fixing its instructions.
+Keeping either the AC value or coefficient in a caller local, passed by
+address to the fully inlined encoder, restores the missing copy and639
+instructions. Scores are98.61502% and98.56025%, with136/142 paired register
+differences and the run+1 scheduling difference still present. These output
+parameter forms are source diagnostics of the helper boundary, not proposed
+upstream API design or a compiler-trace proof of the specific protection flag.
+The baseline's result local and source structure remain retained.
+
+Two additional offline graph checks validate the complete283-selection
+baseline replay before altering any edges. Adding each possible single new
+edge to the run-payload role216 (277 cases), or removing each existing edge
+from work57 (251 cases), never yields the desired leading216,57 selection.
+In the baseline,216 is removed on scan2 at degree12;57 survives to scan3 and is
+removed at degree15. These528 offline cases constrain only single-edge changes
+in that captured graph. They neither prove a source ceiling nor model broader
+source changes; no compiler graph or physical register was forced.
+
+Final ordinary checkdiff, the whole TU report, and the full GALE01 build pass
+at the retained baseline. All six matched neighbors remain100%, RGB remains
+98.7788%, and the source SHA256 is unchanged:
+`0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee`.
+PR3377 remains open at5d8814c180; all applicable checks pass and it has no new
+human comments or reviews. No source improvement warranted updating that PR.
+
+Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-07-counter-and-inline-owners/`
+contains all46 candidates, generators/results, both graph checks, PR status,
+and final verification in a SHA256-verified archive. Stay on this encoder;
+the alternate outer-inline form is a measured reconstruction branch to reason
+from, not a replacement for the current best source.
