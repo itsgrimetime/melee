@@ -1316,3 +1316,19 @@ virtual correspondence for each candidate; never reuse target37/38 blindly.
 No candidate compiler was launched through the unsafe route and no source was
 changed. Existing manual retail correspondence path still works. Production
 remains98.82488; PR3396 merged; exact match and TU linking remain unfinished.
+
+## Direct typed chroma arrays — 2026-09-07
+
+Six source forms directly index JpegWork.data.x518/x618 at the actual work
+object base, instead of indexing field[0] through a shifted work pointer.
+Named column index, direct column-first sum, or direct row-first sum; direct
+base expression or function-local JpegWork pointer. Indices stay within the
+64-element chroma arrays, and both pixel reads remain around Cb store.
+
+Scores97.258064/95.96774/98.156685 respectively,frame152; local base pointer
+neutral. Full instruction-row comparison confirms the three direct-base forms
+are exactly equal to their prior shifted-pointer/direct-destination counterparts.
+This is scoped instruction-output equivalence excluding relocation-only rows,
+not a statement about hidden virtual identity. No new lowering/allocation
+behavior or production gain. Sources/diffs in2026-09-07-typed-chroma-arrays;
+production restored98.82488.
