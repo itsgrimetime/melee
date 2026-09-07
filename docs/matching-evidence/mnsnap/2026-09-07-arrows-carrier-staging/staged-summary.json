@@ -1,0 +1,44 @@
+[
+  {
+    "name": "staged-joint",
+    "score": 98.15765,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 65
+    }
+  },
+  {
+    "name": "staged-shape",
+    "score": 98.11901,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 66
+    }
+  },
+  {
+    "name": "staged-joint-shape",
+    "score": 98.11901,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 66
+    }
+  }
+]

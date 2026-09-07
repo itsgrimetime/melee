@@ -1,0 +1,72 @@
+[
+  {
+    "name": "carrier-arrows_joint",
+    "score": 98.10664,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 82
+    }
+  },
+  {
+    "name": "carrier-arrows_shapeanim",
+    "score": 98.10664,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 82
+    }
+  },
+  {
+    "name": "carrier-arrows_joint-arrows_shapeanim",
+    "score": 98.06646,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 408,
+      "frame_growth": 8
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 88
+    }
+  },
+  {
+    "name": "grouped-arrows_joint",
+    "score": 98.06801,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 416,
+      "frame_growth": 16
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 88
+    }
+  },
+  {
+    "name": "grouped-arrows_shapeanim",
+    "score": 98.06801,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 416,
+      "frame_growth": 16
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 88
+    }
+  }
+]

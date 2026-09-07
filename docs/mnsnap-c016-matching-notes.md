@@ -218,3 +218,24 @@ matching-evidence/mnsnap/2026-09-07-arrows-pressure.
 Independent thumbnail task incorporated3407 and refreshed WvrZ0; reports public
 1712/64700 separately from local98.15765. Qhghg public source has invalid first
 vararg pairing and is not a production candidate.
+
+## Arrows carriers and staged loads: eight negative controls
+
+On98.15765 seed, one-field void** carriers for arrow joint or shape both
+98.10664/frame400; both carriers98.06646/frame408. Grouping all4 arrow resource
+pointers in a local struct scores98.06801/frame416 in forward or reverse
+member order. Every variant retains the wrong joint r18 / shape r17 pair at
+ordinary offsets3c4/474. This carrier family does not move the required color.
+
+Staging actual HSD_Joint* descriptor load immediately before HSD_JObjLoadJoint
+is neutral98.15765. Staging HSD_ShapeAnimJoint* before AddAnimAll, alone or with
+the model descriptor, scores98.11901; allframe400. No source retained.
+
+Fresh spill-round comparison: old98.13447 spills49,50,42,36,38,35,90,144,141,
+142,139,140,64 then48. Current98.15765 spills49,50,42,36,38,34,35,142,139,140,
+137,138,64 then48. Physical resource identities/string offsets must be mapped
+across changed temp IDs. Page-name64 remains first-round spill, cursor48
+second-round spill. No spill-round movement from the resource-home fix.
+
+All applicable CI checks on PR3407 are now passing, including Nix.
+Evidence in matching-evidence/mnsnap/2026-09-07-arrows-carrier-staging.
