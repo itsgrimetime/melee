@@ -996,3 +996,20 @@ fuzzy scores do not imply equivalent virtual graphs.
 
 Complete model, source, diffs and fresh stages SHA256-verified in
 2026-09-07-row-merge-model. Source restored98.7788%, build passes. Goal active.
+
+## Row loop condition and update boundaries — 2026-09-07
+
+Twelve probes move dst_row, src_row, or both to the chroma_y loop condition,
+or to its initializer/update expression. Tested against production and the
+coherent direct-row-call structural candidate. Unlike the earlier chroma_x
+condition experiments, these change the row calculation lifetime boundary.
+Only bounded local arithmetic executes for the terminating chroma_y=4; no
+pixel access or output store is added there.
+
+Condition results (dst/src/both): production92.90323/93.940094/91.63595;
+structural92.53456/92.58986/90.89862. Initializer/update results:
+production94.28571/92.68664/88.354836;
+structural93.09677/91.64056/87.39632. Frames152–168; no gain. All
+sources and complete diffs retained in2026-09-07-row-loop-boundaries.
+Production source restored. These loop boundaries are not a productive way
+to obtain the needed row lifetime merge. Matching remains unfinished.
