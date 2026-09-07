@@ -736,3 +736,31 @@ Ghidra setup validated the compiler hash and3248-function project before audit.
 Complete valid AST, hook, extracted node names and CodeGen decompilation are
 SHA256-verified in2026-09-07-entry-ast. Production source remains unchanged at
 RGB98.7788%, encoder100%; goal still requires100%, new PR, and TU linking.
+
+## Exact arithmetic-builder complexity swap — 2026-09-07
+
+Read-only AST captures at0x50ee60 and0x47b3f0 both already contain the reversed
+EADD, ruling out their subsequent passes. Static audit of the exact retail PE
+follows addition builder0x4fa620 to constructor0x473e30 and reorder0x4fb470.
+Constructor byte+1 is a Sethi-Ullman-style expression-complexity value: max of
+unequal child values, or equal value+1 (capped200). For ordinary integer nodes,
+reorder swaps children when left complexity exceeds right, with constant/type
+special cases. This is not merely source assignment canonicalization.
+
+Live read-only entry/return capture at0x4fb470 for the target row expression
+confirms exact pointer exchange: node0x644784 has left0x644724 (tile expression,
+complexity3), right0x644764 (dst_row,complexity1), then left/right reverse. The
+before/after expression trees agree. This identifies the exact early reversal
+site rather than inferring it from IRO snapshots.
+
+Four ordinary corrected-pixel candidates introduce an explicit tile_offset
+local at row or tile scope, with dst_row self-update or separate row_sum.
+Three score96.17512%,frame152; row-scope separate sum95.95392%,frame160. None
+retained. Equalizing parsed operand complexity is insufficient on its own:
+later optimization and materialization still need to match the target graph.
+Do not repeat these simple tile-local forms or rely on patched operand order
+as production evidence. Next source work should combine this measured ordering
+rule with a coherent row-sum ownership boundary, not blind parenthesis sweeps.
+
+Evidence and four full source/diff candidates are SHA256-verified in
+2026-09-07-expression-complexity. Source restored; no PR delta or Matching flag.
