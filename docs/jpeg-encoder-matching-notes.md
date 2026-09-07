@@ -724,3 +724,76 @@ contains73 compile attempts (68 valid), two precompile review rejections, one
 duplicate skipped, candidate generators, historical PR/search observations,
 and final verification in a SHA256-verified archive. These failed source
 families constrain their tested forms; they do not establish a source ceiling.
+
+## Flat pointer: observed coalescing eligibility explains the surviving copy
+
+The retained encoder remains **99.70266%, frame104,639 instructions,38
+register-only differences**. No source change was retained in this continuation.
+The most useful result is a measured distinction between a flat pointer and
+the retained one-field struct, rather than another guess at register order.
+
+A fresh supported retail backend trace for the flat `tables-rhs` candidate
+completes with320 GPR nodes,2655 edges, and284 color decisions. Its persistent
+work role is IG40/r31, and the global-address temporary IG103 receives r0.
+They remain separate and the ordinary assembly contains `mr r31,r0` at entry.
+The retained aggregate source has320 nodes,2655 edges,283 decisions, and the
+natural merge103->57; work IG57 receives r31. Neither recorded graph has an
+interference edge between the work owner and103. Equal total edge counts do
+not mean the two graphs are identical.
+
+Read-only probes using the existing retail hook infrastructure separately
+observe **GPR coalescing bounds41..317 in both sources**, at colorgraph entry
+after coalescing. Thus the flat owner40 is outside the observed interval,
+while aggregate owner57 and address temporary103 are inside it. The compiler
+reconstruction's `SpillCode_CanCoalesce` requires both nonphysical endpoints
+inside this window; it also checks interference. Its preallocation code places
+the window boundary after the initial/local-object walks. This accounts for
+why absence of interference alone does not eliminate the flat pointer copy.
+The reconstruction is labelled high-level equivalent with binary match
+unmeasured; the bounds, mappings, colors, and ordinary output were measured
+independently. No compiler data/register/alias override was used.
+
+The trace itself does not provide source-object attribution or earlier PCode
+operands. The association of the persistent work role with40/57 uses its
+physical-register uses in ordinary assembly and graph comparison, not a
+fabricated source-location field. Eligibility bounds were read after coalescing;
+these artifacts do not claim to trace every coalescer branch or preceding pass.
+Issue1535 requests including these bounds in the normal backend trace, so this
+distinction can be diagnosed without a separate probe. The validated copy
+pattern is saved as `named-pointer-outside-coalesce-window` in the mismatch DB.
+It explains/removes the flat version's extra copy; it does not solve the
+remaining r30/r31 swap.
+
+An offline two-axis model also tested752 combinations of work-root ID57..103
+and subsets of its four stale table-address edges. Before perturbation, replay
+exactly reproduces all283 baseline selections. Removing edges does not broaden
+the IDs that produce the desired leading run/work pair: only101..103 do so in
+this model;103 is the only ID preserving the entire remaining selection order.
+These are graph permutations/deletions, not compiler interventions or evidence
+that a source declaration can realize them.
+
+40 valid ordinary source probes, all restored:
+
+| Family | Count | Result |
+| --- | ---: | --- |
+| Shared initialization helper for work and selected tables, aggregate return/output or separate outputs |8| All inline; no gain, extra copies/changed frames |
+| Consistent global buffer declaration, typed union, direct global and flat typed access |4| Array/union declarations neutral; direct/flat access regresses |
+| Switch or nested conditional table selectors |10| Additional branch/copy instructions, no gain |
+| Entry work assignment inside table RHS/condition/branches or sequenced assignments, flat/member |8| Member forms mostly neutral; flat forms retain copy; branch forms regress |
+| Inline work getter at every use, with/without discarded entry call |6| Multiple address forms and frames112..312; no gain |
+| Integer work-address carrier, full-width bitfields and u64 carrier |4| All98.54773%, frame104, two extra instructions |
+
+The global-type experiment follows an existing TODO: hsd_804D2648 is defined
+as a0x828-byte array but declared as __jmp_buf. Both a consistent byte-array
+declaration and a shared JpegWork union preserve the exact encoder output, all
+six matched neighbors, both hsd_3B33 functions, and all hsd_4D11 data. This rules
+out those tested declaration changes as the register-swap fix. No unrelated
+type cleanup was retained. Header and definition edits are included alongside
+each candidate so these experiments are reproducible.
+
+Ordinary restoration and the full GALE01 build pass. The source hash remains
+`0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee`.
+Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-07-coalesce-eligibility/`
+contains candidates, the new full flat trace, both bounds probes and hooks,
+the baseline trace/comparison, offline model, compiler source references and
+their revision, and final verification in a SHA256-verified archive.

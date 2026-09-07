@@ -1,0 +1,26 @@
+{
+  "function": "hsd_803B3CD8",
+  "retained_percent": 99.70266,
+  "source100": false,
+  "source_changes_retained": false,
+  "source_sha256": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+  "valid_compiles": 40,
+  "compile_attempts": 40,
+  "finding": "Observed coalescing bounds 41..317 exclude flat work owner 40, include aggregate work owner 57 and address temporary 103. Read-only bounds at colorgraph entry, not full coalescer branch tracing.",
+  "tool_issue": 1535,
+  "offline_model_cases": 752,
+  "offline_model_scope": "Graph edits only, no evidence of source realizability",
+  "validation": {
+    "frame": 104,
+    "instructions": 639,
+    "register_only_differences": 38,
+    "full_build": "exit0"
+  },
+  "compiler_reference": {
+    "repo": "/Users/mike/code/mwcc-decomp",
+    "commit": "35c0e0fab7c5945789a534ac6a8d739044a960e2",
+    "status": "",
+    "scope": "High-level equivalent reconstruction; binary match unmeasured. Actual bounds measured separately in retail compiler.",
+    "melee_compiler_sha256": "ccf4b465cec73b5aae9c5c5543dcf8cda8a62aba246f89e2e0b200d742f2e55c"
+  }
+}
