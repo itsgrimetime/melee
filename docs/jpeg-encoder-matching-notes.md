@@ -1073,3 +1073,12 @@ verification remains 100%, all six previously matched neighbors remain100%,
 and full build/checksum passes. Source100 evidence and learnings are committed
 and pushed on the fork work branch. The public scratch still has the prior
 99.70266% source; local-server discovery failed during the attempted sync.
+
+## CI portability fix — 2026-09-07
+
+PR #3391 Clang-Tidy rejected the four unguarded MWCC pragmas as unknown
+pragmas. PR commit `87c5c22c6d` (fork `700cc4fefd`) wraps push/inline_depth,
+auto_inline, and pop in `#ifdef MUST_MATCH`, following existing repository
+conventions. Clang-Tidy passes locally; production encoder and all six
+matched neighbors remain100%, and the full build passes. Future matching
+changes using MWCC pragmas must also run the configured Clang-Tidy check.
