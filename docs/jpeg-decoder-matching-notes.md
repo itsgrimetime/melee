@@ -621,3 +621,27 @@ than source proof. Report and GDB failure log saved in2026-09-07-diagnostic-resu
 Next actionable diagnostic repair: remote prototype flag/context parity or
 bounded retail capture avoiding GDB hook abort; manual source/checkdiff remains
 available. No production changes,98.83817 baseline retained.
+
+## Windows compile flags recovered — 2026-09-07
+
+Issue1554 root cause: remote runner hardcodes -Cpp_exceptions off, omits MUST_MATCH,
+and adds -warn iserror. Real TU command uses exceptions on,MUST_MATCH,warnings off.
+An isolated decoder_pcdump.ps1 changes those three settings; it lives beside the
+repaired DLL under C:\Users\mikes\code\mwcc_debug\codex-c016-v6-20260907.
+No shared default runner or production compile flags changed. Staged exact local
+source SHA256 a4c7e7d8c3bf0531c2d2ba7cfc2658ff1f24ff1e87969400ffedc68dddb12e58.
+Remote compiles exit0 in0.526s,940152-byte dump; source and stock DLL restored.
+
+verify-backend against committed clamp-result retail capture:790 comparable facts
+equal,0 different,69 retail-only nodes. This validates captured allocator fields,
+not arbitrary runner equivalence for other TUs. Fresh lifetime-pressure now has
+no warnings; hypotheses still need source proof and final-color-holder causality
+caution. Coalesce discover returns no pairs. General remote TU-flag parity remains
+an open tooling issue; this per-TU runner is the verified local workaround.
+
+Four source probes combine direct chroma array access with luminance-first red
+expression: neither/both unsigned indices98.75519; one unsigned96.53527. No retained
+gain; production restored98.83817 and ninja passes. Verified runner, fresh dump,
+fidelity/pressure reports and candidate sources/diffs archived under
+2026-09-07-windows-flags-recovery. Next captures should use decoder_pcdump.ps1,
+not the generic runner that rejects the earlier unprototyped helper.
