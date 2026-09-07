@@ -147,3 +147,119 @@ Durable evidence is in
 `docs/matching-evidence/jpeg-rgb/2026-09-06-helper-layout/`: complete candidate
 sources/results, generators, baseline/final diffs, audit setup result, restored
 TU report, build/checksum evidence, and a verified 203-member SHA-256 manifest.
+
+## Retail creation provenance: the addition-lowering cause
+
+The next capture **identified the lowering routine** and produced a source
+variant with the exact target pixel-address window. This supersedes the
+previous static audit's lack of an explanation. The production baseline
+remains **98.7788%, 217 instructions, 868 bytes, frame 152**; the structurally
+useful candidate is preserved separately, at **98.04147%**.
+
+Both pixel loads in the useful candidate use:
+
+```c
+pixel = src[((chroma_x & 1) * 2 + (chroma_x & 2) * 4) + src_row];
+```
+
+The ordinary compiler now produces the exact target instructions at
+`+0xbc` through `+0xc8`: high-column extraction, low-column extraction,
+`high + row`, then `low + result`. The lower score does not invalidate this
+local instruction-window improvement. Preserve it as a starting point for
+further reconstruction, rather than rerunning the same association search.
+
+The exact retail GC/1.2.5n executable's `FUN_004a1130` combines operands.
+An operand can carry a deferred pair of registers (`GPRSum`, kind 2), instead
+of an already emitted addition. Combining a scalar register with that pair
+emits an add of the pair's secondary register and the new scalar, while
+keeping its primary register deferred. `Operands_ForceGPR` / `FUN_004a0ba0`
+subsequently materializes the remaining addition.
+
+In the old source, the pair is `(row, high)` and the new scalar is `low`:
+the compiler emits `high + low`, then `row + result`. In the useful source,
+the pair is `(low, high)` and the new scalar is `row`: it emits `high + row`,
+then `low + result`. Read-only entry observations and PCode creation events
+confirm both paths. The relevant emission call sites are `0x004a1402` and
+`0x004a0c87`; the addition-lowering caller returns at `0x004b8511`.
+The combiner sidecar's `requested` argument was read as 32 bits although the
+parameter is 16 bits: only its low 16 bits are meaningful. This field is not
+needed for the pair-order conclusion.
+
+The baseline capture joins all 220 initial instructions to 220 creation
+events; the candidate joins all 219 to 219. The ordinary final output for
+both has 217 instructions. These are read-only diagnostics, not modified
+compiler output or proof of a complete traced compile. The compiler SHA-256
+is `ccf4b465cec73b5aae9c5c5543dcf8cda8a62aba246f89e2e0b200d742f2e55c`.
+The reusable finding is recorded as mismatch pattern
+`mwcc-deferred-gpr-sum-reassociation`.
+
+### Remaining scheduling and allocation evidence
+
+Nine candidate PCode stages and four GPR/FPR coloring snapshots passed the
+standalone structural validators. Their instruction counts are respectively
+219, 240, 219, 218, 212, 217, 217, 217, and 217, from initial lowering through
+final scheduling. Stage comparison follows instruction addresses within the
+same capture; it is not an independent byte-for-byte object verification.
+
+The first pixel load is `LHZ` (the later luma load is `LHZX`). The low-bit
+extraction used by the destination index is before this load through
+post-allocation peephole, and the final scheduler moves it after the load.
+The target has the extraction immediately before the load. This isolates
+the new ordering difference to final scheduling, after the corrected
+address sequence has already survived lowering and allocation.
+
+The candidate destination pointer, virtual GPR 37, has one definition and
+two store-base uses, is not coalesced, and receives physical r30; the target
+uses r22. The chroma index receives r23 where the target uses r21. The
+remaining diff also includes the old destination-row add commutation and
+luma `li`/`addi` order. Declaration movement alone does not resolve these.
+Object-name/vreg-origin capture was deliberately disabled in this focused
+run: `?` names and the report's generic scratch labels are **not** evidence
+that every register represents a compiler-generated temporary. Likewise,
+an alias displayed as `r61` is a virtual parent, not a physical register 61.
+
+### Source probes and tooling lessons
+
+There were 71 compiled candidates in this pass; six are excluded as evidence
+for their intended high-term sharing transform because the generator failed
+to replace its uses. The six corrected high-sharing probes were rerun.
+All experiments were restored; none improved the full-function percentage.
+
+| Source family | Count | Match % range / result |
+| --- | ---: | --- |
+| Pixel-address operand order and association | 12 | 98.04147–98.7788; two forms fix the target four-instruction window |
+| Named low/high terms, scalar/struct/array | 11 | 97.92627–98.04147; six ineffective high-term transforms excluded |
+| Corrected high-term / both-term sharing | 6 | 98.20277 |
+| Destination pointer ownership and early index calculation | 10 | 96.95853–98.133644 |
+| Pixel s32/u32/int types on baseline and corrected address | 6 | 81.6636–98.7788; u32 changes float conversion |
+| Reuse existing index for low/high term | 4 | 91.07373–97.99539 |
+| Destination-index operand order and association | 12 | 94.691246–95.912445 |
+| Destination/index scope and inner declaration order | 10 | 97.23502–98.04147 |
+
+The existing standalone `mwcc-decomp` reader worked through the retail
+emulator without Docker. Its GDB entry point needs `runpy.run_path` in this
+embedding; plain GDB `source` inherited the wrong import context. The
+standalone function-name cache was empty, so the focused hook used the
+existing exact-1.2.5n object decoder to select the function. An earlier run
+completed successfully while selecting no functions: exit success alone
+does not establish that a trace was captured. Disabling unrelated register
+creation breakpoints made the focused capture practical. No inferior memory
+was changed. Tool issue 1515 requests a supported focused provenance command.
+
+Complete candidate sources/results, read-only hooks, successful and failed
+capture artifacts, static compiler export, stage validation/comparisons,
+tool input snapshots, and the exported mismatch pattern are archived under
+`docs/matching-evidence/jpeg-rgb/2026-09-06-creation-provenance/` with per-member
+SHA-256 hashes. The source candidate is
+`c016-rgb-combine-rule/LHR-left.c` inside the archive.
+
+Next source work should preserve the proven address association and target
+the destination-index lifetime or its scheduling dependency, using the
+captured stages to reject ineffective transformations. More operand-order
+or declaration-scope sweeps from this set would repeat measured failures.
+
+After restoring the production source, ordinary checkdiff reproduced
+98.7788%. The encoder remained 99.70266% and the other six TU functions
+remained 100%. `python configure.py && ninja` passed; built and original DOL
+SHA-1 both equal `08e0bf20134dfcb260699671004527b2d6bb1a45`. The TU remains
+Linkable, and no upstream source PR update is warranted by these experiments.
