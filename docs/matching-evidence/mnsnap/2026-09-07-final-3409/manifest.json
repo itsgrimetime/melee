@@ -1,0 +1,290 @@
+{
+  "function": "mnSnap_80257F24",
+  "status": "matched-and-linked",
+  "author": "gitRasheed",
+  "upstream_pr": "https://github.com/doldecomp/melee/pull/3409",
+  "upstream_commit": "683b601cfccb5dcff498cd00dee35cc077f082f8",
+  "local_import_commit": "ba094613fe",
+  "all_measures": {
+    "fuzzy_match_percent": 99.999954,
+    "total_code": "3882032",
+    "matched_code": "3882032",
+    "matched_code_percent": 100.0,
+    "total_data": "1211168",
+    "matched_data": "1211168",
+    "matched_data_percent": 100.0,
+    "total_functions": 19828,
+    "matched_functions": 19828,
+    "matched_functions_percent": 100.0,
+    "complete_code": "3882032",
+    "complete_code_percent": 100.0,
+    "complete_data": "1211168",
+    "complete_data_percent": 100.0,
+    "total_units": 1130,
+    "complete_units": 1130
+  },
+  "tu": {
+    "name": "main/melee/mn/mnsnap",
+    "measures": {
+      "fuzzy_match_percent": 100.0,
+      "total_code": "22460",
+      "matched_code": "22460",
+      "matched_code_percent": 100.0,
+      "total_data": "1616",
+      "matched_data": "1616",
+      "matched_data_percent": 100.0,
+      "total_functions": 19,
+      "matched_functions": 19,
+      "matched_functions_percent": 100.0,
+      "complete_code": "22460",
+      "complete_code_percent": 100.0,
+      "complete_data": "1616",
+      "complete_data_percent": 100.0,
+      "total_units": 1,
+      "complete_units": 1
+    },
+    "sections": [
+      {
+        "name": ".bss",
+        "size": "400",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2152335888"
+        }
+      },
+      {
+        "name": ".data",
+        "size": "1032",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2151612776"
+        }
+      },
+      {
+        "name": ".sdata",
+        "size": "32",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2152550512"
+        }
+      },
+      {
+        "name": ".sdata2",
+        "size": "152",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2152579776"
+        }
+      },
+      {
+        "name": ".text",
+        "size": "22460",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149921156"
+        }
+      }
+    ],
+    "functions": [
+      {
+        "name": "mnSnap_80253184",
+        "size": "280",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149921156"
+        },
+        "address": "0"
+      },
+      {
+        "name": "mnSnap_8025329C",
+        "size": "932",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149921436"
+        },
+        "address": "280"
+      },
+      {
+        "name": "mnSnap_80253640",
+        "size": "804",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149922368"
+        },
+        "address": "1212"
+      },
+      {
+        "name": "mnSnap_80253964",
+        "size": "384",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149923172"
+        },
+        "address": "2016"
+      },
+      {
+        "name": "mnSnap_80253AE4",
+        "size": "252",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149923556"
+        },
+        "address": "2400"
+      },
+      {
+        "name": "mnSnap_80253BE0",
+        "size": "468",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149923808"
+        },
+        "address": "2652"
+      },
+      {
+        "name": "fn_80253DB4",
+        "size": "52",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149924276"
+        },
+        "address": "3120"
+      },
+      {
+        "name": "fn_80253DE8",
+        "size": "52",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149924328"
+        },
+        "address": "3172"
+      },
+      {
+        "name": "fn_80253E1C",
+        "size": "64",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149924380"
+        },
+        "address": "3224"
+      },
+      {
+        "name": "fn_80253E5C",
+        "size": "52",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149924444"
+        },
+        "address": "3288"
+      },
+      {
+        "name": "mnSnap_80253E90",
+        "size": "208",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149924496"
+        },
+        "address": "3340"
+      },
+      {
+        "name": "mnSnap_80253F60",
+        "size": "180",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149924704"
+        },
+        "address": "3548"
+      },
+      {
+        "name": "mnSnap_80254014",
+        "size": "136",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149924884"
+        },
+        "address": "3728"
+      },
+      {
+        "name": "mnSnap_8025409C",
+        "size": "508",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149925020"
+        },
+        "address": "3864"
+      },
+      {
+        "name": "mnSnap_80254298",
+        "size": "388",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149925528"
+        },
+        "address": "4372"
+      },
+      {
+        "name": "mnSnap_8025441C",
+        "size": "424",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149925916"
+        },
+        "address": "4760"
+      },
+      {
+        "name": "fn_802545C4",
+        "size": "14264",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149926340"
+        },
+        "address": "5184"
+      },
+      {
+        "name": "fn_80257D7C",
+        "size": "424",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149940604"
+        },
+        "address": "19448"
+      },
+      {
+        "name": "mnSnap_80257F24",
+        "size": "2588",
+        "fuzzy_match_percent": 100.0,
+        "metadata": {
+          "virtual_address": "2149941028"
+        },
+        "address": "19872"
+      }
+    ],
+    "metadata": {
+      "complete": true,
+      "module_name": "main",
+      "module_id": 0,
+      "source_path": "src/melee/mn/mnsnap.c",
+      "progress_categories": [
+        "game"
+      ],
+      "auto_generated": false
+    }
+  },
+  "artifacts": {
+    "src/melee/mn/mnsnap.c": {
+      "bytes": 102245,
+      "sha1": "e76151291e904e2e06d8bb0d2495808cb1433ad1",
+      "sha256": "c3c51e08540a43841dcaf32d3505e2b1d2ae08fde471ec2c70da0c84f7384e7c"
+    },
+    "build/GALE01/main.dol": {
+      "bytes": 4425184,
+      "sha1": "08e0bf20134dfcb260699671004527b2d6bb1a45",
+      "sha256": "dc21504513424350bda17a7c65e82371b45112a5dfc1e9f2749a8b7ab0eff646"
+    },
+    "orig/GALE01/sys/main.dol": {
+      "bytes": 4425184,
+      "sha1": "08e0bf20134dfcb260699671004527b2d6bb1a45",
+      "sha256": "dc21504513424350bda17a7c65e82371b45112a5dfc1e9f2749a8b7ab0eff646"
+    }
+  },
+  "dol_byte_equality": true
+}

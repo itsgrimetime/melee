@@ -1,3 +1,33 @@
+# Completed: mnSnap_80257F24 — 100% matched and linked
+
+Final solution by **gitRasheed (Rasheed)** in [PR3409](https://github.com/doldecomp/melee/pull/3409),
+commit683b601cfccb5dcff498cd00dee35cc077f082f8. Imported preserving author as
+ba094613fe. Earlier entries below are historical investigations, not current
+blockers. No more matching work is needed on this function.
+
+Independent configure/ninja succeeded with required prototypes enabled. All
+19828functions matched, all1130TUs linked, mnsnap19/19functions and1616databytes
+100%. Direct cmp of newly linked DOL versus original succeeds; both SHA1
+08e0bf20134dfcb260699671004527b2d6bb1a45. The raw checkdiff match boolean remains
+false because it compares anonymous relocation labels; objdiff report100 plus
+byte-identical complete linked DOL are the authoritative proof.
+
+The final patch combines a discarded archive public_info->offset expression,
+main_joint pointer alias restoration without main_load, main animation/material
+assignment order, direct global pointer passed to CreateThumbnails, and direct
+global thumbnail/count text-array stores. It also removes the duplicate
+mnSnap_thumb_imgs array, using mnSnap_804A0B90, and marks the TU Matching.
+We have not ablated each change, so do not claim any one edit independently
+caused a particular scheduling/register fix. The important lesson is that
+source references outside the immediate diff region can change compiler web
+formation and scheduling; local register-only probes missed this combination.
+
+Our prior resource-home improvement merged as PR3407. The final match is
+Rasheed's work; no duplicate final PR was opened. Final evidence:
+matching-evidence/mnsnap/2026-09-07-final-3409/manifest.json.
+
+---
+
 # Snapshot initializer continuation
 
 Current retained baseline: **98.13447%**, source8a94f5de1a, PR3406 head9f1bdc6bbf
