@@ -1,0 +1,1736 @@
+{
+  "summary": {
+    "function": "hsd_803B3CD8",
+    "retained_percent": 99.70266,
+    "retained_source_sha256": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "compile_attempts": 73,
+    "valid_compiles": 68,
+    "invalid_generator_compiles": 5,
+    "review_rejections": 2,
+    "duplicate_sources_skipped": 1,
+    "source_changes_retained": false,
+    "source100": false,
+    "validation": {
+      "frame": 104,
+      "register_only_differences": 38,
+      "instruction_count": 639,
+      "full_build": "exit0",
+      "matched_neighbors": 6
+    },
+    "tool_issue": 1534,
+    "upstream_merge": "4ae0cedc4c",
+    "upstream_head": "7f97c7afe0",
+    "pr3377_head": "5d8814c18093525f573011ff5e37e97020d3c655",
+    "research_scope": "PR2479 is a regressing standard-JPEG rewrite. Public code search and inspected KAR tree supplied no new encoder body; this is not an exhaustive donor verdict."
+  },
+  "runs": [
+    {
+      "family": "c016-enc12-dc-phase",
+      "name": "global-tables-caller-run-caller",
+      "score": 98.27856,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      },
+      "structural": {
+        "opcode_similarity": 0.9984375,
+        "line_delta": 4,
+        "hunk_count": 27
+      },
+      "regdiff": 41,
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc12-dc-phase",
+      "name": "global-tables-caller-run-output",
+      "score": 97.926445,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      },
+      "structural": {
+        "opcode_similarity": 0.9984375,
+        "line_delta": 4,
+        "hunk_count": 27
+      },
+      "regdiff": 41,
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc12-dc-phase",
+      "name": "global-tables-callee-run-caller",
+      "score": 96.58685,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      },
+      "structural": {
+        "opcode_similarity": 0.9640625,
+        "line_delta": 4,
+        "hunk_count": 18
+      },
+      "regdiff": 32,
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc12-dc-phase",
+      "name": "global-tables-callee-run-output",
+      "score": 96.9734,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      },
+      "structural": {
+        "opcode_similarity": 0.965625,
+        "line_delta": 4,
+        "hunk_count": 19
+      },
+      "regdiff": 31,
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc12-dc-phase",
+      "name": "pointer-tables-caller-run-caller",
+      "score": 99.38184,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 59
+      },
+      "regdiff": 71,
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc12-dc-phase",
+      "name": "pointer-tables-caller-run-output",
+      "score": 99.02191,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 69
+      },
+      "regdiff": 95,
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc12-dc-phase",
+      "name": "pointer-tables-callee-run-caller",
+      "score": 97.10329,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.9827856025039123,
+        "line_delta": 0,
+        "hunk_count": 74
+      },
+      "regdiff": 113,
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc12-dc-phase",
+      "name": "pointer-tables-callee-run-output",
+      "score": 97.41158,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.9843505477308294,
+        "line_delta": 0,
+        "hunk_count": 87
+      },
+      "regdiff": 121,
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc12-dc-phase",
+      "name": "state-pointer-tables-caller-run-caller",
+      "score": 98.33177,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      },
+      "structural": {
+        "opcode_similarity": 0.9976580796252927,
+        "line_delta": 3,
+        "hunk_count": 33
+      },
+      "regdiff": 52,
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc12-dc-phase",
+      "name": "state-pointer-tables-caller-run-output",
+      "score": 97.98748,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      },
+      "structural": {
+        "opcode_similarity": 0.9976580796252927,
+        "line_delta": 3,
+        "hunk_count": 33
+      },
+      "regdiff": 52,
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc12-dc-phase",
+      "name": "state-pointer-tables-callee-run-caller",
+      "score": 96.28013,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      },
+      "structural": {
+        "opcode_similarity": 0.9804839968774395,
+        "line_delta": 3,
+        "hunk_count": 37
+      },
+      "regdiff": 72,
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc12-dc-phase",
+      "name": "state-pointer-tables-callee-run-output",
+      "score": 96.596245,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      },
+      "structural": {
+        "opcode_similarity": 0.9820452771272443,
+        "line_delta": 3,
+        "hunk_count": 32
+      },
+      "regdiff": 49,
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc12-address-representation",
+      "name": "union-pointer-first-write-integer",
+      "score": 95.10016,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9391575663026521,
+        "line_delta": 4,
+        "hunk_count": 12
+      },
+      "regdiff": 24,
+      "entry": [
+        "<hsd_803B3CD8>:",
+        "+000: 7c 08 02 a6 \tmflr    r0",
+        "+004: 3c 80 00 00 \tlis     r4,0",
+        "+004: R_PPC_ADDR16_HA\thsd_804D2648",
+        "+008: 90 01 00 04 \tstw     r0,4(r1)",
+        "+00c: 38 04 00 00 \taddi    r0,r4,0",
+        "+00c: R_PPC_ADDR16_LO\thsd_804D2648",
+        "+010: 3c 80 00 00 \tlis     r4,0",
+        "+010: R_PPC_ADDR16_HA\tlbl_80430C40",
+        "+014: 94 21 ff 98 \tstwu    r1,-104(r1)",
+        "+018: 2c 03 00 00 \tcmpwi   r3,0",
+        "+01c: 38 a4 00 00 \taddi    r5,r4,0",
+        "+01c: R_PPC_ADDR16_LO\tlbl_80430C40",
+        "+020: be e1 00 44 \tstmw    r23,68(r1)",
+        "+024: 90 01 00 38 \tstw     r0,56(r1)",
+        "+028: 40 82 00 10 \tbne     <hsd_803B3CD8+0x38>",
+        "+02c: 3c 80 00 00 \tlis     r4,0",
+        "+02c: R_PPC_ADDR16_HA\tlbl_80431678",
+        "+030: 38 c4 00 00 \taddi    r6,r4,0",
+        "+030: R_PPC_ADDR16_LO\tlbl_80431678",
+        "+034: 48 00 00 0c \tb       <hsd_803B3CD8+0x40>",
+        "+038: 3c 80 00 00 \tlis     r4,0"
+      ]
+    },
+    {
+      "family": "c016-enc12-address-representation",
+      "name": "union-pointer-first-read-integer",
+      "score": 94.86072,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9540140296180826,
+        "line_delta": 5,
+        "hunk_count": 20
+      },
+      "regdiff": 10,
+      "entry": [
+        "<hsd_803B3CD8>:",
+        "+000: 7c 08 02 a6 \tmflr    r0",
+        "+004: 3c 80 00 00 \tlis     r4,0",
+        "+004: R_PPC_ADDR16_HA\thsd_804D2648",
+        "+008: 90 01 00 04 \tstw     r0,4(r1)",
+        "+00c: 38 04 00 00 \taddi    r0,r4,0",
+        "+00c: R_PPC_ADDR16_LO\thsd_804D2648",
+        "+010: 3c 80 00 00 \tlis     r4,0",
+        "+010: R_PPC_ADDR16_HA\tlbl_80430C40",
+        "+014: 94 21 ff 98 \tstwu    r1,-104(r1)",
+        "+018: 2c 03 00 00 \tcmpwi   r3,0",
+        "+01c: 38 a4 00 00 \taddi    r5,r4,0",
+        "+01c: R_PPC_ADDR16_LO\tlbl_80430C40",
+        "+020: be e1 00 44 \tstmw    r23,68(r1)",
+        "+024: 90 01 00 38 \tstw     r0,56(r1)",
+        "+028: 40 82 00 10 \tbne     <hsd_803B3CD8+0x38>",
+        "+02c: 3c 80 00 00 \tlis     r4,0",
+        "+02c: R_PPC_ADDR16_HA\tlbl_80431678",
+        "+030: 38 c4 00 00 \taddi    r6,r4,0",
+        "+030: R_PPC_ADDR16_LO\tlbl_80431678",
+        "+034: 48 00 00 0c \tb       <hsd_803B3CD8+0x40>",
+        "+038: 3c 80 00 00 \tlis     r4,0"
+      ]
+    },
+    {
+      "family": "c016-enc12-address-representation",
+      "name": "union-integer-first-write-integer",
+      "score": 95.10016,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9391575663026521,
+        "line_delta": 4,
+        "hunk_count": 12
+      },
+      "regdiff": 24,
+      "entry": [
+        "<hsd_803B3CD8>:",
+        "+000: 7c 08 02 a6 \tmflr    r0",
+        "+004: 3c 80 00 00 \tlis     r4,0",
+        "+004: R_PPC_ADDR16_HA\thsd_804D2648",
+        "+008: 90 01 00 04 \tstw     r0,4(r1)",
+        "+00c: 38 04 00 00 \taddi    r0,r4,0",
+        "+00c: R_PPC_ADDR16_LO\thsd_804D2648",
+        "+010: 3c 80 00 00 \tlis     r4,0",
+        "+010: R_PPC_ADDR16_HA\tlbl_80430C40",
+        "+014: 94 21 ff 98 \tstwu    r1,-104(r1)",
+        "+018: 2c 03 00 00 \tcmpwi   r3,0",
+        "+01c: 38 a4 00 00 \taddi    r5,r4,0",
+        "+01c: R_PPC_ADDR16_LO\tlbl_80430C40",
+        "+020: be e1 00 44 \tstmw    r23,68(r1)",
+        "+024: 90 01 00 38 \tstw     r0,56(r1)",
+        "+028: 40 82 00 10 \tbne     <hsd_803B3CD8+0x38>",
+        "+02c: 3c 80 00 00 \tlis     r4,0",
+        "+02c: R_PPC_ADDR16_HA\tlbl_80431678",
+        "+030: 38 c4 00 00 \taddi    r6,r4,0",
+        "+030: R_PPC_ADDR16_LO\tlbl_80431678",
+        "+034: 48 00 00 0c \tb       <hsd_803B3CD8+0x40>",
+        "+038: 3c 80 00 00 \tlis     r4,0"
+      ]
+    },
+    {
+      "family": "c016-enc12-address-representation",
+      "name": "union-integer-first-read-integer",
+      "score": 94.86072,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9540140296180826,
+        "line_delta": 5,
+        "hunk_count": 20
+      },
+      "regdiff": 10,
+      "entry": [
+        "<hsd_803B3CD8>:",
+        "+000: 7c 08 02 a6 \tmflr    r0",
+        "+004: 3c 80 00 00 \tlis     r4,0",
+        "+004: R_PPC_ADDR16_HA\thsd_804D2648",
+        "+008: 90 01 00 04 \tstw     r0,4(r1)",
+        "+00c: 38 04 00 00 \taddi    r0,r4,0",
+        "+00c: R_PPC_ADDR16_LO\thsd_804D2648",
+        "+010: 3c 80 00 00 \tlis     r4,0",
+        "+010: R_PPC_ADDR16_HA\tlbl_80430C40",
+        "+014: 94 21 ff 98 \tstwu    r1,-104(r1)",
+        "+018: 2c 03 00 00 \tcmpwi   r3,0",
+        "+01c: 38 a4 00 00 \taddi    r5,r4,0",
+        "+01c: R_PPC_ADDR16_LO\tlbl_80430C40",
+        "+020: be e1 00 44 \tstmw    r23,68(r1)",
+        "+024: 90 01 00 38 \tstw     r0,56(r1)",
+        "+028: 40 82 00 10 \tbne     <hsd_803B3CD8+0x38>",
+        "+02c: 3c 80 00 00 \tlis     r4,0",
+        "+02c: R_PPC_ADDR16_HA\tlbl_80431678",
+        "+030: 38 c4 00 00 \taddi    r6,r4,0",
+        "+030: R_PPC_ADDR16_LO\tlbl_80431678",
+        "+034: 48 00 00 0c \tb       <hsd_803B3CD8+0x40>",
+        "+038: 3c 80 00 00 \tlis     r4,0"
+      ]
+    },
+    {
+      "family": "c016-enc12-address-representation",
+      "name": "static-const-scalar",
+      "score": 95.11268,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.940625,
+        "line_delta": 17,
+        "hunk_count": 12
+      },
+      "regdiff": 16,
+      "entry": [
+        "<hsd_803B3CD8>:",
+        "+000: 7c 08 02 a6 \tmflr    r0",
+        "+004: 3c 80 00 00 \tlis     r4,0",
+        "+004: R_PPC_ADDR16_HA\tlbl_80430C40",
+        "+008: 90 01 00 04 \tstw     r0,4(r1)",
+        "+00c: 2c 03 00 00 \tcmpwi   r3,0",
+        "+010: 38 a4 00 00 \taddi    r5,r4,0",
+        "+010: R_PPC_ADDR16_LO\tlbl_80430C40",
+        "+014: 94 21 ff a0 \tstwu    r1,-96(r1)",
+        "+018: be e1 00 3c \tstmw    r23,60(r1)",
+        "+01c: 40 82 00 10 \tbne     <hsd_803B3CD8+0x2c>",
+        "+020: 3c 80 00 00 \tlis     r4,0",
+        "+020: R_PPC_ADDR16_HA\tlbl_80431678",
+        "+024: 38 c4 00 00 \taddi    r6,r4,0",
+        "+024: R_PPC_ADDR16_LO\tlbl_80431678",
+        "+028: 48 00 00 0c \tb       <hsd_803B3CD8+0x34>",
+        "+02c: 3c 80 00 00 \tlis     r4,0",
+        "+02c: R_PPC_ADDR16_HA\tlbl_8043169C",
+        "+030: 38 c4 00 00 \taddi    r6,r4,0",
+        "+030: R_PPC_ADDR16_LO\tlbl_8043169C",
+        "+034: 2c 03 00 00 \tcmpwi   r3,0",
+        "+038: 40 82 00 10 \tbne     <hsd_803B3CD8+0x48>"
+      ]
+    },
+    {
+      "family": "c016-enc12-address-representation",
+      "name": "static-const-aggregate",
+      "score": 95.11268,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.940625,
+        "line_delta": 17,
+        "hunk_count": 12
+      },
+      "regdiff": 16,
+      "entry": [
+        "<hsd_803B3CD8>:",
+        "+000: 7c 08 02 a6 \tmflr    r0",
+        "+004: 3c 80 00 00 \tlis     r4,0",
+        "+004: R_PPC_ADDR16_HA\tlbl_80430C40",
+        "+008: 90 01 00 04 \tstw     r0,4(r1)",
+        "+00c: 2c 03 00 00 \tcmpwi   r3,0",
+        "+010: 38 a4 00 00 \taddi    r5,r4,0",
+        "+010: R_PPC_ADDR16_LO\tlbl_80430C40",
+        "+014: 94 21 ff a0 \tstwu    r1,-96(r1)",
+        "+018: be e1 00 3c \tstmw    r23,60(r1)",
+        "+01c: 40 82 00 10 \tbne     <hsd_803B3CD8+0x2c>",
+        "+020: 3c 80 00 00 \tlis     r4,0",
+        "+020: R_PPC_ADDR16_HA\tlbl_80431678",
+        "+024: 38 c4 00 00 \taddi    r6,r4,0",
+        "+024: R_PPC_ADDR16_LO\tlbl_80431678",
+        "+028: 48 00 00 0c \tb       <hsd_803B3CD8+0x34>",
+        "+02c: 3c 80 00 00 \tlis     r4,0",
+        "+02c: R_PPC_ADDR16_HA\tlbl_8043169C",
+        "+030: 38 c4 00 00 \taddi    r6,r4,0",
+        "+030: R_PPC_ADDR16_LO\tlbl_8043169C",
+        "+034: 2c 03 00 00 \tcmpwi   r3,0",
+        "+038: 40 82 00 10 \tbne     <hsd_803B3CD8+0x48>"
+      ]
+    },
+    {
+      "family": "c016-enc13-run-helper",
+      "name": "count-param-local-length",
+      "score": 99.69484,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 36
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-run-helper",
+      "name": "count-param-out-length",
+      "score": null,
+      "exit": 1
+    },
+    {
+      "family": "c016-enc13-run-helper",
+      "name": "run-param-local-length",
+      "score": 99.69484,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 36
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-run-helper",
+      "name": "run-param-out-length",
+      "score": null,
+      "exit": 1
+    },
+    {
+      "family": "c016-enc13-run-helper",
+      "name": "count-local-local-length",
+      "score": 98.834114,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      },
+      "structural": {
+        "opcode_similarity": 0.9992169146436961,
+        "line_delta": 1,
+        "hunk_count": 55
+      },
+      "regdiff": 83,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-run-helper",
+      "name": "count-local-out-length",
+      "score": null,
+      "exit": 1
+    },
+    {
+      "family": "c016-enc13-run-helper",
+      "name": "run-pointer-local-length",
+      "score": 99.32707,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 54
+      },
+      "regdiff": 71,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-run-helper",
+      "name": "run-pointer-out-length",
+      "score": null,
+      "exit": 1
+    },
+    {
+      "family": "c016-enc13-run-helper",
+      "name": "state-count-local-length",
+      "score": 99.08451,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      },
+      "structural": {
+        "opcode_similarity": 0.9992169146436961,
+        "line_delta": 1,
+        "hunk_count": 49
+      },
+      "regdiff": 71,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-run-helper",
+      "name": "state-count-out-length",
+      "score": null,
+      "exit": 1
+    },
+    {
+      "family": "c016-enc13-run-helper",
+      "name": "reuse-run-separate",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-run-helper",
+      "name": "reuse-run-embedded",
+      "score": 99.043816,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9945184025058731,
+        "line_delta": 1,
+        "hunk_count": 42
+      },
+      "regdiff": 60,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-run-helper-fixed",
+      "name": "count-param-out-length",
+      "score": 99.69484,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 36
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-run-helper-fixed",
+      "name": "run-param-out-length",
+      "score": 99.69484,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 36
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-run-helper-fixed",
+      "name": "count-local-out-length",
+      "score": 98.834114,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      },
+      "structural": {
+        "opcode_similarity": 0.9992169146436961,
+        "line_delta": 1,
+        "hunk_count": 55
+      },
+      "regdiff": 83,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-run-helper-fixed",
+      "name": "run-pointer-out-length",
+      "score": 99.32707,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 54
+      },
+      "regdiff": 71,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-run-helper-fixed",
+      "name": "state-count-out-length",
+      "score": 99.08451,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 128,
+        "frame_growth": 24
+      },
+      "structural": {
+        "opcode_similarity": 0.9992169146436961,
+        "line_delta": 1,
+        "hunk_count": 49
+      },
+      "regdiff": 71,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-category-helper",
+      "name": "nested-both",
+      "score": 99.3349,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 62
+      },
+      "regdiff": 79,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-category-helper",
+      "name": "nested-dc",
+      "score": 99.475746,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 50
+      },
+      "regdiff": 63,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-category-helper",
+      "name": "nested-ac",
+      "score": 99.56964,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 46
+      },
+      "regdiff": 54,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-category-helper",
+      "name": "direct-local-both",
+      "score": 99.014084,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 65
+      },
+      "regdiff": 100,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-category-helper",
+      "name": "direct-local-dc",
+      "score": 99.358376,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 46
+      },
+      "regdiff": 65,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-category-helper",
+      "name": "direct-local-ac",
+      "score": 99.358376,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 54
+      },
+      "regdiff": 73,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-category-helper",
+      "name": "direct-parameter-both",
+      "score": 99.1471,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9984350547730829,
+        "line_delta": 0,
+        "hunk_count": 21
+      },
+      "regdiff": 24,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-category-helper",
+      "name": "direct-parameter-dc",
+      "score": 99.31925,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9992181391712275,
+        "line_delta": 1,
+        "hunk_count": 4
+      },
+      "regdiff": 10,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-category-helper",
+      "name": "direct-parameter-ac",
+      "score": 99.53052,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9992169146436961,
+        "line_delta": 1,
+        "hunk_count": 19
+      },
+      "regdiff": 26,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-category-helper",
+      "name": "out-magnitude-both",
+      "score": 99.3349,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 62
+      },
+      "regdiff": 79,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-category-helper",
+      "name": "out-magnitude-dc",
+      "score": 99.46792,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 51
+      },
+      "regdiff": 63,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-category-helper",
+      "name": "out-magnitude-ac",
+      "score": 99.56181,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 47
+      },
+      "regdiff": 54,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0",
+      "calls": [
+        "longjmp"
+      ]
+    },
+    {
+      "family": "c016-enc13-component-types",
+      "name": "int",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc13-component-types",
+      "name": "unsigned-int",
+      "score": 99.32707,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9874804381846636,
+        "line_delta": 0,
+        "hunk_count": 39
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc13-component-types",
+      "name": "unsigned-int-signed-test",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc13-component-types",
+      "name": "u32",
+      "score": 99.32707,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9874804381846636,
+        "line_delta": 0,
+        "hunk_count": 39
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc13-component-types",
+      "name": "u32-signed-test",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc13-component-types",
+      "name": "enum",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc13-owner-reuse",
+      "name": "dc_code-copy",
+      "score": 98.989044,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.9992181391712275,
+        "line_delta": 1,
+        "hunk_count": 19
+      },
+      "regdiff": 24,
+      "work_load": "+018: 3b 44 00 00 \taddi    r26,r4,0"
+    },
+    {
+      "family": "c016-enc13-owner-reuse",
+      "name": "dc_code-global",
+      "score": 98.75587,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.9960967993754879,
+        "line_delta": 5,
+        "hunk_count": 19
+      },
+      "regdiff": 24,
+      "work_load": "+018: 3b 44 00 00 \taddi    r26,r4,0"
+    },
+    {
+      "family": "c016-enc13-owner-reuse",
+      "name": "dc_length-copy",
+      "score": 98.989044,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.9992181391712275,
+        "line_delta": 1,
+        "hunk_count": 19
+      },
+      "regdiff": 24,
+      "work_load": "+018: 3b 44 00 00 \taddi    r26,r4,0"
+    },
+    {
+      "family": "c016-enc13-owner-reuse",
+      "name": "dc_length-global",
+      "score": 98.75587,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.9960967993754879,
+        "line_delta": 5,
+        "hunk_count": 19
+      },
+      "regdiff": 24,
+      "work_load": "+018: 3b 44 00 00 \taddi    r26,r4,0"
+    },
+    {
+      "family": "c016-enc13-owner-reuse",
+      "name": "tables-copy",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc13-owner-reuse",
+      "name": "tables-global",
+      "score": 98.91236,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9984375,
+        "line_delta": 4,
+        "hunk_count": 29
+      },
+      "regdiff": 42,
+      "work_load": "+018: 3b 44 00 00 \taddi    r26,r4,0"
+    },
+    {
+      "family": "c016-enc13-owner-reuse",
+      "name": "component-copy",
+      "score": 98.9108,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9992181391712275,
+        "line_delta": 1,
+        "hunk_count": 19
+      },
+      "regdiff": 24,
+      "work_load": "+018: 3b 44 00 00 \taddi    r26,r4,0"
+    },
+    {
+      "family": "c016-enc13-owner-reuse",
+      "name": "component-global",
+      "score": 98.67762,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9960967993754879,
+        "line_delta": 5,
+        "hunk_count": 19
+      },
+      "regdiff": 24,
+      "work_load": "+018: 3b 44 00 00 \taddi    r26,r4,0"
+    },
+    {
+      "family": "c016-enc13-owner-reuse",
+      "name": "value-copy",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc13-owner-reuse",
+      "name": "value-global",
+      "score": 98.91236,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9984375,
+        "line_delta": 4,
+        "hunk_count": 29
+      },
+      "regdiff": 42,
+      "work_load": "+018: 3b 44 00 00 \taddi    r26,r4,0"
+    },
+    {
+      "family": "c016-enc13-reuse-embedded",
+      "name": "dc_code-for-init",
+      "score": 98.989044,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.9992181391712275,
+        "line_delta": 1,
+        "hunk_count": 19
+      },
+      "regdiff": 24,
+      "work_load": "+018: 3b 44 00 00 \taddi    r26,r4,0"
+    },
+    {
+      "family": "c016-enc13-reuse-embedded",
+      "name": "dc_code-lookup",
+      "score": 98.989044,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.9992181391712275,
+        "line_delta": 1,
+        "hunk_count": 19
+      },
+      "regdiff": 24,
+      "work_load": "+018: 3b 44 00 00 \taddi    r26,r4,0"
+    },
+    {
+      "family": "c016-enc13-reuse-embedded",
+      "name": "dc_length-for-init",
+      "score": 98.989044,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.9992181391712275,
+        "line_delta": 1,
+        "hunk_count": 19
+      },
+      "regdiff": 24,
+      "work_load": "+018: 3b 44 00 00 \taddi    r26,r4,0"
+    },
+    {
+      "family": "c016-enc13-reuse-embedded",
+      "name": "dc_length-lookup",
+      "score": 98.989044,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.9992181391712275,
+        "line_delta": 1,
+        "hunk_count": 19
+      },
+      "regdiff": 24,
+      "work_load": "+018: 3b 44 00 00 \taddi    r26,r4,0"
+    },
+    {
+      "family": "c016-enc13-reuse-embedded",
+      "name": "component-for-init",
+      "score": 98.9108,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9992181391712275,
+        "line_delta": 1,
+        "hunk_count": 19
+      },
+      "regdiff": 24,
+      "work_load": "+018: 3b 44 00 00 \taddi    r26,r4,0"
+    },
+    {
+      "family": "c016-enc13-reuse-embedded",
+      "name": "component-lookup",
+      "score": 98.9108,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9992181391712275,
+        "line_delta": 1,
+        "hunk_count": 19
+      },
+      "regdiff": 24,
+      "work_load": "+018: 3b 44 00 00 \taddi    r26,r4,0"
+    },
+    {
+      "family": "c016-enc13-structure-scored",
+      "name": "inline-boundary-call-arg-temp-0",
+      "score": 99.663536,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 37
+    },
+    {
+      "family": "c016-enc13-structure-scored",
+      "name": "block-scope-0",
+      "score": null,
+      "review": "rejected-invalid-C-struct-member-treated-as-local"
+    },
+    {
+      "family": "c016-enc13-structure-scored",
+      "name": "call-arg-tempization-0",
+      "score": null,
+      "review": "duplicate-generated-source"
+    },
+    {
+      "family": "c016-enc13-structure-scored",
+      "name": "adjacent-decl-swap-0",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38
+    },
+    {
+      "family": "c016-enc13-structure-scored",
+      "name": "declaration-use-distance-0",
+      "score": null,
+      "review": "rejected-invalid-C-struct-member-treated-as-local"
+    },
+    {
+      "family": "c016-enc13-structure-scored",
+      "name": "loop-counter-type-0",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38
+    },
+    {
+      "family": "c016-enc13-structure-scored",
+      "name": "temp-introduction-0",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38
+    }
+  ],
+  "archive_sha256": "86b1d3f718576a5154c4be12e061aa0c6c5081f202048464891ab97be490679d",
+  "files": {
+    "c016-enc12-address-representation.py": "3ddc8984cbbde2a191bad2b99a1a585ae75691c53cb759f76b6e0fb27f1092a6",
+    "c016-enc12-address-representation/baseline.c": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "c016-enc12-address-representation/results.json": "72a113c629eb4df1b928c67b7d00b3bd06409d5670c89ff46cbce9123d55ff32",
+    "c016-enc12-address-representation/static-const-aggregate.c": "f5f89bb07348ee8996505a57d531bef676364c142ec2b028843ca4a0e9adabab",
+    "c016-enc12-address-representation/static-const-aggregate.json": "1994214a48f32e445ac8d971425c91e69d6a3f40311ff6445b7f3cf46db167b0",
+    "c016-enc12-address-representation/static-const-aggregate.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-address-representation/static-const-scalar.c": "a173133ff7f0a18210ec18d171fb2ce1fbd6ccb579e86900c788092e0297a50f",
+    "c016-enc12-address-representation/static-const-scalar.json": "6f511635257ac5b55d0c2b39f03c0433839e83b9938cdf6845a71bad4714d875",
+    "c016-enc12-address-representation/static-const-scalar.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-address-representation/union-integer-first-read-integer.c": "dae69b14d43fa42226e05f9db76aaa04871a11e1c74181386c7faf22e42499ae",
+    "c016-enc12-address-representation/union-integer-first-read-integer.json": "f57dc34db67e97e7d0bb1543d006c2bbdc0a80d445be6f9f8854be23644a8334",
+    "c016-enc12-address-representation/union-integer-first-read-integer.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-address-representation/union-integer-first-write-integer.c": "1b1cdeff4bf03631cebc7004cbcbc61a6c4f1a4488d4763485ae3674dca4bad4",
+    "c016-enc12-address-representation/union-integer-first-write-integer.json": "71c918e70e2c57989ce82022b51f08c389b26275c8e99f0a6d127da3c0a7e70c",
+    "c016-enc12-address-representation/union-integer-first-write-integer.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-address-representation/union-pointer-first-read-integer.c": "8c1481435a774f8fdebe1ccd493f4a55235322e94479700fa27f5ce4039d029b",
+    "c016-enc12-address-representation/union-pointer-first-read-integer.json": "f57dc34db67e97e7d0bb1543d006c2bbdc0a80d445be6f9f8854be23644a8334",
+    "c016-enc12-address-representation/union-pointer-first-read-integer.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-address-representation/union-pointer-first-write-integer.c": "a24ef3c19de0435ffe53267f2a86c029ebfb7c714f954d2cc221bee5052617c1",
+    "c016-enc12-address-representation/union-pointer-first-write-integer.json": "06448593169b5f50aec11c1392ec10b2bffdcd20cf9dac11284d0167c56c11e9",
+    "c016-enc12-address-representation/union-pointer-first-write-integer.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-dc-phase.py": "346a67c1a9653a9bed134bee0dbb14bc4b155d7a735fed1d3d790fb05617b10b",
+    "c016-enc12-dc-phase/baseline.c": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "c016-enc12-dc-phase/global-tables-callee-run-caller.c": "def013a7a212a805ed2fe3d71bcf6cd601a436444dc1ebfebd29d1a895281dc3",
+    "c016-enc12-dc-phase/global-tables-callee-run-caller.json": "9bc679c049c7c419946d5134232bb05c882845c86a2e3a59d946a82fadc27ee6",
+    "c016-enc12-dc-phase/global-tables-callee-run-caller.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-dc-phase/global-tables-callee-run-output.c": "6ad7fbde5f6f9edbce453680e19238db470c76ee1f7392688852535d4a6bc949",
+    "c016-enc12-dc-phase/global-tables-callee-run-output.json": "e0f75c0c565ca39a9b93485408d8dd5d102e4d2e9e601d5ba7d22bbacaad3863",
+    "c016-enc12-dc-phase/global-tables-callee-run-output.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-dc-phase/global-tables-caller-run-caller.c": "9cfe1dee707644101e0a5d3b5f306f8cb93d3ceab7c832e3ab9a689595a06f00",
+    "c016-enc12-dc-phase/global-tables-caller-run-caller.json": "190cf3f112a7e74b59982902b1d464fcfbed839877c0fa4ef54e49386f65c751",
+    "c016-enc12-dc-phase/global-tables-caller-run-caller.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-dc-phase/global-tables-caller-run-output.c": "7d30e1679f2963e53b2c4fd391fb11d0947bbc48cf8c856bc4f8889abdf82548",
+    "c016-enc12-dc-phase/global-tables-caller-run-output.json": "7bc8efcfe8fa575ba64c08a45eb479fdb8d590be1d0aa9bc77e969bba10aef6e",
+    "c016-enc12-dc-phase/global-tables-caller-run-output.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-dc-phase/pointer-tables-callee-run-caller.c": "98d30487a2ad3200de2bda54f6b05dff2145f459f4125d03fe4a22be46ca5b9f",
+    "c016-enc12-dc-phase/pointer-tables-callee-run-caller.json": "d31c1f7714ee6ab18080f808b08dcd7630eca5ea94b635150f08ce3f3995b498",
+    "c016-enc12-dc-phase/pointer-tables-callee-run-caller.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-dc-phase/pointer-tables-callee-run-output.c": "4665562543bbd4bf2b2ddf801bfb2ded44b19f0b23d9bfe902572531aa047965",
+    "c016-enc12-dc-phase/pointer-tables-callee-run-output.json": "3ccfad27b306d2722be1c0485169a79f356270d91a76adad67ba5cf2d0dd24ac",
+    "c016-enc12-dc-phase/pointer-tables-callee-run-output.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-dc-phase/pointer-tables-caller-run-caller.c": "1b3cb823db2a8abc29269195d0cee61ac22aefeeca3fec89f8604d27b71c0a37",
+    "c016-enc12-dc-phase/pointer-tables-caller-run-caller.json": "4fc9ffc6571a57dff284fd4fedc871cb1fefe4fb143459982967b3143d44d119",
+    "c016-enc12-dc-phase/pointer-tables-caller-run-caller.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-dc-phase/pointer-tables-caller-run-output.c": "c307496a9200dfb6358d5154f7b33c17c2c38927d1093ac22b99b8eccd1220ff",
+    "c016-enc12-dc-phase/pointer-tables-caller-run-output.json": "fe364aea71d64d006997dd83c363c1b38579c08567ce7025edd34e4130285c0d",
+    "c016-enc12-dc-phase/pointer-tables-caller-run-output.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-dc-phase/results.json": "51b44861eabe1e9de2b9f50e89e7e87ef7bfc730cb4f18f33e8defc3aa91b7f7",
+    "c016-enc12-dc-phase/state-pointer-tables-callee-run-caller.c": "4e20dbb1135ced0107cbba8f1d9db4b1aa533615e795dbad15706f38d6036a4f",
+    "c016-enc12-dc-phase/state-pointer-tables-callee-run-caller.json": "d5a63a9f901278d21a22858f2c09766a6c82219acf319b4fbf4929cb459136a4",
+    "c016-enc12-dc-phase/state-pointer-tables-callee-run-caller.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-dc-phase/state-pointer-tables-callee-run-output.c": "cd34eab7cf98310e296be7678c3801af62f41f016d213a72c003235ec9fc7421",
+    "c016-enc12-dc-phase/state-pointer-tables-callee-run-output.json": "39145893585ef82ed8d131133f721b969242bd17a31e76e4a212ba53edc7ba3e",
+    "c016-enc12-dc-phase/state-pointer-tables-callee-run-output.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-dc-phase/state-pointer-tables-caller-run-caller.c": "623f50f2682dca8c514612d056c85b818d8bf9466b4ecf3c9993db6655186c52",
+    "c016-enc12-dc-phase/state-pointer-tables-caller-run-caller.json": "1e847411cc3757496b28fa9e4dc8612960ddc1c823ac74a3428beedc40085472",
+    "c016-enc12-dc-phase/state-pointer-tables-caller-run-caller.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-dc-phase/state-pointer-tables-caller-run-output.c": "5d38a2965e7b6f9621ba94251b609cc04c31fd127828715a986b33b9f7b533e3",
+    "c016-enc12-dc-phase/state-pointer-tables-caller-run-output.json": "0f645787263ae8b67093f038b1ffb13446bae350d35f51d59af4735a1a6c1646",
+    "c016-enc12-dc-phase/state-pointer-tables-caller-run-output.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc12-pr2479.diff": "212b8f3971defd23a30ea723ebd27be361970b17dd9ef8895e28b3a60e278b50",
+    "c016-enc12-pr2479.json": "cfa384ea6a0c240c403b9905a5ce12b11ad6cc5c94157f7d3c8660ae01ff6c6b",
+    "c016-enc13-archive.py": "555965f454b9cdfa49265deebd76d506f9c083b8ff38a01061551cedf3052226",
+    "c016-enc13-build.log": "f0598dd4ce62fc00ee508c2d28020c06eb77c7765ea0bd592833cfae2d7b0739",
+    "c016-enc13-category-helper.py": "52cdda1a3a3e4045a9b7788539b6fd75f6e96cc9ea9d27addf3b1115a67cafe9",
+    "c016-enc13-category-helper/baseline.c": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "c016-enc13-category-helper/direct-local-ac.c": "c60569042500d3921820e7348e6a58fb0977deeed76adc6c81160f424590243d",
+    "c016-enc13-category-helper/direct-local-ac.json": "1315f5612e9dbf0ebce5f60d051f1cb9172c80f5675695aca01ee1fedd89b6ce",
+    "c016-enc13-category-helper/direct-local-ac.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-category-helper/direct-local-both.c": "a36d0227ada3d343e459f70397fb70c31bb2fc0c5663a22add88a399f2d61447",
+    "c016-enc13-category-helper/direct-local-both.json": "65771318e818863d8868ef250441cb33f02ab4af97f2e55186577efd73a44191",
+    "c016-enc13-category-helper/direct-local-both.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-category-helper/direct-local-dc.c": "2dacdcd58fd8e03414be56542bc94738362bfcbdde777ba55398c4db0724a6cb",
+    "c016-enc13-category-helper/direct-local-dc.json": "b321c58e4b2e9c9aeabe8dcf84e0f65e84f83436f5821031ece282d6addefd23",
+    "c016-enc13-category-helper/direct-local-dc.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-category-helper/direct-parameter-ac.c": "07893307403c808c29594b309a3e24c5c27df9422cd42d7f3abe40f714bb1136",
+    "c016-enc13-category-helper/direct-parameter-ac.json": "a253bf300454f9aaee08f53c153347ff5aa0d63c8bad9fa71aae122084286297",
+    "c016-enc13-category-helper/direct-parameter-ac.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-category-helper/direct-parameter-both.c": "fbed31bf69d8e4dc48a14aaab935fb281f3b8d934890514a7f70e478c8cde6b2",
+    "c016-enc13-category-helper/direct-parameter-both.json": "06e45fcf4d0f1e60868e006778d587636d6ee234cb9098dce3c98d13b7c278eb",
+    "c016-enc13-category-helper/direct-parameter-both.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-category-helper/direct-parameter-dc.c": "6e8b702810b63f8a5b0fa4504c7c0d08f70a6825d1c8e8bdcd1d8593f10a83b2",
+    "c016-enc13-category-helper/direct-parameter-dc.json": "a51e0e5915cc714edc42f4939881450f04d40902d380316a424c88e7db28eb7f",
+    "c016-enc13-category-helper/direct-parameter-dc.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-category-helper/nested-ac.c": "fa2dde2d4e659e38ff3928694f1559383e30527c6d67eb51733dfc78560766a9",
+    "c016-enc13-category-helper/nested-ac.json": "b5b7eca10e753c4918f26aa6a3a7e1f79c086f2275c4d753fca886fd55db876e",
+    "c016-enc13-category-helper/nested-ac.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-category-helper/nested-both.c": "45dc32c56fc84c6322a5aba5c9d864363fd7a0b69dfbc8767070ca5688f1dc65",
+    "c016-enc13-category-helper/nested-both.json": "04615bd2dff9e059684fd427155b34e177e3f38811d1f959eea9d4ba4b590334",
+    "c016-enc13-category-helper/nested-both.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-category-helper/nested-dc.c": "3099941fd8e4d8c0bc6a7a9c1c4e48cf433b21ffd7aecb11379358d073b99925",
+    "c016-enc13-category-helper/nested-dc.json": "5b09497c2fac0c75fb0d24312d4360991fe61deeba17a5e835f90fb4bdea46e4",
+    "c016-enc13-category-helper/nested-dc.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-category-helper/out-magnitude-ac.c": "f35533754ea654d359733db144d850523de7800c68b395ac7dd9e97493ab8ed3",
+    "c016-enc13-category-helper/out-magnitude-ac.json": "b1629cbb819e537759e696f3caf8c85e725e95d27ac14a38ff61a7057d041083",
+    "c016-enc13-category-helper/out-magnitude-ac.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-category-helper/out-magnitude-both.c": "4a88870fff24bedeabb135ebde155ba6cc8cf854c53735142ce81856e4b42330",
+    "c016-enc13-category-helper/out-magnitude-both.json": "eac78f816c86667debb62e1b7baab189851f0d4974b84b367f85e350e3f07050",
+    "c016-enc13-category-helper/out-magnitude-both.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-category-helper/out-magnitude-dc.c": "ae09951b4d67d68150bc4b2dcf26f60ce89627cf7d1c072f85c385c83d8676f0",
+    "c016-enc13-category-helper/out-magnitude-dc.json": "2ed8eaa0a4f40131821d9b17e1735a0fb68569aeb80c4a4639992892a311590a",
+    "c016-enc13-category-helper/out-magnitude-dc.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-category-helper/results.json": "592cb93ebec5645bac9f13ce65380653205b6eeebd12373a5ef46d463f62c83b",
+    "c016-enc13-code-search.json": "380308255f48807899d0f9968a48cf5a6375f7596d8938e1eef9b2d440353be6",
+    "c016-enc13-component-types.py": "7507d29daee609d70dacbd0367e5127e104a8fda586968429a5f8bd86d985859",
+    "c016-enc13-component-types/baseline.c": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "c016-enc13-component-types/baseline.h": "e2ef1345b852b347962f543cec6e65fceb9f42bb1ca7e8aa596ecb1400d5d1bc",
+    "c016-enc13-component-types/enum.c": "a0751ae11dea60907cb8d8eb099b2b4d33770752fa2e30801bfd2390b0a08079",
+    "c016-enc13-component-types/enum.h": "5ce4bba74e3e1b5892ab89cb91235caf961506e4dd983f00914250ab240e31c1",
+    "c016-enc13-component-types/enum.json": "f00093bbbbb97f050c82b2e7da67af279101277662c6b78096bbab029e377ee5",
+    "c016-enc13-component-types/enum.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-component-types/int.c": "043507cbe48de000846af672921ef298345b0ccd446d2cf3f37e0fd52f7b8a7a",
+    "c016-enc13-component-types/int.h": "80bdb8fc34a33162a21c93cb171b32d83a0749a5acfa8c5cd2ccf5f1ae58a8ed",
+    "c016-enc13-component-types/int.json": "f4200682ba2a24d527a10d68fda7306360f4ab7b2d84867edd9158e246857c43",
+    "c016-enc13-component-types/int.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-component-types/results.json": "3a63c55e14e362e38f030a74d24e20aed5363249e5d6672288b6e2dbd9f95cd7",
+    "c016-enc13-component-types/u32-signed-test.c": "79656996403c1c8d140303c4cedccb74a0edf6eb30ee376514bafb210ffa52b9",
+    "c016-enc13-component-types/u32-signed-test.h": "8df7eee274dc3ffd7ecd14ef6be4bf47a2cfc3acd61d79ce36d5931e6894cf33",
+    "c016-enc13-component-types/u32-signed-test.json": "abf7f9422d7f194518c671aa1ae0518742028201796e77691d0cb64e0a0ed4cb",
+    "c016-enc13-component-types/u32-signed-test.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-component-types/u32.c": "2c30ecc814fe150b1873d806fbe4b236586c239ae2d490ffc7f4d55ed9afd0ce",
+    "c016-enc13-component-types/u32.h": "8df7eee274dc3ffd7ecd14ef6be4bf47a2cfc3acd61d79ce36d5931e6894cf33",
+    "c016-enc13-component-types/u32.json": "83d7dc83f12e0865791e736883f2fac00ee528a196516faedbedda5e15d4ba66",
+    "c016-enc13-component-types/u32.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-component-types/unsigned-int-signed-test.c": "46b3a0f3e487b41a2710c6e2396a9db028335a065ea8c596ca00106624dbcd77",
+    "c016-enc13-component-types/unsigned-int-signed-test.h": "53ad5f692005539e46db7e34f706c0867e8f2f7cd604a2af382c92d533144686",
+    "c016-enc13-component-types/unsigned-int-signed-test.json": "abf7f9422d7f194518c671aa1ae0518742028201796e77691d0cb64e0a0ed4cb",
+    "c016-enc13-component-types/unsigned-int-signed-test.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-component-types/unsigned-int.c": "1b666a62cec8695f7aba72603517c5f3309844df7620ae42245eece2777453f2",
+    "c016-enc13-component-types/unsigned-int.h": "53ad5f692005539e46db7e34f706c0867e8f2f7cd604a2af382c92d533144686",
+    "c016-enc13-component-types/unsigned-int.json": "83d7dc83f12e0865791e736883f2fac00ee528a196516faedbedda5e15d4ba66",
+    "c016-enc13-component-types/unsigned-int.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-final.json": "de89cb8e4f5125da42ae831e3fcda583dcd6ed7eb6bb7156ace39d343433149b",
+    "c016-enc13-final.log": "2804c8abfc41bf7e7e1260771ecbe6e66d617b394108a8f3e3206c060ba3801c",
+    "c016-enc13-kar-tree.txt": "c599e0cb0262622498c6949af55380d61dd6aecc39301f0d8bd052cc815a63b0",
+    "c016-enc13-owner-reuse.py": "b272a9b69aa69090248554e3cfa80dedba5c1929fb0f072c94d51b2151f631b8",
+    "c016-enc13-owner-reuse/baseline.c": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "c016-enc13-owner-reuse/component-copy.c": "398e374a652069b899100d86c4ac7c3dffe8a1298ea9d47bd5052271c9f4aace",
+    "c016-enc13-owner-reuse/component-copy.json": "5b5ba3515ff5bb8a8790a0a1ce90c3510dedccc67b87dc1b77224da3096b965c",
+    "c016-enc13-owner-reuse/component-copy.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-owner-reuse/component-global.c": "50629f2a5cde8e97e75438cabc28bf1e4bfdcb09951a9a5b0ab57fba63e8eef5",
+    "c016-enc13-owner-reuse/component-global.json": "e308eba668a630eb504bd1c2a505702e6d8a5ed4d9668ae768c5e5861d48e751",
+    "c016-enc13-owner-reuse/component-global.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-owner-reuse/dc_code-copy.c": "fe135e22bd29b45d62b7813b400e1c4ce5ed33dcd1651f25eb0e605160f79b28",
+    "c016-enc13-owner-reuse/dc_code-copy.json": "606f30b916cf5b82dc6b0b9ae3bc65b1a368ae9866d26c179d8e3565c7d0c08c",
+    "c016-enc13-owner-reuse/dc_code-copy.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-owner-reuse/dc_code-global.c": "ac0f7534e3515cb67c7b07480c00bdb36eab6bd06c1b460c6b4abc19a74bc296",
+    "c016-enc13-owner-reuse/dc_code-global.json": "540a9adba63edfa4e0326aa3eaaa04b9bbdfa545d4bf12a162b48efa78b8c813",
+    "c016-enc13-owner-reuse/dc_code-global.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-owner-reuse/dc_length-copy.c": "8b5b6573c84db4e68a8912afa59beee94b25a6390cf90e3c9f7afc25f5eab3da",
+    "c016-enc13-owner-reuse/dc_length-copy.json": "5f55e4e069b3653685309f39a3c73c226ce7cef9ebc0aa3ef45efd344ddaf99c",
+    "c016-enc13-owner-reuse/dc_length-copy.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-owner-reuse/dc_length-global.c": "c4ae8d6582acc65fe87d71d8f25b2f76507ff7ec9168ca8028badc761dd50ea3",
+    "c016-enc13-owner-reuse/dc_length-global.json": "540a9adba63edfa4e0326aa3eaaa04b9bbdfa545d4bf12a162b48efa78b8c813",
+    "c016-enc13-owner-reuse/dc_length-global.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-owner-reuse/results.json": "37cc0351466e650f2db82dfc47bc53074be76cc2842d1d5a81224f1a1bd1431c",
+    "c016-enc13-owner-reuse/tables-copy.c": "47954e86faa1c9a2d023e1be30b4d62b128be7290ab7d7972c25b3762d5bfe8e",
+    "c016-enc13-owner-reuse/tables-copy.json": "9115231c5cb0aea6bcaf8ab35ff35f78d6c303d4fc84b60eb5bbb3d83776b7ca",
+    "c016-enc13-owner-reuse/tables-copy.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-owner-reuse/tables-global.c": "ebfaaf741599b37d021675bc8d105bd0ac3b6a92191fe6e1923a49b266196fd4",
+    "c016-enc13-owner-reuse/tables-global.json": "973ecfe111bb97ef0b9902c97a91f56c9906130ffa869772468d2759fa45c206",
+    "c016-enc13-owner-reuse/tables-global.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-owner-reuse/value-copy.c": "6843a3f82c803c57dcd9c36658b23e067676abfca298c197f4e8f27e558d2814",
+    "c016-enc13-owner-reuse/value-copy.json": "a4e639156df561f28e383c61416040b41d7161840314a881355680af904eb97f",
+    "c016-enc13-owner-reuse/value-copy.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-owner-reuse/value-global.c": "b4f36321818775118d7db94ccf565ade64b5b277b73ae052b2903e678b7b75e3",
+    "c016-enc13-owner-reuse/value-global.json": "973ecfe111bb97ef0b9902c97a91f56c9906130ffa869772468d2759fa45c206",
+    "c016-enc13-owner-reuse/value-global.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-pr3377.json": "53b9fd8e3c3bd78e9e1f6414f46eecd4cfb8c9ba7e8d5fc372f8ed27114bd978",
+    "c016-enc13-reuse-embedded.py": "af61c10520e103b3554e2cd5f1173135c72947933ccd04f757860862e3f4661c",
+    "c016-enc13-reuse-embedded/baseline.c": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "c016-enc13-reuse-embedded/component-for-init.c": "ccd280d27a3f10ed78f151366a7250e9d53c587291230d537f5b14da2dd0f622",
+    "c016-enc13-reuse-embedded/component-for-init.json": "49cee2893d8e1b8a6be9d19eda70956a4c46b99c6f49933e2d315fdf83b7358b",
+    "c016-enc13-reuse-embedded/component-for-init.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-reuse-embedded/component-lookup.c": "0a37ac9436b9da3ddead97277cf926182e1b7085c185e5eb7952d64ede026451",
+    "c016-enc13-reuse-embedded/component-lookup.json": "0adb5a591809c8214d332d836d4d9629078d30a7e64211dfe44a0c0e1b8e84ad",
+    "c016-enc13-reuse-embedded/component-lookup.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-reuse-embedded/dc_code-for-init.c": "8e899ef8b9dd7f7297e9160cb35ad834b720f12c91196ff8ca723998e154f03a",
+    "c016-enc13-reuse-embedded/dc_code-for-init.json": "13b8b0ccd6d77e180d1fff0db4504ac2c671542c42cb319c5ac303f12058d2b8",
+    "c016-enc13-reuse-embedded/dc_code-for-init.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-reuse-embedded/dc_code-lookup.c": "080ec76b0804061b0949ca968d9b7544318a224e505615f08dd4bdc2b5cabf64",
+    "c016-enc13-reuse-embedded/dc_code-lookup.json": "2b2ccdcc4de4eb5e1d2a25bf8a426e67e44ebd2baf72653a0ecc598fccf3d184",
+    "c016-enc13-reuse-embedded/dc_code-lookup.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-reuse-embedded/dc_length-for-init.c": "d3f6104327b20208ef505c63cbf03eaadec893310b5134286dc37672f72dd739",
+    "c016-enc13-reuse-embedded/dc_length-for-init.json": "2b2ccdcc4de4eb5e1d2a25bf8a426e67e44ebd2baf72653a0ecc598fccf3d184",
+    "c016-enc13-reuse-embedded/dc_length-for-init.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-reuse-embedded/dc_length-lookup.c": "981277ffa70061a0ccf4dd0bc9b62f33c573f96663a4f763ab6d33361e9f1530",
+    "c016-enc13-reuse-embedded/dc_length-lookup.json": "2b2ccdcc4de4eb5e1d2a25bf8a426e67e44ebd2baf72653a0ecc598fccf3d184",
+    "c016-enc13-reuse-embedded/dc_length-lookup.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-reuse-embedded/results.json": "8855d3ac857361c0aac5ed3b9b52af32dc8904e498a342b4023971c2435ef00c",
+    "c016-enc13-run-helper-fixed.py": "783400007e47a870cb377b3ec70746fa2972ac18a0acd27aeedb078f498412df",
+    "c016-enc13-run-helper-fixed/baseline.c": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "c016-enc13-run-helper-fixed/count-local-out-length.c": "e1b06a954e3c2f974d5a3a1ad3ba11f0d05974e65e6db73e1c581dcfa7d92471",
+    "c016-enc13-run-helper-fixed/count-local-out-length.json": "d62d452c6f3da4dbf3a658b7f230cc57f89f12e52312f525a617a4265b8e7ff9",
+    "c016-enc13-run-helper-fixed/count-local-out-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper-fixed/count-param-out-length.c": "a2fd0a41baa1cc3bd915d7ec51f71ce3401efb8fd8fa7dc1ccbb05f7cc4a3aa6",
+    "c016-enc13-run-helper-fixed/count-param-out-length.json": "4ca062e51afe0f4de081841ae88ace6a89e344ee6f81e1a678c200ecc7cb5512",
+    "c016-enc13-run-helper-fixed/count-param-out-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper-fixed/results.json": "06c22f0979f929d7de48725101898219bd67cb7b0cf533c13bc86da0eeaa74aa",
+    "c016-enc13-run-helper-fixed/run-param-out-length.c": "18829416081943eb0ede64790e18fcaed74f94163957e49ea49e2cd190a19f4c",
+    "c016-enc13-run-helper-fixed/run-param-out-length.json": "ec4f89d72a28a9788557ffd662678cafed88295b2dce476219c4671d704924ed",
+    "c016-enc13-run-helper-fixed/run-param-out-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper-fixed/run-pointer-out-length.c": "76f5612c195bf01207c39ee1a1a1caa652873cc02bd874e5d36392e342199602",
+    "c016-enc13-run-helper-fixed/run-pointer-out-length.json": "15ff444f5eb346ec39018751362432d4805008d878e7bce90f34b5965ff218fe",
+    "c016-enc13-run-helper-fixed/run-pointer-out-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper-fixed/state-count-out-length.c": "794f8f5c31175780efc45cbd67b311803218b25c62f117a8890f8a3947d96ff1",
+    "c016-enc13-run-helper-fixed/state-count-out-length.json": "cc533541f845c984662d1263d8b41307eaaa6a88e131e5c7b4f61268deda611b",
+    "c016-enc13-run-helper-fixed/state-count-out-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper.py": "339eb8db29694f6ae73a25ec6936940caaa3ce0172f8b69a1ce84cdbcffab604",
+    "c016-enc13-run-helper/baseline.c": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "c016-enc13-run-helper/count-local-local-length.c": "0a06a49f91a9149649f2ff5a8573ed7d83de9bde7b4bad51aa1434bef3c83aa4",
+    "c016-enc13-run-helper/count-local-local-length.json": "d62d452c6f3da4dbf3a658b7f230cc57f89f12e52312f525a617a4265b8e7ff9",
+    "c016-enc13-run-helper/count-local-local-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper/count-local-out-length.c": "e0e59f8d403d543d5f3946c86836856f435d790118eb06716af7d2b33dfd64d9",
+    "c016-enc13-run-helper/count-local-out-length.json": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper/count-local-out-length.log": "03598b1e4e92bd60a177c249b1c59e01a4baba7b67192ac59c726a6d5c0237ee",
+    "c016-enc13-run-helper/count-param-local-length.c": "d6eb713407559502624f72580c911eaa74215c101a52a1745d05f13909c54a8f",
+    "c016-enc13-run-helper/count-param-local-length.json": "07a80f81ef3275d60c5f076e57ca58659032e13e6bcc60ec7648e22e339ae064",
+    "c016-enc13-run-helper/count-param-local-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper/count-param-out-length.c": "96eb4d9e49e72677eb284553e8143f9dd43c8c9368e5001908411d3f92e78d7a",
+    "c016-enc13-run-helper/count-param-out-length.json": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper/count-param-out-length.log": "ee6513a80ec08a496f974f61ea792e9fc35a5411e409d9402ece9321444b33b2",
+    "c016-enc13-run-helper/results.json": "f9e9ab839913c21adb6281b82311fca111e5f9819a5113778ec9b6af96432b87",
+    "c016-enc13-run-helper/reuse-run-embedded.c": "bdfd761f6df0c20a38649fde2ad9e013ee2719b6ab96ae9132e074208062d777",
+    "c016-enc13-run-helper/reuse-run-embedded.json": "ea51cba4a6dff86b86e40f61d0aee118fd664f52da1f68451f0fa7dedb3a3bed",
+    "c016-enc13-run-helper/reuse-run-embedded.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper/reuse-run-separate.c": "645cad2ed2c78e91cf6b6be5daa0fd5aa8cac941c31a8b53bbf14d26aeac95c8",
+    "c016-enc13-run-helper/reuse-run-separate.json": "5682ef7804713f3fbfc8849bed16f435b2ff49eedc08f615157c6b98a359aa51",
+    "c016-enc13-run-helper/reuse-run-separate.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper/run-param-local-length.c": "bf7f58f21209548adf6c4c6e0a79a3110724493a2b9487b4106cebbec7f1f7d2",
+    "c016-enc13-run-helper/run-param-local-length.json": "ec4f89d72a28a9788557ffd662678cafed88295b2dce476219c4671d704924ed",
+    "c016-enc13-run-helper/run-param-local-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper/run-param-out-length.c": "8b018b85212681d5e130adaa36d60ace07fcc396de3aac3f5c67b38eb3fdb322",
+    "c016-enc13-run-helper/run-param-out-length.json": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper/run-param-out-length.log": "2f69836070f450c360e888dd4c194ae68f376ca3aff30444ade387a9b3430450",
+    "c016-enc13-run-helper/run-pointer-local-length.c": "2fb9020b704871688a3e328811e82c1d517d9f4c2712aa3e5f1569d93f861b3b",
+    "c016-enc13-run-helper/run-pointer-local-length.json": "15ff444f5eb346ec39018751362432d4805008d878e7bce90f34b5965ff218fe",
+    "c016-enc13-run-helper/run-pointer-local-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper/run-pointer-out-length.c": "c1f8275dc07e109d670728f7a00fa374ce820a5f470fa2b855dd2f0818257293",
+    "c016-enc13-run-helper/run-pointer-out-length.json": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper/run-pointer-out-length.log": "4e1c771ed902a4bea742b7e1a9be393c4292362949a22e13b05375aaf6b7b83f",
+    "c016-enc13-run-helper/state-count-local-length.c": "4e643dd780ea02ff26a80c359b0504d17513c3598554380bb3d3bfd54024defd",
+    "c016-enc13-run-helper/state-count-local-length.json": "51a4a91d79c1aac71c39e8e7a5e0fb073ea9347a1cf40110bff2348943baf78b",
+    "c016-enc13-run-helper/state-count-local-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper/state-count-out-length.c": "c7a4a1b2b40534c40c07e29e0f6c098c85ff682ece535fdb645ffd9a604d954d",
+    "c016-enc13-run-helper/state-count-out-length.json": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-run-helper/state-count-out-length.log": "06c4f06a45896035efe06a1a5d388da95137ff38f541e154a05422108bd1f02b",
+    "c016-enc13-structure-review.py": "acd13ac3468038db52dbc8fed23b0f3b85a2c0fa6cbbe09a8afb94cfaf675575",
+    "c016-enc13-structure-scored/adjacent-decl-swap-0.c": "f5ba376e39a6dd6d41b0d3d3d9e1d33bfb959dad704a7e16d073aeb8d50bddd6",
+    "c016-enc13-structure-scored/adjacent-decl-swap-0.json": "7e434594d55db9b32f7998a8a6cf55c0cc2b537d7914cd24b0aa7b93d2c28c32",
+    "c016-enc13-structure-scored/adjacent-decl-swap-0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-structure-scored/baseline.c": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+    "c016-enc13-structure-scored/inline-boundary-call-arg-temp-0.c": "db5f9dd1c1b94b4afd734e3086e4dfb6a43b342a38f8de2cfccf8739bb3bf8ce",
+    "c016-enc13-structure-scored/inline-boundary-call-arg-temp-0.json": "a53cd45225f6140cc84e3a7711c143975d0e6c3aa34cec331a5918b6424a161a",
+    "c016-enc13-structure-scored/inline-boundary-call-arg-temp-0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-structure-scored/loop-counter-type-0.c": "677a87d8dacd49aaef3e4ac3ed25adc8549263f3fe4429541a37b63885feb8b0",
+    "c016-enc13-structure-scored/loop-counter-type-0.json": "f00093bbbbb97f050c82b2e7da67af279101277662c6b78096bbab029e377ee5",
+    "c016-enc13-structure-scored/loop-counter-type-0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-structure-scored/results.json": "9c1a325eaf802c68f022f68662d1ed2389d8d169dd0fa34be4c134eb1ea13fe2",
+    "c016-enc13-structure-scored/temp-introduction-0.c": "03d40cbdbd786ee3db3978d5bf1fdb2575be1344d401534be6aa791a070ca5fd",
+    "c016-enc13-structure-scored/temp-introduction-0.json": "f00093bbbbb97f050c82b2e7da67af279101277662c6b78096bbab029e377ee5",
+    "c016-enc13-structure-scored/temp-introduction-0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc13-structure.json": "beede9d16c96d1cb393d997b5af7070c9e49f1362a0e8f6427a2abf92e869845",
+    "c016-enc13-structure/inline-boundary/inline-boundary-call-arg-temp-0.c": "db5f9dd1c1b94b4afd734e3086e4dfb6a43b342a38f8de2cfccf8739bb3bf8ce",
+    "c016-enc13-structure/source-lifetime/adjacent-decl-swap-0.c": "f5ba376e39a6dd6d41b0d3d3d9e1d33bfb959dad704a7e16d073aeb8d50bddd6",
+    "c016-enc13-structure/source-lifetime/block-scope-0.c": "76d536c3c42dbf1785e6310cd8c1cfa061571b82a5fb6f6ab8705328e63c460a",
+    "c016-enc13-structure/source-lifetime/call-arg-tempization-0.c": "db5f9dd1c1b94b4afd734e3086e4dfb6a43b342a38f8de2cfccf8739bb3bf8ce",
+    "c016-enc13-structure/source-lifetime/declaration-use-distance-0.c": "475f3a2a1ff69c0543e97dc8f1f99e97f13e4bd5535357cf43294f83f6c06f39",
+    "c016-enc13-structure/source-lifetime/loop-counter-type-0.c": "677a87d8dacd49aaef3e4ac3ed25adc8549263f3fe4429541a37b63885feb8b0",
+    "c016-enc13-structure/source-lifetime/temp-introduction-0.c": "03d40cbdbd786ee3db3978d5bf1fdb2575be1344d401534be6aa791a070ca5fd",
+    "c016-enc13-upstream-merge.log": "4f4521180829bc70937fd2d7aae188352dc127a1cebdbc3a522c9a051ba82e8f"
+  }
+}

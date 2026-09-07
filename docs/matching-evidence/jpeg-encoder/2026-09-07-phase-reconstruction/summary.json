@@ -1,0 +1,24 @@
+{
+  "function": "hsd_803B3CD8",
+  "retained_percent": 99.70266,
+  "retained_source_sha256": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+  "compile_attempts": 73,
+  "valid_compiles": 68,
+  "invalid_generator_compiles": 5,
+  "review_rejections": 2,
+  "duplicate_sources_skipped": 1,
+  "source_changes_retained": false,
+  "source100": false,
+  "validation": {
+    "frame": 104,
+    "register_only_differences": 38,
+    "instruction_count": 639,
+    "full_build": "exit0",
+    "matched_neighbors": 6
+  },
+  "tool_issue": 1534,
+  "upstream_merge": "4ae0cedc4c",
+  "upstream_head": "7f97c7afe0",
+  "pr3377_head": "5d8814c18093525f573011ff5e37e97020d3c655",
+  "research_scope": "PR2479 is a regressing standard-JPEG rewrite. Public code search and inspected KAR tree supplied no new encoder body; this is not an exhaustive donor verdict."
+}

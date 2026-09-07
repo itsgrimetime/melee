@@ -641,10 +641,86 @@ contains all50 candidates, comparison code and both full retail traces, public
 scratch summaries/source, ordinary verification, and a verified190-member
 SHA256 archive. PR3377 and scratchmbSPH keep the existing best source.
 
-Next distinct source hypothesis: extract the complete DC encoding phase
+The next continuation tested this source hypothesis: extract the complete DC encoding phase
 (table selection, difference/category, history update, Huffman/payload output),
 with explicit ownership of its work reference. Earlier DC ownership probes
 covered read/save operations; Huffman probes covered output/table lookups.
 They do not exhaust the complete-phase boundary. Check actual inline expansion
 and frame before interpreting any register score, and keep AC source behavior
-and all runtime data references intact.
+and all runtime data references intact. Its results are recorded below.
+
+## DC phase, run ownership, and category reconstruction
+
+Focus remains **hsd_803B3CD8 until source100**. No candidate in this continuation
+improved the retained 99.70266% source. The existing scratch mbSPH and PR3377
+remain the sharing/review locations; a lower raw register-difference count is
+not evidence of improvement when instructions move or a copy appears.
+
+- All twelve complete DC-phase helpers fully inline when depth8 precedes every
+  helper definition. The closest form passes work and the selected DC tables,
+  with run initialized in the caller: 99.38184%, frame112, same opcode sequence,
+  71 register differences. Other ownership/table/initialization forms regress
+  further. Fully inlining the phase does not solve the work-pointer allocation.
+- Six address-representation probes cover pointer/integer union views and
+  static const scalar/aggregate work pointers. None improves; unions introduce
+  instructions and static pointers change frame/address code. No static data
+  or type-punning experiment was retained.
+- Twelve valid run-phase variants cover input count/run, pointer input,
+  helper-local or aggregate count, caller/helper length ownership, and reuse of
+  run after its zero-count role is dead. A separate `run++;` before encoding,
+  followed by the existing reset, is exactly baseline-identical. Embedding the
+  increment in the bit-length argument changes code. The nearest helper forms
+  preserve the 38 register differences but grow the frame to112. Five initial
+  output-parameter candidates had a generator substitution error that also
+  renamed `bit_length`; all five were corrected and compiled. Invalid attempts
+  are saved but excluded from matching evidence.
+- Twelve signed-category variants move abs and the bit scan into nested or
+  direct helpers, on DC, AC, or both paths. None improves. The direct-parameter
+  DC form adds `addi r25,r3,0` and changes magnitude/history addressing registers;
+  its low positional register count is misleading after that insertion. The
+  work pointer still receives r31. All new helpers fully inline.
+- Six component parameter tests update the header consistently: int, enum,
+  unsigned int/u32, and signed comparisons of the unsigned forms. Int/enum and
+  explicitly signed tests reproduce the baseline. Unsigned tests alter compare
+  instructions. Both source and header are restored.
+- Ten second-role work-owner probes reuse dead DC code/length/table, component,
+  or value locals for the AC phase. Copying through tables/value is neutral.
+  Reusing DC code/length or component changes the initial pointer to r26 and
+  adds a copy; direct global reinitialization adds further instructions. These
+  are changes to allocation, not successful realization of the desired r30.
+  Six follow-ups embed the assignment in the for initializer or coefficient
+  lookup. All reproduce their respective separate-assignment candidates,
+  including the extra copy; embedding alone does not fix this ownership split.
+
+The existing structure search generated seven entries. Two malformed scope
+probes mistake `state.work`'s member declaration for a function local; these
+were rejected before compilation and reported as issue1534. Two entries have
+identical generated source. Four unique valid candidates were compiled: three
+are neutral, while a block-local int for the run payload gives99.663536%.
+That candidate reuses r24 for the incremented run and moves its addi before the
+length decrement. Its37 paired register differences therefore do not improve
+the retained38-difference result. Generated sources and review decisions are
+preserved so these invalid/duplicate entries are not counted as seven compiles.
+
+Closed upstream PR2479 was inspected as an additional historical donor. Its
+report regresses this encoder from82.84% to30.72%, and its source substitutes
+standard combined JPEG run/category coding with0xF0 long-run handling. It is
+not a matching donor for this function's separate run+1 coding. A fresh public
+code search supplied no new encoder body; the inspected Kirby Air Ride repo
+tree contains no JPEG/HSD path. These bounded searches do not establish that
+no donor exists. PR3377 remains open at5d8814c180 with no new human review.
+
+Upstream7f97c7afe0 (PR3385, Fighter input-field renames) was integrated as
+4ae0cedc4c. It contains no change to the encoder TU.
+
+Restored ordinary checkdiff confirms99.70266%, frame104,639 instructions, and38
+register-only differences. All six previously matched neighbors remain100%,
+RGB remains98.7788%, and the full GALE01 build passes. TU stays Linkable.
+The encoder source SHA256 remains
+`0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee`.
+
+Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-07-phase-reconstruction/`
+contains73 compile attempts (68 valid), two precompile review rejections, one
+duplicate skipped, candidate generators, historical PR/search observations,
+and final verification in a SHA256-verified archive. These failed source
+families constrain their tested forms; they do not establish a source ceiling.
