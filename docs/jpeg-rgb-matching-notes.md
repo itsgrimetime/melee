@@ -1332,3 +1332,18 @@ This is scoped instruction-output equivalence excluding relocation-only rows,
 not a statement about hidden virtual identity. No new lowering/allocation
 behavior or production gain. Sources/diffs in2026-09-07-typed-chroma-arrays;
 production restored98.82488.
+
+## Parameter storage reuse — 2026-09-07
+
+Nine row-fixed source probes reuse unused height for chroma_index,row_part,
+dst_row,chroma_y,chroma_x,pixel_index, or reuse x/y/width for chroma_index AFTER
+their original values have been consumed by image_offset/stride. Every new
+working value is assigned before read. Function signature and alias-sensitive
+store/load ordering unchanged; no incoming height value becomes observable.
+
+Index reuse through any of four parameters and row_part through height retain
+98.087555/frame152, with exact full instruction-row equality to coherent seed.
+Other height reuse regresses97.88019(dst_row),97.64977(chroma_y),96.56682(chroma_x),
+97.46544(pixel_index), allframe152. Thus parameter object classification does
+not give the desired index allocation order in these cases. No source retained.
+Full sources/diffs in2026-09-07-parameter-storage; production restored98.82488.
