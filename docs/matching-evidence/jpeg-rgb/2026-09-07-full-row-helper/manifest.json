@@ -1,0 +1,209 @@
+{
+  "function": "hsd_803B3408",
+  "source_head": "2b6d5bea9cfdafd8e0fc29fd190e4e1a44cb19db",
+  "retained_percent": 98.7788,
+  "source_improvement": false,
+  "return_copy_evidence": {
+    "initial": [
+      {
+        "address": "0x00650f44",
+        "opcode": "ADD",
+        "registers": [
+          74,
+          83,
+          84
+        ]
+      },
+      {
+        "address": "0x00650fa4",
+        "opcode": "ADD",
+        "registers": [
+          40,
+          41,
+          74
+        ]
+      },
+      {
+        "address": "0x0065162c",
+        "opcode": "ADD",
+        "registers": [
+          38,
+          38,
+          40
+        ]
+      }
+    ],
+    "optimized": [
+      {
+        "address": "0x00650f44",
+        "opcode": "ADD",
+        "registers": [
+          74,
+          83,
+          84
+        ]
+      },
+      {
+        "address": "0x00650fa4",
+        "opcode": "ADD",
+        "registers": [
+          40,
+          67,
+          74
+        ]
+      },
+      {
+        "address": "0x0065162c",
+        "opcode": "ADD",
+        "registers": [
+          38,
+          38,
+          40
+        ]
+      }
+    ],
+    "forward_peephole": [
+      {
+        "address": "0x00650f44",
+        "opcode": "ADD",
+        "registers": [
+          74,
+          83,
+          84
+        ]
+      },
+      {
+        "address": "0x00650fa4",
+        "opcode": "ADD",
+        "registers": [
+          40,
+          67,
+          74
+        ]
+      },
+      {
+        "address": "0x0065162c",
+        "opcode": "ADD",
+        "registers": [
+          38,
+          38,
+          40
+        ]
+      }
+    ]
+  },
+  "finding": "No return-value copy exists in the first captured backend PCode. The two additions already write separate virtuals74 and40.",
+  "candidates": [
+    {
+      "family": "complete-row",
+      "name": "local",
+      "score": 94.548386,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    },
+    {
+      "family": "complete-row",
+      "name": "pixel",
+      "score": 94.769585,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "complete-row",
+      "name": "counter",
+      "score": 95.70046,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    },
+    {
+      "family": "complete-row",
+      "name": "both",
+      "score": 95.92166,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 152,
+        "frame_growth": 0
+      }
+    },
+    {
+      "family": "row-counter-owner",
+      "name": "pixel-rowptr",
+      "score": 94.548386,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    },
+    {
+      "family": "row-counter-owner",
+      "name": "pixel-tileptr",
+      "score": 94.548386,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    },
+    {
+      "family": "row-counter-owner",
+      "name": "both-rowptr",
+      "score": 95.70046,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    },
+    {
+      "family": "row-counter-owner",
+      "name": "both-tileptr",
+      "score": 95.70046,
+      "frame": {
+        "expected_frame_size": 152,
+        "current_frame_size": 160,
+        "frame_growth": 8
+      }
+    }
+  ],
+  "files": {
+    "c016-rgb-complete-row/both.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-complete-row/both.c": "5cc79c1033ef8746642513005e2b46a49985f8baaa08a397b6e4e02762c82039",
+    "c016-rgb-complete-row/local.c": "4745a9411ddc7e3dc0465532d8104581132d31dc735d36a6e2c792a4e5a1113e",
+    "c016-rgb-complete-row/pixel.json": "58cd412c8bbe5808cf29324ddcad9b3af5388e004f7d2187c3daa0c060577641",
+    "c016-rgb-complete-row/results.json": "0ad2ea10374bfb38ad49d0f35c03a9ceef70d8a29ee0f88a1b24da122c9987d2",
+    "c016-rgb-complete-row/counter.json": "65be5ee284cc99119dae79d3b67434f9de4f99f4339d6368509d44a6eb619b02",
+    "c016-rgb-complete-row/local.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-complete-row/pixel.c": "dac8e88ee469c210d507503aef48eb96d161ce2f6ccf5564e46ff4eac0dd22c4",
+    "c016-rgb-complete-row/counter.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-complete-row/pixel.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-complete-row/both.json": "92433400287bb2db2b2f69dd98ad4b9528f009d044363ad90ccb2057b4748587",
+    "c016-rgb-complete-row/counter.c": "4c43dde838bd606b216de8407524c05b693f02ea1cc0a729afff9b51692dff73",
+    "c016-rgb-complete-row/local.json": "9db339967496b25127822310eac8a873f68e240197719f9eb7a80ebed96af95e",
+    "c016-rgb-complete-row.py": "ba12c1571a368f69c5914968f694e83a563fceaaef5e9eedf0faa1cab97f257c",
+    "c016-rgb-row-counter-owner/both-tileptr.json": "28ec0cb7498f159ade656278524eaa8991a4b4911b7dc7ab88dcb265a7f24f66",
+    "c016-rgb-row-counter-owner/pixel-rowptr.json": "3338cabc400eea654196981b82051adfb8d325af1e805dc82507c9560dae8e19",
+    "c016-rgb-row-counter-owner/both-rowptr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-counter-owner/both-rowptr.json": "77b79f7cdab94793b95f6fe24f4f60bef015449fff79090924b1fb55e99ded31",
+    "c016-rgb-row-counter-owner/pixel-tileptr.json": "a61152413a529e8d3b8b10bb8835c652032a22dbb486cd12578e4792fd87e725",
+    "c016-rgb-row-counter-owner/results.json": "d3d0a2ea79121d5079c6e226aaf00ea2124b64e346ff55015c2b3a00b4c51a9c",
+    "c016-rgb-row-counter-owner/both-rowptr.c": "05dabd9ee7bc57fe97a0093e92c7c6d0232056ed597c09ee516032fae380210f",
+    "c016-rgb-row-counter-owner/pixel-tileptr.c": "949dda92479d28723cc76228468e6fd8c3e93836c7ffadc282f84cf4e902765c",
+    "c016-rgb-row-counter-owner/pixel-rowptr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-counter-owner/both-tileptr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-counter-owner/both-tileptr.c": "8a6839fbdfc406fbcf46c325981f2a8b2240c9c7d6ea1d6643493539205498fe",
+    "c016-rgb-row-counter-owner/pixel-tileptr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-rgb-row-counter-owner/pixel-rowptr.c": "2b23361c8b336c458999a2f7a5ce9f54e20beb0d3b70d8dcd254af00de6bdb28",
+    "c016-rgb-row-counter-owner.py": "201b42e3ca49c221b1caa199e744ccea8a846759c6634459cff6a7dfb9f45620"
+  },
+  "archive_sha256": "2aad4efd1618a655385c44ac61ea65ca12fbcb798977dd1a837291abcc8abca9"
+}

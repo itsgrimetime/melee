@@ -853,3 +853,24 @@ spellings do not supply the required lifetime extension/coalescing.
 The next source work should alter ownership across a larger helper/loop boundary
 or inspect where the return-result copy disappears. Avoid pure SELECT-order
 search and re-running the now exhausted direct/cast/output/inner-row variants.
+
+## Full chroma-row boundary and missing return copy — 2026-09-07
+
+The coherent candidate's INITIAL backend snapshot already has ADD74,83,84 then
+ADD40,41,74. Optimized/forward snapshots only replace tile virtual41 with67.
+No MR/return copy involving74 exists at any captured backend stage, so backend
+copy elimination is not the missing lever. Any separation/copy propagation that
+matters happened during frontend inlining/lowering, before initial PCode.
+
+Eight broader source reconstructions were measured and restored. A helper owns
+row-sum/src-row calculations AND the four-pixel chroma loop, unlike the earlier
+whole-loop helper that received already computed row offsets. Four ownership
+variants keep pixel and/or chroma_x in the caller via pointers or helper locals;
+scores94.548386–95.92166%,frame152/160. Four follow-ups pass chroma_y by pointer,
+optionally tile_offset too, to preserve caller counter ownership. They score
+94.548386/95.70046%,frame160. They do not recover the required row register and
+add frame cost. Do not repeat this full-row helper family on this baseline.
+
+Sources/diffs and compact stage lineage are SHA256-verified in
+2026-09-07-full-row-helper. Production remains98.7788%; the direct-row-call
+structural candidate remains preserved separately. Goal remains active.
