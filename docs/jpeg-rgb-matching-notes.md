@@ -805,3 +805,27 @@ trace are SHA256-verified in2026-09-07-direct-row-call.
 
 Normal frontend IRO dump consumed CPU for90+seconds without a trace; stopped
 only that emulator, reported issue1542. Read-only hooks/full backend still work.
+
+## Helper result ownership probes — 2026-09-07
+
+16 ordinary source variants, all restored. Starting from the coherent direct
+row-call candidate, explicit assignment of the helper result to dst_row followed
+by tile addition is instruction-identical to the direct expression, including
+sumr5 and finalr26. u32/int/unsigned-int casts at that caller boundary are also
+neutral; identity/accessor helpers add8frame bytes (six probes total).
+
+Void output helpers, direct or named-local sum and both parameter orders (four
+probes), remove8frame bytes but do not merge the sum/final row allocation.
+Named-local output gives97.820274%,frame144; direct output95.95392%,frame144.
+
+Tile-parameter helper updating sum through u32/int/unsigned-int, with reversed
+argument order too (six probes), gives97.58064%,frame152. Its row ADD order is
+correct but the surrounding allocation changes substantially: chroma_y takes
+r26, lowr6, highr5, sumr5, finalr6. No improvement over the preserved coherent
+98.04147% candidate. Do not re-run these equivalent caller assignment/cast/
+output-parameter spellings. The mismatch DB also rules out register-keyword-only
+allocation probes for this compiler configuration; none were wasted here.
+
+Evidence is SHA256-verified in2026-09-07-helper-ownership. Production remains
+98.7788%; the direct-row-call candidate remains the next structural starting
+point. Exact matching, a new source-improvement PR and TU linking remain open.
