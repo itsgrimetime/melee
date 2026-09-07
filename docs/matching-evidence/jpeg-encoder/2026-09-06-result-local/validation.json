@@ -1,0 +1,36 @@
+{
+  "primary": {
+    "head": "5cdb1ad08cc12ad1f235e1b3ba9339f56d15eb1f",
+    "dol_sha1": {
+      "orig/GALE01/sys/main.dol": "08e0bf20134dfcb260699671004527b2d6bb1a45",
+      "build/GALE01/main.dol": "08e0bf20134dfcb260699671004527b2d6bb1a45"
+    },
+    "functions": {
+      "hsd_803B3408": 98.7788,
+      "fn_803B376C": 100.0,
+      "hsd_803B3CD8": 99.70266,
+      "hsd_803B46D4": 100.0,
+      "hsd_803B4A2C": 100.0,
+      "hsd_803B4D64": 100.0,
+      "hsd_803B51C8": 100.0,
+      "hsd_803B5C2C": 100.0
+    }
+  },
+  "pr": {
+    "head": "5d8814c18093525f573011ff5e37e97020d3c655",
+    "dol_sha1": {
+      "orig/GALE01/sys/main.dol": "08e0bf20134dfcb260699671004527b2d6bb1a45",
+      "build/GALE01/main.dol": "08e0bf20134dfcb260699671004527b2d6bb1a45"
+    },
+    "functions": {
+      "hsd_803B3408": 98.7788,
+      "fn_803B376C": 100.0,
+      "hsd_803B3CD8": 99.70266,
+      "hsd_803B46D4": 100.0,
+      "hsd_803B4A2C": 100.0,
+      "hsd_803B4D64": 100.0,
+      "hsd_803B51C8": 100.0,
+      "hsd_803B5C2C": 100.0
+    }
+  }
+}

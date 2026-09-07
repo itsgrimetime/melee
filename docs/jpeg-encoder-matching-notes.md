@@ -2,6 +2,10 @@
 
 Verified 2026-09-06 in c016. Source: `src/sysdolphin/baselib/hsd_3B34.c`.
 
+Latest follow-up: `5cdb1ad08c` removes `PAD_STACK(16)` through a real bit-length
+result local, with unchanged99.70266% output. See the final section; earlier
+padding observations below describe the preceding source.
+
 ## Retained improvement
 
 - `hsd_803B3CD8`: 97.746475% → 99.51487% → **99.70266%**.
@@ -298,3 +302,55 @@ Evidence is in `docs/matching-evidence/jpeg-encoder/2026-09-06-root-inversion-so
 baseline and failed override dumps, test logs, graph sweep, restored TU report,
 build/checksum results, and a verified257-member SHA-256 manifest. No new source
 improvement was pushed to upstream PR3377 and the TU remains Linkable.
+
+## Bit-length result local replaces stack padding
+
+Retained source commit **5cdb1ad08c**, clean PR3377 commit **5d8814c180**.
+A branch-local result in `hsd_803B3CD8_bit_length` accounts for the stack
+reservation previously supplied by `PAD_STACK(16)`:
+
+```c
+if (value & (1 << bit)) {
+    s32 result = bit + 1;
+
+    return result;
+}
+```
+
+Removing the padding with this local preserves all802 disassembly/relocation
+lines from the preceding encoder source:639 instructions,104-byte frame,
+99.70266%,38 register-only differences. This is a retained source reconstruction
+improvement, **not a match-percentage gain or allocator solution**. The same
+local with a single return/goto also works; the retained early-return form
+keeps the existing simple control flow. Both primary and PR TU sources agree.
+
+22 ordinary source probes were saved:
+
+- Bit-writing counter ownership and bit-length return forms (8): counter reuse
+  preserves opcodes but shrinks the frame to88 and increases register differences;
+  a preinitialized result moves the zero assignment before each scan. No gain.
+- DC helper/ownership separation and bit-length output/local forms (8): splitting
+  DC reads/writes adds instructions or moves address setup. A late-zero result
+  with padding removed preserves the exact baseline; output parameters keep
+  opcodes but give91 register differences.
+- Structured single-exit and input-parameter reuse forms (4): no gain. Reusing
+  the value parameter preserves opcodes/frame104 but gives117 register differences.
+- Shared and branch-local early-return results (2): both preserve the exact
+  baseline without padding. The simpler branch-local version is retained.
+
+A fresh supported retail backend trace completes successfully. All283 GPR
+color decisions are identical to the preceding source trace, including IDs,
+assignment order, and physical registers. Thus the older allocation evidence
+remains relevant; the result local resolves stack reservation but does not
+change the allocator's work-pointer ownership. No forced compiler edit was used.
+
+Full GALE01 builds pass in both worktrees. Six matched neighbors remain100%,
+RGB remains98.7788%, and both built DOL SHA-1 values equal the original
+`08e0bf20134dfcb260699671004527b2d6bb1a45`. Since these two functions remain
+unlinked, that checksum validates the build rather than proving a source100
+match. TU remains Linkable. PR3377 source and description were pushed; CI
+was running at this checkpoint.
+
+Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-06-result-local/` contains
+all candidates, baseline/retained diffs, the fresh retail trace, comparison,
+validation summaries, and a verified SHA-256 archive manifest.

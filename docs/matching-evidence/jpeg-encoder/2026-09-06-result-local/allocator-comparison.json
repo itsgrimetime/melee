@@ -1,0 +1,18 @@
+{
+  "color_decisions_identical": true,
+  "old_decisions": 283,
+  "new_decisions": 283,
+  "equal_class_fields": [
+    "class_id",
+    "class_name",
+    "coalesce",
+    "color_decisions",
+    "edges",
+    "nodes",
+    "non_allocatable_state",
+    "registers",
+    "select_order",
+    "simplify_order"
+  ],
+  "changed_class_fields": []
+}

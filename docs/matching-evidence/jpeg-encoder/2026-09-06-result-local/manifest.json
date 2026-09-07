@@ -1,0 +1,476 @@
+{
+  "function": "hsd_803B3CD8",
+  "scratch": null,
+  "module": "sysdolphin/baselib",
+  "source_commit": "5cdb1ad08c",
+  "pr_commit": "5d8814c180",
+  "source_sha256": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+  "retained_source_improvement": "branch-local bit-length result replaces PAD_STACK(16); no percentage improvement",
+  "retained_percent": 99.70266,
+  "retained_frame": 104,
+  "candidates": [
+    {
+      "family": "c016-enc4-loop-ownership",
+      "name": "result-break",
+      "score": 98.70735,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      },
+      "structural": {
+        "opcode_similarity": 0.9953051643192489,
+        "line_delta": 0,
+        "hunk_count": 30
+      },
+      "regdiff": 29,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc4-loop-ownership",
+      "name": "return-counter",
+      "score": 91.111115,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.8130081300813008,
+        "line_delta": 48,
+        "hunk_count": 17
+      },
+      "regdiff": 28,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc4-loop-ownership",
+      "name": "result-goto",
+      "score": 98.70735,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      },
+      "structural": {
+        "opcode_similarity": 0.9953051643192489,
+        "line_delta": 0,
+        "hunk_count": 30
+      },
+      "regdiff": 29,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc4-loop-ownership",
+      "name": "reuse-length",
+      "score": 99.44444,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 88,
+        "frame_growth": -16
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 47
+      },
+      "regdiff": 61,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc4-loop-ownership",
+      "name": "while-length",
+      "score": 96.19718,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 96,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.9636075949367089,
+        "line_delta": 14,
+        "hunk_count": 26
+      },
+      "regdiff": 36,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc4-loop-ownership",
+      "name": "counter-initializer",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc4-loop-ownership",
+      "name": "result-break-reuse-length",
+      "score": 98.46479,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9953051643192489,
+        "line_delta": 0,
+        "hunk_count": 40
+      },
+      "regdiff": 52,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc4-loop-ownership",
+      "name": "return-counter-reuse-length",
+      "score": 90.8529,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 88,
+        "frame_growth": -16
+      },
+      "structural": {
+        "opcode_similarity": 0.8130081300813008,
+        "line_delta": 48,
+        "hunk_count": 17
+      },
+      "regdiff": 28,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc4-dc-ownership",
+      "name": "global-dc-prefix",
+      "score": 96.25822,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.6614664586583463,
+        "line_delta": 6,
+        "hunk_count": 17
+      },
+      "regdiff": 74,
+      "work_load": "+07c: 38 a5 00 00 \taddi    r5,r5,0"
+    },
+    {
+      "family": "c016-enc4-dc-ownership",
+      "name": "helper-dc-read",
+      "score": 98.056335,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.9921996879875195,
+        "line_delta": 6,
+        "hunk_count": 26
+      },
+      "regdiff": 86,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc4-dc-ownership",
+      "name": "helper-dc-write",
+      "score": 98.0266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9914129586260734,
+        "line_delta": 5,
+        "hunk_count": 31
+      },
+      "regdiff": 51,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc4-dc-ownership",
+      "name": "helper-dc-both",
+      "score": 96.06416,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.6630265210608425,
+        "line_delta": 6,
+        "hunk_count": 17
+      },
+      "regdiff": 77,
+      "work_load": "+07c: 38 a5 00 00 \taddi    r5,r5,0"
+    },
+    {
+      "family": "c016-enc4-dc-ownership",
+      "name": "late-zero-result",
+      "score": 99.69484,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 36
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc4-dc-ownership",
+      "name": "late-zero-result-no-pad",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc4-dc-ownership",
+      "name": "output-length",
+      "score": 99.17058,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 120,
+        "frame_growth": 16
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 73
+      },
+      "regdiff": 91,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc4-dc-ownership",
+      "name": "output-length-no-pad",
+      "score": 99.178406,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 72
+      },
+      "regdiff": 91,
+      "work_load": "+018: 3b e4 00 00 \taddi    r31,r4,0"
+    },
+    {
+      "family": "c016-enc4-single-exit",
+      "name": "negative-counter-fallback",
+      "score": 97.92958,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.9953271028037384,
+        "line_delta": 6,
+        "hunk_count": 32
+      },
+      "regdiff": 50
+    },
+    {
+      "family": "c016-enc4-single-exit",
+      "name": "loop-else-zero",
+      "score": 98.48983,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.9953051643192489,
+        "line_delta": 0,
+        "hunk_count": 37
+      },
+      "regdiff": 37
+    },
+    {
+      "family": "c016-enc4-single-exit",
+      "name": "do-break-result",
+      "score": 78.18466,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 112,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.8472222222222222,
+        "line_delta": 126,
+        "hunk_count": 14
+      },
+      "regdiff": 31
+    },
+    {
+      "family": "c016-enc4-single-exit",
+      "name": "goto-reuse-value",
+      "score": 98.84976,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 82
+      },
+      "regdiff": 117
+    },
+    {
+      "family": "c016-enc4-return-local",
+      "name": "shared-return-local",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38
+    },
+    {
+      "family": "c016-enc4-return-local",
+      "name": "branch-return-local",
+      "score": 99.70266,
+      "frame": {
+        "expected_frame_size": 104,
+        "current_frame_size": 104,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 35
+      },
+      "regdiff": 38
+    }
+  ],
+  "archive_sha256": "2d73495a7aff73f806a7d2e3b658b54cadfdf4cec895980bb7d1eca5c0622415",
+  "files": {
+    "c016-enc4-attempt.log": "31f582a2f7919f3bbd04b4b5c77101cf5143f52c0d937d9689f32f4493b65dc1",
+    "c016-enc4-dc-ownership/baseline.c": "b38c169edd6fe1585eb195d3bd59a4ad9ddccf4915dfdb216bda58875c6586ef",
+    "c016-enc4-dc-ownership/global-dc-prefix.c": "b207d2907aad665aae3eee051265814575906819cc8a00cbc586ab178d8e5f5e",
+    "c016-enc4-dc-ownership/global-dc-prefix.json": "ed9c19a40c3ccd4a64a6bff56a07e4da4fd68c4f741beccdb4b4860b50e038d1",
+    "c016-enc4-dc-ownership/global-dc-prefix.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-dc-ownership/helper-dc-both.c": "7b57cbf6d4e2fb0e90fae28294ee1a944ac2aa210f77926e4c6c59be0fbfffd4",
+    "c016-enc4-dc-ownership/helper-dc-both.json": "004ad08d02f2733a0eedd59dc08e7c42b48e6909b3d1936068498c430cf001c7",
+    "c016-enc4-dc-ownership/helper-dc-both.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-dc-ownership/helper-dc-read.c": "4921ac0866df1e1b43847f0646dbcae516973652dba5f7bcb663fb369f6b71cf",
+    "c016-enc4-dc-ownership/helper-dc-read.json": "1109eadd17562b028a3c468f91b68ae7bcfb1fd5d1b12d6c50103289680a8551",
+    "c016-enc4-dc-ownership/helper-dc-read.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-dc-ownership/helper-dc-write.c": "c37f16f2d8d41b8c90e8d15e9788cfec377253a558c0b83bb253b43e3fc9d874",
+    "c016-enc4-dc-ownership/helper-dc-write.json": "c941a245ffd39a59308d5f20f3d07acfd7b2b8c0cd7f6c5add41330dc38c8573",
+    "c016-enc4-dc-ownership/helper-dc-write.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-dc-ownership/late-zero-result-no-pad.c": "a4b559d45d18e99a26b6ddd85ff83ad2ca3f9f811ad1ea3fef159fdb39a72885",
+    "c016-enc4-dc-ownership/late-zero-result-no-pad.json": "19cfc56ff41f30c5a9e9fc058a8211e0f0a12c3f9d5b13e35aa1b2cbf31523dc",
+    "c016-enc4-dc-ownership/late-zero-result-no-pad.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-dc-ownership/late-zero-result.c": "d0f632b0c743ea6df490109f15ed39f1deb0958ec570891d462b4fb6d83f909d",
+    "c016-enc4-dc-ownership/late-zero-result.json": "c6fcf634a3f4b8f4df95711217af46b35639c4a9b0056dafcb9cc1dfd08a157a",
+    "c016-enc4-dc-ownership/late-zero-result.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-dc-ownership/output-length-no-pad.c": "c52befb75138610126b437783107ed92915c969d8cc4985eca689585a1a94001",
+    "c016-enc4-dc-ownership/output-length-no-pad.json": "3a07b86c0e007f2b23441c738e07b720ced63b73c68d66fe5acd08db71139181",
+    "c016-enc4-dc-ownership/output-length-no-pad.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-dc-ownership/output-length.c": "6e9a2ca8b9e4fde055405a86d6f882444f0ac9e80e3cd6f77a7e62daf7fbe0dd",
+    "c016-enc4-dc-ownership/output-length.json": "443c5dfb342b234b83272b15a4bf38fd7fdca098b1823808299f776416d3523e",
+    "c016-enc4-dc-ownership/output-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-dc-ownership/results.json": "0fcb4d1a59fe46df09da1347add54e2700650d7ff92246fd1f97ac14feb6022a",
+    "c016-enc4-dc-ownership.py": "e10d280de3c14735d411cfae8b9add5a10845072b6a73ed5d0c87927a16f1c11",
+    "c016-enc4-loop-ownership/baseline.c": "b38c169edd6fe1585eb195d3bd59a4ad9ddccf4915dfdb216bda58875c6586ef",
+    "c016-enc4-loop-ownership/counter-initializer.c": "c1286fb5a7f8cd2bad6dc5bb23db275d782fbb3a70046ac3bf5b10db7a5e52cc",
+    "c016-enc4-loop-ownership/counter-initializer.json": "e55e14fcad630cf19a3c35bd783cebcb4c8af262394082df29d43b5d310802a3",
+    "c016-enc4-loop-ownership/counter-initializer.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-loop-ownership/result-break-reuse-length.c": "808a30f1a36d960b6eb0990c00bd133789d2971e5f6a1cc4a6d202ce020e2876",
+    "c016-enc4-loop-ownership/result-break-reuse-length.json": "81b64a8d51ac6aa20747b28b8a3dbd97cf6f301ffb17ddb8481e703bcf6fffd1",
+    "c016-enc4-loop-ownership/result-break-reuse-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-loop-ownership/result-break.c": "9347927491c38a4b474e0a6b6c0f5e56f04a02727db3122f5a0a582ff145de99",
+    "c016-enc4-loop-ownership/result-break.json": "c778a96fa2dcb77f137e4b67ff666bc19a3bcbda37362b8f326b68f841f1ea13",
+    "c016-enc4-loop-ownership/result-break.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-loop-ownership/result-goto.c": "8b5d33739432c558c0acc5f155818d4bbca075c5563fdaf35138dc3db0b642d0",
+    "c016-enc4-loop-ownership/result-goto.json": "c333a5d51046dc3f4c3ef7fd226835f8b573f00afd93ff941420ee083ccfe18f",
+    "c016-enc4-loop-ownership/result-goto.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-loop-ownership/results.json": "902feb50f95f4834cecebc7640800982cf44a0ed8aae156e0052ae95d3a58498",
+    "c016-enc4-loop-ownership/return-counter-reuse-length.c": "dc690c54f771e9b054bb4fabdbf9c80107cf8b519fbbfff8500d4e986dc6a56f",
+    "c016-enc4-loop-ownership/return-counter-reuse-length.json": "fb1982abbd82a93c258a57860451f609a39509be3d64ea1782eef170707291a4",
+    "c016-enc4-loop-ownership/return-counter-reuse-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-loop-ownership/return-counter.c": "4a291babc8f7f5ff0e61cc37a0543365dd04c76d72d12118c20bda7b468f54c8",
+    "c016-enc4-loop-ownership/return-counter.json": "1d0fbf03379d1b23390cffc17fcfba3eb9ad9e807db922483b2dfef7d737b458",
+    "c016-enc4-loop-ownership/return-counter.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-loop-ownership/reuse-length.c": "b557e480f2d724ecd16a1be3007cf8867984b23e58f1d3a9db7a23e4231a9f44",
+    "c016-enc4-loop-ownership/reuse-length.json": "25422b35934d7ab8e727f0e9ce96e9ceebf83aaafacac5e12a19864c3616ed26",
+    "c016-enc4-loop-ownership/reuse-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-loop-ownership/while-length.c": "aab4d8b15cb42eeedff4e9b8fe88f82acce0c09d4cd8e91f925d2a025a46c003",
+    "c016-enc4-loop-ownership/while-length.json": "df9de181a5f60ab19ed54bdedfb3da5100f336649d208c3b441e937aaca78f36",
+    "c016-enc4-loop-ownership/while-length.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-loop-ownership.py": "3d2994d6b05dd6a6b91fc633b21c6ebdd6c7a05cb28816e8b30e4e93bda2baf3",
+    "c016-enc4-pr-body.md": "50c2a5198cb16a91d11f6510019ccc24554a42481110912099d543834c49c30d",
+    "c016-enc4-retail/backend-events.v1.jsonl": "c49ba24ed278015afa2fb5db7fb7605e2d4d7445bfe34576150579fb13b3fab1",
+    "c016-enc4-retail/backend-object-events.v1.json": "2de2da6690dc460aeb4b3f9e3c14c8b8ad8640d4d6e96baad3e42f5dd1b0d742",
+    "c016-enc4-retail/backend-onepass-summary.json": "bf4d49b67c125eecb53a085cde653da5c2914f64c36f4be7e2d7304dd34ec11f",
+    "c016-enc4-retail/backend-pcode-events.v1.json": "b756199b05a0236acc040b02c65069e4af4af9bbac4046c617d8e8e0f63e2490",
+    "c016-enc4-retail/backend-summary.txt": "c81851149c6f43cc3edd4620986916651bc92467203678de136ec21238a36755",
+    "c016-enc4-retail/backend-trace.v1.json": "71b1cce4546e9786664a3576815b250574c39739b07743eb26d333ce6d83fd44",
+    "c016-enc4-retail/launch.log": "6845e20aebfaca354505a788a93b5327c77f77e0dbb0d6f10a2a7710e040439d",
+    "c016-enc4-retail/regalloc-summary.txt": "0dc7826a8d11862f25d4410349e2238b95d1df34744c9332d1df7b8e0617a44b",
+    "c016-enc4-retail.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-retained.json": "f00093bbbbb97f050c82b2e7da67af279101277662c6b78096bbab029e377ee5",
+    "c016-enc4-retained.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-return-local/baseline.c": "b38c169edd6fe1585eb195d3bd59a4ad9ddccf4915dfdb216bda58875c6586ef",
+    "c016-enc4-return-local/branch-return-local.c": "04a8d7fa1b11007c0ef85ce618184d1e03b662f1f432a068451a711b47a306c4",
+    "c016-enc4-return-local/branch-return-local.json": "f00093bbbbb97f050c82b2e7da67af279101277662c6b78096bbab029e377ee5",
+    "c016-enc4-return-local/branch-return-local.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-return-local/results.json": "1c8da22118ba09c8c6777ea14862f180cb5e36dbcc2e87544971d795a7516e1b",
+    "c016-enc4-return-local/shared-return-local.c": "d89c154dd48f0c3a3931074e1b6dde78bf2a8557fbf86d1f5f66412770008c0f",
+    "c016-enc4-return-local/shared-return-local.json": "d064ab53eb5aef6fbcdc9b8a2e6c1ed4c73d4d6417a8d63fccaab5d810686c75",
+    "c016-enc4-return-local/shared-return-local.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-return-local.py": "c174d5925fe6a1810bb2e847a8490ef18854f52b84c39aa29ead20a3d58a10fd",
+    "c016-enc4-single-exit/baseline.c": "b38c169edd6fe1585eb195d3bd59a4ad9ddccf4915dfdb216bda58875c6586ef",
+    "c016-enc4-single-exit/do-break-result.c": "2c9f5ab25bc7507522d358aab59666ca2895599f89911ca7c5a7786b42d0d152",
+    "c016-enc4-single-exit/do-break-result.json": "befbf03781c1e3246042a9ac927671e5421e6c78fbe6b39d185da76693e8671c",
+    "c016-enc4-single-exit/do-break-result.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-single-exit/goto-reuse-value.c": "a3d001823332248889412b6ce3121c735bdf3910963422315bb67e3e089a86be",
+    "c016-enc4-single-exit/goto-reuse-value.json": "3e3f62afb9d09fd3b22c1c6daccce642960cfed25838fc9c3eaa743f5b351bc2",
+    "c016-enc4-single-exit/goto-reuse-value.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-single-exit/loop-else-zero.c": "8ab272067a443b4052c982930dae00e271a32ce1fed4c42ca2c6ba81f504dd40",
+    "c016-enc4-single-exit/loop-else-zero.json": "3f1ee8b34cce744cb39cff6458d9cbcf41b746f88304fdc68141fb5a61a6bbbb",
+    "c016-enc4-single-exit/loop-else-zero.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-single-exit/negative-counter-fallback.c": "a50f896e6740813fd55016b8b379f22b53dd31c7c3926966a818b18bde2af3f9",
+    "c016-enc4-single-exit/negative-counter-fallback.json": "1846244bdd0ec88abce0cdf7464e4a31f392059c546aae5010f9a58fc4e3c5b0",
+    "c016-enc4-single-exit/negative-counter-fallback.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "c016-enc4-single-exit/results.json": "89409233805bbec927710618bddc449ec51c66042641f492ab1dd9751c28f359",
+    "c016-enc4-single-exit.py": "5920a473a4f71900f43f56dd8e3725e9ba51bbc6d8c6635f116ea8c9f30cb0d5",
+    "c016-encoder-status.json": "5f2cde3af6027977e22787e7ed07f5923119c4bd210083882d3ac7a4eecbaf6a"
+  }
+}
