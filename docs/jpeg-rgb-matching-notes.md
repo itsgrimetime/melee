@@ -1513,3 +1513,38 @@ ninja passes. All sources, compile-producing diffs and runners archived in
 2026-09-07-post-breakthrough-source-shapes. Next diagnostics should inspect the
 current final source's actual ADD construction/optimization stage before more
 parenthesis sweeps; old virtual identities are not proof on this new source.
+
+## Exact 99.400925 lowering and scheduling trace — 2026-09-07
+
+Fresh read-only retail stages for final production confirm217 instructions.
++104 instruction address0x00652708 is emitted initially as ADD101,38,100;
+operands persist through optimization and scheduling, coloring to21,26,21.
+It is not a late register-coloring swap. Current-CodeGen-item AST printed live
+at emit shows unsigned nested(row+low)+high, with high replaced by frontend CSE
+object@53. Thus integer instruction selection materializes row+column despite
+nested tree spelling, rather than a scheduler reversing the ADD operands.
+
+Luma ADDI+280 address0x00654238: initial position156, optimized142, scheduled124.
+LI0 address0x00653fc0: initial149, optimized138, scheduled127. The desired LI-before-
+ADDI order exists initially and is reversed at pre-allocation scheduling; final
+positions124/125 retain the wrong order. This is independent of the ADD issue.
+Four luma_base type probes u32,s32,u8*,void* with casts at use all99.400925/frame152,
+no gain; original production restored and rebuilt.
+
+Exact-hash Ghidra project validated. FUN_004a0ba0 materializes type2 descriptors
+with ADD; FUN_004a0fc0 leaves type2 unchanged. Fresh live breakpoint at4a0ba0
+finds target descriptor raw0200260000006400000000000000000000000000000000000000:
+kind2,short+2=38(row),short+6=100(column),requested destination0,caller4b8086.
+The caller's raw disassembly calls ENode dispatch then materializer before the
+shift. Table0x560648 maps EADD15->4b8240, ESHL17->4b7fd0. These are next static
+inspection entry points. Do not treat old virtual numbers as source identities
+for changed candidates.
+
+Issue1551's Java decoder exception is from passing a null function to decompiler:
+getFunctionContaining(4b8086) returnsNone although instructions exist. This is a
+missing function-boundary annotation, not Windows unavailability; raw listing
+works. Need create a bounded temporary function at verified dispatch-table entry
+4b7fd0 (or use instruction analysis) before querying that routine. Avoid changing
+shared tooling/project state unnecessarily. No source improvement this turn.
+Artifacts, full stages, ASTs, descriptor trace, static materializer decompilations,
+and luma-type probe results archived in2026-09-07-final-lowering-trace.
