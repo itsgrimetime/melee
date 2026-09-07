@@ -937,3 +937,20 @@ all87mapped GPR and34FPR colors AND selection positions unchanged. The neutral
 ordinary score therefore hides no desired mapped-order movement for this candidate.
 Source/DLL restored by both remote runs; real source restored and ninja passes.
 Traces, mappings, model and sources/diffs archived in2026-09-07-red-first-green-copy.
+
+## X-only scalar helper and width reuse — 2026-09-07
+
+Eight scalar-helper probes isolate only (x/4)*16. Raw-coordinate and quotient-input
+s32 return forms98.80083/frame184; int input/return98.6971/frame184; explicit local
+result98.6971/frame192. With red-first expression, respective scores98.71784 and
+98.614105, same frames. No gain.
+
+Five follow-ups reuse the width parameter for rounded block_columns and remove
+that caller declaration. Width reuse alone retains98.962654/frame176. Paired with
+raw/quotient scalar helper it restores176-byte frame and scores98.94191; int helper
+98.83817/frame176; local-result helper98.6971/frame184. Exact ordinary-instruction
+comparison for raw helper+width reuse versus retained source finds only one line:
++158 add r4,r20,r4 becomes add r4,r4,r20. No register assignments change, and X still
+usesr20. Thus frame growth had hidden only an add-operand commutation here, not a
+useful X-allocation change. No candidate retained; source restored, ninja passes.
+All13 source/diff probes and scripts archived in2026-09-07-x-scalar-helper.
