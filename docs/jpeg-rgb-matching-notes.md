@@ -1387,3 +1387,29 @@ is resolved by the isolated updated runner. Artifacts, compressed full dump,
 pressure/coalesce reports and hashes are preserved under matching-evidence/
 jpeg-rgb/2026-09-07-windows-simplify-repair. No production C source was changed;
 98.82488 remains the best merged source, and exact match/TU linking remain open.
+
+## Local array promotion — 2026-09-07
+
+Six diagnostic probes replace chroma_index and/or chroma_dest with one-element
+local arrays, with/without the named luma row_offset. This distinguishes array
+promotion from the earlier scalar-record promotion, not a proposed stylistic
+change for upstream. Both source loads remain around the Cb store.
+
+Index-only scores97.866356/frame160, or98.087555/frame152 with luma row inlined.
+Pointer-only96.76037/frame160 or96.98157/frame152; combined96.76037/frame160.
+The best array candidate's full instruction rows exactly equal the coherent
+scalar seed (raw current_asm lists differ in non-instruction content).
+Fresh read-only retail capture and target correspondence validate267 GPR operands,
+81 virtuals, no target contradictions after the known two instruction swaps.
+Index moves38->73, exactly as for the prior scalar record; pointer stays37 and
+all eight color differences remain. Array promotion does not move the index
+near desired rank101 or change final instructions. Sources/diffs/correspondence
+archived in2026-09-07-local-array-promotion; retail snapshot is locally in
+/tmp/c016-rgb-array-stages. Production restored and ninja passes.
+
+The generic lifetime-layout generator was also inspected with repaired Windows
+pcdump. Its12 defaults are declaration/type/scope and pointer-walk families,
+mostly already explored; no automated local debug candidate runner was launched.
+Its baseline still calls coalesce-root nodes62/72 spills, so do not use that
+spill_set as proof (existing flag0x08 interpretation issue). Best source remains
+98.82488, already merged; no new upstream source delta.
