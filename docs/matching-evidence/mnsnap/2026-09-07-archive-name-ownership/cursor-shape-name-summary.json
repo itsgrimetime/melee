@@ -1,0 +1,44 @@
+[
+  {
+    "name": "named",
+    "score": 98.15765,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 65
+    }
+  },
+  {
+    "name": "eq",
+    "score": 97.10355,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9367283950617284,
+      "line_delta": 2,
+      "hunk_count": 27
+    }
+  },
+  {
+    "name": "ne",
+    "score": 97.98918,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.8919753086419753,
+      "line_delta": 2,
+      "hunk_count": 24
+    }
+  }
+]

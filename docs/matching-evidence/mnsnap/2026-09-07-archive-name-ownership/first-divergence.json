@@ -1,0 +1,68 @@
+{
+  "kind": "allocator-first-divergence",
+  "fact": {
+    "class_id": 0,
+    "ig_idx": 132,
+    "case": "B",
+    "iter_idx": 65,
+    "baseline_reg": 5,
+    "baseline_reg_name": "r5",
+    "target_reg": 6,
+    "target_reg_name": "r6",
+    "coalesced_nodes": [],
+    "coalesced_root": null,
+    "coalesced_root_phys": null,
+    "coalesced_root_phys_name": "?",
+    "blocker_ig": null,
+    "blocker_dependency": false,
+    "working_mask": [
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      28,
+      31
+    ],
+    "cap_hit": false,
+    "earlier_unmapped_warning": true,
+    "local_target": "introduce interference with the holders of the registers below the target register, or move X later in simplify order"
+  },
+  "source": {
+    "ig_idx": 132,
+    "var_name": null,
+    "confidence": "pcode-first-def",
+    "alternates": [],
+    "ideas": [
+      "introduce interference with the holders of the registers below the target register, or move X later in simplify order",
+      "implicit address temp: preserve implicit indexed array expressions; try same-line index/base expression spelling, index-local scope, or indexed-pointer-loop variants that keep the address temp implicit before more declaration-order cycling.",
+      "source probe route: run melee-agent debug select-order-search with --include-transform-corpus --transform-family indexed_byte_address_temp_steering for non-struct byte-array base+index temps before trying pointer walks."
+    ],
+    "rejected": [],
+    "first_def": "B5: addi r132,r107,592",
+    "blocker_ig": null,
+    "blocker_var_name": null,
+    "blocker_confidence": null,
+    "blocker_alternates": [],
+    "blocker_rejected": [],
+    "blocker_first_def": null,
+    "source_kind": "implicit-temp",
+    "source_expression": "addi r132,r107,592",
+    "source_file": "src/melee/mn/mnsnap.c",
+    "source_line": null,
+    "source_col": null,
+    "source_confidence": "pcode-first-def",
+    "candidate_spans": [
+      "operand r107: first def B1: addi r107,r106,LO(@248)"
+    ],
+    "negative_diagnostics": [
+      "reject materialized element pointers such as candidate = &array[index]; they make the address temp source-visible and usually perturb allocator shape",
+      "reject split base-plus-increment pointer walks when the target first-def is an implicit add base,index; they add or move instructions instead of preserving the indexed expression",
+      "reject line-count or statement-count changing probes until same-line indexed-expression spelling probes have failed"
+    ]
+  }
+}

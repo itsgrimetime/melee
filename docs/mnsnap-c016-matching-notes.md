@@ -239,3 +239,26 @@ second-round spill. No spill-round movement from the resource-home fix.
 
 All applicable CI checks on PR3407 are now passing, including Nix.
 Evidence in matching-evidence/mnsnap/2026-09-07-arrows-carrier-staging.
+
+## Archive resource name ownership and partial target diagnostic
+
+Six page-name inline controls preserve literal source order: direct/named-result/
+output-parameter string identity helpers, with assignment inside or outside the
+call. Direct-inside neutral98.15765; direct-outside/named-inside98.06955;
+named-outside98.029366/frame408; output forms98.149925/frame400. None retained.
+
+First-divergence on fresh source targets128:7,129:5,130:4,132:6,133:7,134:8,
+135:5,136:9, mapped by constant-string byte offsets, reports IG132 (string592,
+cursor shape resource) at iteration65: currentr5,targetr6,caseB. It explicitly
+sets earlier_unmapped_warning=true: earliest among supplied targets, not a
+complete causal explanation of the target allocator. Advisory array-index
+source suggestions do not apply to a constant resource-name address.
+
+Three directed cursor-shape-name controls: embedded named local is neutral;
+discarded post-call equality97.10355 and inequality97.98918, each two fewer
+instructions, allframe400. Do not promote. The exact spill/color changes were
+not captured for these rejected forms. Nine source probes total this pass.
+
+Historical review links issue1565 to earlier1544 (same unsafe generated address
+rewrite); recurrence noted in queue. PR3407 unchanged, no new source gain.
+Evidence in matching-evidence/mnsnap/2026-09-07-archive-name-ownership.

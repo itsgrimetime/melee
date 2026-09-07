@@ -1,0 +1,86 @@
+[
+  {
+    "name": "direct-inside",
+    "score": 98.15765,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 65
+    }
+  },
+  {
+    "name": "direct-outside",
+    "score": 98.06955,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 88
+    }
+  },
+  {
+    "name": "named-inside",
+    "score": 98.06955,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 88
+    }
+  },
+  {
+    "name": "named-outside",
+    "score": 98.029366,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 408,
+      "frame_growth": 8
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 92
+    }
+  },
+  {
+    "name": "output-inside",
+    "score": 98.149925,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 65
+    }
+  },
+  {
+    "name": "output-outside",
+    "score": 98.149925,
+    "frame": {
+      "expected_frame_size": 400,
+      "current_frame_size": 400,
+      "frame_growth": 0
+    },
+    "structural": {
+      "opcode_similarity": 0.9520865533230294,
+      "line_delta": 0,
+      "hunk_count": 65
+    }
+  }
+]
