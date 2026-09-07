@@ -196,3 +196,25 @@ Source commit615cd2f5da; fresh clean PR branch codex/mnsnap-resource-homes,
 worktree /tmp/melee-c016-snap-resource-pr, source commit6304289df5. Push every
 further gain to this PR while open. Previous3406 merged. Evidence in
 matching-evidence/mnsnap/2026-09-07-resource-home-gain.
+
+## Fresh arrows allocation on PR3407 seed
+
+PR3407 opened with6304289df5. New patched-DLL capture SHA542798716f9634669f55e543a218e0c8df45bfd8199ff3596785242ce8111ed0
+confirms arrows_joint IG41/r18 and arrows_shapeanim IG39/r17; desired41/r17,
+39/r18. Corrected d82d parser used for lifetime-pressure, final colors confirmed.
+They interfere across archive call, neither spilled, no coalesced aliases.
+Six discarded comparison-lifetime probes: equality/inequality before archive,
+after archive, after arrows creation. After equality neutral98.15765; after
+inequality98.0881. Before equality97.598145/frame392/two fewer instructions;
+before inequality96.66924/frame400/one fewer instruction. None retained.
+Smaller hunk count in392candidate is diff merging, not a structural improvement.
+
+Read-only select-order search generated an invalid address-owner rewrite:
+replace arrows_joint=&snap->arrows_joint with temp=snap->arrows_joint;
+arrows_joint=&temp. Archive output must update persistent snap field; this
+probe redirects it to a local. Rejected without compilation, issue1565 filed.
+Do not treat generated low-risk labels as semantic validation. Evidence under
+matching-evidence/mnsnap/2026-09-07-arrows-pressure.
+Independent thumbnail task incorporated3407 and refreshed WvrZ0; reports public
+1712/64700 separately from local98.15765. Qhghg public source has invalid first
+vararg pairing and is not a production candidate.
