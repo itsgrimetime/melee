@@ -354,3 +354,100 @@ was running at this checkpoint.
 Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-06-result-local/` contains
 all candidates, baseline/retained diffs, the fresh retail trace, comparison,
 validation summaries, and a verified SHA-256 archive manifest.
+
+## Retail front end, public scratch, and libjpeg provenance lead
+
+The retained encoder remains **99.70266%, 639 instructions, frame104, 38
+register-only differences**. Public scratch, owned by `itsgrimetime`:
+https://decomp.me/scratch/mbSPH . Production compilation verifies score190/63900,
+matching the ordinary local residual. The source is unchanged from5cdb1ad08c;
+PR3377 remains5d8814c180 and its applicable CI checks passed.
+
+A full retail front-end capture completed54 optimizer snapshots. At pass5,
+`IRO_ScalarizeClassDataMembers` rewrites20 references to the local `state`
+aggregate into compiler-created scalar `@319`. The global work address is
+assigned at entry before and after this pass. CSE later reduces these to19
+references; the scalar survives to the final pass. This supports inspecting
+scalarization and pointer ownership, rather than assuming late CSE first
+materializes the work pointer. The trace command adds exception/symbol options;
+it is diagnostic evidence, not an independent production100 result.
+
+32 ordinary source candidates were compiled and restored:
+
+| Family | Count | Result |
+| --- | ---: | --- |
+| DC table const/void/array pointer views |9| Const neutral; other views reduce frame by8, no register fix |
+| Separate AC inline helper, pointer/global ownership |6| No gain; helper depth changes inlining and frames |
+| Matched header-writer donor: whole-body helper with redundant global-pointer assignment |8| No gain; best98.39593 with extra instruction/frame120 |
+| Individually scalarized DC table pointer aggregates |6| One aggregate neutral; both add8 stack bytes, same38 register differences |
+| Stock IJG-style zero-first branch and branch-local AC value |3|98.4241–99.253525%; instruction order regresses |
+
+Whole-function and window donor searches completed. No convincing whole-function
+twin was found. Useful windows were in the already-matched JPEG header writer
+`hsd_803B4D64`; the donor index's score for that function was stale. The redundant
+pointer-parameter reassignment pattern above was tested directly, not inferred
+from the similarity score.
+
+A normal decomp-permuter run also completed a bounded search (last progress1089
+iterations,153 compile errors) without beating baseline score190. Importer
+preserved inline bodies, but host preprocessing selected generic shift/xor
+`abs` because `__MWERKS__` was absent. Correcting only the imported source to
+`__abs` recovered the real baseline:38 register differences and zero stack,
+branch, insertion, deletion, or reorder penalties. Issue1525 records this
+importer bug. The archived reusable kit has corrected `base.c`; the importer's
+old, incorrect `base.o` is deliberately excluded. No permuter job remains live.
+
+### Remote Inspector: distinguish the failures
+
+Windows host `nzxt-local` is available. Both native Git and MSYS Git successfully
+contacted the fork and fetched exact PR ref5d8814c180. The earlier generic fetch
+failure did not reproduce; credentials were not established as its root cause.
+
+Invocation `c016-encoder-20260906-frontend` completed private checkout and then
+failed PRE validation because `build/GALE01/include` was absent. Investigation
+found that **worktree-doctor had downgraded the wrapper**: this branch already
+contains generated-header transport fix94f54d46c1, but doctor copied the older
+shared-master wrapper over it. The branch-owned wrapper has now been restored.
+Do not repeat that downgrade or reimplement the existing fix.
+
+A temporary bounded diagnostic retry using safe private-directory provisioning,
+`c016-encoder-20260906-frontend-dir`, timed out180s at private-clone instead.
+Neither run produced Inspector IR, and cancellation lacked a terminal cleanup
+receipt. No broad process cleanup was performed. Issues1497/1526 record these
+separate stages; another invocation should use the restored wrapper and inspect
+clone/process state before drawing conclusions about Inspector itself.
+
+### Public scratch tooling fixes
+
+Scratch creation exposed two extractor bugs. Existing fixa95d06faa4 for Linkable
+objects was cherry-picked as31736a7434. Multiline `Object(...)` declarations were
+still omitted; fixf76d606b91 parses them across lines while retaining library
+association. Four focused tests pass;38 integration tests skip because their
+legacy submodule fixture is unavailable. Actual worktree extraction and public
+scratch creation/compilation both succeeded. Installed shared CLI still needs
+these fixes integrated; run branch-local CLI with explicit current worktree root.
+Issue1527 is resolved with that qualification.
+
+### Provenance: community lead remains worth pursuing
+
+The user relayed a Discord suggestion that the encoder derives from libjpeg6b
+with GameCube changes, specifically `jchuff-nin`. This is a stronger search lead
+than quantization-table similarity. Public Doshin decompilation data confirms
+`libjpeg/jchuff-nin.c` and `libjpeg/jdhuff-nin.c`, with familiar IJG symbols
+including `encode_one_block`, `emit_bits`, and `jinit_huff_encoder`:
+https://github.com/break-core/doshin-gc/blob/b01be768ab68782c6890b832cd61e35d3b4d9103/config/GKDP01/splits.txt
+
+That confirms the Nintendo filename, not Melee's exact ancestry. No source body
+for that Nintendo variant was located. Stock IJG6b was obtained from
+https://www.ijg.org/files/jpegsrc.v6b.tar.gz (SHA256
+75c3ec241e9996504fe02a9ed4d12f16b74ade713972f3db9e65ce95cd27e35d).
+Its `encode_one_block` emits run/size symbols and0xF0 long-run codes, unlike the
+current Melee reconstruction's separate run+1 coding. Its floating DCT also
+differs, but that cannot exclude selective libjpeg borrowing or replacement of
+the transform. Do not present the earlier HAL-specific implementation hypothesis
+as established provenance, or the community suggestion as verified identity.
+
+Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-07-frontend-community/`
+contains32 candidates,54 retail front-end snapshots, donor results, corrected
+permuter kit/run, remote-stage logs, public compile verification, and a verified
+195-member SHA256 archive manifest. Ordinary build passes; TU remains Linkable.
