@@ -1,0 +1,831 @@
+{
+  "function": "fn_803B6820",
+  "scratch": null,
+  "source_head": "faa0b47f3061a8d727f03ff4bb3456ecec365624",
+  "retained_percent": 98.81743,
+  "retained_frame": 176,
+  "retained_source_change": false,
+  "useful_candidate": "c016-decoder-padding-reconstruction/record-group_row-no-pad.c",
+  "candidate_caveat": "Removes PAD_STACK with group-row aggregate, same instruction bytes and score; not a 100% source match.",
+  "validation": {
+    "instruction_byte_comparison": {
+      "baseline_count": 241,
+      "candidate_count": 241,
+      "identical": true,
+      "scope": "Instruction bytes only; anonymous relocation symbol names differ; not linked candidate proof."
+    },
+    "restored_percent": 98.81743,
+    "full_build_exit": 0,
+    "checksums": [
+      {
+        "path": "build/GALE01/main.dol",
+        "sha1": "08e0bf20134dfcb260699671004527b2d6bb1a45"
+      },
+      {
+        "path": "orig/GALE01/sys/main.dol",
+        "sha1": "08e0bf20134dfcb260699671004527b2d6bb1a45"
+      }
+    ],
+    "restored_tu_functions": [
+      {
+        "name": "hsd_803B5C4C",
+        "percent": 100.0
+      },
+      {
+        "name": "hsd_803B5D70",
+        "percent": 100.0
+      },
+      {
+        "name": "hsd_803B5EA0",
+        "percent": 100.0
+      },
+      {
+        "name": "fn_803B61B4",
+        "percent": 100.0
+      },
+      {
+        "name": "fn_803B6820",
+        "percent": 98.81743
+      },
+      {
+        "name": "hsd_803B6BE4",
+        "percent": 100.0
+      }
+    ]
+  },
+  "candidates": [
+    {
+      "family": "gprsum",
+      "name": "row-low-high",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      }
+    },
+    {
+      "family": "gprsum",
+      "name": "low-high-row",
+      "score": 98.71369,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 23
+      }
+    },
+    {
+      "family": "gprsum",
+      "name": "high-row-low",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      }
+    },
+    {
+      "family": "gprsum",
+      "name": "row-low-high-right",
+      "score": 98.71369,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 23
+      }
+    },
+    {
+      "family": "high-term",
+      "name": "s32-low-high-keep",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      }
+    },
+    {
+      "family": "high-term",
+      "name": "s32-low-high-remove",
+      "score": 96.975105,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 168,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 28
+      }
+    },
+    {
+      "family": "high-term",
+      "name": "s32-high-low-keep",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      }
+    },
+    {
+      "family": "high-term",
+      "name": "s32-high-low-remove",
+      "score": 96.975105,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 168,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 28
+      }
+    },
+    {
+      "family": "high-term",
+      "name": "int-low-high-keep",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      }
+    },
+    {
+      "family": "high-term",
+      "name": "int-low-high-remove",
+      "score": 96.975105,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 168,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 28
+      }
+    },
+    {
+      "family": "high-term",
+      "name": "int-high-low-keep",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      }
+    },
+    {
+      "family": "high-term",
+      "name": "int-high-low-remove",
+      "score": 96.975105,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 168,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 28
+      }
+    },
+    {
+      "family": "high-term",
+      "name": "u32-low-high-keep",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      }
+    },
+    {
+      "family": "high-term",
+      "name": "u32-low-high-remove",
+      "score": 96.975105,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 168,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 28
+      }
+    },
+    {
+      "family": "high-term",
+      "name": "u32-high-low-keep",
+      "score": 97.11618,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 22
+      }
+    },
+    {
+      "family": "high-term",
+      "name": "u32-high-low-remove",
+      "score": 96.975105,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 168,
+        "frame_growth": -8
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 28
+      }
+    },
+    {
+      "family": "padding-reconstruction",
+      "name": "chroma-aggregate-no-pad",
+      "score": 94.52282,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 33
+      }
+    },
+    {
+      "family": "padding-reconstruction",
+      "name": "chroma-aggregate-reverse-no-pad",
+      "score": 94.52282,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 33
+      }
+    },
+    {
+      "family": "padding-reconstruction",
+      "name": "samples-aggregate-no-pad",
+      "score": 94.381744,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 184,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 34
+      }
+    },
+    {
+      "family": "padding-reconstruction",
+      "name": "samples-aggregate-ycbcr-no-pad",
+      "score": 94.381744,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 184,
+        "frame_growth": 8
+      },
+      "structural": {
+        "opcode_similarity": 0.991701244813278,
+        "line_delta": 0,
+        "hunk_count": 34
+      }
+    },
+    {
+      "family": "padding-reconstruction",
+      "name": "record-chroma_row-no-pad",
+      "score": 97.94606,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 31
+      }
+    },
+    {
+      "family": "padding-reconstruction",
+      "name": "record-group_row-no-pad",
+      "score": 98.81743,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 24
+      }
+    },
+    {
+      "family": "padding-reconstruction",
+      "name": "record-luma_x-no-pad",
+      "score": 98.381744,
+      "frame": {
+        "expected_frame_size": 176,
+        "current_frame_size": 176,
+        "frame_growth": 0
+      },
+      "structural": {
+        "opcode_similarity": 1.0,
+        "line_delta": 0,
+        "hunk_count": 34
+      }
+    }
+  ],
+  "members": [
+    {
+      "path": "c016-decoder-archive-current.py",
+      "bytes": 3215,
+      "sha256": "e94c84c783489c93fbea196046b2742e4bb51d7b8850d66da23c2895d676df42"
+    },
+    {
+      "path": "c016-decoder-baseline-current.json",
+      "bytes": 34322,
+      "sha256": "0f0f5b7fa5ab2e78a9b7486f0800522ad8484393f72ccdbc7d48ac7700767f13"
+    },
+    {
+      "path": "c016-decoder-baseline-current.log",
+      "bytes": 309,
+      "sha256": "a7691549231af19d18428e6e724cbf2dda35511705cc734c5f3d98f7092e6b41"
+    },
+    {
+      "path": "c016-decoder-build-current.log",
+      "bytes": 337,
+      "sha256": "82c7b09098b0a82bba534c1b01d66ff37548df7fb3d410de8d97479d287dc0fe"
+    },
+    {
+      "path": "c016-decoder-gprsum.py",
+      "bytes": 1405,
+      "sha256": "dc6c2f7c5df68277b8b899c4d94a77da0cb35dcba4256d6ecd64cf6acb19e753"
+    },
+    {
+      "path": "c016-decoder-gprsum/baseline.c",
+      "bytes": 33715,
+      "sha256": "3b2df073814983b43393b09890c85ea4de0cccd0fb906383a2f4a04bb3f51e3c"
+    },
+    {
+      "path": "c016-decoder-gprsum/high-row-low.c",
+      "bytes": 33671,
+      "sha256": "cfac96527ed1754f55503a96b4a3eaef2fd991e2abbf372b46cf83c1834338a8"
+    },
+    {
+      "path": "c016-decoder-gprsum/high-row-low.json",
+      "bytes": 34462,
+      "sha256": "5f8bfe169536c012c4e132025ddbf67fbfaf850be9a3275280ca2f8f0d7a2e9c"
+    },
+    {
+      "path": "c016-decoder-gprsum/high-row-low.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-gprsum/low-high-row.c",
+      "bytes": 33671,
+      "sha256": "55a3909dc587be25c64bce9752ef878d97f2ea40f2203e019611fa94868182c6"
+    },
+    {
+      "path": "c016-decoder-gprsum/low-high-row.json",
+      "bytes": 34464,
+      "sha256": "00c18dbbca91d63f46440874b3804fdc5edb474b00078d5569174c52546f547f"
+    },
+    {
+      "path": "c016-decoder-gprsum/low-high-row.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-gprsum/results.json",
+      "bytes": 1145,
+      "sha256": "b91ffc0711862e7fe8c6364555eed53eb48a8ce38eb40065ab536ce53c5de853"
+    },
+    {
+      "path": "c016-decoder-gprsum/row-low-high-right.c",
+      "bytes": 33671,
+      "sha256": "2ebb40e2c583228518e255c33bc1d5d6c73e3a9048e14ea50426b7e2f5d1b680"
+    },
+    {
+      "path": "c016-decoder-gprsum/row-low-high-right.json",
+      "bytes": 34464,
+      "sha256": "00c18dbbca91d63f46440874b3804fdc5edb474b00078d5569174c52546f547f"
+    },
+    {
+      "path": "c016-decoder-gprsum/row-low-high-right.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-gprsum/row-low-high.c",
+      "bytes": 33671,
+      "sha256": "da1fee12ad353536567bd40edae507d49791896604a4ad23d7c50da452afad17"
+    },
+    {
+      "path": "c016-decoder-gprsum/row-low-high.json",
+      "bytes": 34462,
+      "sha256": "d6c67eb8e22d8fa2079ee73498dcdf7cd4eecff71f2665f5f095c86c3ffa777d"
+    },
+    {
+      "path": "c016-decoder-gprsum/row-low-high.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-high-term.py",
+      "bytes": 1827,
+      "sha256": "5d641a705980b852949216a30b5c1af57bb7e54ae56e7ed510959d757067d503"
+    },
+    {
+      "path": "c016-decoder-high-term/baseline.c",
+      "bytes": 33715,
+      "sha256": "3b2df073814983b43393b09890c85ea4de0cccd0fb906383a2f4a04bb3f51e3c"
+    },
+    {
+      "path": "c016-decoder-high-term/int-high-low-keep.c",
+      "bytes": 33722,
+      "sha256": "35b9e54883893f0b97e7ce9150a4a4cdcd78964edd9e865276019d84aa4239c3"
+    },
+    {
+      "path": "c016-decoder-high-term/int-high-low-keep.json",
+      "bytes": 34211,
+      "sha256": "f87f2f9d4e871d9ba5e17b064fbd93b6e7358e4bda1b22cf782028b9adee6f89"
+    },
+    {
+      "path": "c016-decoder-high-term/int-high-low-keep.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-high-term/int-high-low-remove.c",
+      "bytes": 33704,
+      "sha256": "3322da835d81427d36be07dc4db1e8b89df9c3edca9b81c6bc4883c6e25b475a"
+    },
+    {
+      "path": "c016-decoder-high-term/int-high-low-remove.json",
+      "bytes": 36397,
+      "sha256": "147b0e9cdaeb8037d80c5ec3341617e3066db6d7dd6b2a8aa75ffadc9a1e9d40"
+    },
+    {
+      "path": "c016-decoder-high-term/int-high-low-remove.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-high-term/int-low-high-keep.c",
+      "bytes": 33722,
+      "sha256": "f98c3c3d693454391ff98bbd9d516d393f79162952d0b9efe0fd8e75ba7187b7"
+    },
+    {
+      "path": "c016-decoder-high-term/int-low-high-keep.json",
+      "bytes": 34211,
+      "sha256": "f87f2f9d4e871d9ba5e17b064fbd93b6e7358e4bda1b22cf782028b9adee6f89"
+    },
+    {
+      "path": "c016-decoder-high-term/int-low-high-keep.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-high-term/int-low-high-remove.c",
+      "bytes": 33704,
+      "sha256": "2340df6dbe12eb5d5a30f27ccf12c39292f47ea5f384d6265099e9003af179b9"
+    },
+    {
+      "path": "c016-decoder-high-term/int-low-high-remove.json",
+      "bytes": 36397,
+      "sha256": "147b0e9cdaeb8037d80c5ec3341617e3066db6d7dd6b2a8aa75ffadc9a1e9d40"
+    },
+    {
+      "path": "c016-decoder-high-term/int-low-high-remove.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-high-term/results.json",
+      "bytes": 3579,
+      "sha256": "bc1a1b1f810be98470f87d0e9e7d12823dcc37d98735f2b145f9c0ffa8cd87ce"
+    },
+    {
+      "path": "c016-decoder-high-term/s32-high-low-keep.c",
+      "bytes": 33722,
+      "sha256": "7ced5754daed3a9133eb3f328aaec8de4b43a1c1ffaabbed48a098ee44a27668"
+    },
+    {
+      "path": "c016-decoder-high-term/s32-high-low-keep.json",
+      "bytes": 34211,
+      "sha256": "f87f2f9d4e871d9ba5e17b064fbd93b6e7358e4bda1b22cf782028b9adee6f89"
+    },
+    {
+      "path": "c016-decoder-high-term/s32-high-low-keep.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-high-term/s32-high-low-remove.c",
+      "bytes": 33704,
+      "sha256": "7d6a126667f9c1d03bcbabcaf3b1ddb7367fe6e3c663a01f13d539c02ac36beb"
+    },
+    {
+      "path": "c016-decoder-high-term/s32-high-low-remove.json",
+      "bytes": 36397,
+      "sha256": "147b0e9cdaeb8037d80c5ec3341617e3066db6d7dd6b2a8aa75ffadc9a1e9d40"
+    },
+    {
+      "path": "c016-decoder-high-term/s32-high-low-remove.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-high-term/s32-low-high-keep.c",
+      "bytes": 33722,
+      "sha256": "5e79f1962dcba800d0a2c2d9c162c93b53dc293fd6988e803dca74be8d5df3fc"
+    },
+    {
+      "path": "c016-decoder-high-term/s32-low-high-keep.json",
+      "bytes": 34462,
+      "sha256": "5f8bfe169536c012c4e132025ddbf67fbfaf850be9a3275280ca2f8f0d7a2e9c"
+    },
+    {
+      "path": "c016-decoder-high-term/s32-low-high-keep.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-high-term/s32-low-high-remove.c",
+      "bytes": 33704,
+      "sha256": "544ccdb9272c0a545357d539a00ac452cfd1f2fc534b3e5070cb323214de97c8"
+    },
+    {
+      "path": "c016-decoder-high-term/s32-low-high-remove.json",
+      "bytes": 36397,
+      "sha256": "147b0e9cdaeb8037d80c5ec3341617e3066db6d7dd6b2a8aa75ffadc9a1e9d40"
+    },
+    {
+      "path": "c016-decoder-high-term/s32-low-high-remove.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-high-term/u32-high-low-keep.c",
+      "bytes": 33722,
+      "sha256": "6dc46e605344a4451025d815d788e820d5e16688d1e7ef8844b18cbf635cc888"
+    },
+    {
+      "path": "c016-decoder-high-term/u32-high-low-keep.json",
+      "bytes": 34211,
+      "sha256": "f87f2f9d4e871d9ba5e17b064fbd93b6e7358e4bda1b22cf782028b9adee6f89"
+    },
+    {
+      "path": "c016-decoder-high-term/u32-high-low-keep.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-high-term/u32-high-low-remove.c",
+      "bytes": 33704,
+      "sha256": "6233aee122ee521889251690dd131652725cc99f6bbadac10a2d58853fb78077"
+    },
+    {
+      "path": "c016-decoder-high-term/u32-high-low-remove.json",
+      "bytes": 36397,
+      "sha256": "147b0e9cdaeb8037d80c5ec3341617e3066db6d7dd6b2a8aa75ffadc9a1e9d40"
+    },
+    {
+      "path": "c016-decoder-high-term/u32-high-low-remove.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-high-term/u32-low-high-keep.c",
+      "bytes": 33722,
+      "sha256": "cde65bd9487d8fa9f4c0b5f241cef44e7fadbe3fc4aaf72adaf3d3a0baa01c8f"
+    },
+    {
+      "path": "c016-decoder-high-term/u32-low-high-keep.json",
+      "bytes": 34211,
+      "sha256": "f87f2f9d4e871d9ba5e17b064fbd93b6e7358e4bda1b22cf782028b9adee6f89"
+    },
+    {
+      "path": "c016-decoder-high-term/u32-low-high-keep.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-high-term/u32-low-high-remove.c",
+      "bytes": 33704,
+      "sha256": "60b7a93fad8a37ea53c1ec87e71881e2be63b4fd34ec852deb9a5dad7cfe0bac"
+    },
+    {
+      "path": "c016-decoder-high-term/u32-low-high-remove.json",
+      "bytes": 36397,
+      "sha256": "147b0e9cdaeb8037d80c5ec3341617e3066db6d7dd6b2a8aa75ffadc9a1e9d40"
+    },
+    {
+      "path": "c016-decoder-high-term/u32-low-high-remove.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction.py",
+      "bytes": 1776,
+      "sha256": "c8802f531091c5ac6877734f325caf73b9f6fd76dfaa2f56e5fe5ea5a1e30978"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/baseline.c",
+      "bytes": 33715,
+      "sha256": "3b2df073814983b43393b09890c85ea4de0cccd0fb906383a2f4a04bb3f51e3c"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/chroma-aggregate-no-pad.c",
+      "bytes": 33740,
+      "sha256": "b7df642f91d0e0fa79c158acc1d7722a9cac72ada4d1b1e9d8757caf2c630c45"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/chroma-aggregate-no-pad.json",
+      "bytes": 44081,
+      "sha256": "3d08395a12b0ded5a49d4d401029889883bf7762f4bafbdf9ec0f8dbc593165e"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/chroma-aggregate-no-pad.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/chroma-aggregate-reverse-no-pad.c",
+      "bytes": 33740,
+      "sha256": "06b086d59b2bdfc3d438197232b663125e36e3af69050dd53beb284b25fc5f3c"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/chroma-aggregate-reverse-no-pad.json",
+      "bytes": 44080,
+      "sha256": "98eedcea794de21d40c2b215a774fe4f8d5eb7b37a2402f0818f00239438b308"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/chroma-aggregate-reverse-no-pad.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/record-chroma_row-no-pad.c",
+      "bytes": 33753,
+      "sha256": "1661fe3f8efc73a255ffa8a441216be305c4d98a0b5310098fe74206937804b8"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/record-chroma_row-no-pad.json",
+      "bytes": 37048,
+      "sha256": "b7f1061e73aadfffc18506a3d66842d336970e6efbe9ccd936c9f8a0f6e807a3"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/record-chroma_row-no-pad.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/record-group_row-no-pad.c",
+      "bytes": 33753,
+      "sha256": "42aecda61faa690f85e8a72e7a4ed21910ec98bddc4d4a0978ffebf7b0dc0fe9"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/record-group_row-no-pad.json",
+      "bytes": 33881,
+      "sha256": "2cc2e2a7b5367834cb358463c310e6bbf61ad6af3fd1bcbae013bfc3b6e40361"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/record-group_row-no-pad.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/record-luma_x-no-pad.c",
+      "bytes": 33753,
+      "sha256": "e41b2cf31411618b2f32c988e78f1cb3faabf5016450d657ff3dd89dff2de5dd"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/record-luma_x-no-pad.json",
+      "bytes": 36632,
+      "sha256": "ee03c9e089fda3629935cc6ffb75478b30789ec33d65f9950814a7a63b03d9ec"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/record-luma_x-no-pad.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/results.json",
+      "bytes": 2092,
+      "sha256": "9f2c012015fa458e334afe8f15eb170e515acc883575d99bbf11f2275deb1e03"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/samples-aggregate-no-pad.c",
+      "bytes": 33750,
+      "sha256": "bd1f35779551677667e03ac23653b05c1a19293011bd8f2e68a808794e4e9bb4"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/samples-aggregate-no-pad.json",
+      "bytes": 45307,
+      "sha256": "8c0dba3858f5e85e8b40f36c89f8c4503b1bc49031bccf7175f6315c5c3757bf"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/samples-aggregate-no-pad.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/samples-aggregate-ycbcr-no-pad.c",
+      "bytes": 33750,
+      "sha256": "8ecbb0f92e50ef50e8cddbd501755a2b622adf6a622bafaf8f78154fb34f5694"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/samples-aggregate-ycbcr-no-pad.json",
+      "bytes": 45308,
+      "sha256": "ad7283d1548aac0e6fa80e94fff41f8e9306294ed1736527b5df739594cf3852"
+    },
+    {
+      "path": "c016-decoder-padding-reconstruction/samples-aggregate-ycbcr-no-pad.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-decoder-restored-current.json",
+      "bytes": 34323,
+      "sha256": "939de7a34e27e593a55eba52bc3bb5eaebebca894da80a1ed9a7503a2a50b990"
+    },
+    {
+      "path": "c016-decoder-restored-current.log",
+      "bytes": 310,
+      "sha256": "181eea2bc8f325627ed8ae3000fc22eda917d747325e18fc722dd3fcfe4f62bb"
+    },
+    {
+      "path": "c016-decoder-verification-current.json",
+      "bytes": 958,
+      "sha256": "9d440c24242ed7d326cbcb59b2afd0621c41c752a4fb3b1a5711ecacb2412a08"
+    }
+  ],
+  "archive_sha256": "e4b601aa36e9eff9ca8133255a93527178311d70222726abfaf2ef24b0e8aae7"
+}

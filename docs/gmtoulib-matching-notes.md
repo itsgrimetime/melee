@@ -119,3 +119,30 @@ slot assignment 99.57437% (+2 instructions), reused slot assignment
 JObj assignment 99.94527% (neutral), new JObj assignment 99.86478%, and new
 GObj assignment 99.90019%. The baseline was restored. Source/checkdiff probes
 are retained in the `jpeg-lookup-transfer/` evidence subdirectory.
+
+## Ownership handoff after a reported match
+
+On 2026-09-06 the user reported that another contributor had announced a
+complete `gmtoulib` match, with its PR not yet posted. Treat the TU as owned
+by that contributor. The c016 source was restored and its function claim
+released; no duplicate PR was opened. The announcement is ownership evidence,
+not a locally verified 100% source result.
+
+Before that message, this pass compiled 18 further candidates. Eight
+coordinate-value carrier variants scored 99.93239%, except a standalone
+`ent` temporary at 99.85061% with a 216-byte frame. Four explicit slot/entrant
+evaluation orders scored 99.66066–99.85061%; three grew the frame to 216 and
+one changed the instruction sequence at the original 208-byte frame. Six
+case-23 loop variants (existing `k` or scoped counter, for/while/do) were
+neutral at 99.94527%. No source change was retained.
+
+The read-only lifetime-pressure command completed successfully after more
+than five minutes of CPU work, but classified its cache as stale and
+suppressed all source hypotheses. Its node/color table agrees with the
+earlier report; it is not new fresh allocator evidence. Issue 1517 records
+the late freshness check and absent progress output. The analysis and final
+source probe were already terminal when the ownership message was handled.
+
+Sources, complete checkdiff reports, generators, baseline, and diagnostic
+result are archived with a verified 67-member SHA-256 manifest under
+`docs/matching-evidence/gmtoulib/2026-09-06-ownership-handoff/`.

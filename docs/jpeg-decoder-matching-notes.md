@@ -187,3 +187,57 @@ ordinary candidate sources/results, generated lifetime probes, permuter inputs
 and tied outputs, build logs, and a recursive SHA256 manifest. Diagnostic
 forced outputs are labeled separately from source candidates. This extends,
 rather than replaces, the earlier JPEG color evidence directory.
+
+## Deferred-sum transfer and removal of explicit padding
+
+After merging upstream through `22dba004cd`, the baseline still measures
+98.81743%, 241 instructions, frame 176. The claim moved back here after the
+user reported another contributor's complete `gmtoulib` match. No overlapping
+tournament-bracket PR was opened.
+
+The RGB creation-provenance finding suggested changing the chroma address
+from `(row + high) + low` to `(row + low) + high`. In ordinary compilation,
+this produces the desired `low + high`, then `row + result` operands, but
+also changes the division/remainder instruction order. Its score is
+97.11618%. The alternate `(low + high) + row` spelling instead groups
+`high + row` first, at 98.71369%. These are not retained improvements.
+The compiler lowering rule transfers, but it is not sufficient to preserve
+the surrounding division sequence.
+
+Twelve further variants materialized the high term in an s32/int/u32 local,
+before or after the low term, with or without the old `PAD_STACK(8)`.
+Keeping padding yielded the same 97.11618% sequence and frame 176; removing
+it reduced the frame to 168 and scored 96.975105%. The extra named scalar
+does not supply the missing stack storage.
+
+Seven aggregate reconstructions tested actual data storage in place of the
+explicit padding:
+
+| Reconstruction, all without PAD_STACK | Match % | Frame |
+| --- | ---: | ---: |
+| Paired Cb/Cr samples, either member order | 94.52282 | 176 |
+| Three luma/Cb/Cr samples, two member orders | 94.381744 | 184 |
+| Chroma row and column offsets | 97.94606 | 176 |
+| Group luma-row and chroma-row offsets | 98.81743 | 176 |
+| Luma X and row offsets | 98.381744 | 176 |
+
+The group-row pair is a useful preserved reconstruction: removing the
+separate `group_row` and `group_chroma` scalars and `PAD_STACK(8)`, then
+using a local two-member struct for those offsets, preserves all 241
+instruction bytes. Only anonymous constant relocation names differ in the
+assembly listing. This establishes a source form without explicit padding,
+not a higher match percentage or proof that the original used that struct.
+It remains an experimental candidate; production source was restored.
+
+All 23 candidates, generators, complete ordinary diffs, the instruction-byte
+comparison, and restored verification are saved with SHA-256 hashes under
+`docs/matching-evidence/jpeg-decoder/2026-09-06-gprsum-reconstruction/`.
+The padding-free candidate is
+`c016-decoder-padding-reconstruction/record-group_row-no-pad.c` inside the
+archive. Future work can use it when investigating the missing aggregate
+layout, without repeating these frame probes.
+
+Restored verification: decoder 98.81743%, other five TU functions 100%;
+`python configure.py && ninja` passes. Built and original DOL SHA-1 both
+equal `08e0bf20134dfcb260699671004527b2d6bb1a45`. The 85-member archive was
+verified against its per-member hashes. The TU remains Linkable.

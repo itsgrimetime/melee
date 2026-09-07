@@ -1,0 +1,345 @@
+{
+  "function": "fn_8018B090",
+  "retained_percent": 99.94527,
+  "retained_source_change": false,
+  "stop_reason": "User reported another contributor has matched gmtoulib; our source restored and claim released. No duplicate PR.",
+  "diagnostic_caveat": "Current pressure invocation completed but marked stale and suppressed all source hypotheses; not new fresh allocator evidence.",
+  "members": [
+    {
+      "path": "c016-bracket-baseline.json",
+      "bytes": 177716,
+      "sha256": "58fe23da9264c65328be7026319baa3b6f566edca1e0d048544fbc0ebac57d09"
+    },
+    {
+      "path": "c016-bracket-baseline.log",
+      "bytes": 310,
+      "sha256": "2185b132bb87ac14fddc5e99dd88b51d02d41b60583ace7626bda1e8545ddb55"
+    },
+    {
+      "path": "c016-bracket-doctor-current.log",
+      "bytes": 2498,
+      "sha256": "d32b73b0a21d44b7b90586185c24f79df07361142cb856f6fa65d2b75fb5600e"
+    },
+    {
+      "path": "c016-bracket-evaluation-order.py",
+      "bytes": 1835,
+      "sha256": "04c115213965842deae37caa8082feb27dd41c98d20a979054e7581526c24b50"
+    },
+    {
+      "path": "c016-bracket-evaluation-order/baseline.c",
+      "bytes": 82095,
+      "sha256": "b2aa5348b1c3261e951860711ece3d700c017170ea3598e4f7333ec622538016"
+    },
+    {
+      "path": "c016-bracket-evaluation-order/entrant-before.c",
+      "bytes": 82096,
+      "sha256": "4deff58fc51a46764929c25a913afa156325884ccca581608e277120ddabdd99"
+    },
+    {
+      "path": "c016-bracket-evaluation-order/entrant-before.json",
+      "bytes": 199783,
+      "sha256": "857a45596ba959b9ae9de9f1608d132a8eccb2327a36d0f8ef66777006747dcd"
+    },
+    {
+      "path": "c016-bracket-evaluation-order/entrant-before.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-bracket-evaluation-order/entrant-then-slot.c",
+      "bytes": 82122,
+      "sha256": "a96d6092ce011315d175b392be983600ca2d92fbfca5e3d6745f7a7a99160755"
+    },
+    {
+      "path": "c016-bracket-evaluation-order/entrant-then-slot.json",
+      "bytes": 201652,
+      "sha256": "c95a86a5db01b5bd0d38a250eb8992199816ebf3106872cad5a37c09e91305a2"
+    },
+    {
+      "path": "c016-bracket-evaluation-order/entrant-then-slot.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-bracket-evaluation-order/results.json",
+      "bytes": 1167,
+      "sha256": "77a3fdd89cf2ac6871c6af05ea2361d7545985f4562f06ab215086f9b3c6a64f"
+    },
+    {
+      "path": "c016-bracket-evaluation-order/slot-before.c",
+      "bytes": 82101,
+      "sha256": "f7e3f91bdd1a1685f9ac8e1305d9ecc9d579c1cf70bfe5457f8341c3fa08d499"
+    },
+    {
+      "path": "c016-bracket-evaluation-order/slot-before.json",
+      "bytes": 181972,
+      "sha256": "48d99aa03b7d117c7ea7a1d84bde1cb31118bb87579dc3d2e3edeeb55116949c"
+    },
+    {
+      "path": "c016-bracket-evaluation-order/slot-before.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-bracket-evaluation-order/slot-then-entrant.c",
+      "bytes": 82122,
+      "sha256": "d082ce79e3a31eb798712f0626e6c03bfb0154cbd4939665aa0e728e29f5a253"
+    },
+    {
+      "path": "c016-bracket-evaluation-order/slot-then-entrant.json",
+      "bytes": 201637,
+      "sha256": "43d5c112bb966a3c3f29fd24012be0d20e3beb66a7357385173b563f53077386"
+    },
+    {
+      "path": "c016-bracket-evaluation-order/slot-then-entrant.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-bracket-loop-counter.py",
+      "bytes": 1821,
+      "sha256": "631961ee18be969e8ccc0d3d76a5a16bef6b35fb6317f9a1a997bf6878cc398d"
+    },
+    {
+      "path": "c016-bracket-loop-counter/baseline.c",
+      "bytes": 82095,
+      "sha256": "b2aa5348b1c3261e951860711ece3d700c017170ea3598e4f7333ec622538016"
+    },
+    {
+      "path": "c016-bracket-loop-counter/k-do.c",
+      "bytes": 82137,
+      "sha256": "06d62407c0fbb1586c2a95d4e007c7de123673a1b6bda23a65061b781fe845e7"
+    },
+    {
+      "path": "c016-bracket-loop-counter/k-do.json",
+      "bytes": 177716,
+      "sha256": "1a2c09918c59eb43fd410b332b63a4761db7222abab93aeb05ff477d1b1b43dc"
+    },
+    {
+      "path": "c016-bracket-loop-counter/k-do.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-bracket-loop-counter/k-for.c",
+      "bytes": 82095,
+      "sha256": "11954a0c5b7cadaf1fc915c6f464b75a084e0e16d66e9d67f1b519bceccb22f3"
+    },
+    {
+      "path": "c016-bracket-loop-counter/k-for.json",
+      "bytes": 177731,
+      "sha256": "21cb3fddfd3a5fb5510c7dec57f88685fcc2446a2fe9f12c88e83b0147fab240"
+    },
+    {
+      "path": "c016-bracket-loop-counter/k-for.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-bracket-loop-counter/k-while.c",
+      "bytes": 82133,
+      "sha256": "bebd3e6af12f5d538b9b74ee1c302b511c9ab690f9bc448598a2f7c13c75c726"
+    },
+    {
+      "path": "c016-bracket-loop-counter/k-while.json",
+      "bytes": 177716,
+      "sha256": "638df5e1eced5ac6c04c1007a2534c76967bc4252f039a9294d752a3466738b7"
+    },
+    {
+      "path": "c016-bracket-loop-counter/k-while.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-bracket-loop-counter/results.json",
+      "bytes": 1643,
+      "sha256": "f08d8060d7f94c22f118df3a629ab131538c4daadf3b76d4368c638d367df118"
+    },
+    {
+      "path": "c016-bracket-loop-counter/slot_no-do.c",
+      "bytes": 82214,
+      "sha256": "303f203ad1036ddd1a4e36b75eeccf3f12c9784cca9fa9e268a0d34e7ddb8268"
+    },
+    {
+      "path": "c016-bracket-loop-counter/slot_no-do.json",
+      "bytes": 177716,
+      "sha256": "638df5e1eced5ac6c04c1007a2534c76967bc4252f039a9294d752a3466738b7"
+    },
+    {
+      "path": "c016-bracket-loop-counter/slot_no-do.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-bracket-loop-counter/slot_no-for.c",
+      "bytes": 82172,
+      "sha256": "50bd8b9c45412b59bee95e3fab84c6deefd08169cda798cece0448fae2ed0dc5"
+    },
+    {
+      "path": "c016-bracket-loop-counter/slot_no-for.json",
+      "bytes": 177716,
+      "sha256": "638df5e1eced5ac6c04c1007a2534c76967bc4252f039a9294d752a3466738b7"
+    },
+    {
+      "path": "c016-bracket-loop-counter/slot_no-for.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-bracket-loop-counter/slot_no-while.c",
+      "bytes": 82210,
+      "sha256": "f08c8dd6a231d0acc1d1487a96e7ad3b96b250430535435a23644d0c9c2f665a"
+    },
+    {
+      "path": "c016-bracket-loop-counter/slot_no-while.json",
+      "bytes": 177716,
+      "sha256": "56462a58f446e7685870555b57baa75e6fd439d24d255265caa7c70f17b920f4"
+    },
+    {
+      "path": "c016-bracket-loop-counter/slot_no-while.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-bracket-pressure-current.json",
+      "bytes": 5271541,
+      "sha256": "3e1e08d4e10d778609f62ec400cb30d51489e63a5015171099b4fd6009c87b23"
+    },
+    {
+      "path": "c016-bracket-value-carriers.py",
+      "bytes": 1936,
+      "sha256": "e2ec2c8ed80e94782f42100798f71a605806082633dc20b46d9d1eb67a13f192"
+    },
+    {
+      "path": "c016-bracket-value-carriers/baseline.c",
+      "bytes": 82095,
+      "sha256": "b2aa5348b1c3261e951860711ece3d700c017170ea3598e4f7333ec622538016"
+    },
+    {
+      "path": "c016-bracket-value-carriers/ent-before.c",
+      "bytes": 82096,
+      "sha256": "b9af9245c5783dc4873605fed5b8e5336a2b75f4676d2ba0a1aa7d77ef791db5"
+    },
+    {
+      "path": "c016-bracket-value-carriers/ent-before.json",
+      "bytes": 199768,
+      "sha256": "897672946ec5576ba4b6ddb8cc0802397e1376efed7894dc8ee8fc26f3da75e7"
+    },
+    {
+      "path": "c016-bracket-value-carriers/ent-before.log",
+      "bytes": 310,
+      "sha256": "86326f5ec5aa084f3bb65de2b7a1b9c6487c5d2ebe503f47ff366fef9e623eef"
+    },
+    {
+      "path": "c016-bracket-value-carriers/ent-embedded.c",
+      "bytes": 82097,
+      "sha256": "ea033aedb5d37769ca0284c3538ee9270cc0164eec6bd1242afea317f1b1177f"
+    },
+    {
+      "path": "c016-bracket-value-carriers/ent-embedded.json",
+      "bytes": 178185,
+      "sha256": "9c5c8a688854be8dfd30550940aaf90e1c6a766edfdcee4e203f9c715570b173"
+    },
+    {
+      "path": "c016-bracket-value-carriers/ent-embedded.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-bracket-value-carriers/i-before.c",
+      "bytes": 82067,
+      "sha256": "31389fecd7329d4091545235b45a62f37de39a1c06dc4158fb93908e18c02705"
+    },
+    {
+      "path": "c016-bracket-value-carriers/i-before.json",
+      "bytes": 178185,
+      "sha256": "96856f68513c1a6f435b40462ee1c5188bd5bb25acb05cc9e720c16ebf5da763"
+    },
+    {
+      "path": "c016-bracket-value-carriers/i-before.log",
+      "bytes": 310,
+      "sha256": "c0a14fb2da1babe9b0f1324a2820f92cdab3af0ccaa8d3b271aa1a0fb1f7212b"
+    },
+    {
+      "path": "c016-bracket-value-carriers/i-embedded.c",
+      "bytes": 82070,
+      "sha256": "e9e0a2f3f79df36fb1d4d1d8f9b726ebf87c75368ff9d00bbfffe342b963a457"
+    },
+    {
+      "path": "c016-bracket-value-carriers/i-embedded.json",
+      "bytes": 178185,
+      "sha256": "2302d0bb1b307af9a09d684221c1b92e848c3af7ab8ecd62165b24ef94967165"
+    },
+    {
+      "path": "c016-bracket-value-carriers/i-embedded.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-bracket-value-carriers/k-before.c",
+      "bytes": 82067,
+      "sha256": "a5dbba8a15d4f8fc1b2e57f9936edb121023d5e4c6601020627950ae36e73661"
+    },
+    {
+      "path": "c016-bracket-value-carriers/k-before.json",
+      "bytes": 178185,
+      "sha256": "96856f68513c1a6f435b40462ee1c5188bd5bb25acb05cc9e720c16ebf5da763"
+    },
+    {
+      "path": "c016-bracket-value-carriers/k-before.log",
+      "bytes": 310,
+      "sha256": "2e5f1c96303b6e8d90c9c8569e557112c283ec71d60bd4239250e24b7f01e1cf"
+    },
+    {
+      "path": "c016-bracket-value-carriers/k-embedded.c",
+      "bytes": 82070,
+      "sha256": "846f1019324e4223518131893917180954174f7b29f9972c537adceabfce2116"
+    },
+    {
+      "path": "c016-bracket-value-carriers/k-embedded.json",
+      "bytes": 178185,
+      "sha256": "12f8d3bf963f90ce5a1c20b7124002d2d540cb2d617b9ad969a43336be0f9c00"
+    },
+    {
+      "path": "c016-bracket-value-carriers/k-embedded.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-bracket-value-carriers/results.json",
+      "bytes": 2211,
+      "sha256": "a576def47f583a70f8ab7ff88987c09b041d38779a32acac7103c634fe5bf9e3"
+    },
+    {
+      "path": "c016-bracket-value-carriers/var_r24-before.c",
+      "bytes": 82079,
+      "sha256": "64e50a2ef583965b084237da41169a450921eb28daf5ce1d643deb9998820db9"
+    },
+    {
+      "path": "c016-bracket-value-carriers/var_r24-before.json",
+      "bytes": 178185,
+      "sha256": "96856f68513c1a6f435b40462ee1c5188bd5bb25acb05cc9e720c16ebf5da763"
+    },
+    {
+      "path": "c016-bracket-value-carriers/var_r24-before.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "c016-bracket-value-carriers/var_r24-embedded.c",
+      "bytes": 82076,
+      "sha256": "382f0c9d72960574de2762c4ea24e5b6eebad5602cc2e9bc24e45b07a0aed56b"
+    },
+    {
+      "path": "c016-bracket-value-carriers/var_r24-embedded.json",
+      "bytes": 178185,
+      "sha256": "12f8d3bf963f90ce5a1c20b7124002d2d540cb2d617b9ad969a43336be0f9c00"
+    },
+    {
+      "path": "c016-bracket-value-carriers/var_r24-embedded.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "archive_sha256": "9f82a6627592478d97058f0abaf663de5b19ccf15305b51479b7057175a381c8"
+}
