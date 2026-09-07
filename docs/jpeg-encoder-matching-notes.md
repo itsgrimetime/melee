@@ -160,3 +160,7 @@ The fork pre-commit style checker flags four unsuffixed floating literals
 already present in the merged upstream grbigblue/psdisp sources. All other
 checks and the full build passed. Merge commits preserve upstream source;
 the hook was bypassed for those merge commits only.
+
+Follow-up CI check: every applicable job for PR3377 head `116e620820` passed,
+including Nix, native, clang, diff/link/test, and all style jobs. Pages/wiki
+publication jobs were skipped as expected for the PR workflow.
