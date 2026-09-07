@@ -2,6 +2,10 @@
 
 Verified 2026-09-06 in c016. Source: `src/sysdolphin/baselib/hsd_3B34.c`.
 
+User instruction, 2026-09-07: stay on **hsd_803B3CD8 until source100**, with no
+more function switching. Public scratch: https://decomp.me/scratch/mbSPH .
+The decoder experiments are set aside and its active claim was released.
+
 Latest follow-up: `5cdb1ad08c` removes `PAD_STACK(16)` through a real bit-length
 result local, with unchanged99.70266% output. See the final section; earlier
 padding observations below describe the preceding source.
@@ -495,11 +499,12 @@ New bounded source tests used the recovered ownership information:
   failed C89 syntax; corrected versions were compiled, and both sets are saved.
 - Three coherent plain-`int` variants cover helper types, function locals, or
   both. Helpers alone are neutral. Whole-flow/function-local variants score
- 99.53052%, retain frame104, and add an instruction. The26 opcode-aligned
-  register differences are therefore not a26-instruction-only residual.
+ 99.53052%, retain frame104, and remove a required copy instruction. The26
+  opcode-aligned register differences are therefore not a26-instruction-only
+  residual. This corrects the earlier description of an added instruction.
 - Four follow-ups change coefficient/history/all integer work-buffer fields to
   `int` on that whole-flow candidate. All are identical99.53052%; field types do
-  not remove the extra instruction. All source candidates were restored.
+  not restore the missing copy. All source candidates were restored.
 
 Discord archive search finds2025 discussions of Doshin's custom `jchuff-nin` /
 `jdhuff-nin`, including a participant saying they could not locate their source.
@@ -518,3 +523,63 @@ Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-07-inspector-recovered/`
 contains the full recovered dump, encoder-only excerpt, hash/ref/process checks,
 local-object summary,17 attempted compiles (14 valid candidates), Discord search
 results, final validation, and a verified74-member archive manifest.
+
+
+## Focused encoder continuation: shared owners and inline reconstruction
+
+The encoder remains **99.70266%, 639 instructions, frame104, 38 register-only
+instruction differences**. All trial source changes were restored, ordinary
+checkdiff verifies the retained baseline, and the full build passes. PR3377
+and scratchmbSPH retain the existing best source; no percentage improvement
+was found to push to the PR. The user explicitly requests continuing this
+encoder until100 rather than moving to another function.
+
+59 ordinary source compile attempts (58 valid candidates):
+
+| Family | Attempts | Result |
+| --- | ---: | --- |
+| Shared second work owner across DC calls, AC calls, or all seven calls; flat/member; embedded/separate initialization |12| Best neutral; embedded ownership usually adds a copy and grows frame |
+| Byte-helper expansion and all-call bit-writer expansion, with flat/member/direct work references |8| Byte expansion preserves38 register differences but grows frame128; other forms regress |
+| Explicit if/else and default-then-override table selection, individual/DC-pair/all tables |12| No gain; DC pair changes work pointer to r26 and introduces copies |
+| Bit/byte helper return value, length, byte, destination, or success conventions |8| All baseline-identical |
+| IJG-like checks of always-successful inline emitters |2| Bit-writer checks neutral; checking both helper layers grows frame128 |
+| Sequential work-buffer structs and explicit jump-context union view |5| Four valid variants baseline-identical; one generator error corrected |
+| Whole encoder inline, with local owner or work parameter, original/expanded byte helper |6| Nested bit/length helpers remain calls at default depth; no gain |
+| Same six variants with depth8 set before every helper definition |6| Fully inlines to longjmp-only calls, but best97.82316%, frame136, two extra instructions |
+
+The layout generator initially removed `metadata->data` along with the intended
+`JpegWork` member accesses. That candidate failed compilation in a different
+function and is not matching evidence. Restoring the unrelated metadata
+accesses yields the valid, neutral flat-struct result. Jump context size248
+plus32 header bytes preserves the first sample offset0x118 in the sequential
+layouts.
+
+The outer-inline experiment distinguishes two observations: setting depth8
+before all helper definitions does eliminate the residual bit/length helper
+calls; full inlining alone does not recover the encoder's instruction stream,
+frame, or register allocation. No pragma/source variant was retained.
+
+The earlier coherent-int candidate was examined with opcode/register-normalized
+alignment. It **removes**, rather than adds, the required `mr r22,r0` after the
+AC coefficient test: the load instead writes r22 directly. The work pointer
+still receives r31. Lower raw paired-difference counts do not represent an
+allocation improvement. The earlier paragraph has been corrected accordingly.
+
+A broader ordinary permuter run started from verified score190. At interruption
+it had completed11547 iterations with1569 compile errors and produced zero
+better candidate directories. It exited normally after Ctrl-C; no run remains
+live. Triage found no candidate sources, so there was no winner to transfer to
+the real tree. The reusable kit remains the previously corrected one; the old
+imported base.o must still not be mistaken for the corrected baseline object.
+
+Lifetime-pressure on the saved retail trace again mislabels later final-color
+holders as causal blockers of IG57, which is actually selected first. Added
+this encoder reproduction to issue1524; rely on the verified selection order
+and scan replay, not its proposed removal of interference with a later holder.
+PR3004 and PR3181 were reread for pointer-alias/lifetime techniques; they do not
+provide evidence that this encoder's instruction sequence is solved by the
+same source spelling.
+
+Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-07-focused-source/`
+contains all candidates and results, generators, a PR source diff, final
+checkdiff/build evidence, a run summary, and a verified206-member SHA256 archive.

@@ -1,0 +1,30 @@
+{
+  "function": "hsd_803B3CD8",
+  "scratch": "https://decomp.me/scratch/mbSPH",
+  "focus": "User explicitly requests this function until source100; no function switching.",
+  "retained_percent": 99.70266,
+  "frame": {
+    "expected_frame_size": 104,
+    "current_frame_size": 104,
+    "frame_growth": 0
+  },
+  "register_only_count": 38,
+  "source_sha256": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+  "ordinary_compile_attempts": 59,
+  "valid_candidates": 58,
+  "retained_changes": false,
+  "permuter": {
+    "base_score": 190,
+    "last_iteration": 11547,
+    "compile_errors": 1569,
+    "better_candidate_directories": 0,
+    "exit": "Interrupted normally after bounded run; Exiting; exit0",
+    "command": "python /Users/mike/code/decomp-permuter/permuter.py nonmatchings/hsd_803B3CD8 --better-only --stop-on-zero -j 4",
+    "triage": "No candidate sources found; no winners existed to transfer."
+  },
+  "validation": {
+    "checkdiff": "Retained baseline restored and verified",
+    "ninja": "exit0",
+    "source100": false
+  }
+}
