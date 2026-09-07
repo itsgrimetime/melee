@@ -940,3 +940,20 @@ Do not apply linear end-pointer/induction advice to this tiled, nonuniform
 address mapping without proving semantic equivalence. No generated probe or
 forced allocator mutation was run. Full outputs SHA256-verified in
 2026-09-07-remote-frontier. Production untouched98.7788%; goal remains active.
+
+## Final-add-only output and guarded helpers — 2026-09-07
+
+11 ordinary variants, all restored. Unlike earlier output helpers computing the
+row sum, a final-add-only void helper receives tile expression and &dst_row,
+updating *row = tile + *row. Parameter ordering, a u32 read cast, and named tile
+local all converge:96.65899% baseline pixel grouping,96.17512% corrected,
+frame152. They add tile to high-row before low-row, the rejected grouping.
+
+Null-check, early-return null-check, and conditional value-return forms around
+that helper regress85.97696–86.82949%,frame152. Although the caller supplies a
+valid local address, these guarded forms do not preserve the required generated
+code. No reason to pursue this guard timing family further.
+
+Complete source/diffs SHA256-verified in2026-09-07-final-row-output. Production
+restored98.7788%, no new PR delta; direct-row-call structural candidate remains
+separately preserved. Goal remains active.
