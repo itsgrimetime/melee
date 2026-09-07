@@ -311,3 +311,35 @@ checkdiff remains **98.7788%**, all six already-matched TU functions remain
 100%, and the encoder remains99.70266%. The full build passes and its DOL
 matches the original SHA-1 `08e0bf20134dfcb260699671004527b2d6bb1a45`.
 No source change or new PR was warranted; the TU remains Linkable.
+
+## Inline channel boundaries and shared work-buffer ownership
+
+A further 24 real-TU compiles tested larger source boundaries on both the
+98.7788% baseline and 98.04147% corrected pixel-address tree. No source change
+was retained.
+
+| Family | Runs | Result |
+| --- | ---: | --- |
+| Cb/Cr result helpers and store helpers with both argument orders | 10 | Single result helpers and store helpers neutral; extracting both result helpers adds eight frame bytes, giving98.5576% /97.820274% |
+| Luminance JpegWork view, then one shared work pointer at function/tile scope | 6 | Changes luminance loop code, adds two instructions and eight frame bytes;82.576035–83.77419% |
+| Cb addition order, constant-last products, and negative channel expressions | 8 | Addition/product commutations neutral; negative expressions alter arithmetic code and regress97.05069–98.04147% |
+
+The shared-work reconstruction addresses chroma through `work->data.x518` /
+`x618` and luminance through `work->data.x118[pixel_index * 64]`, shifting the
+work pointer by the logical luminance position. This is a diagnostic source
+shape, not a proposed type-layout change. Its emitted code is substantially
+worse than the separate scalar luma-base representation. The negative channel
+expressions are likewise diagnostics; mathematical equivalence alone is not
+proof of identical contracted floating-point evaluation.
+
+These results close the tested helper and cross-phase pointer-sharing forms.
+They do not rule out a different original helper boundary or prove that the
+remaining register order is unreachable. The saved retail model remains useful,
+but none of these source forms realizes its destination-pointer selection move.
+
+The restored ordinary check is98.7788%; the encoder is99.70266% and all six
+other functions in the TU remain100%. `python configure.py && ninja` passes,
+and built/original DOL SHA-1 remains
+`08e0bf20134dfcb260699671004527b2d6bb1a45`. Source, complete diffs, generators,
+and final verification are archived in
+`docs/matching-evidence/jpeg-rgb/2026-09-06-inline-ownership/`.
