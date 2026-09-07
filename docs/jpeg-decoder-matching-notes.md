@@ -773,3 +773,30 @@ or adding later channel dependencies does not solve its early selection here.
 They do not exclude other source structures. Restored98.962654 PR source; archived
 all sources, ordinary reports, and fresh two-role pressure report under
 2026-09-07-dependency-boundaries. No PR source delta from this pass.
+
+## Trimmed helper reconstruction — 2026-09-07
+
+The inline-loop-initial-parameters pattern motivated four complete bias-helper
+forms: initial block parameter, initial group count, both, and initial block plus
+limit. All98.01245/frame200. Removing caller declarations used only by that helper
+(luma,luma_block,channel,bias_block,luma_groups) restores176-byte frame and gives
+98.15353 for all four. Comparing ordinary instruction lines after offset0xfc with
+the retained PR source finds zero changes. Only bias pointer r8/r9 ownership moves;
+this boundary is not a lever for the later X-offset allocation.
+
+Reviewed the archived tile-groups generator: it copied every caller declaration
+into the helper and left every original declaration in the caller. Reconstructed
+from current source with declarations restricted to actual uses. Three group
+helper forms (ordinary,start group parameter,precomputed width) all46.825726 with
+frame296. Actual three bl instructions remain at offsets260,2a4,2e8: nested clamp
+calls, not just register/frame differences.
+
+Flattening RGB calculations into the groups helper removes all three calls.
+Explicit rgb_out local:91.435684/frame184. Indexed out[out_offset] store:
+93.04979/frame176. All three parameter forms share those results. Indexed form
+has the same instruction count but different opcode order (similarity0.946058),
+and X offset now r28. Thus neither unused-local cleanup nor reduced inline depth
+rescues this larger reconstruction. Do not reuse the earlier frame280 result as
+proof that a clean group helper inherently requires that frame; these new tests
+separate those effects. Seventeen total compiles, no retained gain. Full sources,
+generators and diffs archived in2026-09-07-trimmed-helper-reconstruction.
