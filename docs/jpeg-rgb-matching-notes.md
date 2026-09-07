@@ -1132,3 +1132,28 @@ old-row failures as equivalent graph evidence. No forced compiler mutation.
 
 Production restored98.82488. All PR3396 checks now pass (deploy/wiki jobs skipped).
 Full traces/replay/probes in2026-09-07-chroma-select-frontier. Goal remains active.
+
+## Direct chroma addresses and correspondence check — 2026-09-07
+
+19 probes on the row-fixed source:6 destination byte-offset/index reuse forms,
+12 direct column-sum permutations with/without named destination pointer, and
+one best-form baseline pixel-expression recheck. Byte-offset locals97.036865,
+frame160; reuse-index97.258064/frame152. Direct forms94.73733–98.156685/frame152.
+No production gain beyond98.82488.
+
+Fresh capture of prior dest-expression97.258064 validates267GPRoperands/81virtuals
+without contradictions after BOTH known scheduler transpositions.19changed
+assignments instead of the named-pointer candidate's8: removing the pointer
+alone broadly perturbs the row/tile graph, not just its own SELECT slot.
+
+Direct row+low+high address expression98.156685 eliminates chroma scheduling
+transposition; normalized instructions differ only at luma1f0/1f4. However a
+fresh retail correspondence (only luma transposition aligned) exposes exact
+operand contradictions at104: virtual38 would need r26 AND r21; virtual100
+would need r21 AND r26. This is the destination-index ADD's commuted operands,
+not a consistent pure-coloring target. Do not promote it as allocator-only just
+because opcode-normalized diff has only2lines. Baseline/corrected pixel versions
+score equally98.156685 but raw current_asm lists differ; equal score is not
+byte-identity proof. Preserve the earlier coherent donor structural candidate
+as primary. No forced changes; source restored and all evidence archived in
+2026-09-07-direct-chroma-addresses.
