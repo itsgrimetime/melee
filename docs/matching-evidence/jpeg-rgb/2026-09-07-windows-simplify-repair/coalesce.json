@@ -1,0 +1,232 @@
+{
+  "function": "hsd_803B3408",
+  "mode": "discover",
+  "register_class": "gpr",
+  "target_source": "--discover",
+  "cascade": [
+    31,
+    30,
+    29,
+    28,
+    27,
+    26,
+    25
+  ],
+  "pairs": [
+    {
+      "from": 50,
+      "to": 37,
+      "register_class": "gpr",
+      "priority_class": "frees-slot",
+      "depends_on": null,
+      "ir_facts": {
+        "from": {
+          "virtual": 50,
+          "is_phys": false,
+          "register_class": "gpr",
+          "first_def": {
+            "block": 11,
+            "opcode": "li",
+            "operands": "r50,0"
+          },
+          "use_blocks": [
+            11,
+            15
+          ]
+        },
+        "to": {
+          "virtual": 37,
+          "is_phys": false,
+          "register_class": "gpr",
+          "first_def": {
+            "block": 6,
+            "opcode": "add",
+            "operands": "r37,r117,r91"
+          },
+          "use_blocks": [
+            6
+          ]
+        }
+      },
+      "suggestions": [],
+      "preflight": {
+        "safe": false,
+        "reasons": [
+          "no direct copy/identity edge between r50 and r37 in pre-coloring IR \u2014 non-interfering but unsafe to force; treat this as a source-shape lead, not a --force-coalesce proof"
+        ]
+      }
+    },
+    {
+      "from": 46,
+      "to": 37,
+      "register_class": "gpr",
+      "priority_class": "register-reuse",
+      "depends_on": null,
+      "ir_facts": {
+        "from": {
+          "virtual": 46,
+          "is_phys": false,
+          "register_class": "gpr",
+          "first_def": {
+            "block": 12,
+            "opcode": "li",
+            "operands": "r46,0"
+          },
+          "use_blocks": [
+            12,
+            13
+          ]
+        },
+        "to": {
+          "virtual": 37,
+          "is_phys": false,
+          "register_class": "gpr",
+          "first_def": {
+            "block": 6,
+            "opcode": "add",
+            "operands": "r37,r117,r91"
+          },
+          "use_blocks": [
+            6
+          ]
+        }
+      },
+      "suggestions": [],
+      "preflight": {
+        "safe": false,
+        "reasons": [
+          "no direct copy/identity edge between r46 and r37 in pre-coloring IR \u2014 non-interfering but unsafe to force; treat this as a source-shape lead, not a --force-coalesce proof"
+        ]
+      }
+    },
+    {
+      "from": 51,
+      "to": 40,
+      "register_class": "gpr",
+      "priority_class": "register-reuse",
+      "depends_on": null,
+      "ir_facts": {
+        "from": {
+          "virtual": 51,
+          "is_phys": false,
+          "register_class": "gpr",
+          "first_def": {
+            "block": 10,
+            "opcode": "li",
+            "operands": "r51,0"
+          },
+          "use_blocks": [
+            10,
+            17
+          ]
+        },
+        "to": {
+          "virtual": 40,
+          "is_phys": false,
+          "register_class": "gpr",
+          "first_def": {
+            "block": 5,
+            "opcode": "add",
+            "operands": "r40,r82,r83"
+          },
+          "use_blocks": [
+            5,
+            6
+          ]
+        }
+      },
+      "suggestions": [],
+      "preflight": {
+        "safe": false,
+        "reasons": [
+          "no direct copy/identity edge between r51 and r40 in pre-coloring IR \u2014 non-interfering but unsafe to force; treat this as a source-shape lead, not a --force-coalesce proof"
+        ]
+      }
+    },
+    {
+      "from": 46,
+      "to": 47,
+      "register_class": "gpr",
+      "priority_class": "register-reuse",
+      "depends_on": null,
+      "ir_facts": {
+        "from": {
+          "virtual": 46,
+          "is_phys": false,
+          "register_class": "gpr",
+          "first_def": {
+            "block": 12,
+            "opcode": "li",
+            "operands": "r46,0"
+          },
+          "use_blocks": [
+            12,
+            13
+          ]
+        },
+        "to": {
+          "virtual": 47,
+          "is_phys": false,
+          "register_class": "gpr",
+          "first_def": {
+            "block": 6,
+            "opcode": "lhz",
+            "operands": "r47,0(r55)"
+          },
+          "use_blocks": [
+            6
+          ]
+        }
+      },
+      "suggestions": [],
+      "preflight": {
+        "safe": false,
+        "reasons": [
+          "no direct copy/identity edge between r46 and r47 in pre-coloring IR \u2014 non-interfering but unsafe to force; treat this as a source-shape lead, not a --force-coalesce proof"
+        ]
+      }
+    },
+    {
+      "from": 138,
+      "to": 37,
+      "register_class": "gpr",
+      "priority_class": "register-reuse",
+      "depends_on": null,
+      "ir_facts": {
+        "from": {
+          "virtual": 138,
+          "is_phys": false,
+          "register_class": "gpr",
+          "first_def": {
+            "block": 12,
+            "opcode": "li",
+            "operands": "r138,2"
+          },
+          "use_blocks": [
+            12
+          ]
+        },
+        "to": {
+          "virtual": 37,
+          "is_phys": false,
+          "register_class": "gpr",
+          "first_def": {
+            "block": 6,
+            "opcode": "add",
+            "operands": "r37,r117,r91"
+          },
+          "use_blocks": [
+            6
+          ]
+        }
+      },
+      "suggestions": [],
+      "preflight": {
+        "safe": false,
+        "reasons": [
+          "no direct copy/identity edge between r138 and r37 in pre-coloring IR \u2014 non-interfering but unsafe to force; treat this as a source-shape lead, not a --force-coalesce proof"
+        ]
+      }
+    }
+  ]
+}

@@ -2611,8 +2611,6 @@ static void *__cdecl hook_simplifygraph(int rclass, int n_colors, int n_class_re
     IGNode *head;
     IGNode *node;
     int order_idx;
-    IGNode **ig;
-    int ig_n;
 
     head = (IGNode *)((simplifygraph_fn)simplifygraph_trampoline)(
         rclass, n_colors, n_class_regs);
@@ -2756,16 +2754,6 @@ static void *__cdecl hook_simplifygraph(int rclass, int n_colors, int n_class_re
 
     if (PCFILE && DEBUG_GUARD)
     {
-        // Read IG state AFTER simplifygraph returns. Reading before crashes
-        // (likely because INTERFERENCEGRAPH isn't reliably in shape for cross-
-        // function reads at function-start time — possibly find_remat
-        // realloc is still racing or the pointer is mid-update). After the
-        // trampoline call the IG is in its final state for this class.
-        ig = INTERFERENCEGRAPH;
-        ig_n = N_IGNODES;
-        if (ig_n > 1024) ig_n = 1024;
-        if (ig_n < 0) ig_n = 0;
-
         debug_printf("\nSIMPLIFY GRAPH (class=%d, n_colors=%d, n_class_regs=%d)\n",
                      rclass, n_colors, n_class_regs);
         debug_printf("%-5s %-7s %-7s %-8s %-9s %s\n",
@@ -2774,14 +2762,12 @@ static void *__cdecl hook_simplifygraph(int rclass, int n_colors, int n_class_re
         order_idx = 0;
         for (node = head; node; node = node->next)
         {
-            int idx = -1;
-            int j;
+            // Like colorgraph, use the identity stored on the node. N_IGNODES
+            // can be the block count, so an array scan bounded by it loses
+            // valid virtuals above that count.
+            int idx = (int)node->ig_idx;
             const char *spill_note;
-            for (j = 0; j < ig_n; j++)
-            {
-                if (ig && ig[j] == node) { idx = j; break; }
-            }
-            spill_note = (node->flags & 0x08) ? "SPILLED" : "";
+            spill_note = (node->flags & IG_FLAG_SPILLED) ? "SPILLED" : "";
             debug_printf("%-5d %-7d %-7d %-8d 0x%-7x %s\n",
                          order_idx, idx,
                          (int)node->degree,

@@ -1347,3 +1347,43 @@ Other height reuse regresses97.88019(dst_row),97.64977(chroma_y),96.56682(chroma
 97.46544(pixel_index), allframe152. Thus parameter object classification does
 not give the desired index allocation order in these cases. No source retained.
 Full sources/diffs in2026-09-07-parameter-storage; production restored98.82488.
+
+## Windows diagnostic recovery and simplify IDs — 2026-09-07
+
+The Windows host is healthy. Its installed DLL was obsolete (13554 bytes,
+SHA256 95dd139c92403370363344201445b47cd7257f2c78bd637090d188a7573a9c37),
+with no feature manifest or coalescing event strings. Deployed current runner
+and DLL in a separate owned directory, leaving the installed originals alone:
+C:\Users\mikes\code\mwcc_debug\codex-c016-v6-20260907.
+Use debug dump remote with --remote-script pointing to run_pcdump.ps1 there.
+Staged coherent donor source SHA256:
+3d4b97bfd5971eed8ab120a1392dee0e78a984e778b3acff69a70c6fb641c7d9.
+
+The fresh v6 DLL exposes coalescing and colorgraph, but simplify IDs above37
+were -1. Root cause: hook_simplifygraph scans only N_IGNODES (38 here, a
+block count), although the class contains139 virtuals. Read node->ig_idx
+as the colorgraph hook already does. Also correct simplify SPILLED annotation
+to IG_FLAG_SPILLED instead of coalesce-root bit0x08. These are logging-only
+changes. Built successfully with build_macos.sh and ran the isolated Windows
+runner: compile exit0,0.457seconds; staged source and stock DLL restored.
+Repaired DLL SHA256:
+ee9c5d22ba10bc9473f94ec3b63ac95b756e976df6d55e357d3c17f593ec8a8a.
+
+Verification against existing full retail donor backend:765 equal,0 different,
+66 retail-only nodes (including physical nodes),0 debug-only. Equality comprises
+153 entries each for assigned_phys,color_status,degree,simplify_order,select_order.
+Before repair:624 equal,141 different due to missing simplify IDs. This validates
+these comparable allocator fields, not every compiler pass or the emitted binary.
+Fresh pressure report now runs from the Windows dump with no warnings, but its
+source hypotheses remain low-confidence conversion-temporary scope suggestions.
+Coalesce discovery emits5 pairs, all correctly rejected for forcing because there
+is no direct identity/copy edge; none contains a concrete source suggestion.
+Existing late-color-holder causality caveat still applies. Automated source-order
+search remains constrained by issue1549's local-only candidate runner and fresh
+identity requirement; recovering remote dumps does not resolve that integration.
+
+Issue1550 covers the simplify diagnostic repair; issue1545's old-DLL data gap
+is resolved by the isolated updated runner. Artifacts, compressed full dump,
+pressure/coalesce reports and hashes are preserved under matching-evidence/
+jpeg-rgb/2026-09-07-windows-simplify-repair. No production C source was changed;
+98.82488 remains the best merged source, and exact match/TU linking remain open.
