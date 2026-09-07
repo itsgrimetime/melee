@@ -1034,3 +1034,20 @@ problem. No productive sequential local-sharing lever found in these pairs.
 
 Full sources and diffs saved in2026-09-07-phase-local-reuse. Production source
 restored; ninja passes. Best remains98.7788%; no upstream PR delta.
+
+## Common scaled tiled-offset helper — 2026-09-07
+
+Nine reconstruction probes factor (i&1)*low_stride+(i&2)*high_stride into one
+inline helper, called for destination/source rows, optionally luma addresses,
+and optionally both chroma column calculations. Both chroma pixel loads remain.
+This is broader than the earlier row-plus-column helper: one scaled bit-offset
+abstraction serves multiple source/destination address domains.
+
+Helper bodies use direct return, named sum, or named low/high terms. Scores
+95.07834–96.48387; frames152–232. Direct-return rows+luma is the only152-frame
+variant,96.059906. Inspection shows high-row+tile followed by low-row+result,
+not the target low+high then tile+sum, and row counter r26 rather than r7.
+Thus its frame recovery does not hide a useful structural row improvement.
+Named-local forms create more stack homes without solving the whole function.
+No common-helper candidate retained. Full sources/diffs in
+2026-09-07-common-tiled-offset; production restored.
