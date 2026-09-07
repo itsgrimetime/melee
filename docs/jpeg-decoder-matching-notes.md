@@ -846,3 +846,32 @@ Exploratory web search of exact JPEG coefficients and GitHub code search
 claim). Generic YCbCr formula results do not justify a donor reconstruction.
 Retained source restored; ninja passes. Sources/diffs/scripts archived under
 2026-09-07-type-early-interactions.
+
+## Comparison result ownership and mapped graph — 2026-09-07
+
+Eight pointer-result probes: local int98.6971/frame184; local u8, overwritten
+out_offset/chroma_column/channel, and empty-if all98.83817/frame176 (lose gain).
+Discarded result+1 neutral98.962654; result<<1 regresses98.11203/frame176. Six
+internal clamp-result discards before return: !=0,!=255,!=1,<128,and byte-cast !=0
+all89.3195/frame168; ==0 gives94.609955/frame168. All restored; ninja passes.
+
+Re-established correspondence for retained inequality versus baseline before it.
+Proposed map: GPR IDs below107 unchanged, IDs107+ shift by3, FPR unchanged. Remove
+only observed subf/addic/subfe definitions of new r107/r108/r109. Every one of ten
+precolor passes then has identical per-block instruction multisets. Three removed
+instructions per pass, six in load deletion's expanded representation. Scheduling
+positions can differ. Anonymous constants normalized; this audit alone is not
+semantic/data equivalence or graph-isomorphism proof.
+
+Separately compare GPR interference pairs from observed decision lists under that
+mapping. No old-node edges added or removed. All88 added edges touch new107/108/109.
+Thus the retained gain changes allocation by adding temporary nodes and their
+edges, not by changing the observed edges among old nodes. Together with the
+source diff and ordinary-byte comparison, this is a more precise source lever
+than the previous generic lifetime explanation. Fresh target correspondence for
+28 previously mapped GPR targets is archived as mapped-target.txt (actual basename
+c016-decoder-inequality-mapped-target.txt). This is an inherited partial target
+remapped to current IDs, not a new forced-match verification or a complete target.
+Next model work can study the added-node neighborhood without blindly reusing
+old raw IDs. Sources, diffs and role/edge audits archived in
+2026-09-07-comparison-role-audit. No further ordinary-source gain this pass.
