@@ -1247,3 +1247,20 @@ and unsigned-int-sum: still `add r6,r29,r6`, retaining the row-first operands
 that conflict with target `add r21,r21,r26`. These casts do not repair the
 candidate's known operand-order contradiction. Full sources/diffs under
 2026-09-07-store-return-and-index-casts. Production restored98.82488.
+
+## Luma loop forms after row fix — 2026-09-07
+
+Ten valid probes: while-condition, do/base-before, do/base-inside,
+for-initializer-base and for-body-base on production and coherent row-fixed
+sources. The initial do/body generator put a declaration after a statement,
+failed to compile, and was corrected with an inner C declaration block; invalid
+output was never interpreted as a score. Archived sources/results are corrected.
+
+While-condition neutral98.82488/98.087555,frame152. Do/base-before85.129036/
+84.13825,frame152; do/base-inside84.91705/83.92627,frame160. For-initializer and
+for-body98.48848/97.75115,frame160. These are loop structure effects, not a
+new numerical improvement. All four for-based moved-base outputs still show
++1f0 addi r5,r21,280 followed by +1f4 li r26,0: the unwanted scheduling order
+is preserved. Moving luma setup around these source loop boundaries is not a
+repair of that residual. Source restored98.82488; archive in
+2026-09-07-luma-loop-forms. Goal remains active.
