@@ -1051,3 +1051,23 @@ Thus its frame recovery does not hide a useful structural row improvement.
 Named-local forms create more stack homes without solving the whole function.
 No common-helper candidate retained. Full sources/diffs in
 2026-09-07-common-tiled-offset; production restored.
+
+## Delayed simplification diagnostic — 2026-09-07
+
+Tool/history audit found no new upstream RGB donor; latest merged PR still3395.
+Remote metadata issue1545 remains open. Source-model-synthesis is specialized
+around profiled functions/meta-ceiling artifacts, not a ready generic RGB solver.
+
+Six DIAGNOSTIC algebraic probes test whether a more complex RHS can survive
+frontend ordering, simplify later, and retain the row's shared lifetime. These
+are not suggested maintainable source, and none was retained. All operands
+are bounded row/tile counters or row offsets, so cancellations do not rely on
+signed overflow. Corrected pixel grouping used throughout.
+
+row+chroma_y-chroma_y:98.04147%,152frame, retains reversed r26+r8 row ADD.
+row+tile-tile, row-tile+tile, row+low-low, and row+rowsum-rowsum all96.17512%,
+152frame: they regroup high+tile then low+result, losing target grouping.
+row^tile^tile:97.11981%,152frame, preserves tile+sum ordering but keeps TWO
+XOR instructions and a separate sumr5/finalr26. No late simplification path
+in these probes yields both target operand order and shared row lifetime.
+Full sources/diffs retained in2026-09-07-late-simplification; source restored.
