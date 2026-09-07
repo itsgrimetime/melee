@@ -1,0 +1,408 @@
+{
+  "function": "hsd_803B3408",
+  "source_head": "50e75e044b18ec4c9940488f4140570775298377",
+  "retained_percent": 98.7788,
+  "source_improvement": false,
+  "offline_model": {
+    "baseline_replay_rows": 138,
+    "hypothesis_only": true,
+    "scope": "Offline coalesced alias with unioned root neighbors, retained permanent alias edges. No compiler intervention; not a source-realizability proof. Target subset only, not final code/scheduling proof.",
+    "variants": [
+      {
+        "root": 40,
+        "alias": 74,
+        "row_color": 26,
+        "target_mismatches": {
+          "38": {
+            "actual": 23,
+            "target": 21
+          },
+          "101": {
+            "actual": 21,
+            "target": 22
+          },
+          "102": {
+            "actual": 21,
+            "target": 22
+          },
+          "98": {
+            "actual": 21,
+            "target": 22
+          },
+          "99": {
+            "actual": 21,
+            "target": 22
+          },
+          "95": {
+            "actual": 22,
+            "target": 23
+          },
+          "96": {
+            "actual": 22,
+            "target": 23
+          },
+          "37": {
+            "actual": 30,
+            "target": 22
+          }
+        },
+        "mismatch_count": 8,
+        "select_order": [
+          128,
+          118,
+          72,
+          71,
+          69,
+          67,
+          66,
+          64,
+          63,
+          62,
+          61,
+          55,
+          52,
+          51,
+          50,
+          49,
+          48,
+          46,
+          45,
+          43,
+          42,
+          40,
+          39,
+          37,
+          139,
+          138,
+          136,
+          135,
+          134,
+          133,
+          132,
+          131,
+          130,
+          129,
+          127,
+          126,
+          125,
+          124,
+          123,
+          122,
+          121,
+          120,
+          119,
+          117,
+          116,
+          115,
+          114,
+          113,
+          112,
+          111,
+          110,
+          109,
+          108,
+          107,
+          106,
+          105,
+          104,
+          103,
+          102,
+          101,
+          100,
+          99,
+          98,
+          97,
+          96,
+          95,
+          94,
+          93,
+          92,
+          91,
+          90,
+          89,
+          88,
+          87,
+          86,
+          85,
+          84,
+          83,
+          82,
+          81,
+          80,
+          79,
+          78,
+          77,
+          76,
+          75,
+          73,
+          70,
+          68,
+          60,
+          59,
+          58,
+          57,
+          56,
+          54,
+          53,
+          47,
+          44,
+          41,
+          38,
+          36,
+          35,
+          34,
+          33,
+          32
+        ]
+      },
+      {
+        "root": 74,
+        "alias": 40,
+        "row_color": 5,
+        "target_mismatches": {
+          "42": {
+            "actual": 26,
+            "target": 7
+          },
+          "85": {
+            "actual": 7,
+            "target": 21
+          },
+          "83": {
+            "actual": 21,
+            "target": 22
+          },
+          "74": {
+            "actual": 5,
+            "target": 26
+          },
+          "40": {
+            "actual": 5,
+            "target": 26
+          },
+          "52": {
+            "actual": 7,
+            "target": 6
+          },
+          "89": {
+            "actual": 6,
+            "target": 5
+          },
+          "90": {
+            "actual": 6,
+            "target": 5
+          },
+          "91": {
+            "actual": 6,
+            "target": 5
+          },
+          "55": {
+            "actual": 6,
+            "target": 5
+          },
+          "38": {
+            "actual": 23,
+            "target": 21
+          },
+          "101": {
+            "actual": 21,
+            "target": 22
+          },
+          "102": {
+            "actual": 21,
+            "target": 22
+          },
+          "98": {
+            "actual": 21,
+            "target": 22
+          },
+          "99": {
+            "actual": 21,
+            "target": 22
+          },
+          "95": {
+            "actual": 22,
+            "target": 23
+          },
+          "96": {
+            "actual": 22,
+            "target": 23
+          },
+          "37": {
+            "actual": 30,
+            "target": 22
+          },
+          "111": {
+            "actual": 6,
+            "target": 5
+          },
+          "112": {
+            "actual": 6,
+            "target": 5
+          },
+          "108": {
+            "actual": 6,
+            "target": 5
+          },
+          "109": {
+            "actual": 6,
+            "target": 5
+          },
+          "114": {
+            "actual": 6,
+            "target": 5
+          }
+        },
+        "mismatch_count": 23,
+        "select_order": [
+          128,
+          118,
+          74,
+          72,
+          71,
+          69,
+          67,
+          66,
+          64,
+          63,
+          62,
+          61,
+          55,
+          52,
+          51,
+          50,
+          49,
+          48,
+          46,
+          45,
+          43,
+          42,
+          39,
+          37,
+          139,
+          138,
+          136,
+          135,
+          134,
+          133,
+          132,
+          131,
+          130,
+          129,
+          127,
+          126,
+          125,
+          124,
+          123,
+          122,
+          121,
+          120,
+          119,
+          117,
+          116,
+          115,
+          114,
+          113,
+          112,
+          111,
+          110,
+          109,
+          108,
+          107,
+          106,
+          105,
+          104,
+          103,
+          102,
+          101,
+          100,
+          99,
+          98,
+          97,
+          96,
+          95,
+          94,
+          93,
+          92,
+          91,
+          90,
+          89,
+          88,
+          87,
+          86,
+          85,
+          84,
+          83,
+          82,
+          81,
+          80,
+          79,
+          78,
+          77,
+          76,
+          75,
+          73,
+          70,
+          68,
+          60,
+          59,
+          58,
+          57,
+          56,
+          54,
+          53,
+          47,
+          44,
+          41,
+          38,
+          36,
+          35,
+          34,
+          33,
+          32
+        ]
+      }
+    ]
+  },
+  "candidate_percent": 97.1659,
+  "candidate_result": "No mapped target contradiction, but separate virtual74 and73 happen to receive same r5;74 still has no target-r5 neighbor, so not the needed coalesce.",
+  "files": {
+    "c016-rgb-merge-model.py": "f835448477acb20e933cbe33a4394d7be251cac0b133b8bada863204e90062cc",
+    "c016-rgb-merge-model.json": "c54e0a9d3ee4c4e8d466be6c451ac0c2fb1fd062f8c230f2e21c887031c5605b",
+    "c016-rgb-shared-row-check.py": "a6bfd91b8469d3e201cf26dd1b6f40975c2a9339d5f3b9c0dd7670fb7c0a0961",
+    "c016-rgb-shared-row.c": "49f9f6e8cfd2efda08b2154de1929c27d28a5d5df6c29e254a3fdad1b5e27208",
+    "c016-rgb-shared-row.json": "f7d3073104d5c9c394ae4e6d139a07f48602cd257ff744da85294d611bd72804",
+    "c016-rgb-shared-row-correspondence.py": "e5c799d23342945aa2673adf817d0da5ab0841398ada2a429c25023d6422c679",
+    "c016-rgb-shared-row-correspondence.json": "ab102ea7e64a55a2290da36efdbcb3a9630e1868dc430670d16de16e8c202924",
+    "c016-rgb-shared-row-stages/provenance.json": "39b198d5394549fbf74f5b04732ebeaf7c1c032e487de2005482a241dca55110",
+    "c016-rgb-shared-row-stages/launch.log": "058faefbf39baac533447eacfa59bef2b98d271edd6df49776e7cf2c6c54afb6",
+    "c016-rgb-shared-row-stages/creation/allocator-0001.json": "7f8b12d5e224ae53686bd1f7acf36c3a9060ee2f945354119c0328983b4e415b",
+    "c016-rgb-shared-row-stages/creation/pcode-creations-0001-register_coloring.json": "492ce947c2f30aac4a52edd897de09a23fda7a346487886b7ff37118fe16d814",
+    "c016-rgb-shared-row-stages/creation/coloring-0001-fpr-01-after.json": "d751c4af6c3bfc3db6460e67ee562cf02ffb9da526a64bb079c69c466c8e0f0a",
+    "c016-rgb-shared-row-stages/creation/pcode-creations-0001-post_allocation_peephole.json": "bba9fdd632648d0a7860e31310d45c59a03c23191ae4c06a42860f45fb07df97",
+    "c016-rgb-shared-row-stages/creation/capture-complete.json": "f627db60b5b680511257d975c248257ec69e6af55a4569d49e2c211da80a342e",
+    "c016-rgb-shared-row-stages/creation/functions.jsonl": "9b546ddab281cc8662450801a3b4be1f7950ee74c6443f0207c94be9a8b00596",
+    "c016-rgb-shared-row-stages/creation/coloring-0001-gpr-01-after.json": "3565a902da92de5582e457d958604fe01423d2ef65893b10db7a7c5e528f2136",
+    "c016-rgb-shared-row-stages/creation/pcode-0001-initial.json": "cd2070f296743c8d5392347ae6947a1650ebe3f0c3010d1bc2ecc8870f1630c7",
+    "c016-rgb-shared-row-stages/creation/pcode-creations-0001-epilogue_prologue.json": "35d18fea464a1c997961c757b04d0d8ef9eb3a840db923d05637588583bf6b2c",
+    "c016-rgb-shared-row-stages/creation/pcode-creations-0001-allocator.json": "cab6e4a4f1879cff8936c8c26a5a562fb47311149a0cef026712339b8ada59e5",
+    "c016-rgb-shared-row-stages/creation/pcode-creations-0001-final.json": "b1d5a05911023fa38c3762cd3a6ec04cd82b0505b6ebbcada9721e2228e68070",
+    "c016-rgb-shared-row-stages/creation/pcode-0001-epilogue_prologue.json": "3f65442228056cb9664f022df85ce64793aa159079c560169f2f100d8e904aa3",
+    "c016-rgb-shared-row-stages/creation/pcode-0001-optimized.json": "3faec10eac242a47df77adf6bfcdf029c4420aafce148f15c7e490e483108b99",
+    "c016-rgb-shared-row-stages/creation/coloring-0001-fpr-01-before.json": "ca50f64cb0e3e151671d58f842bfa0abac0fb50952f87296c84eb3a4c0ea6681",
+    "c016-rgb-shared-row-stages/creation/pcode-creations-0001-forward_peephole.json": "80bb18b42021bc60b8291ae5c9c9b1d3f2c43a2b31a6033e2d3a6f9fa973b652",
+    "c016-rgb-shared-row-stages/creation/code-motion-0001.json": "6964cba9e671a2d0204b09a325e1b3c2b5a2e7a5f7dcac69851c2ab9fad2edc0",
+    "c016-rgb-shared-row-stages/creation/pcode-creations-0001-optimized.json": "af0610ce5f541893f260fbc2cb1ed2f66105b0be47bf3e2aa14905c069e09ece",
+    "c016-rgb-shared-row-stages/creation/pcode-0001-post_allocation_peephole.json": "b6c42bb76e3fc72d9ffb942c8c568277411b9c1082276a2483c2a277a33130d1",
+    "c016-rgb-shared-row-stages/creation/pcode-0001-forward_peephole.json": "5c4603f1469d520ba96d533c1d4af4cecea5d7182f7349bd6293059033b09f1c",
+    "c016-rgb-shared-row-stages/creation/pcode-creations-0001-initial.json": "6e2e5b2a1873752b5a702b0d2e2f3f2dfee9060a4f5c074ed82e6b890d65e899",
+    "c016-rgb-shared-row-stages/creation/pcode-0001-register_coloring.json": "58fce76387b1636acbddabef98bad3468202b099f4d1ee68f7f547151a87b60c",
+    "c016-rgb-shared-row-stages/creation/pcode-creations-0001-scheduled.json": "7ee9a73f499bdd65f827b360784e10bfdcc62017ced6d2995ad0f077f3092ae7",
+    "c016-rgb-shared-row-stages/creation/pcode-0001-final.json": "cef3e2141dd6bf189ec5d4ce1e97eb394f776a6ae7f8a55a7a98b8fdea487a66",
+    "c016-rgb-shared-row-stages/creation/pcode-creations-0001-epilogue_merge.json": "e7aa39e16ecafbb4ba54480aa31331ae2fe1049466bc2d96544459b4b2cbdb73",
+    "c016-rgb-shared-row-stages/creation/coloring-0001-gpr-01-before.json": "3131ec96abbf5c193df0d38aed4249053b43e85b625db7a81338eb337d85ddd9",
+    "c016-rgb-shared-row-stages/creation/pcode-0001-scheduled.json": "fc2312331946668c318ec23dcdacb94d235ff27cdacb1bd248a750da40b07772",
+    "c016-rgb-shared-row-stages/creation/pcode-0001-epilogue_merge.json": "28d7463e216c625b07567a92831cb6da9f35b6a3a7fd7f9458cc0b69eb630bd7"
+  },
+  "archive_sha256": "1dc3f1a3084bd53fbf359da9b6aa914b9d05633b1cc195081d9666900432e4a1"
+}

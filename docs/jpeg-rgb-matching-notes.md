@@ -975,3 +975,24 @@ fails to preserve target code. No pointer boundary gain.
 
 Complete sources/diffs SHA256-verified in2026-09-07-row-pointer-boundaries.
 Production restored98.7788%, build passes. Goal remains active, no PR delta.
+
+## Offline merge model and physical-sharing recheck — 2026-09-07
+
+Exact simplify+SELECT replay reproduces106/106 decisions for the coherent direct
+row-call candidate (this candidate has106 active GPR webs). OFFLINE hypothetical
+merge74->40 unions root neighbors and leaves the alias as a permanent blocker.
+It gives rowr26 but leaves8other mapped target mismatches. Reverse40->74 gives
+rowr5 and23mismatches. This is a graph model only, NOT an actual compiler merge
+or source-realizability proof. It confirms row repair alone is insufficient.
+
+Revisited prior combined inner-loop tile+row placement with the remaining luma
+column_offset local removed:97.1659%,frame152,217instructions. Fresh retail
+stages and267-operand/82-virtual correspondence have no contradictions, but
+row sum74 and final row73 are DISTINCT virtuals that happen to getr5. This is
+not a merged lifetime.74's target-colored neighbors again include no r5;
+selection-order-only repair remains impossible for it. Do not confuse this
+candidate with the old97.1659% low/sum-merged contradictory helper: equal
+fuzzy scores do not imply equivalent virtual graphs.
+
+Complete model, source, diffs and fresh stages SHA256-verified in
+2026-09-07-row-merge-model. Source restored98.7788%, build passes. Goal active.
