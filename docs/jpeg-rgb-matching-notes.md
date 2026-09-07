@@ -263,3 +263,51 @@ After restoring the production source, ordinary checkdiff reproduced
 remained 100%. `python configure.py && ninja` passed; built and original DOL
 SHA-1 both equal `08e0bf20134dfcb260699671004527b2d6bb1a45`. The TU remains
 Linkable, and no upstream source PR update is warranted by these experiments.
+
+## Decoder technique transfer and retail SELECT replay
+
+After rechecking upstream and active PRs/claims, RGB remains available; the
+Big Blue and snapshot residuals are covered by other work. The decoder's new
+outer-subtract-negative technique was tested here in six pixel-address forms
+and eight destination-row forms (the latter on both original and corrected
+pixel-address trees). None improves the retained 98.7788%. Correcting the pixel
+address still gives 98.04147%; some row forms regress as far as 96.17512%.
+All fourteen keep the 152-byte frame. The decoder technique is therefore not
+a general fix for this RGB residual.
+
+A fresh local diagnostic dump was refused with exit125: the earlier encoder
+root-inversion process, PID95126, remains uninterruptible (UEs, parent1) in
+macOS. No new wibo process or unsafe override was used. The refusal and live
+process observation were added to existing issue1514. This blocks that dump
+route, not ordinary compilation or analysis of saved retail evidence.
+
+The corrected pixel candidate's existing retail before/after coloring
+snapshots were adapted to the existing SELECT model. The adapter uses the
+before snapshot's recorded list in its listed order and after snapshot's
+physical assignments, resolving coalesced aliases through their roots. It
+reproduces **105 of 105 GPR assignments**, with no incomplete or spilled nodes.
+Reversing the list reproduces only 28/105; the snapshot field's name
+`simplify_order` must not be taken as an instruction to reverse it here.
+These inputs were already structurally validated in the creation-provenance
+archive; this replay adds a check against observed retail allocation.
+
+Moving destination pointer IG37 later in this abstract selection order can
+change it from r30 to the target r22. Fifteen positions do so, but every one
+also changes IG95 r22 to r23 and IG38 r23 to r20. This is **not** a full-target
+solution or a source-realizability claim. It establishes that the pointer's
+single desired color must be evaluated together with the collateral changes.
+
+Six source follow-ups tried assigning the destination pointer inside the store
+expression, computing a named Cb result before the pointer, and computing it
+before the destination index. Each was tested on original and corrected pixel
+address trees. All six are neutral for their respective baselines; the three
+forms in each group emit identical instruction bytes. Merely moving those
+statements does not supply the modeled selection-order change.
+
+All 20 compile runs, candidate sources, retail model inputs/adapter/results,
+diagnostic refusal, and restored verification are preserved under
+`docs/matching-evidence/jpeg-rgb/2026-09-06-decoder-transfer/`. Ordinary final
+checkdiff remains **98.7788%**, all six already-matched TU functions remain
+100%, and the encoder remains99.70266%. The full build passes and its DOL
+matches the original SHA-1 `08e0bf20134dfcb260699671004527b2d6bb1a45`.
+No source change or new PR was warranted; the TU remains Linkable.
