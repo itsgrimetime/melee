@@ -1277,3 +1277,20 @@ is a scoped non-stack comparison, not full object equivalence or proof that
 virtual IDs are identical. No needed physical-allocation change was obtained;
 helper homes account for the visible stack growth. No source retained.
 Full sources/diffs in2026-09-07-channel-inline; production restored98.82488.
+
+## Named column-term donor transfer — 2026-09-07
+
+16 probes transfer the successful named-row-term idea to the direct-address
+candidate's destination index. Twelve name either low or high column part,
+then permute the three sum terms at both chroma stores; four row-first forms
+remove the named luma row offset to recover frame152. Other full variants
+frame160. No source/pixel load is removed and row fix remains intact.
+
+Best direct-address variant low-row-low-high reaches98.22581/frame152, above
+that family's previous98.156685 but below production98.82488. All four
+frame-restored row-first forms still emit +104 `add r6,r29,r6`, retaining the
+known row-first operand contradiction against target `add r21,r21,r26`.
+The source-term donor is therefore not a complete transfer of the row fix:
+it slightly changes allocation but leaves the destination ADD wrong. Do not
+promote its percentage as a pure-register frontier. Complete sources/diffs in
+2026-09-07-column-term-donor. Production restored98.82488.
