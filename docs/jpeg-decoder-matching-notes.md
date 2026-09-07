@@ -800,3 +800,28 @@ rescues this larger reconstruction. Do not reuse the earlier frame280 result as
 proof that a clean group helper inherently requires that frame; these new tests
 separate those effects. Seventeen total compiles, no retained gain. Full sources,
 generators and diffs archived in2026-09-07-trimmed-helper-reconstruction.
+
+## Four-block helper and refreshed permuter — 2026-09-07
+
+Extracted just the four-block loop, with scoped RGB calculations and original
+clamp helper, removing obsolete caller locals. Ordinary/start-block-parameter
+forms both give94.60581 with indexed output/frame176; explicit rgb_out pointer
+forms92.9917/frame184. All four restored. This narrower boundary also does not
+preserve the retained match.
+
+CLI permute bootstrap still fails through extract get (issue1552, note added).
+Direct importer works using the function-only slice of the existing target.s;
+feeding the whole previously imported target redefines assembler macros. New
+import: nonmatchings/fn_803B6820-2. Reused verified production compile.sh, replacing
+the importer's outdated Wine flags. Independently compiled base.o matches all241
+instruction bytes of real current object; target.o independently matches all241
+instruction bytes of real reference object. Baseline permuter score250:50 register
+penalties, zero stack/branch/reorder/insertion/deletion penalties.
+
+120-second two-worker ordinary-compiler search (--better-only --stop-on-zero
+--stack-diffs -j2) completed973 reported iterations with27 compiler errors, minimum
+score250, no improved outputs. Planned SIGINT shut down cleanly with exit0.
+Each compiler stages a unique PID source; real source was unchanged by the search.
+No debug-DLL scoring or forced registers. Import, target-fidelity report, search
+log and four helper source/diffs archived in2026-09-07-block-helper-permuter.
+Current source remains98.962654; no new PR delta.
