@@ -744,3 +744,32 @@ Old raw virtual target IDs therefore cannot be reused. This explains why a
 side-effect-free discarded inequality can affect allocation despite not adding
 final instructions. Fresh dump and failed-bijection report are archived separately
 as compiler-evidence.tar.gz in the same evidence directory.
+
+## Dependency boundaries and current pressure — 2026-09-07
+
+Re-established the focused roles in the fresh inequality trace: IG65 is defined
+by rlwinm r65,r92,4,0,27 and used by outer output address add r94,r65,r93; IG37
+is the chroma address add r37,r81,r106 and base for Cr/Cb loads. Thus those two
+IDs happen to survive this edit, but the full old map does not. Pressure report
+using the exact staged source has no warnings: X65 remains r20/select21;
+chroma37 now r15/select39 (previously r11/select34), neither coalesced. Final-holder
+lists remain noncausal for earlier SELECT choices; do not follow that heuristic
+as an established blocker explanation.
+
+23 ordinary compiles retained no gain:
+- X-offset equality/inequality with group_y at outer loop: ne98.11203, eq neutral.
+  Comparisons with tile_x before/after block loop neutral. With out_offset at store:
+  both96.07469. With aligned_width before loops92.3444; integer dst92.323654.
+  All ten frame176.
+- Replace retained pointer comparison with actual Cr address96.34855, Cb96.25311,
+  luma address neutral; integer less/greater88.24066/frame184; integer subtraction
+  or xor followed by !=0 neutral. These are seven variants.
+- Add channel comparisons inside RGB helper: red/green98.13278/frame176;
+  red/blue, green/blue and pixel.green/blue neutral; red/Cr89.3195/frame184;
+  green/Cb97.99585/frame184. Six variants.
+
+These tests narrow the comparison lever: merely involving the persistent X value
+or adding later channel dependencies does not solve its early selection here.
+They do not exclude other source structures. Restored98.962654 PR source; archived
+all sources, ordinary reports, and fresh two-role pressure report under
+2026-09-07-dependency-boundaries. No PR source delta from this pass.
