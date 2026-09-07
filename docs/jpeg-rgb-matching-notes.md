@@ -1413,3 +1413,24 @@ mostly already explored; no automated local debug candidate runner was launched.
 Its baseline still calls coalesce-root nodes62/72 spills, so do not use that
 spill_set as proof (existing flag0x08 interpretation issue). Best source remains
 98.82488, already merged; no new upstream source delta.
+
+## Separate chroma pixel locals — 2026-09-07
+
+Sixteen valid probes use independent cb_pixel/cr_pixel locals for the two chroma
+loads, preserving Cb store before the Cr load. Twelve cover u16/s32/u32 and
+shared loop scope versus independent per-store blocks on production/coherent
+sources. Initial per-store generator incorrectly placed a C89 declaration after
+statements; corrected to explicit blocks before scoring and reran the set.
+No stale object was scored on that compile failure.
+
+u16 and s32: production98.60368/coherent97.866356,frame160. u32 changes integer
+conversion lowering and regresses86.5576/86.37327,frame160. Scope does not change
+these results. Two followups removing only luma row_offset stayframe160 (their
+artifact labels say frame-neutral, but this intended result was NOT achieved).
+Removing BOTH row_offset and column_offset in two further probes recovers152:
+production98.82488, coherent98.087555. Coherent full instruction rows exactly
+equal original coherent seed. Thus these independent pixel-value scopes provide
+no final instruction gain after recovering the source frame; this does not assert
+unchanged hidden virtual identities without a fresh trace. All sources/results
+in2026-09-07-split-chroma-pixels. Production restored; ninja passes. No new source
+change to submit upstream;100% and TU linking remain unfinished.
