@@ -1,9 +1,9 @@
 # JPEG decoder color conversion: fn_803B6820
 
-Current retained source: **98.83817%**, committed as `94db8b8d65` and submitted
-in [PR #3384](https://github.com/doldecomp/melee/pull/3384), clean head
-`535a768bd1`. The final section records the chroma-addition improvement.
-Earlier baseline sections below describe the preceding 98.81743% source.
+Current retained source: **98.962654%**, committed as `06ef39775e` and submitted
+in [PR #3403](https://github.com/doldecomp/melee/pull/3403), clean head
+`cab0ee48b5`. Earlier sections describe the preceding baselines; see the final
+section for the discarded-pointer-comparison improvement.
 
 ## Verified baseline
 
@@ -679,3 +679,33 @@ have no supported pattern, and jpeg_store_rgb565 is too complex for its pure
 expression inliner. This is a tool coverage limitation, not proof that helper
 reconstruction cannot work. Sources, ordinary checkdiff results, and diagnostic
 JSON are archived in 2026-09-07-output-address-parameters. Baseline restored.
+
+## Discarded pointer inequality improvement — 2026-09-07
+
+The mismatch-db pattern `discarded-binary-alias-dependency-regalloc` supplied a
+new source family beyond prior bare/unary discards. Six ordinary probes:
+output/chroma pointer equality and base/chroma equality neutral98.83817;
+output/chroma inequality **98.962654**; x/luminance equality90.149376/frame184;
+out_offset/luminance equality97.59336; cb/cr equality98.796684. Retained:
+`(void) ((u8*) out != chroma);` immediately before the Cr load. Equality comparison
+of the converted pointers has no side effects; no comparison instruction remains.
+
+Nine instruction lines change registers, with 241 instructions, identical opcode
+sequence and176-byte frame. Chroma pointer changes r11->r15; luminance and Cr
+conversion temporaries change r15->r11, and the block offset calculation changes
+r15->r11. This is a real ordinary-compiler gain, but chroma still needs r16 and
+persistent X offset still holds r20 instead of targetr15. No claim of full match.
+Fresh ordinary verification repeats98.962654; configure+ninja and pre-commit
+format/style checks pass. Clean upstream PR3403 contains only the one-line gain.
+TU remains Linkable; five other functions are untouched.
+
+Preceding probes: eight X-offset type/cast/shift forms and five cloned clamp
+helper arrangements all preserve every one of the241 baseline instruction lines.
+They do not provide an allocation lever here. These19 probes, source scripts and
+full ordinary diffs are archived in2026-09-07-pointer-inequality.
+
+Follow-up remote trace exited124 after60 seconds, zero bytes, before staged-source
+acknowledgment. The runner selected the correct Windows worktree; captured no
+candidate compiler evidence. Blocker JSON is archived. No retry or fresh virtual
+mapping claimed; next trace should first investigate staging transport. The
+ordinary-compiler gain and PR do not depend on this diagnostic capture.
