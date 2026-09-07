@@ -1230,3 +1230,20 @@ assumption. Named Cb is optimized away; full variants reserve160/168 frames.
 Destination/both record variants96.76037–96.98157 and add homes; neither field
 order nor pixel/row scope helps. Full sources/diffs and both captured stages
 archived in2026-09-07-chroma-records. Production restored98.82488.
+
+## Store-return ownership and direct-index cast boundaries — 2026-09-07
+
+17 probes, all restored. Eight Cb helper forms store a converted value then
+RETURN the computed JpegWork pointer for Cr: value/offset parameter order,
+named/direct column index, full/removed luma offset locals. Named-index96.76037,
+direct94.70968; frames168/full and160/reduced. Unlike prior void store helpers,
+these explicitly return pointer ownership; no useful later-temporary source
+or production gain results. Both source pixel loads preserved around Cb store.
+
+Nine int/u32/unsigned-int casts at row, column-bit sum, or row+low boundaries
+in the direct-address98.156685 candidate. Row and row+low casts remain98.156685;
+bit-sum casts95.96774. Frame152 throughout. Checked +104 in int-row, u32-row,
+and unsigned-int-sum: still `add r6,r29,r6`, retaining the row-first operands
+that conflict with target `add r21,r21,r26`. These casts do not repair the
+candidate's known operand-order contradiction. Full sources/diffs under
+2026-09-07-store-return-and-index-casts. Production restored98.82488.
