@@ -713,3 +713,26 @@ and permuter log are SHA256-verified in2026-09-07-loop-state-permuter. No new
 upstream PR or Matching flag. The active goal remains unfinished; a useful next
 step needs a concrete new row-expression/ownership hypothesis or a trace of the
 pre-IRO compound-assignment rewrite, rather than repeating scalar spellings.
+
+## Entry AST separates commutation from ADDASS — 2026-09-07
+
+Read-only retail CodeGen entry capture at0x4351c0 completes85 statements for
+hsd_803B3408. First parameter (esp+4) is the statement list, second parameter
+identifies the function. The source's second dst_row assignment is already
+EASS(dst_row,EADD(dst_row,tile)) here: the addition operands have reversed,
+but the node is still EASS, not EADDASS. The earlier first-IRO snapshot shows
+EADDASS. Thus operand commutation precedes compound-assignment conversion;
+merely suppressing the latter is not sufficient. Next static/live inquiry
+should follow the AST construction/normalization before CodeGen entry.
+
+The initial reader failed: GC/1.2.5n NODE_NAMES was empty and _patch_elabel
+masked the decoding exception as an ELABEL with no type. Reported issue1541.
+The valid diagnostic initializes75 node names from the exact retail PE table
+at0x55268c, located via EADDASS string/pointer xrefs. Source line numbers,
+constants, object names and surrounding assignments agree with current source.
+The rejected partial AST is not evidence. No compiler/source state was mutated.
+Ghidra setup validated the compiler hash and3248-function project before audit.
+
+Complete valid AST, hook, extracted node names and CodeGen decompilation are
+SHA256-verified in2026-09-07-entry-ast. Production source remains unchanged at
+RGB98.7788%, encoder100%; goal still requires100%, new PR, and TU linking.

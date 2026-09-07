@@ -1,0 +1,22 @@
+{
+  "function": "hsd_803B3408",
+  "source_head": "19ffd29a5129617264585f1257f9e8ccdeb602cd",
+  "compiler_sha256": "ccf4b465cec73b5aae9c5c5543dcf8cda8a62aba246f89e2e0b200d742f2e55c",
+  "retained_percent": 98.7788,
+  "entry_stage": "0x4351c0 before frontend optimizer",
+  "statement_count": 85,
+  "node_names_table": "0x55268c, 75 entries, extracted from exact retail PE",
+  "finding": "Second dst_row assignment is EASS(dst_row,EADD(dst_row,tile)) at codegen entry. Operand reversal precedes EADDASS conversion.",
+  "tool_issue": 1541,
+  "files": {
+    "c016-rgb-entry-ast-valid/entry-complete.json": "db0da7f695c3a16ae9670d1330c7f7608619eba395de2cd66d678ac143792a19",
+    "c016-rgb-entry-ast-valid/provenance.json": "39b198d5394549fbf74f5b04732ebeaf7c1c032e487de2005482a241dca55110",
+    "c016-rgb-entry-ast-valid/launch.log": "0cf8b3da5c04e0863dd6cfba48cd0637ec461dedd0641504c1efe8bb112b0f48",
+    "c016-rgb-entry-ast-valid/entry-ast.txt": "afc29657569310a7fcb51b322c3c2d350fcd41f32a77531d9d201595f5177f19",
+    "c016-rgb-entry-ast.py": "89b16e27491f5b86dbee662d6e4150c9978929bd0cce8c9b8215853fea9c1792",
+    "c016-rgb-node-names.json": "39b49ed33138489c5f494857a5d93b9952429365ec57f40bdc8a659aab084119",
+    "c016-rgb-codegen-query.py": "16c3c3bee6abe181deb872ed50cbb13249138d1b2d5a7f94121d8277c2802eb6",
+    "c016-rgb-codegen-decompile.c": "2a0234b066214cc1bded1de0474c8c8700f2070fb97ce32f572701127b1953d2"
+  },
+  "archive_sha256": "580de18d0500fa27ad51a081a86a82ef90952d07202d9050da71913b1442bc77"
+}
