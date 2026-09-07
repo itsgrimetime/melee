@@ -954,3 +954,22 @@ comparison for raw helper+width reuse versus retained source finds only one line
 usesr20. Thus frame growth had hidden only an add-operand commutation here, not a
 useful X-allocation change. No candidate retained; source restored, ninja passes.
 All13 source/diff probes and scripts archived in2026-09-07-x-scalar-helper.
+
+## Named clamp results and ownership transfer — 2026-09-07
+
+Twelve ordinary probes: add s32 red_result,green_result,or both before byte copies,
+with/without red-first expression. Keeping existing jpeg_clamp result local gives
+frame184 and98.82158 (98.73859 red-first) for all three. Remove the inner clamp
+result local and directly return (u8)(s32)value: one named outer result yields
+frame168 and98.82158 (98.73859 red-first); both named results restoreframe176 and
+exact respective baseline score98.962654/98.87967. No retained improvement.
+
+Fresh Windows SCP capture of red-first/both-outer-results transfer succeeds:
+SHA8e3c77d34b847eff7ece9bb6516c47beb2fff3d34007387962c9ab508e91e249,
+compile0.515s,942752bytes. All ten precolor passes align bijectively with red-first
+baseline; all87mapped GPR and34FPR colors and selection positions unchanged.
+Therefore the frame-neutral transfer supplies neither desired clamp-result
+order move. Named-local ownership here changes frame reservation without the
+needed allocation effect. Remote source/DLL restored; production source restored
+and ninja passes. Sources/diffs and fresh trace/mapping archived under
+2026-09-07-clamp-owner-transfer.
