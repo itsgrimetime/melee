@@ -1,0 +1,29 @@
+{
+  "function": "hsd_803B3CD8",
+  "retained_percent": 99.70266,
+  "source100": false,
+  "source_changes_retained": false,
+  "source_sha256": "0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee",
+  "valid_compiles": 16,
+  "compile_attempts": 16,
+  "lead": {
+    "candidate": "c016-enc17-flat-boundary/caller-ac_value-run-value.c",
+    "ordinary_score": 99.02973,
+    "ordinary_frame": 104,
+    "ordinary_work_register": 30,
+    "ordinary_register_differences": 95,
+    "additional_difference": "run+1 calculation reordered before bit-count decrement",
+    "retail_work_merge": "105->98/r30",
+    "retail_work_select_position": 1,
+    "preallocation_object": "@173",
+    "preallocation_first": 36,
+    "source100": false
+  },
+  "validation": {
+    "frame": 104,
+    "instructions": 639,
+    "register_only_differences": 38,
+    "full_build": "exit0",
+    "matched_neighbors": 6
+  }
+}

@@ -950,3 +950,66 @@ Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-07-preallocation-objects/
 contains35 complete candidates, new retail trace, both raw object-list captures,
 validation/comparison scripts, reference layouts, bounded search observations,
 and restored build/checkdiff results in a verified archive.
+
+## Ordinary-C reconstruction reaches work r30, below the best overall score
+
+The retained source is still99.70266%, frame104,639 instructions,38 register
+rows. **A new alternate source reaches the target work-pointer register r30
+without compiler overrides.** Its overall99.02973% score is lower, so it is
+saved as a reconstruction lead rather than replacing the best source or PR.
+
+The earlier whole-encoder inline probes kept a one-field work aggregate or
+used a work parameter. This follow-up instead declares a **flat work pointer
+inside the inline encoder**, initializes it there, and passes its address
+through both output helper layers. The outer function owns the AC value, run,
+and DC value as locals, passed by address to the inline encoder. All helper
+calls inline; longjmp remains the only external call.
+
+Candidate: `c016-enc17-flat-boundary/caller-ac_value-run-value.c` in the archive.
+The ordinary work-address instruction is `addi r30,r4,0` at+0x18. The candidate
+has the exact104-byte frame and639 instructions, but95 register differences.
+Register/branch-label-normalized alignment also shows the run+1 calculation
+before the bit-count decrement instead of after it. Correct work r30 alone
+is not a100% match or evidence that the other register differences are harmless.
+
+The supported full retail trace independently completes with320 GPR nodes,
+2655 edges,283 color decisions. It observes work-address merge105->98/r30;
+98 is selected second, after101/r31. The new read-only preallocation capture
+binds @173 to98, with first eligible slot36. Named caller value/run/ac_value
+occupy33/34/35. All72 allocated GPR object slots32..103 are observed exactly
+once. The first-selected object is @166/101; its source role has not yet been
+established from a fresh front-end trace, so do not guess its role from its
+final physical register. Object-reader errors are empty and both trace runs
+finished normally. No physical-register or alias map was forced.
+
+16 valid source compiles, all restored:
+
+| Family | Count | Result |
+| --- | ---: | --- |
+| Inline-local flat pointer, passed by value or address/const address through output helpers; direct/local bit-length result |6| Best98.403755%, frame104; workr26, missing coefficient copy |
+| Caller AC value/run/DC value combinations on the address-passing variant |4| Run ownership reaches workr30; best such form99.02973%, frame104 |
+| Reassigned work parameter in either parameter order |2| Both98.403755%, frame104; no gain over inline-local form |
+| Additional caller length/index/AC-table owners on the work-r30 candidate |4| Length is exactly neutral; index moves work back to r31; no overall gain |
+
+The flat-local/by-value variants have more pointer copies and larger frames.
+Passing the address through both helpers removes those extra pointer copies,
+and caller AC-value ownership restores the target coefficient copy. These
+source effects are validated by ordinary compilation; they are not claims
+that the resulting output-parameter API is ready for upstream review.
+
+Next useful analysis is a fresh front-end binding for @166 and the run-payload
+value on this exact candidate, followed by a source test that restores the
+run+1/bit-count initialization order. A specialized run-payload helper that
+computes run+1 after initializing the bit counter is one untested hypothesis.
+Do not reuse the baseline57/216 IDs for this candidate or declare the older
+root-ID graph permutation realized: the full graph/source context differs.
+
+Final restoration gives99.70266%, frame104,639 instructions,38 register rows.
+Six neighboring functions remain100%, RGB remains98.7788%, and the full build
+passes. Source hash stays0f06df91008f9fe01f3264d8e69eee97685f65e62c4e81b2ca48fd651b4ea5ee.
+PR3377 and scratchmbSPH retain the best source. Stay on this encoder until100.
+
+Evidence: `docs/matching-evidence/jpeg-encoder/2026-09-07-source-work-r30/`
+contains the16 candidates and results, the unforced-r30 source/assembly,
+full retail trace, preallocation capture/hook, normalized alignment summary,
+and final verification in a SHA256-verified archive.
