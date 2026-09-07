@@ -1105,3 +1105,30 @@ conclusion. New active structural candidate is structural-candidate.c.txt here.
 
 Complete donors/probes/fresh traces under2026-09-07-donor-row-breakthrough.
 The row blocker is resolved; next work is chroma allocation and scheduling.
+
+## Chroma SELECT frontier after row breakthrough — 2026-09-07
+
+Fresh full retail backend capture of the corrected-pixel structural candidate
+succeeds. Supported lifetime-pressure with its eight changed target virtuals
+runs on this trace; attribution remains low confidence/unattributed, with
+freshness unknown. Its final-color holder lists are not causal SELECT timing
+proof. Use the exact fresh snapshots for order analysis.
+
+All neighbors of the eight changed virtuals are target-mapped; no target-color
+interference contradictions.105-web simplify+SELECT replay matches the capture.
+OFFLINE order search: moving38 alone to positions40–47 reduces8target misses to1.
+Moving38 to39 and37 to55 (and several nearby positions) yields ZERO mapped target
+misses on the unchanged graph. This is a SELECT-order hypothesis, not an actual
+compiler or source result; unmodeled scheduler/implicit operands still require
+ordinary verification. Critically, unlike the old row-helper graph, current
+chroma target colors ARE reachable by ordering alone.
+
+19 ordinary source probes:11 index/destination type/scope/expression changes,
+8 index-inline caller/local/frame variants. Scalar int/u32 types, pointer view
+casts, and most scopes retain98.087555; direct pointer expression97.258064,
+function-scope pointer97.39632. Index helper variants95.7235,frames152–168.
+No new source gain. These test the NEW row-fixed candidate; do not count earlier
+old-row failures as equivalent graph evidence. No forced compiler mutation.
+
+Production restored98.82488. All PR3396 checks now pass (deploy/wiki jobs skipped).
+Full traces/replay/probes in2026-09-07-chroma-select-frontier. Goal remains active.
