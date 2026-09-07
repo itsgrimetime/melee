@@ -402,3 +402,62 @@ matching is 98.7788%, encoder 99.70266%, and the other six TU functions 100%.
 The full build passes and built/original DOL SHA-1 is
 `08e0bf20134dfcb260699671004527b2d6bb1a45`. The TU remains Linkable; no source
 PR update is warranted.
+
+## From SELECT-only targets to a checked simplify reconstruction
+
+The graph from the corrected pixel candidate now reproduces the full GPR
+simplify order as well as its coloring: two ascending-ID scans remove nodes
+whose dynamic degree is below 29, updating neighbors immediately. Reversing
+that removal list reproduces all 105 retail selections. Coalesced-away nodes
+are excluded using the recorded flags. The replay makes no jam/spill choice
+because neither scan jams in this input.
+
+Twenty diagnostic swaps of pointer 37/index 38 with the otherwise unused
+virtual slots 32–36 fail to fix any of the eight target color differences.
+This rules out that specific parameter-slot renumbering idea under the model;
+it does not assume a C parameter reuse would necessarily produce those IDs.
+
+A second search moves the two roles later in the virtual-number sequence,
+preserving other roles' relative order, then recomputes **simplify and SELECT**.
+Of 10,000 insertion pairs, 140 reproduce the extended target. For example,
+inserting pointer 37 after old 103 and index 38 after old 101 maps the pointer to
+new 103 and index to new 100. They select at positions 55 and 58. This is stronger
+than prescribing SELECT order directly: the simplify rules produce that order
+on an isomorphic graph. It remains a diagnostic relabeling, not a source-level
+match or a proof that the source can realize the same graph and numbering.
+The extended target still assumes unchanged colors for unmapped roles, and the
+known instruction-order/add-operand residuals remain separate.
+
+### Retail backend route and pressure-report limitation
+
+The supported `debug retro backend` route succeeds and produces a retail
+backend-v1 trace with 105 GPR and 48 FPR decisions. Both selection lists and all
+153 colors agree with the earlier independently captured snapshots. Its
+first-definition, live-interval, and source-attribution fields are explicitly
+unavailable; the route did not provide the complete lifetime/source facts
+initially sought. The supported pressure explorer consumes it, but cannot
+invent those missing fields.
+
+The pressure report calls IG95's final r22 color a blocker for IG37 even
+though IG37 selects at 23 and IG95 at 64. That is a final-color compatibility
+conflict, not evidence that IG95 already blocked r22 at the earlier decision.
+It also labels the selection of r30 as coming from a volatile pool. These
+misleading causal/pool descriptions are reported in issue1524. The separately
+checked simplify/SELECT replay is the basis for the ordering conclusions.
+
+### Source follow-ups
+
+Twelve component-variable probes introduce explicit red/green/blue scalar,
+record, or floating values after **each** pixel read, on both source baselines.
+None improves matching. Scalar forms add eight frame bytes; records add 16;
+floating forms also perturb registers. Three pointer-return helpers used
+directly on store left-hand sides test the later-value-creation hypothesis:
+expression return, named index, and passed buffer base. They score 95.7235% or
+91.870964%, adding eight or 16 frame bytes. All fifteen were restored.
+
+Evidence is in
+`docs/matching-evidence/jpeg-rgb/2026-09-06-simplify-creation/`: source probes,
+ordinary diffs, full backend-v1 output, pressure report, simplify/label models,
+and verification. Restored RGB is 98.7788%, encoder 99.70266%, and the other six
+TU functions 100%. The full build passes and built/original DOL SHA-1 is
+`08e0bf20134dfcb260699671004527b2d6bb1a45`; the TU remains Linkable.
