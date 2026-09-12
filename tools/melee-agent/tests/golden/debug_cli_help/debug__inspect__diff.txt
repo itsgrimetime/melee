@@ -1,0 +1,32 @@
+                                                                                
+ Usage: melee-agent debug inspect diff [OPTIONS] INPUT_A INPUT_B                
+                                                                                
+ Compare two source or pcdump inputs through the mwcc-debug pipeline.           
+                                                                                
+ Existing `.txt` inputs are treated as already-captured pcdumps. `.c`           
+ inputs are compiled with `debug dump local --no-cache-sync`, then the          
+ resulting pass snapshots are compared in pipeline order without running        
+ the heavier mwcc-inspect front-end workflow. Pass `--source-inspect` to        
+ run mwcc-inspect for `.c` inputs, or pass `--inspect-a/--inspect-b` to         
+ include pre-captured front-end snapshots in the same staged lowering           
+ report.                                                                        
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    input_a      TEXT  First source or pcdump file [required]               │
+│ *    input_b      TEXT  Second source or pcdump file [required]              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --fn,--function   -f      TEXT     Function to diff. Required for MVP.       │
+│ --timeout         -t      INTEGER  Per-source `debug dump local` timeout in  │
+│                                    seconds.                                  │
+│                                    [default: 90]                             │
+│ --inspect-a               PATH     mwcc-inspect output for the first input.  │
+│                                    Requires --inspect-b.                     │
+│ --inspect-b               PATH     mwcc-inspect output for the second input. │
+│                                    Requires --inspect-a.                     │
+│ --source-inspect                   Also run tools/workflow/mwcc-inspect.sh   │
+│                                    for .c inputs. Default source mode is     │
+│                                    local pcdump-only.                        │
+│ --help                             Show this message and exit.               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

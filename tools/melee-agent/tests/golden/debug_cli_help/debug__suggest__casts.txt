@@ -1,0 +1,45 @@
+                                                                                
+ Usage: melee-agent debug suggest casts [OPTIONS] FUNCTION                      
+                                                                                
+ Tier 7d: static lint for cast-mismatch and signedness patterns.                
+                                                                                
+ Surfaces explicit casts on function arguments that are likely wrong —          
+ especially the `(f32)` cast on integer values that the matching agent          
+ identified as the `drop-variadic-cast` pattern in their session                
+ findings.                                                                      
+                                                                                
+ Three-tier classification for cast warnings:                                   
+   HIGH — cast on a value the function declares as integer                      
+   MEDIUM — cast on a value that LOOKS integer but can't be proven              
+   LOW — every other explicit cast (for general audit)                          
+                                                                                
+ With `--asm`, also cross-references the call site against                      
+ build/GALE01/asm/<unit>.s to identify args loaded as integers when             
+ the source casts to float (and vice versa).                                    
+                                                                                
+ With `--signedness`, scans the current-vs-expected ASM diff for                
+ compare-opcode mismatches: cmplwi (unsigned) where expected has cmpwi          
+ (signed), or vice versa. Useful when `u8 limit` → `int limit` gives            
+ a match improvement that the source-level cast audit misses.                   
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    function      TEXT  Function name to audit [required]                   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --asm                     Cross-reference each call-site with the expected   │
+│                           ASM in build/GALE01/asm/. Detects integer-loaded   │
+│                           args that the source code wraps in (f32) (and vice │
+│                           versa).                                            │
+│ --signedness              Scan the current-vs-expected ASM diff (via         │
+│                           checkdiff) for compare-opcode signedness           │
+│                           mismatches: cmplwi (unsigned) where expected has   │
+│                           cmpwi (signed), or vice versa. Requires the TU's   │
+│                           .o to be built (`ninja <unit>.o`). This is         │
+│                           separate from the source-level cast audit.         │
+│ --severity          TEXT  Filter by severity: high/medium/low/all (default:  │
+│                           medium+).                                          │
+│                           [default: medium]                                  │
+│ --json                    Emit warnings as JSON.                             │
+│ --help                    Show this message and exit.                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

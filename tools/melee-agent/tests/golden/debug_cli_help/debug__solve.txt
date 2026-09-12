@@ -1,0 +1,24 @@
+                                                                                
+ Usage: melee-agent debug solve [OPTIONS] COMMAND [ARGS]...                     
+                                                                                
+ Inverse-coloring solver: surrogate-checked, §1.5-filtered C-move worksheets    
+ for register-only residuals.                                                   
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ coloring           Inverse register coloring: enumerate §1.5-filtered        │
+│                    node-set/content                                          │
+│                    perturbations, predict their coloring with the SELECT     │
+│                    surrogate, map                                            │
+│                    winners to C moves, emit a ranked worksheet. Exit         │
+│                    0=actionable candidate,                                   │
+│                    3=abstain, 4=budgeted no-candidate (incl. window-order).  │
+│ allocator-ceiling  Classify exhausted allocator-rotation evidence without    │
+│                    compiling.                                                │
+│ node-set-split     Realize a solve-coloring node-set split with source-shape │
+│                    candidates; use --coupled with --node-set-delta for       │
+│                    interdependent rotations.                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

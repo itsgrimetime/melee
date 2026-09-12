@@ -1,0 +1,96 @@
+                                                                                
+ Usage: melee-agent debug search source-model-synthesis [OPTIONS]               
+                                                                                
+ Generate and classify post-meta-ceiling source-family probes.                  
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function          -f                        TEXT     Function to        │
+│                                                           synthesize source  │
+│                                                           families for.      │
+│                                                           [required]         │
+│ *  --meta-ceiling-js…                            PATH     Meta-ceiling JSON  │
+│                                                           or                 │
+│                                                           retained-frontiers │
+│                                                           aggregate JSON.    │
+│                                                           [required]         │
+│    --retained-fronti…                            PATH     Optional           │
+│                                                           retained-frontiers │
+│                                                           aggregate to merge │
+│                                                           with the meta      │
+│                                                           ceiling.           │
+│    --source-file,--s…                            PATH     Retained C source  │
+│                                                           baseline.          │
+│    --source-function                             TEXT     Retained source    │
+│                                                           function name.     │
+│                                                           Defaults to the    │
+│                                                           profiled source    │
+│                                                           alias.             │
+│    --target                                      PATH     Target JSON for    │
+│                                                           score-source       │
+│                                                           validation.        │
+│    --cflags-from                                 PATH     Source path for    │
+│                                                           score-source       │
+│                                                           cflags.            │
+│                                                           [default:          │
+│                                                           src/melee/mn/mndi… │
+│    --expression-base…                            PATH     Baseline pcdump    │
+│                                                           for                │
+│                                                           expression-aware   │
+│                                                           score-source       │
+│                                                           validation.        │
+│    --write-probes                                PATH     Directory for      │
+│                                                           generated          │
+│                                                           candidate .c       │
+│                                                           files.             │
+│    --max-per-dimensi…                            INTEGER  Maximum candidates │
+│                                                           per dimension.     │
+│                                                           [default: 5]       │
+│    --score                 --no-score                     Run debug target   │
+│                                                           score-source for   │
+│                                                           probes.            │
+│                                                           [default:          │
+│                                                           no-score]          │
+│    --score-json                                  PATH     Offline            │
+│                                                           score-source JSON. │
+│                                                           Repeatable.        │
+│    --checkdiff-guard       --no-checkdiff-gu…             Require            │
+│                                                           score-source       │
+│                                                           structural guard   │
+│                                                           validation.        │
+│                                                           [default:          │
+│                                                           checkdiff-guard]   │
+│    --remote                --no-remote                    Forward --remote   │
+│                                                           to score-source.   │
+│                                                           [default:          │
+│                                                           no-remote]         │
+│    --remote-fallback       --no-remote-fallb…             Forward            │
+│                                                           --remote-fallback  │
+│                                                           to score-source.   │
+│                                                           [default:          │
+│                                                           no-remote-fallbac… │
+│    --timeout                                     FLOAT    score-source       │
+│                                                           timeout in         │
+│                                                           seconds.           │
+│                                                           [default: 120.0]   │
+│    --include-source        --no-include-sour…             Include generated  │
+│                                                           source text in     │
+│                                                           JSON output.       │
+│                                                           [default:          │
+│                                                           no-include-source] │
+│    --continue-after-…      --no-continue-aft…             Opt in to bounded  │
+│                                                           source-family      │
+│                                                           probes after       │
+│                                                           terminal Sort      │
+│                                                           proofs that are    │
+│                                                           not automatically  │
+│                                                           routed.            │
+│                                                           [default:          │
+│                                                           no-continue-after… │
+│    --json                  --text                         Emit               │
+│                                                           machine-readable   │
+│                                                           JSON.              │
+│                                                           [default: json]    │
+│    --help                                                 Show this message  │
+│                                                           and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

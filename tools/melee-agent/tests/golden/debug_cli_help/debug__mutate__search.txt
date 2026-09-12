@@ -1,0 +1,85 @@
+                                                                                
+ Usage: melee-agent debug mutate search [OPTIONS]                               
+                                                                                
+ Tier 3: multi-start search over targeted mutation seeds.                       
+                                                                                
+ Workflow:                                                                      
+ 1. Resolve pcdump + target.                                                    
+ 2. Enumerate variable bindings via the symbol bridge.                          
+ 3. Plan up to --budget seed mutations.                                         
+ 4. Materialize each seed inside                                                
+    nonmatchings/<fn>/tier3_seed_<idx>/.                                        
+ 5. Smoke-compile each. If all seeds fail, exit non-zero with a                 
+    clear message.                                                              
+ 6. For each compiling seed, launch decomp-permuter (with                       
+    mwcc-debug score blending) for up to --per-seed-time seconds.               
+    The global --total-time cap stops the loop early once                       
+    exceeded.                                                                   
+ 7. Find the best candidate each permuter produced and rank                     
+    seeds by delta (baseline score minus best candidate's score).               
+ 8. Print the top result with full diff path.                                   
+ 9. If --apply-best is set, transfer the winning candidate into                 
+    the real source tree via the same debug permute verify machinery (with      
+    the inline_fn placeholder check still firing).                              
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function                -f      TEXT     Function to search (required). │
+│                                               [required]                     │
+│    --budget                          INTEGER  Maximum number of seed         │
+│                                               mutations to try. Hard cap on  │
+│                                               seed count; truncated by       │
+│                                               priority order.                │
+│                                               [default: 5]                   │
+│    --per-seed-time                   INTEGER  Wall-clock seconds to permute  │
+│                                               each compiling seed. The       │
+│                                               permuter runs against the      │
+│                                               seed's perm-dir for this long, │
+│                                               then is killed. Default 60s.   │
+│                                               [default: 60]                  │
+│    --total-time                      INTEGER  Global wall-clock cap          │
+│                                               (seconds) across the whole     │
+│                                               per-seed search. Stop early    │
+│                                               once exceeded, even if seeds   │
+│                                               remain. Default 600s (10       │
+│                                               minutes).                      │
+│                                               [default: 600]                 │
+│    --perm-root                       PATH     Root of decomp-permuter clone. │
+│                                               [default:                      │
+│                                               /Users/mike/code/decomp-permu… │
+│    --target                  -t      PATH     Target spec; auto-derived if   │
+│                                               omitted.                       │
+│    --blend                           FLOAT    mwcc-score blend weight.       │
+│                                               [default: 0.1]                 │
+│    --threshold                       FLOAT    Minimum delta (% improvement,  │
+│                                               post-transfer) to consider a   │
+│                                               seed's permuter run a win when │
+│                                               applying with --apply-best.    │
+│                                               Default 0.05 — matches the     │
+│                                               global debug permute verify    │
+│                                               default.                       │
+│                                               [default: 0.05]                │
+│    --apply-best                               After ranking, if the winning  │
+│                                               seed's best candidate improves │
+│                                               real-source match by >=        │
+│                                               --threshold, transfer it to    │
+│                                               the real tree via the same     │
+│                                               debug permute verify machinery │
+│                                               (with the inline_fn            │
+│                                               placeholder guard). Off by     │
+│                                               default — dry-run semantics.   │
+│    --include-low-confidence                   Also generate seeds from       │
+│                                               bindings the symbol-bridge     │
+│                                               flagged as low-confidence (red │
+│                                               flags present: nested decls,   │
+│                                               statics, extra                 │
+│                                               compiler-introduced virtuals). │
+│                                               Off by default — skip these to │
+│                                               avoid bad seeds on functions   │
+│                                               where the cursor heuristic is  │
+│                                               unreliable. Verify the binding │
+│                                               manually via `debug inspect    │
+│                                               var-to-virtual <var> -f FN     │
+│                                               --basis` before opting in.     │
+│    --help                                     Show this message and exit.    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

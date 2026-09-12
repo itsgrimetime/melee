@@ -1,0 +1,37 @@
+                                                                                
+ Usage: melee-agent debug [OPTIONS] COMMAND [ARGS]...                           
+                                                                                
+ MWCC debugging workflow for dumps, inspection, target scoring, source          
+ suggestions, focused mutations, and permuter triage.                           
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ diff-schedule        Diff real vs forced scheduler-window decisions.         │
+│ coalesce-search      Search source-shape probes by target                    │
+│                      coalescing/interference objective.                      │
+│ select-order-search  Search source-shape probes by target COLORGRAPH         │
+│                      select-order objective.                                 │
+│ dump                 Collect pcdumps and manage local mwcc_debug setup.      │
+│ inspect              Read, compare, and explain MWCC pcdumps.                │
+│ target               Define and score allocator targets.                     │
+│ suggest              Suggest source-shape and mismatch fixes.                │
+│ mutate               Apply focused source mutations on specific variables or │
+│                      decls.                                                  │
+│ intervene            Run backend-backed allocator interventions and report   │
+│                      allocator deltas.                                       │
+│ permute              Run, verify, and triage decomp-permuter candidates.     │
+│ artifacts            Inspect and safely prune retained diagnostic evidence.  │
+│ util                 Low-level helpers outside the main mwcc-debug loop.     │
+│ solve                Inverse-coloring solver: surrogate-checked,             │
+│                      §1.5-filtered C-move worksheets for register-only       │
+│                      residuals.                                              │
+│ measure              Run source-shape measurement harnesses over matched     │
+│                      functions.                                              │
+│ search               Fast+directed match-search substrate (Spec 1).          │
+│ retro                Retail-binary MWCC introspection via retrowin32 + gdb   │
+│                      (GC/1.2.5n front-end IRO and backend/regalloc traces,   │
+│                      plus GC/1.1 backend dumps).                             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

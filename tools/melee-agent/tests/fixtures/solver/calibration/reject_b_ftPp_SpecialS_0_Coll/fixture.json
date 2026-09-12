@@ -1,0 +1,85 @@
+{
+  "name": "reject_b_ftPp_SpecialS_0_Coll",
+  "function": "ftPp_SpecialS_0_Coll",
+  "unit": "melee/ft/chara/ftNana/ftNn_Init",
+  "class_id": 0,
+  "kind": "reject_b_synthetic",
+  "real_exemplar": true,
+  "reused_from": "flag_c_ftPp_SpecialS_0_Coll",
+  "phys_target": {
+    "39": 28
+  },
+  "reachable": false,
+  "expected": {
+    "outcome": "rejected_b",
+    "filter_token": "rejected_b"
+  },
+  "target_ig": 55,
+  "class_signal": {
+    "source_kind": "implicit-temp",
+    "first_def_opcode": "addi",
+    "implicated_hops": 2,
+    "observed_reg": 0,
+    "contested_residual": [
+      39
+    ]
+  },
+  "whole_solver": {
+    "expected_token": "rejected_b",
+    "target_ig": 55,
+    "implicated_hops": 2,
+    "candidates_for_target": 8,
+    "rejected_count": 8,
+    "flagged_count": 0,
+    "survived_in_full": 0,
+    "survived_in_partial": 0,
+    "survived_in_window": 0,
+    "production_filter_token": "rejected_b",
+    "whole_solver_reject_assertion_ok": true,
+    "recompute_equality_audit_ok": true,
+    "recompute_audit": {
+      "reasons": [
+        "rejected_b"
+      ],
+      "flags": [],
+      "admits": 0,
+      "candidates": 8
+    },
+    "broken_filter_control": {
+      "survivors_under_admit_everything": 0,
+      "breaks_gate": true
+    },
+    "enumeration_trace": {
+      "filter_counts": {
+        "candidates_generated": 246,
+        "rejected_a": 78,
+        "rejected_b": 40,
+        "flagged_c": 122,
+        "rejected_survival": 6
+      },
+      "evals_per_kind": {
+        "node-add": 122,
+        "edge": 0,
+        "order": 0
+      },
+      "full_hits": 0,
+      "partial_hits": 0,
+      "window_order_hits": 122,
+      "truncated": false,
+      "last_kind": "node-add"
+    }
+  },
+  "bridge_file": "bridge.json",
+  "matched_fn_span": null,
+  "provenance": {
+    "amendment": "A2",
+    "rule": "caller-invisible iff synthetic-intermediate KIND (implicit-temp / copy-coalesce / nameless-lineless first-def)",
+    "target_kind": "implicit-temp",
+    "target_first_def_opcode": "addi",
+    "note": "reuses the frozen flag_c IG/bridge (no recompile); the synthetic node is genuinely caller-invisible (no source variable an alias can split)."
+  },
+  "alias": {
+    "source_object_candidates": [],
+    "lever": null
+  }
+}

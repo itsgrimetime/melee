@@ -1,0 +1,22 @@
+                                                                                
+ Usage: melee-agent debug inspect explain-schedule [OPTIONS]                    
+                                                                                
+ Explain observed scheduler windows for known force-schedule targets.           
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function        -f      TEXT  Function to analyze. [required]           │
+│ *  --force-schedule          TEXT  Target scheduler swap list to explain,    │
+│                                    e.g. 'lwz:0x94>0x90,lwz:0xAC>0xA8'.       │
+│                                    [required]                                │
+│    --pcdump                  PATH  Path to pcdump.txt. Auto-resolves from    │
+│                                    cache when omitted.                       │
+│    --source-file             PATH  C source file used for advisory IR/source │
+│                                    provenance. Defaults to the repo source   │
+│                                    for the function when available.          │
+│    --checkdiff-json          PATH  Path to `tools/checkdiff.py <function>    │
+│                                    --format json` output; enables non-load   │
+│                                    code-offset schedule windows.             │
+│    --json                          Emit as JSON.                             │
+│    --help                          Show this message and exit.               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

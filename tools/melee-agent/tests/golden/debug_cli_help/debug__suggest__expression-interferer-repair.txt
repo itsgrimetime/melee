@@ -1,0 +1,51 @@
+                                                                                
+ Usage: melee-agent debug suggest expression-interferer-repair                  
+            [OPTIONS]                                                           
+                                                                                
+ Rank expression-scored FPR repair candidates without losing protected hits.    
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --candidate-json,--score-json          TEXT     Path, comma-separated paths, │
+│                                                 or a JSON file with a        │
+│                                                 candidates array. Each       │
+│                                                 payload should include       │
+│                                                 expression_score and         │
+│                                                 optional residual facts.     │
+│ --function                     -f      TEXT     Target function label for    │
+│                                                 diagnostics; pair with       │
+│                                                 --source-function when the C │
+│                                                 source uses a different      │
+│                                                 name.                        │
+│ --source-file                          PATH     Current retained C source    │
+│                                                 used to generate protected   │
+│                                                 row_offset/product FPR       │
+│                                                 repair candidates.           │
+│ --source-function                      TEXT     Function definition to patch │
+│                                                 inside --source-file when it │
+│                                                 differs from --function.     │
+│ --write-probes,--out-dir               PATH     Directory for generated      │
+│                                                 source candidate .c files.   │
+│ --cflags-from                          TEXT     Compile flags unit to use    │
+│                                                 when validating generated    │
+│                                                 probes with debug target     │
+│                                                 score-source.                │
+│ --max-source-candidates                INTEGER  Maximum protected            │
+│                                                 row/product source           │
+│                                                 candidates to emit.          │
+│                                                 [default: 16]                │
+│ --include-source                                Include full candidate       │
+│                                                 source text in JSON when not │
+│                                                 writing probes.              │
+│ --focus-name,--focus-express…          TEXT     Expression anchor that must  │
+│                                                 reach its expected register. │
+│                                                 [default:                    │
+│                                                 col_offset_product_fpr]      │
+│ --attempted-families                   TEXT     Comma-separated transform    │
+│                                                 families already exhausted.  │
+│ --recombine-status                     TEXT     Status of any manual         │
+│                                                 subhunk/recombine step.      │
+│                                                 [default: not-run]           │
+│ --json                                          Emit as JSON.                │
+│ --help                                          Show this message and exit.  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,12 @@
+                                                                                
+ Usage: melee-agent debug permute remote stop [OPTIONS] JOB_ID                  
+                                                                                
+ Stop a remote permuter tmux session.                                           
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    job_id      TEXT  Remote permuter job id. [required]                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

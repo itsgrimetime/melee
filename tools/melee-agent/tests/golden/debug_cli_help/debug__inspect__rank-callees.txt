@@ -1,0 +1,25 @@
+                                                                                
+ Usage: melee-agent debug inspect rank-callees [OPTIONS] [PCDUMP]               
+                                                                                
+ Predict the callee-save cascade for a function before compiling.               
+                                                                                
+ Lists callee-save virtuals (those that got r13-r31) sorted by                  
+ ig_idx descending — the order MWCC's simplifygraph processes them.             
+ Higher ig_idx = colored first = gets r31, r30, r29, ... via                    
+ top-down nonvolatile dispense.                                                 
+                                                                                
+ Useful for predicting the param-iter-ceiling: if your target wants             
+ a parameter virtual (low ig_idx) at r31 but several locals have                
+ higher ig_idx, the cascade will give those locals r31 first and                
+ the parameter will land lower. No source-level fix.                            
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   pcdump      [PCDUMP]  Path to pcdump.txt. Omit to auto-resolve via         │
+│                         --function from the cache.                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function  -f      TEXT  Function to analyze (required) [required]       │
+│    --json                    Emit as JSON.                                   │
+│    --help                    Show this message and exit.                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

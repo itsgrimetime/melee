@@ -1,0 +1,33 @@
+                                                                                
+ Usage: melee-agent debug inspect analyze [OPTIONS] [DUMP]                      
+                                                                                
+ Summarize a pcdump.txt: per-virtual register live ranges, use counts,          
+ interferences, and 'could have been' candidate sets.                           
+                                                                                
+ Without --function, lists all functions with brief summary. With --function,   
+ prints a detailed coloring-decision table for that function — the kind of      
+ output that tells you whether a register-cascade question is constrained       
+ by interferences or is a free allocator choice.                                
+                                                                                
+ The 'Candidates' column shows physicals not used by interfering virtuals.      
+ If a virtual got a physical that's NOT the lowest-numbered candidate, that     
+ asymmetry is the kind of allocator-preference question worth digging into.     
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   dump      [DUMP]  Path to a pcdump.txt produced by 'debug dump remote'. If │
+│                     omitted, auto-resolves via --function from the cache at  │
+│                     build/mwcc_debug_cache/.                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --function    -f      TEXT  Show only this function (default: list all).     │
+│                             Also used to auto-resolve the pcdump path when   │
+│                             not given.                                       │
+│ --candidates                Show the set of physicals each virtual could     │
+│                             have been assigned (based on interferer          │
+│                             constraints).                                    │
+│                             [default: True]                                  │
+│ --json                      Emit structured JSON instead of human-readable   │
+│                             text.                                            │
+│ --help                      Show this message and exit.                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

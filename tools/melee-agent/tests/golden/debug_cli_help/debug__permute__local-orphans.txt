@@ -1,0 +1,19 @@
+                                                                                
+ Usage: melee-agent debug permute local-orphans [OPTIONS]                       
+                                                                                
+ Detect abandoned local permuter compiler and Python worker processes.          
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --perm-root            PATH                  Resolved decomp-permuter root   │
+│                                              used to prove process           │
+│                                              ownership.                      │
+│                                              [default:                       │
+│                                              /Users/mike/code/decomp-permut… │
+│ --terminate                                  Revalidate and terminate safe   │
+│                                              orphan process groups.          │
+│ --grace-seconds        FLOAT RANGE [x>=0.0]  Seconds to wait between TERM    │
+│                                              and KILL.                       │
+│                                              [default: 2.0]                  │
+│ --help                                       Show this message and exit.     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

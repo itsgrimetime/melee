@@ -1,0 +1,13 @@
+                                                                                
+ Usage: melee-agent debug intervene [OPTIONS] COMMAND [ARGS]...                 
+                                                                                
+ Run backend-backed allocator interventions and report allocator deltas.        
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ coalesce  Run/report a scoped coalesce intervention backed by the mwcc_debug │
+│           DLL.                                                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

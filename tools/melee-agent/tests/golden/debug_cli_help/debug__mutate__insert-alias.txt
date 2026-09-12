@@ -1,0 +1,23 @@
+                                                                                
+ Usage: melee-agent debug mutate insert-alias [OPTIONS]                         
+                                                                                
+ Insert a fresh local copy of a variable before the N-th reading statement and  
+ rewrite that statement to use the alias.                                       
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function  -f      TEXT     Function containing the variable. [required] │
+│ *  --var               TEXT     Local variable name to alias. [required]     │
+│    --at                INTEGER  0-indexed N-th reading statement to alias    │
+│                                 before.                                      │
+│                                 [default: 0]                                 │
+│    --name              TEXT     Alias variable name (default: <var>_alias).  │
+│    --scope             TEXT     Optional exact scope_path display string,    │
+│                                 e.g. fn/block@l10c4. Use var-to-virtual      │
+│                                 --all to inspect.                            │
+│    --apply                      Write the mutated source back to the file.   │
+│                                 Default: print to stdout.                    │
+│    --diff                       Print a focused unified diff instead of the  │
+│                                 full mutated source.                         │
+│    --help                       Show this message and exit.                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,17 @@
+                                                                                
+ Usage: melee-agent debug permute remote local-retain [OPTIONS] JOB_ID          
+                                                                                
+ Explicitly retain one owned locally fetched remote run.                        
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    job_id      TEXT  Owned local remote-run job id. [required]             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --reason           TEXT  Required reason for retaining the run.           │
+│                             [required]                                       │
+│    --perm-root        PATH  Local decomp-permuter root.                      │
+│                             [default: /Users/mike/code/decomp-permuter]      │
+│    --json                   Emit deterministic JSON.                         │
+│    --help                   Show this message and exit.                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,2802 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+from copy import deepcopy
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+import yaml
+
+from src.search.delta_minimize import run as run_module
+from src.search.delta_minimize.contracts import AxisDistances, CandidateProfile, DeltaMinimizeError
+from src.search.delta_minimize.delta import DeltaAtom, DeltaManifest, MaterializedCandidate
+from src.search.delta_minimize.epochs import PARSER_SCHEMA_HASH
+from src.search.delta_minimize.evaluator import EvaluationBackends, ParentEvidenceBundle, RawCandidateEvidence
+from src.search.delta_minimize.namespace_review import NamespaceArtifact, NamespaceReviewRequest
+from src.search.delta_minimize.objectives import (
+    COLOR_TARGET_SCHEMA_V2,
+    OBJECTIVE_MANIFEST_SCHEMA,
+    ROLE_NAMESPACE_SCHEMA,
+    AxisReference,
+    NamespaceMapResolution,
+    ObjectiveManifest,
+)
+from src.search.delta_minimize.run import (
+    DeltaMinimizeBackends,
+    DeltaMinimizeConfig,
+    default_delta_minimize_backends,
+    run_delta_minimize,
+)
+from src.search.delta_minimize.store import DeltaRunStore
+
+LEFT = "int f(void) {\n int a = 1;\n int b = 2;\n return a+b;\n}\n"
+RIGHT = "int f(void) {\n int a = 3;\n int b = 4;\n return a+b;\n}\n"
+
+
+def test_parent_opcode_evidence_ignores_blank_checkdiff_terminators() -> None:
+    assert run_module._validated_asm_lines(["+000: 38 60 00 00 li r3,0", ""]) == ("+000: 38 60 00 00 li r3,0",)
+
+
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _config(tmp_path: Path, **changes: object) -> DeltaMinimizeConfig:
+    left = tmp_path / "left.c"
+    right = tmp_path / "right.c"
+    cflags = tmp_path / "unit.c"
+    left.write_text(LEFT, encoding="utf-8")
+    right.write_text(RIGHT, encoding="utf-8")
+    cflags.write_text("/* unit */\n", encoding="utf-8")
+    values = {
+        "function": "f",
+        "left": left,
+        "right": right,
+        "out_dir": tmp_path / "out",
+        "max_candidates": 64,
+        "target_path": None,
+        "donor_overrides": {},
+        "include_objobjects": True,
+        "melee_root": tmp_path,
+        "cflags_from": cflags,
+    }
+    values.update(changes)
+    return DeltaMinimizeConfig(**values)
+
+
+def _coupling_diagnostic() -> dict[str, object]:
+    return {
+        "schema_version": "delta-coupling-diagnostic.v1",
+        "reason": "ambiguous-delta-coupling",
+        "function": "f",
+        "left_sha256": _hash(LEFT),
+        "right_sha256": _hash(RIGHT),
+        "context": {"symbol": "f"},
+        "alternatives": [
+            {
+                "label": "f declaration + call",
+                "reason": "competing-semantic-atom-group",
+                "symbols": ["f"],
+                "atom_ids": ["atom-a"],
+                "left_spans": [[0, 5]],
+                "right_spans": [[0, 5]],
+            }
+        ],
+        "review": {
+            "supported": False,
+            "reason": "semantic-coupling-review-unsupported",
+            "next_action": "edit-parent-and-rerun",
+        },
+    }
+
+
+def _objective(
+    *,
+    desired_physical: int = 3,
+    donor_overrides: dict[str, str] | None = None,
+) -> ObjectiveManifest:
+    overrides = donor_overrides or {}
+    color_donor = overrides.get("color", "left")
+    objobject_donor = overrides.get("objobjects", color_donor)
+    stack_donor = overrides.get("stack-homes", "right")
+    references = {
+        "opcode": AxisReference(
+            "absolute",
+            "opcode-artifact",
+            None,
+            "expected-assembly-absolute;equal-parent-distance",
+            False,
+        ),
+        "color": AxisReference(
+            "mixed",
+            "color-artifact",
+            color_donor,
+            "cross-parent-round-trip-derived-target;"
+            + ("explicit-color-donor-override" if "color" in overrides else "lower-desired-assignment-distance"),
+            "color" in overrides,
+        ),
+        "objobjects": AxisReference(
+            "proxy",
+            "objobjects-artifact",
+            objobject_donor,
+            ("explicit-objobject-donor-override" if "objobjects" in overrides else "inherits-selected-color-donor"),
+            "objobjects" in overrides,
+        ),
+        "stack-homes": AxisReference(
+            "absolute",
+            "stack-homes-artifact",
+            stack_donor,
+            (
+                "explicit-stack-home-donor-override"
+                if "stack-homes" in overrides
+                else "strictly-lower-stack-home-distance"
+            ),
+            "stack-homes" in overrides,
+        ),
+    }
+    return ObjectiveManifest(
+        schema_version=OBJECTIVE_MANIFEST_SCHEMA,
+        function="f",
+        class_id=0,
+        target_spec={
+            "function": "f",
+            "target_kind": "force_proof_proxy",
+            "target_coverage": 1.0,
+            "causal_closure": False,
+            "provenance": {"inference": "parent-register-diff", "parent": "left"},
+            "roles": [
+                {
+                    "original_ig": 1,
+                    "desired_phys": desired_physical,
+                    "class_id": 0,
+                    "descriptor": None,
+                    "role_order_rank": 0,
+                }
+            ],
+        },
+        desired_phys={1: desired_physical},
+        color_donor=color_donor,
+        objobject_donor=objobject_donor,
+        stack_home_donor=stack_donor,
+        references=references,
+    )
+
+
+def _v2_objective() -> ObjectiveManifest:
+    objective = _objective()
+    provenance = {
+        "schema_version": COLOR_TARGET_SCHEMA_V2,
+        "baseline_side": "left",
+        "baseline_dump": "/evidence/left.pcdump",
+        "baseline_dump_sha256": "b" * 64,
+        "parent_role_bindings": {
+            "left": {
+                "source_sha256": "1" * 64,
+                "pcdump_sha256": "b" * 64,
+                "canonical_to_parent": {"1": 1},
+            },
+            "right": {
+                "source_sha256": "2" * 64,
+                "pcdump_sha256": "3" * 64,
+                "canonical_to_parent": {"1": 7},
+            },
+        },
+        "namespace_schema": ROLE_NAMESPACE_SCHEMA,
+    }
+    return replace(
+        objective,
+        target_spec={**dict(objective.target_spec), "provenance": provenance},
+        references={
+            **dict(objective.references),
+            "color": replace(
+                objective.references["color"],
+                inference_reason="explicit-versioned-color-target;lower-desired-assignment-distance",
+            ),
+        },
+    )
+
+
+def test_v2_objective_provenance_round_trips_with_exact_bindings() -> None:
+    payload = _v2_objective().to_dict()
+
+    restored = run_module._objective_from_dict(payload, function="f")
+
+    assert restored.to_dict() == payload
+    provenance = restored.target_spec["provenance"]
+    assert tuple(provenance["parent_role_bindings"]) == ("left", "right")
+    assert provenance["namespace_schema"] == ROLE_NAMESPACE_SCHEMA
+
+
+def test_parser_epoch_tracks_complete_occurrence_namespace_proof() -> None:
+    assert "color.v5" in run_module.PARSER_SCHEMA_HASH
+    assert "candidate-evidence.v4" in run_module.PARSER_SCHEMA_HASH
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "left-source-hash",
+        "right-pcdump-hash",
+        "left-role-map",
+        "right-role-map",
+        "baseline-side",
+        "baseline-dump-hash",
+        "namespace-schema",
+        "added-field",
+        "removed-field",
+    ),
+)
+def test_v2_objective_provenance_tampering_fails_closed(mutation: str) -> None:
+    payload = deepcopy(_v2_objective().to_dict())
+    provenance = payload["target_spec"]["provenance"]
+    bindings = provenance["parent_role_bindings"]
+    if mutation == "left-source-hash":
+        bindings["left"]["source_sha256"] = "not-a-hash"
+    elif mutation == "right-pcdump-hash":
+        bindings["right"]["pcdump_sha256"] = "not-a-hash"
+    elif mutation == "left-role-map":
+        bindings["left"]["canonical_to_parent"] = {"1": 2}
+    elif mutation == "right-role-map":
+        bindings["right"]["canonical_to_parent"] = {"2": 7}
+    elif mutation == "baseline-side":
+        provenance["baseline_side"] = "middle"
+    elif mutation == "baseline-dump-hash":
+        provenance["baseline_dump_sha256"] = "4" * 64
+    elif mutation == "namespace-schema":
+        provenance["namespace_schema"] = "delta-minimize-role-namespace.v0"
+    elif mutation == "added-field":
+        provenance["unexpected"] = True
+    else:
+        del provenance["namespace_schema"]
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-manifest$"):
+        run_module._objective_from_dict(payload, function="f")
+
+
+@pytest.mark.parametrize("side", ("left", "right"))
+def test_v2_binding_changes_objective_content_epoch(side: str) -> None:
+    original = _v2_objective().to_dict()
+    changed = deepcopy(original)
+    changed["target_spec"]["provenance"]["parent_role_bindings"][side]["source_sha256"] = "9" * 64
+
+    assert run_module._hash_json(changed) != run_module._hash_json(original)
+
+
+class _CountingFixture:
+    def __init__(
+        self,
+        tmp_path: Path,
+        *,
+        incomplete_mask: int | None = None,
+        rejected_mask: int | None = None,
+        missing_target_mask: int | None = None,
+        infrastructure_mask: int | None = None,
+        parent_infrastructure: bool = False,
+    ):
+        self.tmp_path = tmp_path
+        self.incomplete_mask = incomplete_mask
+        self.rejected_mask = rejected_mask
+        self.missing_target_mask = missing_target_mask
+        self.infrastructure_mask = infrastructure_mask
+        self.parent_infrastructure = parent_infrastructure
+        self.parent_calls = 0
+        self.parent_objective_calls = 0
+        self.infer_calls = 0
+        self.score_calls = 0
+        self.inspect_calls = 0
+        self.parent_generation = 1
+        self.parent_checkdiff = False
+        self.expected_object_hash = "expected-object"
+        self.objective_physical = 3
+        self.captured_sources: dict[int, bytes] = {}
+        self.target_paths: list[Path] = []
+
+    def parent_provenance(self, _config):
+        return {
+            "cflags_hash": "cflags",
+            "compiler_fingerprint": "compiler",
+            "expected_object_hash": self.expected_object_hash,
+            "parser_schema_hash": "parsers",
+            "inspector_version": "inspector-v1",
+        }
+
+    def capture_parent(self, candidate, config, _store):
+        self.parent_calls += 1
+        if self.parent_infrastructure:
+            raise DeltaMinimizeError("parent-score-infrastructure")
+        pcdump = self.tmp_path / f"{candidate.candidate_id}.pcdump"
+        pcdump.write_text(
+            f"pcdump {candidate.candidate_id} generation {self.parent_generation}\n",
+            encoding="utf-8",
+        )
+        return RawCandidateEvidence(
+            candidate_id=candidate.candidate_id,
+            mask=candidate.mask,
+            source_path=str(candidate.source_path),
+            source_hash=candidate.source_hash,
+            compile_status="compiled",
+            viable=True,
+            pcdump_path=str(pcdump),
+            checkdiff_evidence={"function": config.function} if self.parent_checkdiff else None,
+            inspect_text="FUNCTION: f\nFrontend: OBJOBJECTS\n" if config.include_objobjects else None,
+            compiler_stderr="",
+            inspection_mode="objobjects" if config.include_objobjects else "no-objobjects",
+            pcdump_hash=hashlib.sha256(pcdump.read_bytes()).hexdigest(),
+        )
+
+    def parent_objective(self, raw, side, _config):
+        self.parent_objective_calls += 1
+        return (side, raw.source_hash)
+
+    def infer_objective(self, _left, _right, config):
+        self.infer_calls += 1
+        return _objective(
+            desired_physical=self.objective_physical,
+            donor_overrides=dict(config.donor_overrides),
+        )
+
+    def score_rows(self, rows, score_config):
+        self.score_calls += 1
+        assert score_config.target is not None
+        self.target_paths.append(score_config.target)
+        row = rows[0]
+        candidate_id = row["candidate_id"]
+        mask = int(candidate_id.split("-")[1], 2)
+        source = Path(row["source_file"])
+        self.captured_sources[mask] = source.read_bytes()
+        if mask == self.infrastructure_mask:
+            return [{**row, "score_error_kind": "infrastructure", "error": "compiler unavailable"}]
+        if mask == self.rejected_mask:
+            return [
+                {
+                    **row,
+                    "score_error_kind": "candidate",
+                    "error": "compile rejected",
+                    "score_stderr": "mwcceppc_debug.exe compiler error: syntax error",
+                }
+            ]
+        if mask == self.missing_target_mask:
+            pcdump = self.tmp_path / f"{candidate_id}.pcdump"
+            pcdump.write_text("Starting function other\n", encoding="utf-8")
+            return [
+                {
+                    **row,
+                    "pcdump_path": str(pcdump),
+                    "error": "function 'f' not in compiled pcdump",
+                    "score_error_kind": "candidate",
+                    "score_returncode": 0,
+                    "terminal_safe": True,
+                }
+            ]
+        pcdump = self.tmp_path / f"{candidate_id}.pcdump"
+        pcdump.write_text(f"pcdump {mask}\n", encoding="utf-8")
+        return [
+            {
+                **row,
+                "pcdump_path": str(pcdump),
+                "score_returncode": 0,
+                "score_error_kind": None,
+                "score_stderr": "",
+                "checkdiff_evidence": {
+                    "match": mask == 2,
+                    "target_asm": ["+000: 38 60 00 00 li r3,0"],
+                    "current_asm": ["+000: 38 80 00 00 li r4,0"],
+                },
+            }
+        ]
+
+    def inspect_source(self, _source, function, _output, **_kwargs):
+        self.inspect_calls += 1
+        return f"FUNCTION: {function}\nFrontend: OBJOBJECTS\n"
+
+    def profile(self, raw, _objective, *, parents):
+        assert parents.left.candidate_id == "parent-left"
+        if not raw.viable:
+            return CandidateProfile(
+                candidate_id=raw.candidate_id,
+                mask=raw.mask,
+                source_hash=raw.source_hash,
+                source_path=raw.source_path,
+                viable=False,
+                compile_status="rejected",
+                axes=None,
+                complete=True,
+                blockers=raw.blockers,
+            )
+        complete = raw.mask != self.incomplete_mask
+        return CandidateProfile(
+            candidate_id=raw.candidate_id,
+            mask=raw.mask,
+            source_hash=raw.source_hash,
+            source_path=raw.source_path,
+            viable=True,
+            compile_status="compiled",
+            axes=AxisDistances(
+                (raw.mask, 0),
+                (3 - raw.mask, 0, 0, 0, 0, 0),
+                (raw.mask % 2, 0),
+                (raw.mask // 2, 0, 0, 0),
+            )
+            if complete
+            else None,
+            complete=complete,
+            exact_object_match=bool(raw.checkdiff_evidence and raw.checkdiff_evidence.get("match") is True),
+            blockers=() if complete else ("missing-inspect-text",),
+        )
+
+    def backends(self) -> DeltaMinimizeBackends:
+        return DeltaMinimizeBackends(
+            parent_provenance=self.parent_provenance,
+            capture_parent=self.capture_parent,
+            parent_objective=self.parent_objective,
+            infer_objective=self.infer_objective,
+            evaluation=EvaluationBackends(self.score_rows, self.inspect_source),
+            profile_candidate=self.profile,
+        )
+
+
+def test_ambiguous_coupling_publishes_only_content_bound_diagnostic(
+    tmp_path: Path,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    diagnostic = _coupling_diagnostic()
+    stale_manifest = DeltaRunStore(config.out_dir).write_delta_manifest(
+        {"schema_version": "stale-delta-manifest.v0"}
+    )
+
+    def ambiguous_manifest(*_args, **_kwargs):
+        raise DeltaMinimizeError(
+            "ambiguous-delta-coupling",
+            {"diagnostic": diagnostic},
+        )
+
+    with pytest.raises(
+        DeltaMinimizeError,
+        match="^ambiguous-delta-coupling$",
+    ) as raised:
+        run_delta_minimize(
+            config,
+            backends=replace(
+                fixture.backends(),
+                extract_manifest=ambiguous_manifest,
+            ),
+        )
+
+    artifact = config.out_dir / "delta-coupling-diagnostic.json"
+    assert raised.value.details == {
+        "diagnostic": diagnostic,
+        "diagnostic_artifact": str(artifact),
+    }
+    assert json.loads(artifact.read_text(encoding="utf-8")) == diagnostic
+    assert fixture.parent_calls == 2
+    assert len(
+        tuple((config.out_dir / "evidence" / "parents").glob("*.json"))
+    ) == 2
+    assert not stale_manifest.exists()
+    assert not (config.out_dir / "namespace-review-request.yaml").exists()
+    assert not (config.out_dir / "delta-manifest.json").exists()
+    assert not (config.out_dir / "candidates.json").exists()
+    assert not (config.out_dir / "result.json").exists()
+
+
+def test_ambiguous_coupling_rejects_nonmatching_diagnostic_content(
+    tmp_path: Path,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    diagnostic = _coupling_diagnostic()
+    diagnostic["left_sha256"] = "0" * 64
+
+    def malformed_manifest(*_args, **_kwargs):
+        raise DeltaMinimizeError(
+            "ambiguous-delta-coupling",
+            {"diagnostic": diagnostic},
+        )
+
+    with pytest.raises(
+        DeltaMinimizeError,
+        match="^invalid-delta-coupling-diagnostic$",
+    ):
+        run_delta_minimize(
+            config,
+            backends=replace(
+                fixture.backends(),
+                extract_manifest=malformed_manifest,
+            ),
+        )
+
+    assert fixture.parent_calls == 2
+    assert not (config.out_dir / "delta-coupling-diagnostic.json").exists()
+
+
+def test_run_evaluates_every_legal_mask_and_resumes(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+
+    first = run_delta_minimize(config, backends=fixture.backends())
+    assert first.candidate_counts == {"legal": 4, "viable": 4, "complete": 4}
+    assert fixture.score_calls == 4
+    assert fixture.parent_calls == 2
+    assert fixture.parent_objective_calls == 2
+    assert fixture.infer_calls == 1
+    second = run_delta_minimize(config, backends=fixture.backends())
+
+    assert second.to_dict() == first.to_dict()
+    assert fixture.score_calls == 4
+    assert fixture.parent_calls == 2
+    assert fixture.parent_objective_calls == 4
+    assert fixture.infer_calls == 2
+    assert second.cache_stats == {"parent_entries": 2, "candidate_entries": 4}
+
+
+def test_exact_parent_inspections_seed_candidates_across_objective_epochs(
+    tmp_path: Path,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+
+    first = run_delta_minimize(config, backends=fixture.backends())
+
+    assert first.objective_manifest["color_donor"] == "left"
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
+    assert fixture.inspect_calls == 2
+
+    second = run_delta_minimize(
+        replace(config, donor_overrides={"color": "right"}),
+        backends=fixture.backends(),
+    )
+
+    assert second.objective_manifest["color_donor"] == "right"
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 8
+    assert fixture.inspect_calls == 4
+
+
+def test_projected_scoped_right_reuses_only_an_exact_parent_hash(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    left = "int unrelated(void) { return 1; }\nint f(void) { return 2; }\n"
+    right = "int unrelated(void) { return 3; }\nint f(void) { return 4; }\n"
+    config.left.write_text(left, encoding="utf-8")
+    config.right.write_text(right, encoding="utf-8")
+
+    result = run_delta_minimize(config, backends=fixture.backends())
+
+    manifest = result.delta_manifest
+    assert manifest["left_hash"] == _hash(left)
+    assert manifest["right_hash"] == _hash(right)
+    assert manifest["scoped_right_hash"] not in {_hash(left), _hash(right)}
+    assert manifest["excluded_atom_ids"]
+    assert result.candidate_counts["legal"] == 2
+    assert [row["source_hash"] for row in result.candidates] == [
+        manifest["left_hash"],
+        manifest["scoped_right_hash"],
+    ]
+    assert fixture.score_calls == 2
+    assert fixture.inspect_calls == 1
+
+
+def test_incomplete_parent_inspection_is_not_seeded(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    base = fixture.backends()
+
+    def capture_incomplete_parent(candidate, config, store):
+        return replace(
+            fixture.capture_parent(candidate, config, store),
+            inspect_text="FUNCTION: other\nFrontend: OBJOBJECTS\n",
+        )
+
+    result = run_delta_minimize(
+        _config(tmp_path),
+        backends=replace(base, capture_parent=capture_incomplete_parent),
+    )
+
+    assert result.candidate_counts == {"legal": 4, "viable": 4, "complete": 4}
+    assert fixture.score_calls == 4
+    assert fixture.inspect_calls == 4
+
+
+def test_fresh_wrong_mode_parent_is_neither_persisted_nor_seeded(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    store = DeltaRunStore(config.out_dir)
+    base = fixture.backends()
+
+    def capture_wrong_mode(candidate, run_config, run_store):
+        return replace(
+            fixture.capture_parent(candidate, run_config, run_store),
+            inspection_mode="no-objobjects",
+        )
+
+    with pytest.raises(DeltaMinimizeError, match="^invalid-parent-evidence$"):
+        run_module._capture_parents(
+            config,
+            store,
+            replace(base, capture_parent=capture_wrong_mode),
+            LEFT,
+            RIGHT,
+        )
+
+    assert list((store.root / "evidence/parents").glob("*.json")) == []
+    assert getattr(store, "_delta_inspection_cache", {}) == {}
+    assert fixture.score_calls == 0
+    assert fixture.inspect_calls == 0
+
+
+def test_cached_wrong_mode_parent_is_invalidated_and_recaptured(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    store = DeltaRunStore(config.out_dir)
+    backends = fixture.backends()
+    provenance = fixture.parent_provenance(config)
+    left_candidate = run_module._parent_candidate("left", LEFT, store)
+    left_key = store.parent_evidence_key(left_candidate, config, provenance)
+    wrong_mode = replace(
+        fixture.capture_parent(left_candidate, config, store),
+        inspection_mode="no-objobjects",
+    )
+    store.write_parent_evidence(left_key, wrong_mode.to_dict())
+    fixture.parent_calls = 0
+
+    parents, stats = run_module._capture_parents(
+        config,
+        store,
+        backends,
+        LEFT,
+        RIGHT,
+    )
+
+    assert stats == {"parent_hits": 0, "parent_misses": 2}
+    assert fixture.parent_calls == 2
+    assert parents.left.inspection_mode == "objobjects"
+    rewritten = store.load_parent_evidence(left_key)
+    assert rewritten is not None
+    assert RawCandidateEvidence.from_dict(rewritten).inspection_mode == "objobjects"
+    assert getattr(store, "_delta_inspection_cache", {})[parents.left.source_hash] == (
+        parents.left.inspect_text
+    )
+
+
+def test_run_projects_unrelated_function_edit_out_of_three_atom_lattice(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path, function="f")
+    left = """\
+int unrelated(void) { s32 value = 1; return value; }
+static int leaf(int x) { return x + 1; }
+static int helper(int x) { return leaf(x) + 2; }
+int f(int x) { return helper(x) + 3; }
+"""
+    right = """\
+int unrelated(void) { int value = 1; return value; }
+static int leaf(int x) { return x + 10; }
+static int helper(int x) { return leaf(x) + 20; }
+int f(int x) { return helper(x) + 30; }
+"""
+    config.left.write_text(left, encoding="utf-8")
+    config.right.write_text(right, encoding="utf-8")
+
+    result = run_delta_minimize(config, backends=fixture.backends())
+    manifest = result.delta_manifest
+
+    assert result.schema_version == "delta-minimize-result.v2"
+    assert result.candidate_counts["legal"] == 8
+    assert fixture.score_calls == 8
+    assert fixture.parent_calls == 2
+    assert len(manifest["atoms"]) == 3
+    assert len(manifest["excluded_atom_ids"]) == 1
+    assert result.inputs["right_hash"] == _hash(right)
+    assert result.inputs["scoped_right_hash"] == manifest["scoped_right_hash"]
+    assert result.inputs["excluded_atom_ids"] == manifest["excluded_atom_ids"]
+    assert all(b"int value = 1" not in source for source in fixture.captured_sources.values())
+    assert all(b"s32 value = 1" in source for source in fixture.captured_sources.values())
+    assert b"return helper(x) + 30" in fixture.captured_sources[0b111]
+    assert fixture.captured_sources[0] == left.encode()
+    original_right_artifact = config.out_dir / "artifacts" / "sources" / f"{_hash(right)[:32]}.c"
+    assert original_right_artifact.read_text(encoding="utf-8") == right
+    assert manifest["scoped_right_hash"] != manifest["right_hash"]
+
+
+def test_run_zero_atom_projection_evaluates_left_once_with_donor_provenance(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path, function="f")
+    left = "int f(void) { return 1; }\nint unrelated(void) { return 2; }\n"
+    right = "int f(void) { return 1; }\nint unrelated(void) { return 20; }\n"
+    config.left.write_text(left, encoding="utf-8")
+    config.right.write_text(right, encoding="utf-8")
+
+    result = run_delta_minimize(config, backends=fixture.backends())
+
+    assert result.candidate_counts["legal"] == 1
+    assert fixture.score_calls == 1
+    assert fixture.captured_sources == {0: left.encode()}
+    assert result.delta_manifest["atoms"] == []
+    assert result.delta_manifest["excluded_atom_ids"]
+    assert result.inputs["right_hash"] == _hash(right)
+    assert result.inputs["scoped_right_hash"] == _hash(left)
+
+
+def test_legacy_manifest_and_result_are_invalidated_and_regenerated(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    base = fixture.backends()
+
+    def legacy_extract(left: str, right: str, *, function: str) -> DeltaManifest:
+        return replace(base.extract_manifest(left, right, function=function), schema_version="delta-manifest.v2")
+
+    first = run_delta_minimize(config, backends=replace(base, extract_manifest=legacy_extract))
+    legacy_result = first.to_dict()
+    legacy_result["schema_version"] = "delta-minimize-result.v1"
+    (config.out_dir / "result.json").write_text(json.dumps(legacy_result), encoding="utf-8")
+
+    second = run_delta_minimize(config, backends=base)
+    published_manifest = json.loads((config.out_dir / "delta-manifest.json").read_text(encoding="utf-8"))
+    published_result = json.loads((config.out_dir / "result.json").read_text(encoding="utf-8"))
+
+    assert second.schema_version == "delta-minimize-result.v2"
+    assert published_manifest["schema_version"] == "delta-manifest.v3"
+    assert published_result["schema_version"] == "delta-minimize-result.v2"
+    assert "scoped_right_hash" in published_manifest
+    assert "excluded_atom_ids" in published_manifest
+
+
+def test_malformed_current_result_scope_provenance_fails_closed(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    result_path = config.out_dir / "result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    del payload["inputs"]["scoped_right_hash"]
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-result$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+@pytest.mark.parametrize(
+    ("path", "bad_value"),
+    (
+        (("status",), 123),
+        (("candidates",), "not-a-list"),
+        (("candidate_counts", "legal"), "4"),
+        (("candidates", 0, "profile", "mask"), "0"),
+        (("delta_manifest", "atoms", 0, "patches", 0, "left_start"), "0"),
+        (("objective_manifest",), {}),
+        (("pareto",), None),
+        (("exact_four_axis",), False),
+    ),
+)
+def test_malformed_current_result_types_fail_closed(
+    tmp_path: Path,
+    path: tuple[str | int, ...],
+    bad_value: object,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    result_path = config.out_dir / "result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    target = payload
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = bad_value
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-result$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+def test_valid_current_result_is_accepted_and_regenerated(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    first = run_delta_minimize(config, backends=fixture.backends())
+
+    second = run_delta_minimize(config, backends=fixture.backends())
+
+    assert second.schema_version == "delta-minimize-result.v2"
+    assert second.candidate_counts == first.candidate_counts
+    assert json.loads((config.out_dir / "result.json").read_text(encoding="utf-8"))["schema_version"] == (
+        "delta-minimize-result.v2"
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "duplicate-candidate",
+        "duplicate-source",
+        "complete-count",
+        "applied-atoms",
+        "ghost-pareto-candidate",
+        "ghost-best-next",
+        "ghost-exact-match",
+        "ghost-representative",
+        "pruned-frontier",
+    ),
+)
+def test_current_result_cross_field_mutations_fail_closed(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    result_path = config.out_dir / "result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    if mutation == "duplicate-candidate":
+        payload["candidates"][1] = deepcopy(payload["candidates"][0])
+    elif mutation == "duplicate-source":
+        for container in (
+            payload["candidates"][1],
+            payload["candidates"][1]["evidence"],
+            payload["candidates"][1]["profile"],
+        ):
+            container["source_hash"] = payload["candidates"][0]["source_hash"]
+            container["source_path"] = payload["candidates"][0]["source_path"]
+    elif mutation == "complete-count":
+        payload["candidate_counts"]["complete"] -= 1
+    elif mutation == "applied-atoms":
+        payload["candidates"][1]["applied_atoms"] = []
+    elif mutation == "ghost-pareto-candidate":
+        payload["pareto"]["candidate_ids"] = ["ghost"]
+    elif mutation == "ghost-best-next":
+        payload["best_next"] = "ghost"
+        payload["pareto"]["best_next"] = "ghost"
+    elif mutation == "ghost-exact-match":
+        payload["pareto"]["exact_match_candidate_ids"] = ["ghost"]
+    elif mutation == "ghost-representative":
+        payload["pareto"]["groups"][0]["representative"] = "ghost"
+    else:
+        payload["pareto"]["candidate_ids"].remove("mask-00")
+        payload["pareto"]["groups"] = [
+            group
+            for group in payload["pareto"]["groups"]
+            if group["candidate_ids"] != ["mask-00"]
+        ]
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-result$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    (
+        ("representative", "mask-01"),
+        ("minimal_from_left", ["mask-01"]),
+        ("minimal_from_right", ["mask-10"]),
+    ),
+)
+def test_current_result_noncanonical_pareto_group_choice_fails_closed(
+    tmp_path: Path,
+    field: str,
+    replacement: object,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    vector = AxisDistances(
+        (1, 0),
+        (1, 0, 0, 0, 0, 0),
+        (1, 0),
+        (1, 0, 0, 0),
+    )
+
+    def tied_profile(raw, _objective, *, parents):
+        assert parents.left.candidate_id == "parent-left"
+        return CandidateProfile(
+            candidate_id=raw.candidate_id,
+            mask=raw.mask,
+            source_hash=raw.source_hash,
+            source_path=raw.source_path,
+            viable=True,
+            compile_status="compiled",
+            axes=vector,
+            complete=True,
+        )
+
+    backends = replace(fixture.backends(), profile_candidate=tied_profile)
+    run_delta_minimize(config, backends=backends)
+    result_path = config.out_dir / "result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    assert payload["pareto"]["groups"][0]["candidate_ids"] == [
+        "mask-00",
+        "mask-01",
+        "mask-10",
+        "mask-11",
+    ]
+    payload["pareto"]["groups"][0][field] = replacement
+    result_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-result$"):
+        run_delta_minimize(config, backends=backends)
+
+
+def test_current_manifest_scoped_hash_mutation_fails_closed(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    manifest_path = config.out_dir / "delta-manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["scoped_right_hash"] = "0" * 64
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-manifest$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+def test_run_preserves_actionable_objective_ambiguity(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    backends = replace(
+        fixture.backends(),
+        infer_objective=lambda *_args: (_ for _ in ()).throw(DeltaMinimizeError("ambiguous-color-target")),
+    )
+
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-target$"):
+        run_delta_minimize(_config(tmp_path), backends=backends)
+
+
+def test_post_lattice_objective_failure_publishes_structured_incomplete_result(
+    tmp_path: Path,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    backends = replace(
+        fixture.backends(),
+        infer_objective=lambda *_args: (_ for _ in ()).throw(
+            DeltaMinimizeError(
+                "incomplete-objective-role-map",
+                {"artifact_id": "parent:right"},
+            )
+        ),
+    )
+
+    result = run_delta_minimize(config, backends=backends)
+
+    assert result.status == "incomplete"
+    assert result.blockers == ("invalid-objective-manifest",)
+    assert result.inputs["blocking_error"] == {
+        "reason": "invalid-objective-manifest",
+        "details": {
+            "cause": "incomplete-objective-role-map",
+            "cause_details": {"artifact_id": "parent:right"},
+        },
+    }
+    assert result.candidate_counts == {"legal": 4, "viable": 0, "complete": 0}
+    assert result.candidates == ()
+    assert fixture.score_calls == 0
+    assert json.loads((config.out_dir / "candidates.json").read_text(encoding="utf-8")) == {
+        "candidates": []
+    }
+    assert json.loads((config.out_dir / "result.json").read_text(encoding="utf-8")) == result.to_dict()
+
+
+def test_changed_context_objective_failure_invalidates_prior_objective_publications(
+    tmp_path: Path,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    publication_paths = (
+        config.out_dir / "objective-manifest.json",
+        config.out_dir / "objective-inputs.json",
+        config.out_dir / "objective" / "color-target-current.json",
+    )
+    assert all(path.is_file() for path in publication_paths)
+    failing_backends = replace(
+        fixture.backends(),
+        infer_objective=lambda *_args: (_ for _ in ()).throw(
+            DeltaMinimizeError("incomplete-objective-role-map")
+        ),
+    )
+
+    result = run_delta_minimize(
+        replace(config, donor_overrides={"color": "right"}),
+        backends=failing_backends,
+    )
+
+    assert result.status == "incomplete"
+    assert result.blockers == ("invalid-objective-manifest",)
+    assert all(not path.exists() for path in publication_paths)
+
+
+def test_namespace_domain_mismatch_publishes_full_raw_lattice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    target = tmp_path / "target.yaml"
+    target.write_text("reviewed target\n", encoding="utf-8")
+    config = _config(tmp_path, target_path=target)
+    loaded_target = SimpleNamespace(
+        schema_version=COLOR_TARGET_SCHEMA_V2,
+        function="f",
+        force_phys={1: 3},
+    )
+    monkeypatch.setattr(run_module, "load_color_target", lambda *_args, **_kwargs: loaded_target)
+    monkeypatch.setattr(
+        run_module,
+        "_resolve_namespaces_for_run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            DeltaMinimizeError(
+                "namespace-domain-mismatch",
+                {
+                    "artifact_count": 113,
+                    "artifact_id": "parent:right",
+                    "canonical_count": 110,
+                },
+            )
+        ),
+    )
+    stale_publication_paths = (
+        config.out_dir / "objective-manifest.json",
+        config.out_dir / "objective-inputs.json",
+        config.out_dir / "objective" / "color-target-current.json",
+    )
+    for path in stale_publication_paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
+
+    result = run_delta_minimize(config, backends=fixture.backends())
+
+    assert result.status == "incomplete"
+    assert result.blockers == ("namespace-domain-mismatch",)
+    assert result.inputs["blocking_error"] == {
+        "reason": "namespace-domain-mismatch",
+        "details": {
+            "artifact_count": 113,
+            "artifact_id": "parent:right",
+            "canonical_count": 110,
+        },
+    }
+    assert result.candidate_counts == {"legal": 4, "viable": 4, "complete": 0}
+    assert len(result.candidates) == 4
+    assert fixture.score_calls == 4
+    assert json.loads((config.out_dir / "candidates.json").read_text(encoding="utf-8")) == {
+        "candidates": list(result.candidates)
+    }
+    assert all(not path.exists() for path in stale_publication_paths)
+
+
+def test_v2_namespace_discovery_captures_full_lattice_before_objective_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _CountingFixture(tmp_path, missing_target_mask=1)
+    fixture.expected_object_hash = "e" * 64
+    config = _config(tmp_path)
+    left_dump = tmp_path / "parent-left.pcdump"
+    right_dump = tmp_path / "parent-right.pcdump"
+    left_dump.write_text("pcdump parent-left generation 1\n", encoding="utf-8")
+    right_dump.write_text("pcdump parent-right generation 1\n", encoding="utf-8")
+    target = tmp_path / "target.yaml"
+    target.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": COLOR_TARGET_SCHEMA_V2,
+                "function": "f",
+                "class_id": 0,
+                "baseline_side": "left",
+                "baseline_dump": str(left_dump),
+                "force_phys": {64: 30, 78: 29},
+                "coalesce_preservation": False,
+                "parent_role_bindings": {
+                    "left": {
+                        "source_sha256": _hash(LEFT),
+                        "pcdump_sha256": hashlib.sha256(left_dump.read_bytes()).hexdigest(),
+                        "canonical_to_parent": {64: 64, 78: 78},
+                    },
+                    "right": {
+                        "source_sha256": _hash(RIGHT),
+                        "pcdump_sha256": hashlib.sha256(right_dump.read_bytes()).hexdigest(),
+                        "canonical_to_parent": {64: 64, 78: 78},
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    config = replace(config, target_path=target)
+    stale_current = config.out_dir / "objective" / "color-target-current.json"
+    stale_current.parent.mkdir(parents=True)
+    stale_current.write_text(
+        json.dumps({"artifact": "objective/color-targets/stale.yaml", "sha256": "0" * 64}),
+        encoding="utf-8",
+    )
+    expected_request: NamespaceReviewRequest | None = None
+
+    def discover(_config, parents, candidates, raw_candidates, manifest):
+        nonlocal expected_request
+        assert len(candidates) == len(raw_candidates) == 4
+        assert [raw.candidate_id for raw in raw_candidates] == [
+            "mask-00",
+            "mask-01",
+            "mask-10",
+            "mask-11",
+        ]
+        assert raw_candidates[1].viable is False
+        assert "candidate-target-function-missing" in raw_candidates[1].blockers
+        domain = tuple(range(110))
+        artifacts = [
+            NamespaceArtifact(
+                artifact_id="parent:left",
+                kind="parent",
+                side="left",
+                candidate=None,
+                mask=None,
+                source_sha256=parents.left.source_hash,
+                pcdump_sha256=parents.left.pcdump_hash,
+                domain=domain,
+                automatically_resolved=True,
+                diagnostic=None,
+            ),
+            NamespaceArtifact(
+                artifact_id="parent:right",
+                kind="parent",
+                side="right",
+                candidate=None,
+                mask=None,
+                source_sha256=parents.right.source_hash,
+                pcdump_sha256=parents.right.pcdump_hash,
+                domain=domain,
+                automatically_resolved=False,
+                diagnostic="ambiguous-automatic-v5",
+            ),
+        ]
+        for candidate, raw in zip(candidates, raw_candidates, strict=True):
+            if not raw.viable:
+                continue
+            automatically_resolved = candidate.mask == 0
+            artifacts.append(
+                NamespaceArtifact(
+                    artifact_id=f"candidate:{candidate.candidate_id}",
+                    kind="candidate",
+                    side=None,
+                    candidate=candidate.candidate_id,
+                    mask=candidate.mask,
+                    source_sha256=raw.source_hash,
+                    pcdump_sha256=raw.pcdump_hash,
+                    domain=domain,
+                    automatically_resolved=automatically_resolved,
+                    diagnostic=None if automatically_resolved else "ambiguous-automatic-v5",
+                )
+            )
+        expected_request = NamespaceReviewRequest(
+            function="f",
+            class_id=0,
+            register_class="GPR",
+            namespace_schema=ROLE_NAMESPACE_SCHEMA,
+            parser_schema_hash=PARSER_SCHEMA_HASH,
+            target_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
+            delta_manifest_sha256=run_module._hash_json(run_module._manifest_to_dict(manifest)),
+            left_source_sha256=parents.left.source_hash,
+            right_source_sha256=parents.right.source_hash,
+            cflags_hash=parents.cflags_hash,
+            compiler_fingerprint=parents.compiler_fingerprint,
+            expected_object_hash=parents.expected_object_hash,
+            inspector_version=parents.inspector_version,
+            canonical_artifact_id="parent:left",
+            canonical_source_sha256=parents.left.source_hash,
+            canonical_pcdump_sha256=parents.left.pcdump_hash,
+            lattice_atom_count=len(manifest.atoms),
+            reviewed_anchors={64: 64, 78: 78},
+            artifacts=tuple(artifacts),
+        )
+        return SimpleNamespace(
+            request=expected_request,
+            resolutions={},
+            unresolved_ids=tuple(
+                artifact.artifact_id for artifact in expected_request.artifacts if not artifact.automatically_resolved
+            ),
+            review_digest=None,
+        )
+
+    monkeypatch.setattr(run_module, "_resolve_namespaces_for_run", discover, raising=False)
+    base = fixture.backends()
+    backends = replace(
+        base,
+        parent_provenance=lambda config: {
+            **base.parent_provenance(config),
+            "cflags_hash": "c" * 64,
+        },
+        infer_objective=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("objective inference must wait for namespace review")
+        ),
+    )
+
+    result = run_delta_minimize(config, backends=backends)
+
+    assert fixture.score_calls == 4
+    assert expected_request is not None
+    assert (config.out_dir / "namespace-review-request.yaml").read_text(encoding="utf-8") == expected_request.to_yaml()
+    assert result.status == "incomplete"
+    assert result.objective_manifest == {}
+    assert result.delta_manifest["schema_version"]
+    assert result.candidate_counts == {"legal": 4, "viable": 3, "complete": 0}
+    assert [row["candidate_id"] for row in result.candidates] == [
+        "mask-00",
+        "mask-01",
+        "mask-10",
+        "mask-11",
+    ]
+    assert all("evidence" in row for row in result.candidates)
+    assert result.candidates[1]["evidence"]["compile_status"] == "rejected"
+    assert result.pareto is None
+    assert result.blockers == ("namespace-review-required",)
+    assert not (config.out_dir / "objective-manifest.json").exists()
+    assert not (config.out_dir / "objective-inputs.json").exists()
+    assert not stale_current.exists()
+    assert not (config.out_dir / "candidates.json").exists()
+
+
+def test_v2_namespace_resolution_uses_manifest_width_above_three_bits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_path = tmp_path / "target.yaml"
+    target_path.write_text("reviewed target\n", encoding="utf-8")
+    domain = tuple(range(110))
+    bindings = {
+        side: SimpleNamespace(canonical_to_parent={64: 64, 78: 78}) for side in ("left", "right")
+    }
+    monkeypatch.setattr(
+        run_module,
+        "load_color_target",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            schema_version=COLOR_TARGET_SCHEMA_V2,
+            baseline_side="left",
+            class_id=0,
+            parent_role_bindings=bindings,
+        ),
+    )
+    monkeypatch.setattr(
+        run_module,
+        "_compile",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            fev=SimpleNamespace(coalesce_sections=[SimpleNamespace(class_id=0, n_virtuals=len(domain))])
+        ),
+    )
+
+    seen_ids: list[str] = []
+
+    def resolve_namespace_map(**kwargs):
+        artifact_id = kwargs["artifact_id"]
+        seen_ids.append(artifact_id)
+        unresolved = artifact_id == "candidate:mask-1000"
+        return NamespaceMapResolution(
+            artifact_id=artifact_id,
+            source_sha256=kwargs["source_sha256"],
+            pcdump_sha256=kwargs["pcdump_sha256"],
+            raw_to_canonical=None if unresolved else {role: role for role in domain},
+            source="unresolved" if unresolved else "automatic-v5",
+        )
+
+    monkeypatch.setattr(run_module, "resolve_namespace_map", resolve_namespace_map)
+
+    def evidence(candidate_id: str, mask: int) -> RawCandidateEvidence:
+        source = tmp_path / f"{candidate_id}.c"
+        pcdump = tmp_path / f"{candidate_id}.pcdump"
+        source.write_text(f"source {candidate_id}\n", encoding="utf-8")
+        pcdump.write_text(f"pcdump {candidate_id}\n", encoding="utf-8")
+        return RawCandidateEvidence(
+            candidate_id=candidate_id,
+            mask=mask,
+            source_path=str(source),
+            source_hash=hashlib.sha256(source.read_bytes()).hexdigest(),
+            compile_status="compiled",
+            viable=True,
+            pcdump_path=str(pcdump),
+            checkdiff_evidence={},
+            inspect_text="FUNCTION: f\nFrontend: OBJOBJECTS\n",
+            compiler_stderr="",
+            pcdump_hash=hashlib.sha256(pcdump.read_bytes()).hexdigest(),
+        )
+
+    parent_left = evidence("parent-left", 0)
+    parent_right = evidence("parent-right", 15)
+    parents = ParentEvidenceBundle(
+        left=parent_left,
+        right=parent_right,
+        cflags_hash="c" * 64,
+        compiler_fingerprint="compiler-v1",
+        expected_object_hash="e" * 64,
+        inspector_version="inspector-v1",
+        parser_schema_hash=PARSER_SCHEMA_HASH,
+    )
+    raw_candidates = (evidence("mask-0000", 0), evidence("mask-1000", 8))
+    candidates = tuple(
+        MaterializedCandidate(
+            candidate_id=raw.candidate_id,
+            mask=raw.mask,
+            source_hash=raw.source_hash,
+            source_path=Path(raw.source_path),
+            applied_atom_ids=(),
+        )
+        for raw in raw_candidates
+    )
+    manifest = DeltaManifest(
+        schema_version="delta-manifest.v2",
+        function="f",
+        left_hash=parent_left.source_hash,
+        right_hash=parent_right.source_hash,
+        atoms=tuple(
+            DeltaAtom(atom_id=f"atom-{index}", kind="declaration", patches=()) for index in range(4)
+        ),
+    )
+
+    state = run_module._resolve_namespaces_for_run(
+        _config(tmp_path, target_path=target_path),
+        parents,
+        candidates,
+        raw_candidates,
+        manifest,
+    )
+
+    assert state.request.lattice_atom_count == 4
+    assert seen_ids == [
+        "parent:left",
+        "parent:right",
+        "candidate:mask-0000",
+        "candidate:mask-1000",
+    ]
+    assert state.unresolved_ids == ("candidate:mask-1000",)
+    assert state.request.artifacts[-1].candidate == "mask-1000"
+
+
+def test_changed_review_digest_republishes_profiles_but_reuses_raw_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    fixture.expected_object_hash = "e" * 64
+    config = _config(tmp_path)
+    target = tmp_path / "target.yaml"
+    target.write_text("reviewed target\n", encoding="utf-8")
+    review = tmp_path / "reviewed.yaml"
+    review.write_text("review epoch\n", encoding="utf-8")
+    config = replace(
+        config,
+        target_path=target,
+        namespace_review_path=review,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "load_color_target",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            schema_version=COLOR_TARGET_SCHEMA_V2,
+            function="f",
+            class_id=0,
+            force_phys={64: 30, 78: 29},
+        ),
+    )
+    review_digest = ["a" * 64]
+
+    def resolved_state(_config, parents, candidates, raw_candidates, manifest):
+        domain = tuple(range(110))
+        rows = [
+            ("parent:left", "parent", "left", None, parents.left),
+            ("parent:right", "parent", "right", None, parents.right),
+            *[
+                (
+                    f"candidate:{candidate.candidate_id}",
+                    "candidate",
+                    None,
+                    candidate.mask,
+                    raw,
+                )
+                for candidate, raw in zip(candidates, raw_candidates, strict=True)
+            ],
+        ]
+        artifacts = tuple(
+            NamespaceArtifact(
+                artifact_id=artifact_id,
+                kind=kind,
+                side=side,
+                candidate=None if mask is None else raw.candidate_id,
+                mask=mask,
+                source_sha256=raw.source_hash,
+                pcdump_sha256=raw.pcdump_hash,
+                domain=domain,
+                automatically_resolved=True,
+                diagnostic=None,
+            )
+            for artifact_id, kind, side, mask, raw in rows
+        )
+        request = NamespaceReviewRequest(
+            function="f",
+            class_id=0,
+            register_class="GPR",
+            namespace_schema=ROLE_NAMESPACE_SCHEMA,
+            parser_schema_hash=PARSER_SCHEMA_HASH,
+            target_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
+            delta_manifest_sha256=run_module._hash_json(run_module._manifest_to_dict(manifest)),
+            left_source_sha256=parents.left.source_hash,
+            right_source_sha256=parents.right.source_hash,
+            cflags_hash=parents.cflags_hash,
+            compiler_fingerprint=parents.compiler_fingerprint,
+            expected_object_hash=parents.expected_object_hash,
+            inspector_version=parents.inspector_version,
+            canonical_artifact_id="parent:left",
+            canonical_source_sha256=parents.left.source_hash,
+            canonical_pcdump_sha256=parents.left.pcdump_hash,
+            lattice_atom_count=len(manifest.atoms),
+            reviewed_anchors={64: 64, 78: 78},
+            artifacts=artifacts,
+        )
+        resolutions = {
+            artifact.artifact_id: NamespaceMapResolution(
+                artifact_id=artifact.artifact_id,
+                source_sha256=artifact.source_sha256,
+                pcdump_sha256=artifact.pcdump_sha256,
+                raw_to_canonical={role: role for role in domain},
+                source="automatic-v5",
+            )
+            for artifact in artifacts
+        }
+        return run_module.RunNamespaceState(
+            request=request,
+            resolutions=resolutions,
+            unresolved_ids=(),
+            review_digest=review_digest[0],
+        )
+
+    monkeypatch.setattr(run_module, "_resolve_namespaces_for_run", resolved_state)
+    base = fixture.backends()
+
+    def infer(left, right, run_config, **_kwargs):
+        return fixture.infer_objective(left, right, run_config)
+
+    def profile(raw, objective, *, parents, **_kwargs):
+        return fixture.profile(raw, objective, parents=parents)
+
+    backends = replace(
+        base,
+        parent_provenance=lambda run_config: {
+            **base.parent_provenance(run_config),
+            "cflags_hash": "c" * 64,
+            "parser_schema_hash": PARSER_SCHEMA_HASH,
+        },
+        infer_objective=infer,
+        profile_candidate=profile,
+    )
+
+    first = run_delta_minimize(config, backends=backends)
+    first_resolution = first.objective_manifest["namespace_resolution"]
+    review_digest[0] = "b" * 64
+    second = run_delta_minimize(config, backends=backends)
+    second_resolution = second.objective_manifest["namespace_resolution"]
+
+    assert fixture.score_calls == 4
+    assert first_resolution["review_sha256"] == "a" * 64
+    assert second_resolution["review_sha256"] == "b" * 64
+    assert first_resolution["resolution_sha256"] != second_resolution["resolution_sha256"]
+    assert fixture.infer_calls == 2
+    assert second.candidate_counts == first.candidate_counts
+
+
+def test_resume_rejects_valid_shape_delta_dependency_cache_mutation(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    first = run_delta_minimize(config, backends=fixture.backends())
+    manifest_path = config.out_dir / "delta-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["atoms"][1]["requires"] = [manifest["atoms"][0]["atom_id"]]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-manifest$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+    assert first.candidate_counts == {"legal": 4, "viable": 4, "complete": 4}
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("atom", "replacement", "anchor", "blockers"),
+)
+def test_resume_rejects_context_matching_delta_manifest_semantic_mutation(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    manifest_path = config.out_dir / "delta-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    if mutation == "atom":
+        manifest["atoms"][0]["atom_id"] += "-tampered"
+    elif mutation == "replacement":
+        manifest["atoms"][0]["patches"][0]["right_text"] += " "
+    elif mutation == "anchor":
+        manifest["atoms"][0]["patches"][0]["anchor_symbol"] += ":tampered"
+    elif mutation == "blockers":
+        manifest["blockers"] = []
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-manifest$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
+
+
+@pytest.mark.parametrize("mutation", ("schema", "function", "left-hash", "right-hash"))
+def test_resume_rejects_or_atomically_replaces_delta_manifest_identity_mutation(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    first = run_delta_minimize(config, backends=fixture.backends())
+    manifest_path = config.out_dir / "delta-manifest.json"
+    canonical = json.loads(manifest_path.read_text(encoding="utf-8"))
+    mutated = json.loads(json.dumps(canonical))
+    if mutation == "schema":
+        mutated["schema_version"] = "delta-manifest.v0"
+    elif mutation == "function":
+        mutated["function"] = "other"
+    elif mutation == "left-hash":
+        mutated["left_hash"] = "0" * 64
+    elif mutation == "right-hash":
+        mutated["right_hash"] = "0" * 64
+    manifest_path.write_text(json.dumps(mutated), encoding="utf-8")
+
+    if mutation == "schema":
+        with pytest.raises(DeltaMinimizeError, match="^corrupt-delta-manifest$"):
+            run_delta_minimize(config, backends=fixture.backends())
+    else:
+        second = run_delta_minimize(config, backends=fixture.backends())
+        assert second.to_dict() == first.to_dict()
+        assert json.loads(manifest_path.read_text(encoding="utf-8")) == canonical
+
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
+
+
+def test_unchanged_delta_manifest_rederives_locally_without_external_resume_work(
+    tmp_path: Path,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    base = fixture.backends()
+    extract_calls = 0
+
+    def extract(left: str, right: str, *, function: str) -> DeltaManifest:
+        nonlocal extract_calls
+        extract_calls += 1
+        return base.extract_manifest(left, right, function=function)
+
+    backends = replace(base, extract_manifest=extract)
+    first = run_delta_minimize(config, backends=backends)
+    second = run_delta_minimize(config, backends=backends)
+
+    assert second.to_dict() == first.to_dict()
+    assert extract_calls == 2
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
+
+
+def test_extractor_schema_upgrade_rekeys_candidates_with_changed_atom_order(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    base = fixture.backends()
+
+    def old_extract(left: str, right: str, *, function: str) -> DeltaManifest:
+        return replace(base.extract_manifest(left, right, function=function), schema_version="delta-manifest.v1")
+
+    first = run_delta_minimize(config, backends=replace(base, extract_manifest=old_extract))
+    assert first.candidate_counts == {"legal": 4, "viable": 4, "complete": 4}
+
+    def new_extract(left: str, right: str, *, function: str) -> DeltaManifest:
+        manifest = base.extract_manifest(left, right, function=function)
+        return replace(manifest, atoms=tuple(reversed(manifest.atoms)))
+
+    second = run_delta_minimize(config, backends=replace(base, extract_manifest=new_extract))
+
+    assert second.candidate_counts == first.candidate_counts
+    assert fixture.score_calls == 8
+    manifest = json.loads((config.out_dir / "delta-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == "delta-manifest.v3"
+
+
+def test_extractor_schema_upgrade_removes_stale_publications_before_enumeration(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    base = fixture.backends()
+
+    def old_extract(left: str, right: str, *, function: str) -> DeltaManifest:
+        return replace(base.extract_manifest(left, right, function=function), schema_version="delta-manifest.v1")
+
+    run_delta_minimize(config, backends=replace(base, extract_manifest=old_extract))
+    assert (config.out_dir / "result.json").is_file()
+    assert (config.out_dir / "candidates.json").is_file()
+
+    with pytest.raises(DeltaMinimizeError, match="^candidate-budget-exceeded$"):
+        run_delta_minimize(
+            replace(config, max_candidates=1),
+            backends=base,
+        )
+
+    assert not (config.out_dir / "result.json").exists()
+    assert not (config.out_dir / "candidates.json").exists()
+    manifest = json.loads((config.out_dir / "delta-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == "delta-manifest.v3"
+
+
+def test_lower_candidate_budget_removes_stale_exact_publications(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    first = run_delta_minimize(config, backends=fixture.backends())
+    assert first.exact_four_axis is True
+    assert (config.out_dir / "result.json").is_file()
+    assert (config.out_dir / "candidates.json").is_file()
+
+    with pytest.raises(DeltaMinimizeError, match="^candidate-budget-exceeded$"):
+        run_delta_minimize(
+            replace(config, max_candidates=1),
+            backends=fixture.backends(),
+        )
+
+    assert not (config.out_dir / "result.json").exists()
+    assert not (config.out_dir / "candidates.json").exists()
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
+
+
+def test_extractor_schema_upgrade_removes_stale_publications_before_objective_failure(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    base = fixture.backends()
+
+    def old_extract(left: str, right: str, *, function: str) -> DeltaManifest:
+        return replace(base.extract_manifest(left, right, function=function), schema_version="delta-manifest.v1")
+
+    run_delta_minimize(config, backends=replace(base, extract_manifest=old_extract))
+    assert (config.out_dir / "result.json").is_file()
+    assert (config.out_dir / "candidates.json").is_file()
+
+    fixture.expected_object_hash = "new-parent-epoch"
+    ambiguous = replace(
+        fixture.backends(),
+        infer_objective=lambda *_args: (_ for _ in ()).throw(DeltaMinimizeError("ambiguous-color-target")),
+    )
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-target$"):
+        run_delta_minimize(config, backends=ambiguous)
+
+    assert not (config.out_dir / "result.json").exists()
+    assert not (config.out_dir / "candidates.json").exists()
+    manifest = json.loads((config.out_dir / "delta-manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == "delta-manifest.v3"
+
+
+def test_objective_context_change_removes_stale_publications_before_ambiguity(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+
+    fixture.expected_object_hash = "new-parent-epoch"
+    ambiguous = replace(
+        fixture.backends(),
+        infer_objective=lambda *_args: (_ for _ in ()).throw(DeltaMinimizeError("ambiguous-color-target")),
+    )
+    with pytest.raises(DeltaMinimizeError, match="^ambiguous-color-target$"):
+        run_delta_minimize(config, backends=ambiguous)
+
+    assert not (config.out_dir / "result.json").exists()
+    assert not (config.out_dir / "candidates.json").exists()
+
+
+def test_run_materializes_only_parent_deltas_and_reproduces_both_endpoints(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+
+    result = run_delta_minimize(_config(tmp_path), backends=fixture.backends())
+
+    assert result.candidate_counts["legal"] == len(fixture.captured_sources) == 4
+    assert fixture.captured_sources[0] == LEFT.encode()
+    assert fixture.captured_sources[3] == RIGHT.encode()
+    assert all(b"1" in source or b"3" in source for source in fixture.captured_sources.values())
+    assert all(b"2" in source or b"4" in source for source in fixture.captured_sources.values())
+
+
+def test_resume_revalidates_stale_parent_artifacts(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    first = run_delta_minimize(config, backends=fixture.backends())
+    (tmp_path / "parent-left.pcdump").unlink()
+
+    second = run_delta_minimize(config, backends=fixture.backends())
+
+    assert second.to_dict() == first.to_dict()
+    assert fixture.parent_calls == 3
+    assert fixture.score_calls == 4
+
+
+def test_parent_cache_can_require_retained_checkdiff_evidence(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    first = run_delta_minimize(config, backends=fixture.backends())
+
+    fixture.parent_checkdiff = True
+    strict = replace(fixture.backends(), parent_requires_checkdiff=True)
+    second = run_delta_minimize(config, backends=strict)
+
+    assert second.to_dict() == first.to_dict()
+    assert fixture.parent_calls == 4
+    assert fixture.score_calls == 4
+
+
+def test_parent_checkdiff_requirement_validates_fresh_capture(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+
+    with pytest.raises(DeltaMinimizeError, match="^invalid-parent-evidence$"):
+        run_delta_minimize(
+            _config(tmp_path),
+            backends=replace(fixture.backends(), parent_requires_checkdiff=True),
+        )
+
+
+def test_production_parent_cache_requires_checkdiff_evidence() -> None:
+    assert default_delta_minimize_backends().parent_requires_checkdiff is True
+
+
+def _production_provenance_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[DeltaMinimizeConfig, dict[str, str]]:
+    root = tmp_path / "repo"
+    unit = root / "src/melee/test.c"
+    header = root / "include/test.h"
+    expected = root / "build/GALE01/obj/melee/test.o"
+    inspector = root / "tools/workflow/mwcc-inspect.sh"
+    compiler = root / "build/compilers/GC/1.2.5n/mwcceppc.exe"
+    for path in (unit, header, expected, inspector, compiler):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    unit.write_text('#include "test.h"\nint f(void) { return TEST_VALUE; }\n', encoding="utf-8")
+    header.write_text("#define TEST_VALUE 1\n", encoding="utf-8")
+    expected.write_bytes(b"expected object")
+    inspector.write_text("#!/usr/bin/env bash\n# inspector v1\n", encoding="utf-8")
+    compiler.write_bytes(b"mwcc compiler v1")
+    (root / "build.ninja").write_text("# queried through ninja -t\n", encoding="utf-8")
+
+    command = {
+        "value": (
+            "build/tools/wibo build/compilers/GC/1.2.5n/mwcceppc.exe "
+            "-O4,p -inline auto -i include -c src/melee/test.c "
+            "-o build/GALE01/src/melee && python tools/transform_dep.py"
+        ),
+        "sequence": [],
+    }
+    dependency_rows = {
+        "value": "\n".join(
+            (
+                "build/GALE01/src/melee/test.o: #deps 2, deps mtime 1 (VALID)",
+                "    src/melee/test.c",
+                "    include/test.h",
+            )
+        ),
+        "sequence": [],
+    }
+    upstream = {"value": ""}
+    ref_commit = {"value": "a" * 40}
+    freshness = {"value": "ninja: no work to do.\n"}
+
+    def fake_run(args, **kwargs):
+        assert kwargs["cwd"] == root
+        assert kwargs["text"] is True
+        assert kwargs["capture_output"] is True
+        assert kwargs["check"] is False
+        if args[:2] == ["ninja", "-n"]:
+            return subprocess.CompletedProcess(args, 0, freshness["value"], "")
+        if args[:3] == ["ninja", "-t", "commands"]:
+            value = command["sequence"].pop(0) if command["sequence"] else command["value"]
+            return subprocess.CompletedProcess(args, 0, value + "\n", "")
+        if args[:3] == ["ninja", "-t", "deps"]:
+            value = (
+                dependency_rows["sequence"].pop(0)
+                if dependency_rows["sequence"]
+                else dependency_rows["value"]
+            )
+            return subprocess.CompletedProcess(args, 0, value + "\n", "")
+        if args[:4] == ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name"]:
+            return subprocess.CompletedProcess(
+                args,
+                0 if upstream["value"] else 1,
+                upstream["value"] + ("\n" if upstream["value"] else ""),
+                "",
+            )
+        if args[:3] == ["git", "rev-parse", "--verify"]:
+            return subprocess.CompletedProcess(args, 0, ref_commit["value"] + "\n", "")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(run_module.subprocess, "run", fake_run)
+    monkeypatch.setenv("MWCC_INSPECT_REMOTE_REF", "refs/heads/reviewed")
+    monkeypatch.setenv("MWCC_INSPECT_HOST", "inspector-a")
+    monkeypatch.setenv("MWCC_INSPECT_REMOTE_DIR", "/remote/melee")
+    monkeypatch.setenv("MWCC_INSPECT_CLI", "/remote/inspector.exe")
+    monkeypatch.setenv("MWCC_INSPECT_REMOTE_BASH", "C:\\msys64\\bash.exe")
+    config = _config(tmp_path, melee_root=root, cflags_from=unit)
+    return config, {
+        "header": str(header),
+        "inspector": str(inspector),
+        "command": command,
+        "dependencies": dependency_rows,
+        "upstream": upstream,
+        "ref_commit": ref_commit,
+        "freshness": freshness,
+    }
+
+
+def _provenance_consumers(
+    tmp_path: Path,
+    provenance: dict[str, str],
+) -> tuple[str, str, str]:
+    candidate = SimpleNamespace(source_hash="1" * 64)
+    config = SimpleNamespace(function="f", include_objobjects=True)
+    store = DeltaRunStore(
+        tmp_path,
+        provenance={**provenance, "objective_manifest_hash": "2" * 64},
+    )
+    evidence_digest = store.evidence_key(candidate, config).digest()
+    parent_digest = store.parent_evidence_key(candidate, config, provenance).digest()
+    domain = tuple(range(32))
+    left = NamespaceArtifact(
+        artifact_id="parent:left",
+        kind="parent",
+        side="left",
+        candidate=None,
+        mask=None,
+        source_sha256="1" * 64,
+        pcdump_sha256="3" * 64,
+        domain=domain,
+        automatically_resolved=True,
+        diagnostic=None,
+    )
+    right = replace(
+        left,
+        artifact_id="parent:right",
+        side="right",
+        source_sha256="4" * 64,
+        pcdump_sha256="5" * 64,
+        automatically_resolved=False,
+        diagnostic="ambiguous-automatic-v5",
+    )
+    request = NamespaceReviewRequest(
+        function="f",
+        class_id=0,
+        register_class="GPR",
+        namespace_schema=ROLE_NAMESPACE_SCHEMA,
+        parser_schema_hash=PARSER_SCHEMA_HASH,
+        target_sha256="6" * 64,
+        delta_manifest_sha256="7" * 64,
+        left_source_sha256=left.source_sha256,
+        right_source_sha256=right.source_sha256,
+        cflags_hash=provenance["cflags_hash"],
+        compiler_fingerprint=provenance["compiler_fingerprint"],
+        expected_object_hash=provenance["expected_object_hash"],
+        inspector_version=provenance["inspector_version"],
+        canonical_artifact_id=left.artifact_id,
+        canonical_source_sha256=left.source_sha256,
+        canonical_pcdump_sha256=left.pcdump_sha256,
+        lattice_atom_count=3,
+        reviewed_anchors={0: 0},
+        artifacts=(left, right),
+    )
+    return evidence_digest, parent_digest, request.sha256
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "header",
+        "compile-flags",
+        "inspector-script",
+        "inspector-host",
+        "inspector-remote-dir",
+        "inspector-cli",
+        "inspector-bash",
+        "inspector-ref",
+        "inspector-ref-commit",
+        "inspector-default-ref",
+        "inspector-upstream",
+        "inspector-connect-timeout",
+    ),
+)
+def test_production_provenance_binds_complete_compiler_and_inspector_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    config, controls = _production_provenance_fixture(tmp_path, monkeypatch)
+    if mutation == "inspector-default-ref":
+        monkeypatch.delenv("MWCC_INSPECT_REMOTE_REF")
+        monkeypatch.setenv("MWCC_INSPECT_DEFAULT_REMOTE_REF", "refs/heads/default-a")
+    elif mutation == "inspector-upstream":
+        monkeypatch.delenv("MWCC_INSPECT_REMOTE_REF")
+        controls["upstream"]["value"] = "origin/upstream-a"
+    baseline = dict(run_module._default_parent_provenance(config))
+    baseline_consumers = _provenance_consumers(tmp_path / "baseline-store", baseline)
+
+    if mutation == "header":
+        Path(controls["header"]).write_text("#define TEST_VALUE 2\n", encoding="utf-8")
+    elif mutation == "compile-flags":
+        controls["command"]["value"] = controls["command"]["value"].replace("-O4,p", "-O3")
+    elif mutation == "inspector-script":
+        Path(controls["inspector"]).write_text("#!/usr/bin/env bash\n# inspector v2\n", encoding="utf-8")
+    elif mutation == "inspector-host":
+        monkeypatch.setenv("MWCC_INSPECT_HOST", "inspector-b")
+    elif mutation == "inspector-remote-dir":
+        monkeypatch.setenv("MWCC_INSPECT_REMOTE_DIR", "/different/melee")
+    elif mutation == "inspector-cli":
+        monkeypatch.setenv("MWCC_INSPECT_CLI", "/remote/inspector-v2.exe")
+    elif mutation == "inspector-bash":
+        monkeypatch.setenv("MWCC_INSPECT_REMOTE_BASH", "C:\\other\\bash.exe")
+    elif mutation == "inspector-ref":
+        monkeypatch.setenv("MWCC_INSPECT_REMOTE_REF", "refs/heads/reviewed-v2")
+    elif mutation == "inspector-ref-commit":
+        controls["ref_commit"]["value"] = "b" * 40
+    elif mutation == "inspector-default-ref":
+        monkeypatch.setenv("MWCC_INSPECT_DEFAULT_REMOTE_REF", "refs/heads/default-b")
+    elif mutation == "inspector-upstream":
+        controls["upstream"]["value"] = "origin/upstream-b"
+    else:
+        monkeypatch.setenv("MWCC_INSPECT_CONNECT_TIMEOUT", "30")
+
+    changed = dict(run_module._default_parent_provenance(config))
+    changed_consumers = _provenance_consumers(tmp_path / "changed-store", changed)
+
+    if mutation in {"header", "compile-flags"}:
+        assert changed["cflags_hash"] != baseline["cflags_hash"]
+    else:
+        assert changed["inspector_version"] != baseline["inspector_version"]
+    assert changed_consumers[0] != baseline_consumers[0]
+    assert changed_consumers[1] != baseline_consumers[1]
+    assert changed_consumers[2] != baseline_consumers[2]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ("would-rebuild", "missing-command", "missing-dependencies", "stale-dependencies"),
+)
+def test_production_provenance_fails_closed_without_exact_compile_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    config, controls = _production_provenance_fixture(tmp_path, monkeypatch)
+    if failure == "would-rebuild":
+        controls["freshness"]["value"] = "[1/1] MWCC build/GALE01/src/melee/test.o\n"
+    elif failure == "missing-command":
+        controls["command"]["value"] = ""
+    elif failure == "missing-dependencies":
+        controls["dependencies"]["value"] = "build/GALE01/src/melee/test.o: deps not found"
+    else:
+        controls["dependencies"]["value"] = controls["dependencies"]["value"].replace(
+            "(VALID)", "(STALE)"
+        )
+
+    with pytest.raises(DeltaMinimizeError, match="^invalid-compiler-context$"):
+        run_module._default_parent_provenance(config)
+
+
+def test_stale_dependency_closure_cannot_authorize_new_header_cache_reuse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, controls = _production_provenance_fixture(tmp_path, monkeypatch)
+    baseline = dict(run_module._default_parent_provenance(config))
+    new_header = config.melee_root / "include/activated.h"
+    new_header.write_text("#define ACTIVATED_VALUE 1\n", encoding="utf-8")
+    config.cflags_from.write_text(
+        '#include "test.h"\n#include "activated.h"\n'
+        "int f(void) { return TEST_VALUE + ACTIVATED_VALUE; }\n",
+        encoding="utf-8",
+    )
+    controls["command"]["value"] = controls["command"]["value"].replace("-O4,p", "-O3")
+    controls["freshness"]["value"] = "[1/1] MWCC build/GALE01/src/melee/test.o\n"
+
+    with pytest.raises(DeltaMinimizeError, match="^invalid-compiler-context$"):
+        run_module._default_parent_provenance(config)
+
+    controls["freshness"]["value"] = "ninja: no work to do.\n"
+    controls["dependencies"]["value"] = "\n".join(
+        (
+            "build/GALE01/src/melee/test.o: #deps 3, deps mtime 2 (VALID)",
+            "    src/melee/test.c",
+            "    include/test.h",
+            "    include/activated.h",
+        )
+    )
+    refreshed = dict(run_module._default_parent_provenance(config))
+    new_header.write_text("#define ACTIVATED_VALUE 2\n", encoding="utf-8")
+    header_changed = dict(run_module._default_parent_provenance(config))
+
+    assert refreshed["cflags_hash"] != baseline["cflags_hash"]
+    assert header_changed["cflags_hash"] != refreshed["cflags_hash"]
+    assert _provenance_consumers(tmp_path / "refreshed-store", refreshed) != _provenance_consumers(
+        tmp_path / "header-changed-store",
+        header_changed,
+    )
+
+
+def test_interleaved_rebuild_cannot_publish_mixed_compiler_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, controls = _production_provenance_fixture(tmp_path, monkeypatch)
+    original_command = controls["command"]["value"]
+    rebuilt_command = original_command.replace("-O4,p", "-O3")
+    rebuilt_header = config.melee_root / "include/rebuilt.h"
+    rebuilt_header.write_text("#define REBUILT_VALUE 1\n", encoding="utf-8")
+    rebuilt_dependencies = "\n".join(
+        (
+            "build/GALE01/src/melee/test.o: #deps 3, deps mtime 3 (VALID)",
+            "    src/melee/test.c",
+            "    include/test.h",
+            "    include/rebuilt.h",
+        )
+    )
+    controls["command"]["sequence"] = [original_command, rebuilt_command]
+    controls["dependencies"]["sequence"] = [rebuilt_dependencies, rebuilt_dependencies]
+
+    with pytest.raises(DeltaMinimizeError, match="^invalid-compiler-context$"):
+        run_module._default_parent_provenance(config)
+
+
+def test_production_objective_adapter_supplies_real_register_diff_deriver(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.cli.debug import _derive_force_phys_from_register_diff_lines
+
+    expected = _objective()
+    seen: dict[str, object] = {}
+
+    def infer(left, right, **kwargs):
+        seen.update(kwargs)
+        assert left is left_parent
+        assert right is right_parent
+        return expected
+
+    left_parent = object()
+    right_parent = object()
+    monkeypatch.setattr(run_module, "infer_objective_manifest", infer)
+
+    actual = default_delta_minimize_backends().infer_objective(
+        left_parent,
+        right_parent,
+        _config(tmp_path),
+    )
+
+    assert actual is expected
+    assert seen["target_path"] is None
+    assert seen["derive_force_target"] is _derive_force_phys_from_register_diff_lines
+
+
+def test_changed_expected_object_invalidates_objective_cache(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+
+    fixture.expected_object_hash = "new-expected-object"
+    run_delta_minimize(config, backends=fixture.backends())
+
+    assert fixture.parent_calls == 4
+    assert fixture.parent_objective_calls == 4
+    assert fixture.infer_calls == 2
+
+
+def test_refreshed_parent_profile_invalidates_objective_cache(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+
+    (tmp_path / "parent-left.pcdump").write_text("stale profile\n", encoding="utf-8")
+    fixture.parent_generation = 2
+    run_delta_minimize(config, backends=fixture.backends())
+
+    assert fixture.parent_calls == 3
+    assert fixture.parent_objective_calls == 4
+    assert fixture.infer_calls == 2
+
+
+def test_changed_valid_objective_starts_a_new_target_epoch(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    first = run_delta_minimize(config, backends=fixture.backends())
+    first_target = fixture.target_paths[-1]
+
+    fixture.expected_object_hash = "new-expected-object"
+    fixture.objective_physical = 4
+    second = run_delta_minimize(config, backends=fixture.backends())
+    second_target = fixture.target_paths[-1]
+
+    assert first.objective_manifest["desired_phys"] == {"1": 3}
+    assert second.objective_manifest["desired_phys"] == {"1": 4}
+    assert first_target != second_target
+    assert json.loads(first_target.read_text(encoding="utf-8"))["virtuals"] == {"1": 3}
+    assert json.loads(second_target.read_text(encoding="utf-8"))["virtuals"] == {"1": 4}
+    assert fixture.score_calls == 8
+    assert len(set(fixture.target_paths[:4])) == 1
+    assert len(set(fixture.target_paths[4:])) == 1
+
+    current = json.loads((config.out_dir / "objective" / "color-target-current.json").read_text())
+    current_target = config.out_dir / current["artifact"]
+    assert current_target.parent.name == "color-targets"
+    assert current["sha256"] == current_target.stem
+    assert json.loads(current_target.read_text(encoding="utf-8"))["roles"][0]["desired_phys"] == 4
+
+    unchanged = run_delta_minimize(config, backends=fixture.backends())
+    assert unchanged.to_dict() == second.to_dict()
+    assert fixture.score_calls == 8
+
+
+def test_objective_cache_persists_context_with_valid_digest(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+
+    payload = json.loads((config.out_dir / "objective-inputs.json").read_text(encoding="utf-8"))
+    context = payload["context"]
+    canonical = json.dumps(context, sort_keys=True, separators=(",", ":")).encode()
+
+    assert payload["schema_version"] == "delta-minimize-objective-inputs.v4"
+    assert payload["context_digest"] == hashlib.sha256(canonical).hexdigest()
+    manifest = json.loads((config.out_dir / "objective-manifest.json").read_text(encoding="utf-8"))
+    manifest_blob = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    assert payload["objective_manifest_digest"] == hashlib.sha256(manifest_blob).hexdigest()
+    assert context["parents"]["left"]["pcdump_hash"]
+    assert context["expected_object_hash"] == "expected-object"
+    assert context["parser_schema_hash"] == "parsers"
+
+
+def test_malformed_objective_cache_context_fails_closed(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    cache_path = config.out_dir / "objective-inputs.json"
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    payload["context_digest"] = "0" * 64
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-cache-context$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+def test_pre_binding_objective_input_schema_is_rejected(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    cache_path = config.out_dir / "objective-inputs.json"
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = "delta-minimize-objective-inputs.v3"
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-cache-context$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+def test_pre_sidecar_objective_manifest_schema_is_rejected() -> None:
+    payload = _objective().to_dict()
+    payload["schema_version"] = "delta-minimize-objectives.v2"
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-manifest$"):
+        run_module._objective_from_dict(payload, function="f")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "schema",
+        "function",
+        "axis-deletion",
+        "axis-extra",
+        "donor-value",
+        "donor-type",
+        "class-type",
+        "class-domain",
+        "desired-phys-range",
+        "descriptor-ig-bool",
+        "descriptor-assigned-range",
+        "reference-artifact-type",
+        "reference-reason-type",
+        "reference-override-type",
+        "reference-unresolved-type",
+        "target-provenance-type",
+        "target-payload",
+    ),
+)
+def test_invalid_integrity_bound_objective_manifest_fails_closed(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    manifest_path = config.out_dir / "objective-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    if mutation == "schema":
+        manifest["schema_version"] = "delta-minimize-objectives.v1"
+    elif mutation == "function":
+        manifest["function"] = "other"
+    elif mutation == "axis-deletion":
+        del manifest["references"]["opcode"]
+    elif mutation == "axis-extra":
+        manifest["references"]["extra"] = dict(manifest["references"]["opcode"])
+    elif mutation == "donor-value":
+        manifest["objobject_donor"] = "both"
+    elif mutation == "donor-type":
+        manifest["color_donor"] = 1
+    elif mutation == "class-type":
+        manifest["class_id"] = True
+    elif mutation == "class-domain":
+        manifest["class_id"] = 2
+        manifest["target_spec"]["roles"][0]["class_id"] = 2
+    elif mutation == "desired-phys-range":
+        manifest["desired_phys"]["1"] = 32
+        manifest["target_spec"]["roles"][0]["desired_phys"] = 32
+    elif mutation in {"descriptor-ig-bool", "descriptor-assigned-range"}:
+        manifest["target_spec"]["roles"][0]["descriptor"] = {
+            "ig_idx": True if mutation == "descriptor-ig-bool" else 1,
+            "first_def_sig": "li r#,0",
+            "use_site_multiset": [["add", 1]],
+            "is_param": False,
+            "var_name": "value",
+            "var_confidence": "high",
+            "assigned_reg": 32 if mutation == "descriptor-assigned-range" else 3,
+            "live_range": [0, 1],
+            "use_count": 1,
+            "spilled": False,
+        }
+    elif mutation == "reference-artifact-type":
+        manifest["references"]["opcode"]["reference_artifact"] = 1
+    elif mutation == "reference-reason-type":
+        manifest["references"]["opcode"]["inference_reason"] = 1
+    elif mutation == "reference-override-type":
+        manifest["references"]["color"]["override"] = 1
+    elif mutation == "reference-unresolved-type":
+        manifest["references"]["stack-homes"]["unresolved"] = [1]
+    elif mutation == "target-provenance-type":
+        manifest["target_spec"]["provenance"] = {"inference": 1, "parent": "left"}
+    elif mutation == "target-payload":
+        manifest["target_spec"]["roles"][0]["desired_phys"] = -1
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    inputs_path = config.out_dir / "objective-inputs.json"
+    inputs = json.loads(inputs_path.read_text(encoding="utf-8"))
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    inputs["objective_manifest_digest"] = hashlib.sha256(canonical).hexdigest()
+    inputs_path.write_text(json.dumps(inputs), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-manifest$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+@pytest.mark.parametrize(
+    ("overrides", "mutation"),
+    (
+        ({}, "default-objobject-donor-diverges"),
+        ({}, "spurious-color-override"),
+        ({"color": "left"}, "missing-color-override"),
+        ({"color": "right"}, "color-context-donor-mismatch"),
+        ({"objobjects": "right"}, "missing-objobject-override"),
+        ({"objobjects": "right"}, "objobject-context-donor-mismatch"),
+        ({"stack-homes": "right"}, "missing-stack-override"),
+        ({"stack-homes": "left"}, "stack-context-donor-mismatch"),
+        ({}, "color-inference-reason-mismatch"),
+        ({}, "objobject-inference-reason-mismatch"),
+        ({}, "stack-inference-reason-mismatch"),
+    ),
+)
+def test_cached_objective_donor_semantics_are_bound_to_context(
+    tmp_path: Path,
+    overrides: dict[str, str],
+    mutation: str,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path, donor_overrides=overrides)
+    run_delta_minimize(config, backends=fixture.backends())
+    manifest_path = config.out_dir / "objective-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    if mutation == "default-objobject-donor-diverges":
+        manifest["objobject_donor"] = "right"
+        manifest["references"]["objobjects"]["donor"] = "right"
+    elif mutation == "spurious-color-override":
+        manifest["references"]["color"]["override"] = True
+        manifest["references"]["color"]["inference_reason"] = (
+            "cross-parent-round-trip-derived-target;explicit-color-donor-override"
+        )
+    elif mutation == "missing-color-override":
+        manifest["references"]["color"]["override"] = False
+        manifest["references"]["color"]["inference_reason"] = (
+            "cross-parent-round-trip-derived-target;lower-desired-assignment-distance"
+        )
+    elif mutation == "color-context-donor-mismatch":
+        manifest["color_donor"] = "left"
+        manifest["references"]["color"]["donor"] = "left"
+    elif mutation == "missing-objobject-override":
+        manifest["references"]["objobjects"]["override"] = False
+        manifest["references"]["objobjects"]["inference_reason"] = "inherits-selected-color-donor"
+    elif mutation == "objobject-context-donor-mismatch":
+        manifest["objobject_donor"] = "left"
+        manifest["references"]["objobjects"]["donor"] = "left"
+    elif mutation == "missing-stack-override":
+        manifest["references"]["stack-homes"]["override"] = False
+        manifest["references"]["stack-homes"]["inference_reason"] = "strictly-lower-stack-home-distance"
+    elif mutation == "stack-context-donor-mismatch":
+        manifest["stack_home_donor"] = "right"
+        manifest["references"]["stack-homes"]["donor"] = "right"
+    elif mutation == "color-inference-reason-mismatch":
+        manifest["references"]["color"]["inference_reason"] = (
+            "cross-parent-round-trip-derived-target;explicit-color-donor-override"
+        )
+    elif mutation == "objobject-inference-reason-mismatch":
+        manifest["references"]["objobjects"]["inference_reason"] = "explicit-objobject-donor-override"
+    elif mutation == "stack-inference-reason-mismatch":
+        manifest["references"]["stack-homes"]["inference_reason"] = "explicit-stack-home-donor-override"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    inputs_path = config.out_dir / "objective-inputs.json"
+    inputs = json.loads(inputs_path.read_text(encoding="utf-8"))
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    inputs["objective_manifest_digest"] = hashlib.sha256(canonical).hexdigest()
+    inputs_path.write_text(json.dumps(inputs), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-manifest$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+def test_valid_cached_objective_with_all_donor_overrides_is_reused(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(
+        tmp_path,
+        donor_overrides={"color": "right", "objobjects": "left", "stack-homes": "left"},
+    )
+
+    first = run_delta_minimize(config, backends=fixture.backends())
+    second = run_delta_minimize(config, backends=fixture.backends())
+
+    assert second.to_dict() == first.to_dict()
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
+    assert fixture.parent_objective_calls == 4
+    assert fixture.infer_calls == 2
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "target-parent",
+        "target-explicit-provenance",
+        "target-coverage",
+        "target-causal-closure",
+        "target-role-identity",
+        "target-role-rank",
+        "target-role-descriptor",
+        "target-class",
+        "target-physical",
+        "opcode-artifact",
+        "opcode-donor",
+        "color-artifact",
+        "color-donor",
+        "objobject-artifact",
+        "stack-artifact",
+        "stack-donor",
+        "stack-reference-kind",
+    ),
+)
+def test_cached_objective_valid_shape_is_bound_to_current_parent_semantics(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    manifest_path = config.out_dir / "objective-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    if mutation == "target-parent":
+        manifest["target_spec"]["provenance"]["parent"] = "right"
+    elif mutation == "target-explicit-provenance":
+        manifest["target_spec"]["provenance"] = {
+            "schema_version": "delta-minimize-color-target.v1",
+            "baseline_dump": str(tmp_path / "parent-left.pcdump"),
+        }
+        manifest["references"]["color"]["inference_reason"] = (
+            "explicit-versioned-color-target;lower-desired-assignment-distance"
+        )
+    elif mutation == "target-coverage":
+        manifest["target_spec"]["target_coverage"] = 0.5
+    elif mutation == "target-causal-closure":
+        manifest["target_spec"]["causal_closure"] = True
+    elif mutation == "target-role-identity":
+        manifest["desired_phys"] = {"2": 3}
+        manifest["target_spec"]["roles"][0]["original_ig"] = 2
+    elif mutation == "target-role-rank":
+        manifest["target_spec"]["roles"][0]["role_order_rank"] = 1
+    elif mutation == "target-role-descriptor":
+        manifest["target_spec"]["roles"][0]["descriptor"] = {
+            "ig_idx": 1,
+            "first_def_sig": "li r#,0",
+            "use_site_multiset": [["add", 1]],
+            "is_param": False,
+            "var_name": "value",
+            "var_confidence": "high",
+            "assigned_reg": 3,
+            "live_range": [0, 1],
+            "use_count": 1,
+            "spilled": False,
+        }
+    elif mutation == "target-class":
+        manifest["class_id"] = 1
+        manifest["target_spec"]["roles"][0]["class_id"] = 1
+    elif mutation == "target-physical":
+        manifest["desired_phys"]["1"] = 4
+        manifest["target_spec"]["roles"][0]["desired_phys"] = 4
+    elif mutation == "opcode-artifact":
+        manifest["references"]["opcode"]["reference_artifact"] = "unbound-expected-object"
+    elif mutation == "opcode-donor":
+        manifest["references"]["opcode"]["donor"] = "left"
+        manifest["references"]["opcode"]["inference_reason"] = "expected-assembly-absolute;left-parent-closer"
+    elif mutation == "color-artifact":
+        manifest["references"]["color"]["reference_artifact"] = "unbound-color-profile"
+    elif mutation == "color-donor":
+        manifest["color_donor"] = "right"
+        manifest["objobject_donor"] = "right"
+        manifest["references"]["color"]["donor"] = "right"
+        manifest["references"]["objobjects"]["donor"] = "right"
+    elif mutation == "objobject-artifact":
+        manifest["references"]["objobjects"]["reference_artifact"] = "unbound-inspect-output"
+    elif mutation == "stack-artifact":
+        manifest["references"]["stack-homes"]["reference_artifact"] = "unbound-stack-profile"
+    elif mutation == "stack-donor":
+        manifest["stack_home_donor"] = "left"
+        manifest["references"]["stack-homes"]["donor"] = "left"
+    elif mutation == "stack-reference-kind":
+        manifest["references"]["stack-homes"]["reference_kind"] = "mixed"
+        manifest["references"]["stack-homes"]["unresolved"] = ["proxy-home"]
+
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    inputs_path = config.out_dir / "objective-inputs.json"
+    inputs = json.loads(inputs_path.read_text(encoding="utf-8"))
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+    inputs["objective_manifest_digest"] = hashlib.sha256(canonical).hexdigest()
+    inputs_path.write_text(json.dumps(inputs), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-manifest$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+    # Resume validation may rederive from retained parents, but it must not
+    # recapture compiler/inspector evidence or evaluate candidates.
+    assert fixture.parent_calls == 2
+    assert fixture.score_calls == 4
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"opcode": "left"},
+        {"color": "middle"},
+        {"stack_homes": "left"},
+        {"color": True},
+    ),
+)
+def test_run_config_rejects_unsupported_donor_overrides(
+    tmp_path: Path,
+    overrides: dict[str, object],
+) -> None:
+    with pytest.raises(DeltaMinimizeError, match="^invalid-delta-minimize-config$"):
+        _config(tmp_path, donor_overrides=overrides)
+
+
+def test_run_config_rejects_non_path_namespace_review(tmp_path: Path) -> None:
+    with pytest.raises(DeltaMinimizeError, match="^invalid-delta-minimize-config$"):
+        _config(tmp_path, namespace_review_path="reviewed.yaml")
+
+
+@pytest.mark.parametrize("mutation", ("manifest-payload", "manifest-digest"))
+def test_objective_manifest_digest_mutation_fails_closed(tmp_path: Path, mutation: str) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    run_delta_minimize(config, backends=fixture.backends())
+    if mutation == "manifest-payload":
+        path = config.out_dir / "objective-manifest.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["target_spec"]["provenance"]["tampered"] = True
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+    else:
+        path = config.out_dir / "objective-inputs.json"
+        inputs = json.loads(path.read_text(encoding="utf-8"))
+        inputs["objective_manifest_digest"] = "0" * 64
+        path.write_text(json.dumps(inputs), encoding="utf-8")
+
+    with pytest.raises(DeltaMinimizeError, match="^corrupt-objective-cache-context$"):
+        run_delta_minimize(config, backends=fixture.backends())
+
+
+def test_validated_cached_objective_manifest_is_deeply_immutable() -> None:
+    objective = run_module._objective_from_dict(_objective().to_dict(), function="f")
+
+    with pytest.raises(TypeError):
+        objective.target_spec["provenance"]["mutated"] = True
+    with pytest.raises(TypeError):
+        objective.desired_phys[1] = 4
+    with pytest.raises(TypeError):
+        objective.references["opcode"] = objective.references["color"]
+
+
+def test_one_incomplete_viable_mask_blocks_the_whole_frontier(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path, incomplete_mask=2)
+
+    result = run_delta_minimize(_config(tmp_path), backends=fixture.backends())
+
+    assert result.status == "incomplete"
+    assert result.exact_four_axis is False
+    assert result.pareto is None
+    assert result.candidate_counts == {"legal": 4, "viable": 4, "complete": 3}
+    assert "missing-inspect-text" in result.blockers
+
+
+def test_compile_rejected_mask_stays_in_ledger_but_not_viable_count(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path, rejected_mask=1)
+
+    result = run_delta_minimize(_config(tmp_path), backends=fixture.backends())
+
+    assert result.candidate_counts == {"legal": 4, "viable": 3, "complete": 3}
+    rejected = next(row for row in result.candidates if row["mask"] == 1)
+    assert rejected["profile"]["compile_status"] == "rejected"
+    assert rejected["profile"]["viable"] is False
+    assert result.pareto is not None
+    assert "mask-01" not in result.pareto.candidate_ids
+
+
+def test_missing_target_mask_is_nonviable_and_later_masks_complete(
+    tmp_path: Path,
+) -> None:
+    fixture = _CountingFixture(tmp_path, missing_target_mask=1)
+    config = _config(tmp_path)
+    left = """\
+int f(void) {
+    int a = 1;
+    int b = 2;
+    int c = 3;
+    return a + b + c;
+}
+"""
+    right = """\
+int f(void) {
+    int a = 10;
+    int b = 20;
+    int c = 30;
+    return a + b + c;
+}
+"""
+    config.left.write_text(left, encoding="utf-8")
+    config.right.write_text(right, encoding="utf-8")
+    base = fixture.backends()
+
+    def complete_profile(raw, _objective, *, parents):
+        assert parents.left.candidate_id == "parent-left"
+        if not raw.viable:
+            return CandidateProfile(
+                candidate_id=raw.candidate_id,
+                mask=raw.mask,
+                source_hash=raw.source_hash,
+                source_path=raw.source_path,
+                viable=False,
+                compile_status=raw.compile_status,
+                axes=None,
+                complete=True,
+                blockers=raw.blockers,
+            )
+        return CandidateProfile(
+            candidate_id=raw.candidate_id,
+            mask=raw.mask,
+            source_hash=raw.source_hash,
+            source_path=raw.source_path,
+            viable=True,
+            compile_status="compiled",
+            axes=AxisDistances(
+                (raw.mask, 0),
+                (7 - raw.mask, 0, 0, 0, 0, 0),
+                (raw.mask % 2, 0),
+                (raw.mask // 2, 0, 0, 0),
+            ),
+            complete=True,
+        )
+
+    backends = replace(base, profile_candidate=complete_profile)
+    first = run_delta_minimize(config, backends=backends)
+    second = run_delta_minimize(config, backends=backends)
+
+    assert len(first.delta_manifest["atoms"]) == 3
+    assert first.inputs["scoped_right_hash"] == _hash(right)
+    assert first.candidate_counts == {"legal": 8, "viable": 7, "complete": 7}
+    assert first.cache_stats == {"parent_entries": 2, "candidate_entries": 8}
+    assert [row["candidate_id"] for row in first.candidates] == [
+        "mask-000",
+        "mask-001",
+        "mask-010",
+        "mask-011",
+        "mask-100",
+        "mask-101",
+        "mask-110",
+        "mask-111",
+    ]
+    rejected = first.candidates[1]
+    assert rejected["evidence"]["compile_status"] == "rejected"
+    assert rejected["evidence"]["viable"] is False
+    assert rejected["profile"]["complete"] is True
+    assert rejected["profile"]["axes"] is None
+    assert "candidate-target-function-missing" in rejected["profile"]["blockers"]
+    assert all(first.candidates[index]["profile"]["viable"] for index in (5, 6, 7))
+    assert first.status == "frontier"
+    assert first.exact_four_axis is True
+    assert first.blockers == ()
+    assert first.pareto is not None
+    assert "mask-001" not in first.pareto.candidate_ids
+    assert fixture.score_calls == 8
+    assert fixture.inspect_calls == 5
+    payload = json.loads((config.out_dir / "result.json").read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "delta-minimize-result.v2"
+    assert len(payload["candidates"]) == payload["candidate_counts"]["legal"] == 8
+    assert payload["cache_stats"]["candidate_entries"] == 8
+    assert payload["candidates"][1]["profile"]["complete"] is True
+    assert payload["candidates"][1]["profile"]["viable"] is False
+    assert payload["pareto"] == first.pareto.to_dict()
+    assert second.to_dict() == first.to_dict()
+    assert fixture.score_calls == 8
+    assert fixture.inspect_calls == 5
+
+
+def test_infrastructure_failure_writes_resumable_incomplete_result(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path, infrastructure_mask=2)
+    config = _config(tmp_path)
+
+    result = run_delta_minimize(config, backends=fixture.backends())
+
+    assert result.status == "incomplete"
+    assert result.candidate_counts["legal"] == 4
+    assert result.pareto is None
+    assert "candidate-score-infrastructure" in result.blockers
+    assert (config.out_dir / "candidates.json").is_file()
+    assert (config.out_dir / "result.json").is_file()
+    assert [row["candidate_id"] for row in result.candidates] == ["mask-00", "mask-01"]
+    assert result.cache_stats == {"parent_entries": 2, "candidate_entries": 2}
+    assert fixture.score_calls == 3
+    assert "mask-11" not in [row["candidate_id"] for row in result.candidates]
+
+
+def test_unproven_missing_target_function_stops_exact_publication(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    base = fixture.backends()
+
+    def score_rows(rows, config):
+        scored = base.evaluation.score_rows(rows, config)
+        if rows[0]["candidate_id"] == "mask-10":
+            scored[0].update(
+                {
+                    "error": "function 'f' not in compiled pcdump",
+                    "score_error_kind": "candidate",
+                    "terminal_safe": True,
+                }
+            )
+        return scored
+
+    backends = replace(
+        base,
+        evaluation=replace(base.evaluation, score_rows=score_rows),
+    )
+    result = run_delta_minimize(_config(tmp_path), backends=backends)
+
+    assert result.status == "incomplete"
+    assert result.candidate_counts["legal"] == 4
+    assert result.pareto is None
+    assert "candidate-score-infrastructure" in result.blockers
+
+
+def test_inspector_compile_error_stops_publication_and_retries(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path)
+    base = fixture.backends()
+    calls = 0
+
+    def inspect_source(_source, _function, output, **_kwargs):
+        nonlocal calls
+        calls += 1
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            "### mwcceppc.exe Compiler:\n# Error: broken\nCompilation finished.\n",
+            encoding="utf-8",
+        )
+        raise DeltaMinimizeError("inspector-failed")
+
+    backends = replace(
+        base,
+        evaluation=replace(base.evaluation, inspect_source=inspect_source),
+    )
+    for attempt in range(2):
+        result = run_delta_minimize(config, backends=backends)
+        assert result.status == "incomplete"
+        assert result.pareto is None
+        assert "inspector-failed" in result.blockers
+        assert calls == attempt + 1
+
+
+def test_parent_infrastructure_failure_writes_early_incomplete_result(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path, parent_infrastructure=True)
+    config = _config(tmp_path)
+
+    result = run_delta_minimize(config, backends=fixture.backends())
+
+    assert result.status == "incomplete"
+    assert result.candidate_counts == {"legal": 0, "viable": 0, "complete": 0}
+    assert result.objective_manifest == {}
+    assert result.delta_manifest == {}
+    assert result.blockers == ("parent-score-infrastructure",)
+    assert (config.out_dir / "result.json").is_file()
+
+
+def test_no_objobjects_is_provisional_and_never_claims_joint_solution(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+
+    result = run_delta_minimize(
+        _config(tmp_path, include_objobjects=False),
+        backends=fixture.backends(),
+    )
+
+    assert result.status == "provisional"
+    assert result.exact_four_axis is False
+    assert result.pareto is not None
+    assert result.pareto.status == "provisional"
+    assert result.pareto.joint_solutions == ()
+    assert result.pareto.joint_zero_all_candidate_ids == ()
+    assert fixture.inspect_calls == 0
+
+
+def test_exact_object_match_controls_matched_status_not_proxy_distance(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+
+    result = run_delta_minimize(_config(tmp_path), backends=fixture.backends())
+
+    assert result.status == "matched"
+    assert result.pareto is not None
+    assert result.pareto.exact_match_candidate_ids == ("mask-10",)
+
+
+def test_budget_overflow_writes_manifest_before_compiling_nothing(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    config = _config(tmp_path, max_candidates=3)
+
+    with pytest.raises(DeltaMinimizeError, match="candidate-budget-exceeded") as error:
+        run_delta_minimize(config, backends=fixture.backends())
+
+    assert error.value.details == {"required": 4, "limit": 3}
+    assert fixture.score_calls == 0
+    assert (config.out_dir / "delta-manifest.json").is_file()
+    assert not (config.out_dir / "pareto.json").exists()
+
+
+def test_atom_safety_ceiling_fails_before_enumeration(tmp_path: Path) -> None:
+    fixture = _CountingFixture(tmp_path)
+    manifest = DeltaManifest(
+        "delta-manifest.v1",
+        "f",
+        _hash(LEFT),
+        _hash(RIGHT),
+        tuple(DeltaAtom(f"a{index}", "expression", ()) for index in range(21)),
+    )
+    backends = replace(fixture.backends(), extract_manifest=lambda *_args, **_kwargs: manifest)
+
+    with pytest.raises(DeltaMinimizeError, match="atom-space-too-large"):
+        run_delta_minimize(_config(tmp_path), backends=backends)
+
+    assert fixture.score_calls == 0

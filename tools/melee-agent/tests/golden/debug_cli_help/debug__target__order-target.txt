@@ -1,0 +1,35 @@
+                                                                                
+ Usage: melee-agent debug target order-target [OPTIONS]                         
+                                                                                
+ Derive a proven order-distance target (the §4.2 class partition).              
+                                                                                
+ Runs the pipeline end-to-end and persists an OrderTarget on a `directed`       
+ result. Every failure mode is a NAMED routing, not an error; the exit code     
+ mirrors routing: 0 directed, 3 unanchorable, 4 not_order_class,                
+ 5 force_cap_blocked, 6 unstable_target.                                        
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function              -f      TEXT     Function to derive (required).   │
+│                                             [required]                       │
+│    --unit                  -u      TEXT     TU path relative to src/ (e.g.   │
+│                                             melee/mn/mndiagram).             │
+│                                             Auto-resolves via report.json if │
+│                                             omitted.                         │
+│    --class-id                      INTEGER  Register class (0=GPR).          │
+│                                             [default: 0]                     │
+│    --out                           PATH     Where to write the OrderTarget   │
+│                                             YAML on a directed result.       │
+│                                             Default:                         │
+│                                             docs/superpowers/order-targets/… │
+│                                             No file is written for           │
+│                                             non-directed routings.           │
+│    --checkdiff-timeout             FLOAT    Per-checkdiff timeout.           │
+│                                             [default: 60.0]                  │
+│    --force-vector-timeout          FLOAT    Wall-clock timeout in seconds    │
+│                                             for the order-target             │
+│                                             force-vector union verifier.     │
+│                                             [default: 30.0]                  │
+│    --json                                   Emit the full artifact as JSON.  │
+│    --help                                   Show this message and exit.      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

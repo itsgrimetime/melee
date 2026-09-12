@@ -1,0 +1,34 @@
+[
+  {
+    "name": "pos_retype_u8_param",
+    "kind": "positive",
+    "expected_rollup": "SOLVED-BY-TOOLING",
+    "lever_class": "retype",
+    "ground_truth_diff": "@@ fn @@\n-    int mode = get_mode();\n+    u8 mode = get_mode();\n",
+    "note": "u8/clrlwi retype is in mismatch-db; advisory must name it."
+  },
+  {
+    "name": "pos_literal_vs_named",
+    "kind": "positive",
+    "expected_rollup": "SOLVED-BY-TOOLING",
+    "lever_class": "literal_vs_named",
+    "ground_truth_diff": "@@ fn @@\n-    foo(name_str);\n+    foo(0.0f);\n",
+    "note": "bare literal vs named symbol; a documented scheduler lever."
+  },
+  {
+    "name": "neg_fpr_window_rotation",
+    "kind": "negative",
+    "expected_rollup": "GAP",
+    "lever_class": "backend_coloring",
+    "ground_truth_diff": "@@ fn @@\n# equal-lifetime f26<->f28 callee-save rotation; no source lever\n",
+    "note": "backend coloring tie-break withheld from DBs; tooling MUST score GAP."
+  },
+  {
+    "name": "neg_gpr_select_order",
+    "kind": "negative",
+    "expected_rollup": "GAP",
+    "lever_class": "backend_coloring",
+    "ground_truth_diff": "@@ fn @@\n# r24-27 vs r25-28 select-order rotation; no zero-cost source lever\n",
+    "note": "equal-count window rotation; tooling MUST score GAP."
+  }
+]

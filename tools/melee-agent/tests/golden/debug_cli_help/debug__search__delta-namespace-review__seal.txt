@@ -1,0 +1,18 @@
+
+ Usage: melee-agent debug search delta-namespace-review seal [OPTIONS]
+
+ Seal explicit namespace-review authority into a provenance-bound sidecar.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --request                PATH  Discovery request YAML to inspect and      │
+│                                   approve explicitly.                        │
+│                                   [required]                                 │
+│ *  --out                    PATH  Atomic output path for the sealed reviewed │
+│                                   namespace sidecar.                         │
+│                                   [required]                                 │
+│    --accept-identity        TEXT  Explicitly approve ARTIFACT_ID as a full   │
+│                                   identity map; repeatable.                  │
+│    --map                    TEXT  Approve ARTIFACT_ID with a full map YAML   │
+│                                   via ID=PATH; repeatable.                   │
+│    --help                         Show this message and exit.                │
+╰──────────────────────────────────────────────────────────────────────────────╯

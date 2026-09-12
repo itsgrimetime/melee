@@ -1,0 +1,12 @@
+
+ Usage: melee-agent debug artifacts [OPTIONS] COMMAND [ARGS]...
+
+ Inspect and safely prune retained diagnostic evidence.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ report  Report retained diagnostic evidence without modifying it.            │
+│ prune   Preview, or explicitly apply, conservative artifact-run pruning.     │
+╰──────────────────────────────────────────────────────────────────────────────╯

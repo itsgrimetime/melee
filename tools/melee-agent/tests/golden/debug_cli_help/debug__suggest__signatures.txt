@@ -1,0 +1,28 @@
+                                                                                
+ Usage: melee-agent debug suggest signatures [OPTIONS]                          
+                                                                                
+ Suggest source levers for checkdiff call-prep signature mismatches.            
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function           -f      TEXT   Function name to inspect [required]   │
+│    --checkdiff-json             PATH   Existing tools/checkdiff.py --format  │
+│                                        json payload. If omitted, checkdiff   │
+│                                        is run for the function.              │
+│    --source-file                PATH   Source file to audit. Defaults to the │
+│                                        repo source for the function.         │
+│    --build                             Allow the initial checkdiff run to    │
+│                                        rebuild before auditing.              │
+│    --validate                          Compile each safe patch candidate to  │
+│                                        a temp object, run checkdiff          │
+│                                        --no-build under the repo lock, and   │
+│                                        attach scores.                        │
+│    --sibling-function           TEXT   Additional sibling function to score  │
+│                                        against validated source variants.    │
+│                                        Can be passed multiple times.         │
+│    --checkdiff-timeout          FLOAT  Timeout in seconds for checkdiff and  │
+│                                        validation compile steps.             │
+│                                        [default: 60.0]                       │
+│    --json                              Emit as JSON.                         │
+│    --help                              Show this message and exit.           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

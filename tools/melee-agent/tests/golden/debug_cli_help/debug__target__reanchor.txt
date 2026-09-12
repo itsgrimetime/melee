@@ -1,0 +1,26 @@
+                                                                                
+ Usage: melee-agent debug target reanchor [OPTIONS] TARGET_JSON [PCDUMP]        
+                                                                                
+ Express a saved TargetSpec in a new compile's ig-numbering (Unit 3).           
+                                                                                
+ Runs the role matcher (forward + inverse round-trip) and prints the            
+ force-phys-safe target spec {function, virtuals, spilled} for the new compile  
+ on stdout; per-role diagnostics                                                
+ (gone/merged/split/ambiguous/unstable_identity/                                
+ no_descriptor — all EXCLUDED from the map) go to stderr. Feed stdout to        
+ `inspect first-divergence` as the --force-phys target.                         
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    target_json      PATH      Saved TargetSpec JSON (from                  │
+│                                 build_target_spec.save_json).                │
+│                                 [required]                                   │
+│      pcdump           [PCDUMP]  New compile's pcdump. Auto-resolves via -f   │
+│                                 if omitted.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --function  -f      TEXT     Function name.                                  │
+│ --class             INTEGER  Register class (0=GPR). [default: 0]            │
+│ --format            TEXT     yaml|json. [default: yaml]                      │
+│ --help                       Show this message and exit.                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,48 @@
+                                                                                
+ Usage: melee-agent debug target derive [OPTIONS] [PCDUMP]                      
+                                                                                
+ Tier 4: extract the current virtual→physical mapping as a target spec.         
+                                                                                
+ Useful for capturing a known-good (or known-experimental) target to            
+ use later as input to `target score-dump` or `inspect guide`. Especially       
+ useful with                                                                    
+ Tier 5 force-phys: force the desired mapping, run pcdump, capture              
+ the result with this command, then save the spec and use it to                 
+ score subsequent natural-source attempts.                                      
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   pcdump      [PCDUMP]  Path to pcdump.txt. Omit to auto-resolve via         │
+│                         --function from the cache.                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function              -f      TEXT     Function name to extract         │
+│                                             (required)                       │
+│                                             [required]                       │
+│    --format                        TEXT     Output format: yaml (default) or │
+│                                             json.                            │
+│                                             [default: yaml]                  │
+│    --force-phys-safe                        Build `virtuals` from the raw    │
+│                                             COLORGRAPH DECISIONS (the        │
+│                                             representation the               │
+│                                             first-divergence analyzer        │
+│                                             consumes) instead of the         │
+│                                             analyze_function reconstruction. │
+│                                             Excludes r0, spilled nodes, and  │
+│                                             coalesced aliases, so the map    │
+│                                             round-trips cleanly as a         │
+│                                             same-source force-phys target.   │
+│                                             Scope with --class.              │
+│    --frame-from-checkdiff          PATH     Override the frame target with   │
+│                                             target_asm/reference_asm from a  │
+│                                             `tools/checkdiff.py <function>   │
+│                                             --format json` payload. Use this │
+│                                             when the current pcdump frame    │
+│                                             differs from the expected object │
+│                                             frame.                           │
+│    --class                         INTEGER  Register class for               │
+│                                             --force-phys-safe (0=GPR,        │
+│                                             1=FPR).                          │
+│                                             [default: 0]                     │
+│    --help                                   Show this message and exit.      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

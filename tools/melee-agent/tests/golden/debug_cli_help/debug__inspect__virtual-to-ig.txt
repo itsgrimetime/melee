@@ -1,0 +1,21 @@
+                                                                                
+ Usage: melee-agent debug inspect virtual-to-ig [OPTIONS] [PCDUMP]              
+                                                                                
+ Map a visible pcode virtual register to allocator graph identity.              
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   pcdump      [PCDUMP]  Path to pcdump.txt. Auto-resolves from cache when    │
+│                         omitted.                                             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function  -f      TEXT  Function to look up. [required]                 │
+│ *  --virtual           TEXT  Visible pcode virtual register, e.g. r108 or    │
+│                              108.                                            │
+│                              [required]                                      │
+│    --class             TEXT  Register class to select when an ig_idx is      │
+│                              ambiguous (gpr/int or fp/fpr). Inferred from    │
+│                              r*/f* tokens when omitted.                      │
+│    --json                    Emit as JSON.                                   │
+│    --help                    Show this message and exit.                     │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

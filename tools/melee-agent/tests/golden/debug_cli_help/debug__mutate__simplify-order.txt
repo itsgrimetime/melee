@@ -1,0 +1,308 @@
+                                                                                
+ Usage: melee-agent debug mutate simplify-order [OPTIONS]                       
+                                                                                
+ Search for source variants that produce a desired simplify order.              
+                                                                                
+ Useful for stuck functions where the RA-input breakdown shows that             
+ simplify order is the only diverging input component. The search               
+ iterates variants from the existing source-mutation primitives                 
+ (decl-orders, insert-alias, holder-lifetime, type-change), gates them on the   
+ preserve-precolor invariant, and ranks survivors by how much of the            
+ target prefix they reproduce.                                                  
+                                                                                
+ With ``--with-permuter``, pre-existing decomp-permuter output dirs             
+ are also harvested (no permuter is launched — run permuter                     
+ separately first).                                                             
+                                                                                
+ Example:                                                                       
+                                                                                
+   melee-agent debug mutate simplify-order \                                    
+       --fn grVenom_80204284 --want-first '42,32'                               
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --fn,--function  -f                      TEXT            Function to      │
+│                                                             search.          │
+│                                                             [required]       │
+│    --want-first                             TEXT            Comma-separated  │
+│                                                             target ig_idx    │
+│                                                             sequence to land │
+│                                                             at the head of   │
+│                                                             simplify order   │
+│                                                             (e.g. '42,32').  │
+│                                                             Mutually         │
+│                                                             exclusive with   │
+│                                                             --want-late.     │
+│    --want-late                              TEXT            Comma-separated  │
+│                                                             target ig_idx    │
+│                                                             sequence to land │
+│                                                             at the TAIL of   │
+│                                                             simplify order   │
+│                                                             (e.g. '46,44').  │
+│                                                             Mutually         │
+│                                                             exclusive with   │
+│                                                             --want-first.    │
+│                                                             Use when the     │
+│                                                             target nodes     │
+│                                                             must be          │
+│                                                             simplified last. │
+│    --class                                  INTEGER         Register class   │
+│                                                             to target. 0 =   │
+│                                                             GPR (default).   │
+│                                                             [default: 0]     │
+│    --force-phys                             TEXT            Score variants   │
+│                                                             by force-phys    │
+│                                                             assignment hits  │
+│                                                             instead of       │
+│                                                             simplify-order   │
+│                                                             proximity.       │
+│                                                             Accepts IG:PHYS  │
+│                                                             or CLASS:IG:PHYS │
+│                                                             pairs, e.g.      │
+│                                                             '53:4' or        │
+│                                                             '0:53:4'.        │
+│                                                             Mutually         │
+│                                                             exclusive with   │
+│                                                             --want-first/--… │
+│    --protect-forc…                          TEXT            Force-phys       │
+│                                                             assignments that │
+│                                                             must remain      │
+│                                                             satisfied while  │
+│                                                             searching        │
+│                                                             residual         │
+│                                                             targets.         │
+│                                                             Defaults to      │
+│                                                             --force-phys     │
+│                                                             entries already  │
+│                                                             satisfied by the │
+│                                                             retained/current │
+│                                                             baseline.        │
+│    --source-file                            PATH            Retained full-TU │
+│                                                             source to mutate │
+│                                                             instead of the   │
+│                                                             repo source.     │
+│                                                             Requires         │
+│                                                             --pcdump so the  │
+│                                                             retained         │
+│                                                             allocator state  │
+│                                                             is the baseline. │
+│    --pcdump                                 PATH            Retained         │
+│                                                             baseline pcdump  │
+│                                                             for              │
+│                                                             --source-file    │
+│                                                             mode.            │
+│    --json               --no-json                           Emit             │
+│                                                             machine-readable │
+│                                                             search output.   │
+│                                                             [default:        │
+│                                                             no-json]         │
+│    --retain-probes                          PATH            Directory where  │
+│                                                             ranked retained  │
+│                                                             candidate .c     │
+│                                                             probes are       │
+│                                                             written.         │
+│    --retain-count                           INTEGER         Maximum ranked   │
+│                                                             probes to        │
+│                                                             write/include in │
+│                                                             JSON.            │
+│                                                             [default: 5]     │
+│    --checkdiff-gu…      --no-checkdiff-…                    Include          │
+│                                                             checkdiff        │
+│                                                             structural guard │
+│                                                             metrics for      │
+│                                                             retained probes. │
+│                                                             [default:        │
+│                                                             no-checkdiff-gu… │
+│    --preserve-pre…      --no-preserve-p…                    Reject variants  │
+│                                                             that disturb the │
+│                                                             pre-coloring     │
+│                                                             shape            │
+│                                                             (interference    │
+│                                                             graph, coalesce  │
+│                                                             mappings, spill  │
+│                                                             set). On by      │
+│                                                             default.         │
+│                                                             [default:        │
+│                                                             preserve-precol… │
+│    --max-candidat…                          INTEGER         Cap on variant   │
+│                                                             compilation      │
+│                                                             count.           │
+│                                                             [default: 100]   │
+│    --skip-first-c…                          INTEGER         Skip the first N │
+│                                                             unique           │
+│                                                             simplify-order   │
+│                                                             candidates after │
+│                                                             dedupe. Use the  │
+│                                                             previous JSON    │
+│                                                             summary          │
+│                                                             compiled/stream  │
+│                                                             position to      │
+│                                                             resume a long    │
+│                                                             retained run.    │
+│                                                             [default: 0]     │
+│    --skip-provena…                          TEXT            Exact candidate  │
+│                                                             provenance to    │
+│                                                             skip. Can be     │
+│                                                             passed multiple  │
+│                                                             times.           │
+│    --skip-family                            TEXT            Candidate        │
+│                                                             provenance       │
+│                                                             prefix to skip,  │
+│                                                             e.g.             │
+│                                                             'type-change '.  │
+│                                                             Can be passed    │
+│                                                             multiple times.  │
+│    --timeout        -t                      INTEGER         Per-compile      │
+│                                                             timeout in       │
+│                                                             seconds.         │
+│                                                             [default: 60]    │
+│    --with-permuter                                          Also harvest     │
+│                                                             pre-existing     │
+│                                                             decomp-permuter  │
+│                                                             output dirs      │
+│                                                             (<perm_root>/no… │
+│                                                             The user runs    │
+│                                                             permuter         │
+│                                                             separately; this │
+│                                                             flag just adds   │
+│                                                             the permuter     │
+│                                                             outputs to the   │
+│                                                             variant stream.  │
+│                                                             If no permuter   │
+│                                                             output is found  │
+│                                                             a one-line hint  │
+│                                                             is printed and   │
+│                                                             the search       │
+│                                                             continues with   │
+│                                                             the other        │
+│                                                             adapters.        │
+│    --permuter-dir                           PATH            Override path    │
+│                                                             resolution for   │
+│                                                             --with-permuter. │
+│                                                             Defaults to      │
+│                                                             <perm_root>/non… │
+│                                                             via              │
+│                                                             MELEE_PERMUTER_… │
+│                                                             or               │
+│                                                             ~/code/decomp-p… │
+│    --rank-mode                              [lex|combined]  Ranking mode for │
+│                                                             the headline     │
+│                                                             output. 'lex'    │
+│                                                             (default,        │
+│                                                             calibration-fre… │
+│                                                             sort all         │
+│                                                             compiled         │
+│                                                             candidates by    │
+│                                                             common_prefix_l… │
+│                                                             DESC then total  │
+│                                                             precolor         │
+│                                                             distance ASC.    │
+│                                                             'combined': sort │
+│                                                             by `prefix_ratio │
+│                                                             - alpha *        │
+│                                                             distance` (see   │
+│                                                             --combined-alph… │
+│                                                             Both pull from   │
+│                                                             gate-passing AND │
+│                                                             gate-rejected    │
+│                                                             candidates       │
+│                                                             uniformly;       │
+│                                                             --preserve-prec… │
+│                                                             still controls   │
+│                                                             the binary gate. │
+│                                                             [default: lex]   │
+│    --rank-combined      --no-rank-combi…                    Deprecated alias │
+│                                                             for --rank-mode  │
+│                                                             combined. Kept   │
+│                                                             for backward     │
+│                                                             compatibility    │
+│                                                             with existing    │
+│                                                             campaign         │
+│                                                             scripts; prefer  │
+│                                                             --rank-mode      │
+│                                                             combined in new  │
+│                                                             code.            │
+│                                                             [default:        │
+│                                                             no-rank-combine… │
+│    --combined-alp…                          FLOAT           Weight on        │
+│                                                             precolor         │
+│                                                             distance in the  │
+│                                                             combined score   │
+│                                                             (combined =      │
+│                                                             prefix_ratio -   │
+│                                                             alpha *          │
+│                                                             distance).       │
+│                                                             Higher alpha     │
+│                                                             punishes         │
+│                                                             disturbance      │
+│                                                             more. Only       │
+│                                                             meaningful with  │
+│                                                             --rank-mode      │
+│                                                             combined;        │
+│                                                             ignored under    │
+│                                                             lex. Default     │
+│                                                             0.001,           │
+│                                                             calibrated       │
+│                                                             against observed │
+│                                                             permuter         │
+│                                                             distance ranges  │
+│                                                             (100-300+) so    │
+│                                                             prefix=N         │
+│                                                             candidates       │
+│                                                             outrank          │
+│                                                             prefix=(N-1)     │
+│                                                             regardless of    │
+│                                                             distance.        │
+│                                                             [default: 0.001] │
+│    --triage             --no-triage                         After the        │
+│                                                             simplify-order   │
+│                                                             harvest          │
+│                                                             completes,       │
+│                                                             invoke `debug    │
+│                                                             permute triage`  │
+│                                                             on the permuter  │
+│                                                             output dir and   │
+│                                                             append a second  │
+│                                                             ranking by       │
+│                                                             real-tree match% │
+│                                                             (the ground      │
+│                                                             truth). Requires │
+│                                                             --with-permuter. │
+│                                                             Closes the       │
+│                                                             methodology gap  │
+│                                                             from the         │
+│                                                             grVenom_80204284 │
+│                                                             campaign — where │
+│                                                             the actual fix   │
+│                                                             lived at         │
+│                                                             output-180-1 but │
+│                                                             was buried below │
+│                                                             the              │
+│                                                             manual-inspecti… │
+│                                                             cutoff because   │
+│                                                             the survey       │
+│                                                             ranked by        │
+│                                                             simplify-order   │
+│                                                             distance (a      │
+│                                                             search-side      │
+│                                                             proxy) instead   │
+│                                                             of match% (the   │
+│                                                             ground-truth     │
+│                                                             metric). If a    │
+│                                                             100% candidate   │
+│                                                             is found, the    │
+│                                                             report surfaces  │
+│                                                             a *** FIX FOUND  │
+│                                                             *** banner so    │
+│                                                             future campaign  │
+│                                                             agents can't     │
+│                                                             miss it. Adds    │
+│                                                             ~5-10s per       │
+│                                                             candidate to the │
+│                                                             run.             │
+│                                                             [default:        │
+│                                                             no-triage]       │
+│    --help                                                   Show this        │
+│                                                             message and      │
+│                                                             exit.            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

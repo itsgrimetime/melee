@@ -1,0 +1,31 @@
+                                                                                
+ Usage: melee-agent debug inspect first-divergence [OPTIONS] [DUMP]             
+                                                                                
+ Find the earliest allocator decision diverging from a same-source target.      
+                                                                                
+ Gated allocator facts are derived mechanically from the recorded colorgraph;   
+ --source adds a NON-gated advisory layer (heuristic symbol-bridge mapping).    
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   dump      [DUMP]  pcdump (auto-resolved if omitted)                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function      -f      TEXT     Function name [required]                 │
+│    --force-phys            TEXT     Target coloring as ig:phys[,ig:phys]     │
+│                                     (the map KEYS are the target node set).  │
+│                                     Required unless --frame is used.         │
+│    --class                 INTEGER  Register class (0=GPR, 1=FPR)            │
+│                                     [default: 0]                             │
+│    --source                         Attach advisory source ideas             │
+│    --frame                          Explain the first stack-frame/local-area │
+│                                     divergence instead of allocator          │
+│                                     force-phys divergence.                   │
+│    --expected-asm          PATH     Expected target asm for --frame. Omit to │
+│                                     extract via `melee-agent extract get     │
+│                                     <function> --full`.                      │
+│    --no-expected                    For --frame, inspect only the current    │
+│                                     pcdump without target asm.               │
+│    --json                           Emit machine-readable output.            │
+│    --help                           Show this message and exit.              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

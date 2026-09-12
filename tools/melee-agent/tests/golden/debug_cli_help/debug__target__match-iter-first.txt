@@ -1,0 +1,121 @@
+                                                                                
+ Usage: melee-agent debug target match-iter-first [OPTIONS] [PCDUMP]            
+                                                                                
+ Recommend --force-iter-first arguments by reading the expected .s.             
+                                                                                
+ For each physical register in --regs, finds the first instruction in           
+ the expected output that defines it (post-prologue), structurally              
+ aligns that instruction to the current pcdump's pre-coloring pass,             
+ and reports the virtual register (= ig_idx in MWCC's IG).                      
+                                                                                
+ Useful for local-vs-local iter-order cascades where rank-callees               
+ can't tell which local "should have" gotten r31. Pipe the output's             
+ ig_idx list into --force-iter-first.                                           
+                                                                                
+ Warning: when any matched target has `` confidence                             
+ (multiple pre-coloring instructions matched the expected signature),           
+ feeding the full list to --force-iter-first can disturb unrelated              
+ code. Verify with `debug dump local <tu> --force-iter-first <list>             
+ --diff` (or run with --auto-verify) before trusting the suggestion.            
+                                                                                
+ Auto-verify cleanup is bounded by MWCC_DEBUG_RESTORE_TIMEOUT, falling back     
+ to MWCC_DEBUG_HANG_TIMEOUT; restore failures print cleanup_complete=false.     
+                                                                                
+ --force-vector composes multiple force overrides, verifies the union with      
+ integrated checkdiff, and probes individual/prefix steps for compatibility.    
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   pcdump      [PCDUMP]  Path to pcdump.txt. Omit to auto-resolve via         │
+│                         --function from the cache.                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function          -f                        TEXT   Function to analyze  │
+│                                                         (required)           │
+│                                                         [required]           │
+│    --regs                                        TEXT   Comma-separated      │
+│                                                         physical regs to     │
+│                                                         report on (for       │
+│                                                         example r31,r30,     │
+│                                                         f31-f30, gpr-callee  │
+│                                                         for r31-r25, or      │
+│                                                         gpr-volatile,r0 for  │
+│                                                         volatile target      │
+│                                                         diffs; default:      │
+│                                                         r31,r30,r29,r28).    │
+│                                                         [default:            │
+│                                                         r31,r30,r29,r28]     │
+│    --asm                                         PATH   Override path to     │
+│                                                         expected .s file.    │
+│                                                         Auto-resolves via    │
+│                                                         report.json.         │
+│    --json                                               Emit as JSON.        │
+│    --auto-verify                                        When ambiguous       │
+│                                                         targets are present, │
+│                                                         run `debug dump      │
+│                                                         local                │
+│                                                         --force-iter-first   │
+│                                                         <list>` to score the │
+│                                                         recommended list     │
+│                                                         against the expected │
+│                                                         output and report    │
+│                                                         the match% delta.    │
+│                                                         Then restore         │
+│                                                         object/report state  │
+│                                                         with a managed       │
+│                                                         cleanup bounded by   │
+│                                                         MWCC_DEBUG_RESTORE_… │
+│                                                         falling back to      │
+│                                                         MWCC_DEBUG_HANG_TIM… │
+│                                                         Restore failures     │
+│                                                         print                │
+│                                                         cleanup_complete=fa… │
+│                                                         in JSON and exit     │
+│                                                         non-zero. Off by     │
+│                                                         default — the        │
+│                                                         explicit verify step │
+│                                                         costs ~10–30s.       │
+│    --force-vector                                TEXT   Compose several      │
+│                                                         force overrides and  │
+│                                                         verify them together │
+│                                                         with `debug dump     │
+│                                                         local --diff`.       │
+│                                                         Entries are          │
+│                                                         comma-separated:     │
+│                                                         ig40:phys=r30,       │
+│                                                         ig42:coalesce=38,    │
+│                                                         class0:iter5:phys=r… │
+│                                                         ig50:iter-first. The │
+│                                                         union is tested      │
+│                                                         first, then          │
+│                                                         singleton and prefix │
+│                                                         probes run by        │
+│                                                         default to expose    │
+│                                                         incompatible steps.  │
+│    --force-vector-pr…      --no-force-vector…           When --force-vector  │
+│                                                         is set, also test    │
+│                                                         each singleton entry │
+│                                                         and each             │
+│                                                         intermediate prefix  │
+│                                                         after the full       │
+│                                                         union.               │
+│                                                         [default:            │
+│                                                         force-vector-probes] │
+│    --force-vector-ch…                            FLOAT  Timeout in seconds   │
+│                                                         for each             │
+│                                                         force-vector         │
+│                                                         integrated checkdiff │
+│                                                         run.                 │
+│                                                         [default: 60.0]      │
+│    --allow-stale-pcd…                                   Allow an             │
+│                                                         auto-resolved cached │
+│                                                         pcdump whose source  │
+│                                                         has changed since    │
+│                                                         capture. Off by      │
+│                                                         default because      │
+│                                                         target derivation    │
+│                                                         can produce stale    │
+│                                                         ig_idx mappings.     │
+│    --help                                               Show this message    │
+│                                                         and exit.            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -26,6 +26,12 @@ go run . fixtab -type=ItemStateTable
 go run . unk
 ```
 
+```
+# find functions with a similar opcode sequence
+go run . opseq beq,mr,bl
+go run . opseq -candidates beq,mr,bl
+```
+
 ## Known bugs
 
 The tool cannot add `#include` statements, so rewritten files may fail to

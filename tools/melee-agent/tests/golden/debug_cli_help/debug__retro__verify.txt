@@ -1,0 +1,11 @@
+                                                                                
+ Usage: melee-agent debug retro verify [OPTIONS]                                
+                                                                                
+ Cross-check a retro dump against the existing DLL pcdump (control TU).         
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --unit              TEXT  [default: src/melee/mn/mnvibration.c]              │
+│ --function  -f      TEXT                                                     │
+│ --help                    Show this message and exit.                        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

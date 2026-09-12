@@ -1,0 +1,89 @@
+# `mn` Module Notes For Agents
+
+These notes capture session-level lessons for menu code. They are not a source
+of truth for final names; use them to avoid known local maxima and to choose
+better source-shape checks. Each section calls out known local maxima and
+successful source shapes.
+
+## `mnsnap`
+
+Risk profile:
+
+- Large state-machine and image/table code makes it easy to overfit register
+  allocation before understanding resource flow.
+- Thumbnail/image tables can look like pointer arithmetic when the source shape
+  is a named table or aggregate.
+
+Known local maxima:
+
+- Repeating `PAD_STACK` after stack-slot drift without checking helper inlines.
+- Treating relocation-only diffs as function-body problems.
+
+Successful source shapes:
+
+- Name image/table data and use direct array indexing where the code walks
+  contiguous resources.
+- Use the large-function checkpoint before editing thumbnail or report/assert
+  heavy functions.
+
+## `mnvibration`
+
+Risk profile:
+
+- Menu widgets often route through JObj/TObj and setter helpers.
+- Repeated axis setter or text cleanup calls may be missing local/static inline
+  shapes.
+
+Known local maxima:
+
+- Chasing direct field access for JObj child/next/parent when wrappers exist.
+- Rewriting equivalent branch shapes instead of checking inline candidates.
+
+Successful source shapes:
+
+- Run `melee-agent patterns inlines src/melee/mn/<file>.c`.
+- Compare nearby matched menu functions before inventing pointer arithmetic.
+
+## `mnnamenew`
+
+Risk profile:
+
+- Name-entry code mixes glyph tables, text objects, and asset/layout data.
+- Small changes to table declarations can move data and create false function
+  mismatches.
+
+Known local maxima:
+
+- Declaring glyph or layout tables with the wrong visibility (`static` vs
+  global) or wrong array/pointer shape.
+- Leaving hidden strings/data as raw base-plus-offset math.
+
+Successful source shapes:
+
+- Inspect `symbols.txt` neighbors with `tools/symbol-layout-analyzer.py`.
+- Model hidden bytes as named fields or file-local structs when they are part of
+  adjacent data.
+- Record blockers in `melee-agent attempts` before switching functions.
+
+## `mndiagram3` — completed 2026-09-05
+
+All nine functions and data match; PR #3355 passes the original DOL checksum.
+See [the detailed matching notes](mndiagram3-matching-notes.md) before repeating
+older cursor-register or ranking-frame campaigns. The decisive changes were
+typed aggregate outputs, small typed inline boundaries plus an embedded data
+argument assignment, and literal-call/row-index expression shape. Moving the
+handler and helpers restored whole-file function order; moving them back leaves
+the handler at 100% but fails the linked checksum. Historical ceiling claims for
+`80245BA4` and `802461BC` are superseded by this result.
+
+## `mnitemsw` — completed 2026-09-06
+
+All ten functions and all data match; PR #3359 links the TU and passes the
+original DOL checksum. See [the detailed matching notes](mnitemsw-matching-notes.md).
+The final rotation required a narrow permanent-interference window, original
+flag lifetime, a byte cursor declared after data, and embedded argument copies
+at specific calls. Excess pressure invoked the allocator fallback and made the
+flag lose again. Discarding one identity-helper return restored the frame.
+The first flag-r31 source scored below the retained baseline but enabled the
+100% result. Separate duplicate-data and small-BSS order fixes were needed for
+linking. Earlier source-ceiling conclusions are superseded by this result.
