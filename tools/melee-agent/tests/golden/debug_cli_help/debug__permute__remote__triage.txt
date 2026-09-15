@@ -1,0 +1,13 @@
+                                                                                
+ Usage: melee-agent debug permute remote triage [OPTIONS]                       
+                                                                                
+ Summarize all local remote permuter jobs for convergence triage.               
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --function  -f      TEXT   Only summarize jobs for this function.            │
+│ --timeout           FLOAT  Per-job remote status/log probe timeout in        │
+│                            seconds.                                          │
+│                            [default: 30.0]                                   │
+│ --help                     Show this message and exit.                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,62 @@
+                                                                                
+ Usage: melee-agent debug suggest protected-expression-reconcile                
+            [OPTIONS]                                                           
+                                                                                
+ Generate/rank dual-frontier protected expression reconciliation probes.        
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --expression-source                  PATH     Retained C source for the   │
+│                                                  protected expression        │
+│                                                  frontier.                   │
+│                                                  [required]                  │
+│ *  --expression-score-json              PATH     score-source --json payload │
+│                                                  for --expression-source.    │
+│                                                  [required]                  │
+│ *  --structural-source                  PATH     Retained C source for the   │
+│                                                  lower structural frontier.  │
+│                                                  [required]                  │
+│ *  --structural-score-json              PATH     score-source --json payload │
+│                                                  for --structural-source.    │
+│                                                  [required]                  │
+│ *  --function                   -f      TEXT     Target/report function name │
+│                                                  used by diagnostics.        │
+│                                                  [required]                  │
+│    --source-function                    TEXT     Function definition to      │
+│                                                  patch in retained sources   │
+│                                                  when it differs from        │
+│                                                  --function.                 │
+│    --cflags-from                        TEXT     Compile flags unit to       │
+│                                                  include in emitted          │
+│                                                  score-source hints.         │
+│    --write-probes,--out-dir             PATH     Directory for generated     │
+│                                                  reconciliation probe .c     │
+│                                                  files.                      │
+│    --max-subhunks                       INTEGER  Maximum non-overlapping     │
+│                                                  structural subhunks per     │
+│                                                  candidate.                  │
+│                                                  [default: 3]                │
+│    --max-candidates                     INTEGER  Maximum generated           │
+│                                                  reconciliation candidates.  │
+│                                                  [default: 64]               │
+│    --max-normalized-diff-lines          INTEGER  Structural improvement      │
+│                                                  ceiling; improved means     │
+│                                                  strictly below this.        │
+│                                                  [default: 30]               │
+│    --candidate-score-json               TEXT     Optional path or            │
+│                                                  comma-separated paths to    │
+│                                                  score-source JSON payloads  │
+│                                                  for generated candidates.   │
+│                                                  V1 never scores itself.     │
+│    --source-hunks-json                  PATH     Optional JSON hunk list, or │
+│                                                  continuation JSON           │
+│                                                  containing source_hunks,    │
+│                                                  for explicit                │
+│                                                  protected/manual subhunk    │
+│                                                  ranges.                     │
+│    --include-source                              Include full generated      │
+│                                                  candidate source text in    │
+│                                                  JSON output.                │
+│    --json                                        Emit as JSON.               │
+│    --help                                        Show this message and exit. │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

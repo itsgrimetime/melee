@@ -1,0 +1,4336 @@
+from __future__ import annotations
+
+import json
+import os
+import shlex
+import signal
+import subprocess
+import sys
+import tomllib
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from src.cli import app
+from src.mwcc_debug import local_remote_runs as lrr
+from src.mwcc_debug import permuter_remote as pr
+
+PROCESS_BIRTH = "Fri Jul 11 12:34:56 2026"
+
+
+def test_load_targets_parses_config(tmp_path: Path) -> None:
+    config = tmp_path / "permuter-remotes.toml"
+    config.write_text(
+        """
+[target.coder64]
+ssh = "coder.coder64"
+remote_melee_root = "/home/coder/melee"
+remote_perm_root = "/home/coder/decomp-permuter"
+threads = 64
+session_prefix = "melee-perm"
+""".strip()
+        + "\n"
+    )
+
+    targets = pr.load_targets(config)
+
+    assert targets["coder64"] == pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+
+def test_load_targets_missing_config_has_example(tmp_path: Path) -> None:
+    missing = tmp_path / "permuter-remotes.toml"
+
+    with pytest.raises(pr.RemoteConfigError) as exc:
+        pr.load_targets(missing)
+
+    msg = str(exc.value)
+    assert str(missing) in msg
+    assert "[target.coder64]" in msg
+    assert "remote_perm_root" in msg
+
+
+def test_remote_targets_cli_missing_config_mentions_example(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(pr, "CONFIG_PATH", tmp_path / "missing.toml")
+    result = CliRunner().invoke(app, ["debug", "permute", "remote", "targets"])
+
+    assert result.exit_code == 2
+    combined = result.stdout + result.stderr
+    assert "Remote permuter config not found" in combined
+    assert "[target.coder64]" in combined
+
+
+def test_remote_tail_cli_streams_and_exits_2_on_tail_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    seen_runner = False
+
+    def fake_read_job(job_id: str, jobs_dir: Path = pr.JOBS_DIR) -> pr.RemoteJob:
+        assert job_id == job.job_id
+        return job
+
+    def fake_tail_job(
+        loaded_job: pr.RemoteJob,
+        *,
+        runner,
+        lines: int = 80,
+        follow: bool = False,
+    ) -> pr.CommandResult:
+        nonlocal seen_runner
+        seen_runner = runner is not pr.run_command
+        assert loaded_job == job
+        assert lines == 12
+        assert follow is True
+        return pr.CommandResult(returncode=1, stdout="", stderr="missing log\n")
+
+    monkeypatch.setattr(pr, "read_job", fake_read_job)
+    monkeypatch.setattr(pr, "tail_job", fake_tail_job)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "remote",
+            "tail",
+            job.job_id,
+            "--lines",
+            "12",
+            "--follow",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert seen_runner
+    assert "missing log" in result.stderr
+
+
+def test_remote_tail_cli_help_documents_snapshot_and_follow() -> None:
+    result = CliRunner().invoke(
+        app,
+        ["debug", "permute", "remote", "tail", "--help"],
+    )
+
+    assert result.exit_code == 0
+    assert "--follow" in result.stdout
+    assert "--no-follow" in result.stdout
+    assert "snapshot" in result.stdout.lower()
+
+
+def test_remote_tail_cli_sanitizes_carriage_return_progress(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+
+    def fake_read_job(job_id: str, jobs_dir: Path = pr.JOBS_DIR) -> pr.RemoteJob:
+        assert job_id == job.job_id
+        return job
+
+    def fake_tail_job(
+        loaded_job: pr.RemoteJob,
+        *,
+        runner,
+        lines: int = 80,
+        follow: bool = False,
+    ) -> pr.CommandResult:
+        assert loaded_job == job
+        assert lines == 3
+        assert follow is False
+        return pr.CommandResult(
+            returncode=0,
+            stdout=(
+                "started\n"
+                "iter 1 score 120\riter 2 score 115\riter 3 score 110\r"
+                "done\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(pr, "read_job", fake_read_job)
+    monkeypatch.setattr(pr, "tail_job", fake_tail_job)
+
+    result = CliRunner().invoke(
+        app,
+        ["debug", "permute", "remote", "tail", job.job_id, "--lines", "3"],
+    )
+
+    assert result.exit_code == 0
+    assert "\r" not in result.stdout
+    assert "iter 1 score" not in result.stdout
+    assert "iter 2 score 115" in result.stdout
+    assert "iter 3 score 110" in result.stdout
+    assert "done" in result.stdout
+
+
+def test_remote_status_reports_stale_age_and_cleanup_guidance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    now = pr.parse_timestamp("2026-05-27T15:30:12")
+
+    def fake_read_job(job_id: str, jobs_dir: Path = pr.JOBS_DIR) -> pr.RemoteJob:
+        assert job_id == job.job_id
+        return job
+
+    def fake_status_job(
+        loaded_job: pr.RemoteJob,
+    ) -> pr.RemoteStatus:
+        assert loaded_job == job
+        return pr.RemoteStatus(job_id=job.job_id, state="active")
+
+    def fake_remote_log_status(
+        loaded_job: pr.RemoteJob,
+    ) -> pr.RemoteLogStatus:
+        assert loaded_job == job
+        return pr.RemoteLogStatus(
+            exists=True,
+            modified_at=pr.parse_timestamp("2026-05-26T14:30:12"),
+            best_score="99.71%",
+        )
+
+    monkeypatch.setattr(pr, "read_job", fake_read_job)
+    monkeypatch.setattr(pr, "status_job", fake_status_job)
+    monkeypatch.setattr(pr, "remote_log_status", fake_remote_log_status)
+    monkeypatch.setattr(pr, "utcnow", lambda: now)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "remote",
+            "status",
+            job.job_id,
+            "--stale-hours",
+            "24",
+            "--idle-hours",
+            "12",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert f"{job.job_id}: active" in result.stdout
+    assert "wall age: 49.0h" in result.stdout
+    assert "log idle: 25.0h" in result.stdout
+    assert "best score: 99.71%" in result.stdout
+    assert "recommendation: stop" in result.stdout
+    assert f"melee-agent debug permute remote stop {job.job_id}" in result.stdout
+
+
+def test_remote_status_forwards_timeout_to_status_and_log_probes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    seen_status_timeout: list[float | None] = []
+    seen_log_timeout: list[float | None] = []
+
+    def fake_read_job(job_id: str, jobs_dir: Path = pr.JOBS_DIR) -> pr.RemoteJob:
+        assert job_id == job.job_id
+        return job
+
+    def fake_status_job(
+        loaded_job: pr.RemoteJob,
+        *,
+        timeout: float | None = None,
+    ) -> pr.RemoteStatus:
+        assert loaded_job == job
+        seen_status_timeout.append(timeout)
+        return pr.RemoteStatus(job_id=job.job_id, state="active")
+
+    def fake_remote_log_status(
+        loaded_job: pr.RemoteJob,
+        *,
+        timeout: float | None = None,
+    ) -> pr.RemoteLogStatus:
+        assert loaded_job == job
+        seen_log_timeout.append(timeout)
+        return pr.RemoteLogStatus(exists=False, detail="timed out")
+
+    monkeypatch.setattr(pr, "read_job", fake_read_job)
+    monkeypatch.setattr(pr, "status_job", fake_status_job)
+    monkeypatch.setattr(pr, "remote_log_status", fake_remote_log_status)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "remote",
+            "status",
+            job.job_id,
+            "--timeout",
+            "0.25",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert seen_status_timeout == [0.25]
+    assert seen_log_timeout == [0.25]
+    assert "log idle: unknown - timed out" in result.stdout
+
+
+def test_parse_permuter_log_summary_uses_global_min_not_latest() -> None:
+    summary = pr.parse_permuter_log_summary(
+        "[fn_80169900] base score = 1000\n"
+        "iteration 5726, 1 errors, score = 20\r"
+        "iteration 7679, 1 errors, score = 1390\r"
+        "wrote to remote-runs/job/nonmatchings/fn_80169900/output-20-1\n"
+    )
+
+    assert summary.global_best_score == 20
+    assert summary.global_best_iteration == 5726
+    assert summary.latest_score == 1390
+    assert summary.latest_iteration == 7679
+    assert summary.match_found is False
+    assert summary.output_candidate_saved is True
+
+
+def test_parse_permuter_log_summary_detects_zero_match() -> None:
+    summary = pr.parse_permuter_log_summary(
+        "iteration 10, 1 errors, score = 50\r"
+        "iteration 12, 0 errors, score = 0\n"
+        "wrote to remote-runs/job/nonmatchings/fn_8001EBF0/output-0-0\n"
+    )
+
+    assert summary.global_best_score == 0
+    assert summary.global_best_iteration == 12
+    assert summary.match_found is True
+    assert summary.output_candidate_saved is True
+    assert summary.verdict == "match"
+
+
+def test_remote_log_status_reads_full_log_summary(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    scripts: list[str] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        scripts.append(argv[2])
+        return pr.CommandResult(
+            returncode=0,
+            stdout=(
+                "exists\t1\n"
+                "mtime\t1770000000\n"
+                "has_output\t1\n"
+                "log_begin\n"
+                "iteration 1, 1 errors, score = 50\r"
+                "iteration 2, 1 errors, score = 1155\r"
+                "iteration 3, 1 errors, score = 20\r"
+                "iteration 4, 1 errors, score = 1390\r"
+            ),
+            stderr="",
+        )
+
+    status = pr.remote_log_status(job, runner=fake_runner)
+
+    assert "cat \"$log\"" in scripts[0]
+    assert "tail -c 65536" not in scripts[0]
+    assert status.exists is True
+    assert status.global_best_score == 20
+    assert status.global_best_iteration == 3
+    assert status.latest_score == 1390
+    assert status.latest_iteration == 4
+    assert status.output_candidate_saved is True
+
+
+def test_remote_status_prints_global_min_latest_match_and_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+
+    def fake_read_job(job_id: str, jobs_dir: Path = pr.JOBS_DIR) -> pr.RemoteJob:
+        assert job_id == job.job_id
+        return job
+
+    def fake_status_job(loaded_job: pr.RemoteJob) -> pr.RemoteStatus:
+        assert loaded_job == job
+        return pr.RemoteStatus(job_id=job.job_id, state="active")
+
+    def fake_remote_log_status(loaded_job: pr.RemoteJob) -> pr.RemoteLogStatus:
+        assert loaded_job == job
+        return pr.RemoteLogStatus(
+            exists=True,
+            modified_at=pr.parse_timestamp("2026-05-27T15:00:00"),
+            global_best_score=20,
+            global_best_iteration=5726,
+            latest_score=1390,
+            latest_iteration=7679,
+            match_found=False,
+            output_candidate_saved=True,
+            verdict="ceiling",
+        )
+
+    monkeypatch.setattr(pr, "read_job", fake_read_job)
+    monkeypatch.setattr(pr, "status_job", fake_status_job)
+    monkeypatch.setattr(pr, "remote_log_status", fake_remote_log_status)
+    monkeypatch.setattr(pr, "utcnow", lambda: pr.parse_timestamp("2026-05-27T15:30:00"))
+
+    result = CliRunner().invoke(
+        app,
+        ["debug", "permute", "remote", "status", job.job_id],
+    )
+
+    assert result.exit_code == 0
+    assert "best (global-min): 20 @iter5726" in result.stdout
+    assert "latest: 1390 @iter7679" in result.stdout
+    assert "match: no" in result.stdout
+    assert "output candidate: yes" in result.stdout
+    assert "verdict: ceiling" in result.stdout
+
+
+def test_remote_triage_summarizes_local_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first = _sample_job(tmp_path)
+    second = replace(
+        first,
+        job_id="fn_80000010-coder64-20260525-143012",
+        function="fn_80000010",
+    )
+
+    def fake_list_jobs(jobs_dir: Path = pr.JOBS_DIR) -> list[pr.RemoteJob]:
+        assert jobs_dir == pr.JOBS_DIR
+        return [first, second]
+
+    def fake_status_job(job: pr.RemoteJob) -> pr.RemoteStatus:
+        return pr.RemoteStatus(job_id=job.job_id, state="active")
+
+    def fake_remote_log_status(job: pr.RemoteJob) -> pr.RemoteLogStatus:
+        if job == first:
+            return pr.RemoteLogStatus(
+                exists=True,
+                global_best_score=20,
+                global_best_iteration=5726,
+                latest_score=1390,
+                latest_iteration=7679,
+                match_found=False,
+                output_candidate_saved=True,
+                verdict="ceiling",
+            )
+        return pr.RemoteLogStatus(
+            exists=True,
+            global_best_score=0,
+            global_best_iteration=22,
+            latest_score=0,
+            latest_iteration=22,
+            match_found=True,
+            output_candidate_saved=True,
+            verdict="match",
+        )
+
+    monkeypatch.setattr(pr, "list_jobs", fake_list_jobs)
+    monkeypatch.setattr(pr, "status_job", fake_status_job)
+    monkeypatch.setattr(pr, "remote_log_status", fake_remote_log_status)
+
+    result = CliRunner().invoke(app, ["debug", "permute", "remote", "triage"])
+
+    assert result.exit_code == 0
+    assert "fn\tjob\tstate\titers\tglobal-min\tlatest\tmatch\toutput\tverdict" in result.stdout
+    assert "fn_80000000" in result.stdout
+    assert "20@5726" in result.stdout
+    assert "1390@7679" in result.stdout
+    assert "no\tyes\tceiling" in result.stdout
+    assert "fn_80000010" in result.stdout
+    assert "0@22" in result.stdout
+    assert "yes\tyes\tmatch" in result.stdout
+
+
+def test_remote_triage_filters_function_and_forwards_probe_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first = _sample_job(tmp_path)
+    second = replace(
+        first,
+        job_id="fn_80000010-coder64-20260525-143012",
+        function="fn_80000010",
+    )
+    seen_status: list[tuple[str, float | None]] = []
+    seen_logs: list[tuple[str, float | None]] = []
+
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=pr.JOBS_DIR: [first, second])
+
+    def fake_status_job(
+        job: pr.RemoteJob,
+        *,
+        timeout: float | None = None,
+    ) -> pr.RemoteStatus:
+        seen_status.append((job.function, timeout))
+        return pr.RemoteStatus(job_id=job.job_id, state="active")
+
+    def fake_remote_log_status(
+        job: pr.RemoteJob,
+        *,
+        timeout: float | None = None,
+    ) -> pr.RemoteLogStatus:
+        seen_logs.append((job.function, timeout))
+        return pr.RemoteLogStatus(exists=False)
+
+    monkeypatch.setattr(pr, "status_job", fake_status_job)
+    monkeypatch.setattr(pr, "remote_log_status", fake_remote_log_status)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "remote",
+            "triage",
+            "-f",
+            "fn_80000010",
+            "--timeout",
+            "0.25",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "fn_80000010" in result.stdout
+    assert "fn_80000000" not in result.stdout
+    assert seen_status == [("fn_80000010", 0.25)]
+    assert seen_logs == [("fn_80000010", 0.25)]
+
+
+def test_run_command_returns_timeout_result_when_check_disabled() -> None:
+    result = pr.run_command(
+        [sys.executable, "-c", "import time; time.sleep(1)"],
+        timeout=0.01,
+        check=False,
+    )
+
+    assert result.returncode == 124
+    assert "timed out after 0.01s" in result.stderr
+
+
+def test_run_command_timeout_uses_process_group_runner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_group_runner(
+        cmd: list[str],
+        *,
+        cwd: Path,
+        timeout: float,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        seen.update(cmd=cmd, cwd=cwd, timeout=timeout, env=env)
+        return subprocess.CompletedProcess(cmd, 0, "ok\n", "")
+
+    monkeypatch.setattr(pr, "_run_with_process_group_timeout", fake_group_runner, raising=False)
+
+    result = pr.run_command(["ssh", "coder", "true"], cwd=tmp_path, timeout=3.5)
+
+    assert result == pr.CommandResult(returncode=0, stdout="ok\n", stderr="")
+    assert seen == {
+        "cmd": ["ssh", "coder", "true"],
+        "cwd": tmp_path,
+        "timeout": 3.5,
+        "env": None,
+    }
+
+
+def test_detect_orphaned_permuter_processes_requires_exact_helpers_and_proven_cwd(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    worker_cwd = perm_root / "nonmatchings" / "fn_80000000"
+    worker_cwd.mkdir(parents=True)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    ps_stdout = "\n".join(
+        [
+            f"101 1 501 S 2-00:00:00 {PROCESS_BIRTH} /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)",
+            f"102 1 502 S 2-00:00:00 {PROCESS_BIRTH} /usr/bin/python3 -c from multiprocessing.spawn import spawn_main; spawn_main(tracker_fd=7, pipe_handle=9) --multiprocessing-fork",
+            f"103 1 503 S 2-00:00:00 {PROCESS_BIRTH} /usr/bin/python3 -c import time; time.sleep(999)",
+            f"104 1 504 S 2-00:00:00 {PROCESS_BIRTH} /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(8)",
+            f"105 44 505 S 2-00:00:00 {PROCESS_BIRTH} /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(9)",
+            f"106 1 0 S 2-00:00:00 {PROCESS_BIRTH} /usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(10)",
+        ]
+    )
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
+            return pr.CommandResult(0, ps_stdout, "")
+        pid = int(argv[argv.index("-p") + 1])
+        cwd = outside if pid == 104 else worker_cwd
+        return pr.CommandResult(0, f"p{pid}\nfcwd\nn{cwd}\n", "")
+
+    real_exists = Path.exists
+
+    def fake_exists(path: Path) -> bool:
+        if path == Path("/proc/104/cwd"):
+            raise PermissionError("permission denied")
+        return real_exists(path)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+
+    found = pr.detect_orphaned_permuter_processes(
+        perm_root=perm_root,
+        runner=fake_runner,
+        current_pgid=999,
+    )
+
+    assert [(proc.pid, proc.pgid, proc.kind) for proc in found] == [
+        (101, 501, "python-resource-tracker"),
+        (102, 502, "python-spawn-worker"),
+    ]
+    assert all(proc.cwd == worker_cwd.resolve() for proc in found)
+
+
+def test_process_table_forces_c_locale_for_stable_birth_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    command = "/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)"
+    ps_commands: list[list[str]] = []
+    monkeypatch.setenv("LC_ALL", "fr_FR.UTF-8")
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
+            ps_commands.append(argv)
+            return pr.CommandResult(
+                0,
+                f"101 1 501 S 00:00:01 {PROCESS_BIRTH} {command}",
+                "",
+            )
+        return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
+
+    found = pr.detect_orphaned_permuter_processes(
+        perm_root=perm_root,
+        runner=fake_runner,
+        current_pgid=999,
+    )
+
+    assert ps_commands[0][:3] == ["env", "LC_ALL=C", "ps"]
+    assert [proc.pid for proc in found] == [101]
+
+
+def test_wibo_substrings_remain_report_only_and_never_gain_kill_authority(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    adversarial = (
+        "/usr/bin/python3 -c \"print('wibo mwcceppc')\""
+    )
+    ps_stdout = (
+        f"101 1 501 S 00:10:00 {PROCESS_BIRTH} {adversarial}"
+    )
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
+            return pr.CommandResult(0, ps_stdout, "")
+        return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
+
+    candidates = pr.detect_orphaned_permuter_processes(
+        perm_root=perm_root,
+        runner=fake_runner,
+        current_pgid=999,
+    )
+    legacy = pr.detect_orphaned_wibo_processes(runner=fake_runner)
+    signals: list[tuple[int, int]] = []
+    report = pr.terminate_orphaned_permuter_processes(
+        candidates,
+        perm_root=perm_root,
+        runner=fake_runner,
+        killpg=lambda pgid, signum: signals.append((pgid, signum)),
+        current_pgid=999,
+        grace_seconds=0,
+    )
+
+    assert candidates == []
+    assert [proc.pid for proc in legacy] == [101]
+    assert signals == []
+    assert report.terminated_pids == ()
+
+
+def test_detect_orphaned_permuter_processes_rejects_malformed_birth_identity(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    command = "/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)"
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
+            return pr.CommandResult(
+                0,
+                f"101 1 501 S 00:00:01 Nope Jul 11 12:34:56 2026 {command}",
+                "",
+            )
+        return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
+
+    assert pr.detect_orphaned_permuter_processes(
+        perm_root=perm_root,
+        runner=fake_runner,
+        current_pgid=999,
+    ) == []
+
+
+def test_terminate_orphaned_permuter_processes_refuses_mixed_group(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    command = "/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)"
+    ps_stdout = "\n".join(
+        [
+            f"101 1 501 S 2-00:00:00 {PROCESS_BIRTH} {command}",
+            f"102 1 501 S 2-00:00:00 {PROCESS_BIRTH} /usr/bin/python3 -c import time;time.sleep(999)",
+        ]
+    )
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
+            return pr.CommandResult(0, ps_stdout, "")
+        return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
+
+    candidate = pr.OrphanedPermuterProcess(
+        pid=101,
+        ppid=1,
+        pgid=501,
+        stat="S",
+        elapsed="2-00:00:00",
+        birth_identity=PROCESS_BIRTH,
+        command=command,
+        cwd=perm_root.resolve(),
+        kind="python-resource-tracker",
+    )
+    signals: list[tuple[int, int]] = []
+
+    report = pr.terminate_orphaned_permuter_processes(
+        [candidate],
+        perm_root=perm_root,
+        runner=fake_runner,
+        killpg=lambda pgid, signum: signals.append((pgid, signum)),
+        current_pgid=999,
+        grace_seconds=0,
+    )
+
+    assert signals == []
+    assert report.surviving_pids == (101,)
+    assert "unrecognized" in report.skipped_groups[501]
+
+
+def test_terminate_orphaned_permuter_processes_rejects_birth_identity_change_before_term(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    command = "/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)"
+    old_birth = PROCESS_BIRTH
+    new_birth = "Fri Jul 11 13:34:56 2026"
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
+            return pr.CommandResult(
+                0,
+                f"101 1 501 S 00:00:01 {new_birth} {command}",
+                "",
+            )
+        return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
+
+    candidate = pr.OrphanedPermuterProcess(
+        pid=101,
+        ppid=1,
+        pgid=501,
+        stat="S",
+        elapsed="00:00:01",
+        birth_identity=old_birth,
+        command=command,
+        cwd=perm_root.resolve(),
+        kind="python-resource-tracker",
+    )
+    signals: list[int] = []
+
+    report = pr.terminate_orphaned_permuter_processes(
+        [candidate],
+        perm_root=perm_root,
+        runner=fake_runner,
+        killpg=lambda _pgid, signum: signals.append(signum),
+        current_pgid=999,
+        grace_seconds=0,
+    )
+
+    assert signals == []
+    assert report.surviving_pids == (101,)
+    assert "birth identity" in report.skipped_groups[501]
+
+
+def test_terminate_orphaned_permuter_processes_rejects_birth_identity_change_before_kill(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    command = "/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)"
+    old_birth = PROCESS_BIRTH
+    new_birth = "Fri Jul 11 13:34:56 2026"
+    snapshots = iter(
+        [
+            f"101 1 501 S 00:10:00 {old_birth} {command}",
+            f"101 1 501 S 00:00:01 {new_birth} {command}",
+        ]
+    )
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
+            return pr.CommandResult(0, next(snapshots), "")
+        return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
+
+    candidate = pr.OrphanedPermuterProcess(
+        pid=101,
+        ppid=1,
+        pgid=501,
+        stat="S",
+        elapsed="00:10:00",
+        birth_identity=old_birth,
+        command=command,
+        cwd=perm_root.resolve(),
+        kind="python-resource-tracker",
+    )
+    signals: list[int] = []
+
+    report = pr.terminate_orphaned_permuter_processes(
+        [candidate],
+        perm_root=perm_root,
+        runner=fake_runner,
+        killpg=lambda _pgid, signum: signals.append(signum),
+        current_pgid=999,
+        grace_seconds=0,
+    )
+
+    assert signals == [signal.SIGTERM]
+    assert report.surviving_pids == (101,)
+    assert "birth identity" in report.skipped_groups[501]
+
+
+def test_terminate_orphaned_permuter_processes_revalidates_before_sigkill(
+    tmp_path: Path,
+) -> None:
+    perm_root = tmp_path / "decomp-permuter"
+    perm_root.mkdir()
+    command = "/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)"
+    snapshots = iter(
+        [
+            f"101 1 501 S 2-00:00:00 {PROCESS_BIRTH} {command}",
+            f"202 1 501 S 00:00:01 {PROCESS_BIRTH} /usr/bin/python3 -c import time;time.sleep(999)",
+        ]
+    )
+
+    def fake_runner(argv: list[str], *, check: bool = True, **_: object) -> pr.CommandResult:
+        if argv[:3] == ["env", "LC_ALL=C", "ps"]:
+            return pr.CommandResult(0, next(snapshots), "")
+        return pr.CommandResult(0, f"p101\nfcwd\nn{perm_root}\n", "")
+
+    candidate = pr.OrphanedPermuterProcess(
+        pid=101,
+        ppid=1,
+        pgid=501,
+        stat="S",
+        elapsed="2-00:00:00",
+        birth_identity=PROCESS_BIRTH,
+        command=command,
+        cwd=perm_root.resolve(),
+        kind="python-resource-tracker",
+    )
+    signals: list[int] = []
+
+    report = pr.terminate_orphaned_permuter_processes(
+        [candidate],
+        perm_root=perm_root,
+        runner=fake_runner,
+        killpg=lambda _pgid, signum: signals.append(signum),
+        current_pgid=999,
+        grace_seconds=0,
+    )
+
+    assert signals == [signal.SIGTERM]
+    assert report.surviving_pids == (202,)
+    assert "changed" in report.skipped_groups[501]
+
+
+def test_permute_local_orphans_cli_reports_uninterruptible_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pr,
+        "detect_orphaned_permuter_processes",
+        lambda **_: [
+            pr.OrphanedPermuterProcess(
+                pid=24276,
+                ppid=1,
+                pgid=24276,
+                stat="UE",
+                elapsed="40:01:02",
+                birth_identity=PROCESS_BIRTH,
+                command=(
+                    "/usr/bin/python3 -c from multiprocessing.resource_tracker "
+                    "import main;main(7)"
+                ),
+                cwd=Path("/Users/mike/code/decomp-permuter"),
+                kind="python-resource-tracker",
+            )
+        ],
+    )
+    monkeypatch.setattr(pr, "detect_orphaned_wibo_processes", lambda: [])
+
+    result = CliRunner().invoke(app, ["debug", "permute", "local-orphans"])
+
+    assert result.exit_code == 1
+    assert "24276" in result.stdout
+    assert "STAT=UE" in result.stdout
+    assert "uninterruptible" in result.stdout
+    assert "restart" in result.stdout.lower()
+
+
+def test_permute_local_orphans_cli_terminate_exits_zero_after_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    candidate = pr.OrphanedPermuterProcess(
+        pid=101,
+        ppid=1,
+        pgid=501,
+        stat="S",
+        elapsed="2-00:00:00",
+        birth_identity=PROCESS_BIRTH,
+        command="/usr/bin/python3 -c from multiprocessing.resource_tracker import main;main(7)",
+        cwd=tmp_path,
+        kind="python-resource-tracker",
+    )
+    seen: dict[str, object] = {}
+
+    def fake_detect(**kwargs: object) -> list[pr.OrphanedPermuterProcess]:
+        seen["detect"] = kwargs
+        return [candidate]
+
+    monkeypatch.setattr(pr, "detect_orphaned_permuter_processes", fake_detect)
+    monkeypatch.setattr(pr, "detect_orphaned_wibo_processes", lambda: [])
+
+    def fake_terminate(candidates: list[pr.OrphanedPermuterProcess], **kwargs: object):
+        seen["candidates"] = candidates
+        seen["terminate"] = kwargs
+        return pr.OrphanCleanupReport(
+            terminated_pids=(101,),
+            surviving_pids=(),
+            skipped_groups={},
+        )
+
+    monkeypatch.setattr(pr, "terminate_orphaned_permuter_processes", fake_terminate)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug", "permute", "local-orphans",
+            "--perm-root", str(tmp_path),
+            "--terminate",
+            "--grace-seconds", "0.25",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Terminated orphan PID(s): 101" in result.stdout
+    assert seen["candidates"] == [candidate]
+    assert seen["terminate"] == {"perm_root": tmp_path, "grace_seconds": 0.25}
+
+
+def test_permute_local_orphans_cli_keeps_legacy_wibo_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pr,
+        "detect_orphaned_permuter_processes",
+        lambda **_: [],
+    )
+    monkeypatch.setattr(
+        pr,
+        "detect_orphaned_wibo_processes",
+        lambda: [
+            pr.OrphanedWiboProcess(
+                pid=2699,
+                ppid=1,
+                stat="UE",
+                elapsed="02-06:55:50",
+                command="build/tools/wibo build/compilers/GC/1.2.5n/mwcceppc.exe",
+            )
+        ],
+    )
+
+    result = CliRunner().invoke(app, ["debug", "permute", "local-orphans"])
+
+    assert result.exit_code == 1
+    assert "PID=2699" in result.stdout
+    assert "Legacy wibo/MWCC" in result.stdout
+    assert "report-only" in result.stdout
+
+
+def test_doctor_target_defaults_to_bounded_probe() -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    seen: list[float] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        check: bool = True,
+        timeout: float,
+    ) -> pr.CommandResult:
+        seen.append(timeout)
+        return pr.CommandResult(124, "", "timed out")
+
+    report = pr.doctor_target(target, runner=fake_runner)
+
+    assert not report.ok
+    assert seen == [60.0]
+    assert any(check.name == "remote ssh" and not check.ok for check in report.checks)
+
+
+def test_remote_doctor_cli_reports_failed_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    monkeypatch.setattr(pr, "load_targets", lambda config_path=pr.CONFIG_PATH: {"coder64": target})
+    monkeypatch.setattr(
+        pr,
+        "doctor_target",
+        lambda loaded_target, local_perm_dir=None, **_: pr.DoctorReport(
+            target=loaded_target.name,
+            checks=[
+                pr.DoctorCheck("remote tmux", True, "/usr/bin/tmux"),
+                pr.DoctorCheck("remote python3 toml", False, "No module named toml"),
+            ],
+        ),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["debug", "permute", "remote", "doctor", "--target", "coder64"],
+    )
+
+    assert result.exit_code == 2
+    assert "PASS\tremote tmux\trequired - /usr/bin/tmux" in result.stdout
+    assert "FAIL\tremote python3 toml\trequired - No module named toml" in result.stdout
+
+
+def test_remote_doctor_cli_timeout_fails_readiness_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    monkeypatch.setattr(
+        pr,
+        "load_targets",
+        lambda config_path=pr.CONFIG_PATH: {"coder64": target},
+    )
+    monkeypatch.setattr(
+        pr,
+        "run_command",
+        lambda argv, cwd=None, check=True, timeout=None: pr.CommandResult(
+            124,
+            "",
+            f"timed out after {timeout:g}s",
+        ),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug", "permute", "remote", "doctor",
+            "--target", "coder64",
+            "--timeout", "0.25",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "FAIL\tremote ssh\trequired - timed out" in result.stdout
+
+
+def test_remote_submit_cli_suggests_healthy_target_after_preflight_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    function = "fn_80000000"
+    perm_root = tmp_path / "decomp-permuter"
+    perm_dir = perm_root / "nonmatchings" / function
+    perm_dir.mkdir(parents=True)
+    (perm_root / "src").mkdir()
+    (perm_root / "permuter.py").write_text("#!/usr/bin/env python3\n")
+    (perm_root / "src" / "compiler.py").write_text("# compiler\n")
+    (perm_dir / "base.c").write_text("void fn_80000000(void) {}\n")
+    coder2 = pr.RemoteTarget(
+        name="coder2",
+        ssh="coder2.example",
+        remote_melee_root="/home/discord/melee",
+        remote_perm_root="/home/discord/decomp-permuter",
+        threads=16,
+        session_prefix="melee-perm",
+    )
+    coder3 = pr.RemoteTarget(
+        name="coder3",
+        ssh="coder3.example",
+        remote_melee_root="/home/discord/melee",
+        remote_perm_root="/home/discord/decomp-permuter",
+        threads=16,
+        session_prefix="melee-perm",
+    )
+
+    def fake_submit_job(**kwargs: object) -> pr.RemoteJob:
+        assert kwargs["target"] == coder2
+        assert kwargs["local_perm_dir"] == perm_dir
+        raise pr.RemoteJobError(
+            "remote preflight failed for coder2: remote melee root: "
+            "/home/discord/melee missing"
+        )
+
+    def fake_suggest_ready_targets(
+        targets: dict[str, pr.RemoteTarget],
+        *,
+        failed_target_name: str,
+        local_perm_dir: Path | None = None,
+    ) -> list[str]:
+        assert targets == {"coder2": coder2, "coder3": coder3}
+        assert failed_target_name == "coder2"
+        assert local_perm_dir == perm_dir
+        return ["coder3"]
+
+    monkeypatch.setattr(pr, "load_targets", lambda config_path=pr.CONFIG_PATH: {
+        "coder2": coder2,
+        "coder3": coder3,
+    })
+    monkeypatch.setattr(pr, "submit_job", fake_submit_job)
+    monkeypatch.setattr(pr, "suggest_ready_targets", fake_suggest_ready_targets, raising=False)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug", "permute", "remote", "submit",
+            "-f", function,
+            "--target", "coder2",
+            "--perm-root", str(perm_root),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "remote preflight failed for coder2" in result.stderr
+    assert "Healthy configured target(s): coder3" in result.stderr
+    assert "Retry with --target coder3" in result.stderr
+
+
+def test_remote_doctor_cli_repair_runs_before_final_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    artifact_root = tmp_path / "matcher-worktree"
+    function_dir = artifact_root / "nonmatchings" / "fn_80000000"
+    function_dir.mkdir(parents=True)
+    decomp_root = tmp_path / "decomp-permuter"
+    (decomp_root / "src").mkdir(parents=True)
+    (decomp_root / "permuter.py").write_text("#!/usr/bin/env python3\n")
+    (decomp_root / "src" / "compiler.py").write_text("# compiler\n")
+    repaired = False
+
+    def fake_repair_target(
+        loaded_target: pr.RemoteTarget,
+        *,
+        local_melee_root: Path,
+        local_perm_root: Path,
+        function: str | None = None,
+        local_perm_dir: Path | None = None,
+        **_: object,
+    ) -> pr.RepairReport:
+        nonlocal repaired
+        repaired = True
+        assert loaded_target == target
+        assert function == "fn_80000000"
+        assert local_perm_dir == function_dir
+        assert local_perm_root == decomp_root
+        return pr.RepairReport(target=target.name, actions=["synced tooling"])
+
+    def fake_doctor_target(
+        loaded_target: pr.RemoteTarget,
+        local_perm_dir: Path | None = None,
+        **_: object,
+    ) -> pr.DoctorReport:
+        assert repaired
+        assert loaded_target == target
+        assert local_perm_dir == function_dir
+        return pr.DoctorReport(
+            target=loaded_target.name,
+            checks=[pr.DoctorCheck("remote tmux", True, "/usr/bin/tmux")],
+        )
+
+    monkeypatch.setattr(pr, "load_targets", lambda config_path=pr.CONFIG_PATH: {"coder64": target})
+    monkeypatch.setattr(pr, "repair_target", fake_repair_target, raising=False)
+    monkeypatch.setattr(pr, "doctor_target", fake_doctor_target)
+    monkeypatch.setenv("MELEE_DECOMP_PERMUTER_ROOT", str(decomp_root))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug", "permute", "remote", "doctor",
+            "--target", "coder64",
+            "--function", "fn_80000000",
+            "--perm-root", str(artifact_root),
+            "--repair",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "REPAIR\tsynced tooling" in result.stdout
+    assert "PASS\tremote tmux\trequired - /usr/bin/tmux" in result.stdout
+
+
+def test_remote_doctor_cli_uses_one_total_deadline_for_repair_and_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import src.cli.debug.permute as permute_cli
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    decomp_root = tmp_path / "decomp-permuter"
+    (decomp_root / "src").mkdir(parents=True)
+    (decomp_root / "permuter.py").write_text("#!/usr/bin/env python3\n")
+    (decomp_root / "src" / "compiler.py").write_text("# compiler\n")
+    time_values = iter([100.0, 100.0, 110.0])
+    observed_timeouts: list[float] = []
+
+    def fake_run_command(
+        argv: list[str],
+        cwd: Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> pr.CommandResult:
+        assert timeout is not None
+        observed_timeouts.append(timeout)
+        return pr.CommandResult(0, _remote_doctor_ok_stdout(), "")
+
+    def fake_repair_target(
+        loaded_target: pr.RemoteTarget,
+        **kwargs: object,
+    ) -> pr.RepairReport:
+        runner = kwargs["runner"]
+        assert callable(runner)
+        runner(["ssh", "coder64", "repair"], check=True)
+        return pr.RepairReport(target=loaded_target.name, actions=["repaired"])
+
+    def fake_doctor_target(
+        loaded_target: pr.RemoteTarget,
+        **kwargs: object,
+    ) -> pr.DoctorReport:
+        runner = kwargs["runner"]
+        assert callable(runner)
+        runner(["ssh", "coder64", "doctor"], check=False)
+        return pr.DoctorReport(
+            target=loaded_target.name,
+            checks=[pr.DoctorCheck("remote ssh", True, "ready")],
+        )
+
+    monkeypatch.setattr(pr, "load_targets", lambda config_path=pr.CONFIG_PATH: {"coder64": target})
+    monkeypatch.setattr(pr, "run_command", fake_run_command)
+    monkeypatch.setattr(pr, "repair_target", fake_repair_target)
+    monkeypatch.setattr(pr, "doctor_target", fake_doctor_target)
+    monkeypatch.setattr(permute_cli.time, "monotonic", lambda: next(time_values))
+    monkeypatch.setenv("MELEE_DECOMP_PERMUTER_ROOT", str(decomp_root))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug", "permute", "remote", "doctor",
+            "--target", "coder64",
+            "--repair",
+            "--timeout", "60",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert observed_timeouts == [60.0, 50.0]
+
+
+def test_remote_doctor_cli_rejects_nonpositive_timeout() -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug", "permute", "remote", "doctor",
+            "--target", "coder64",
+            "--timeout", "0",
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "timeout" in result.output.lower()
+
+
+def test_load_targets_uses_conservative_defaults(tmp_path: Path) -> None:
+    config = tmp_path / "permuter-remotes.toml"
+    config.write_text(
+        """
+[target.coder64]
+ssh = "coder.coder64"
+remote_melee_root = "/home/coder/melee"
+remote_perm_root = "/home/coder/decomp-permuter"
+""".strip()
+        + "\n"
+    )
+
+    target = pr.load_targets(config)["coder64"]
+
+    assert target.threads == 1
+    assert target.session_prefix == "melee-perm"
+
+
+def test_load_targets_rejects_boolean_threads(tmp_path: Path) -> None:
+    config = tmp_path / "permuter-remotes.toml"
+    config.write_text(
+        """
+[target.coder64]
+ssh = "coder.coder64"
+remote_melee_root = "/home/coder/melee"
+remote_perm_root = "/home/coder/decomp-permuter"
+threads = true
+""".strip()
+        + "\n"
+    )
+
+    with pytest.raises(pr.RemoteConfigError) as exc:
+        pr.load_targets(config)
+
+    msg = str(exc.value)
+    assert "threads" in msg
+    assert "invalid positive integer" in msg
+
+
+def test_job_metadata_round_trip(tmp_path: Path) -> None:
+    job = pr.RemoteJob(
+        job_id="fn_80000000-coder64-20260525-143012",
+        function="fn_80000000",
+        target="coder64",
+        ssh="coder.coder64",
+        remote_perm_dir=(
+            "/home/coder/decomp-permuter/remote-runs/"
+            "fn_80000000-coder64-20260525-143012/nonmatchings/fn_80000000"
+        ),
+        remote_run_dir="/home/coder/decomp-permuter/remote-runs/fn_80000000-coder64-20260525-143012",
+        local_perm_dir="/tmp/decomp-permuter/nonmatchings/fn_80000000",
+        tmux_session="melee-perm-fn_80000000-coder64-20260525-143012",
+        threads=64,
+        mode="stock",
+        created_at="2026-05-25T14:30:12",
+    )
+
+    pr.write_job(job, jobs_dir=tmp_path)
+    loaded = pr.read_job(job.job_id, jobs_dir=tmp_path)
+
+    assert loaded == job
+    assert json.loads((tmp_path / f"{job.job_id}.json").read_text())["function"] == "fn_80000000"
+
+
+def _sample_job(tmp_path: Path) -> pr.RemoteJob:
+    return pr.RemoteJob(
+        job_id="fn_80000000-coder64-20260525-143012",
+        function="fn_80000000",
+        target="coder64",
+        ssh="coder.coder64",
+        remote_perm_dir=(
+            "/home/coder/decomp-permuter/remote-runs/"
+            "fn_80000000-coder64-20260525-143012/nonmatchings/fn_80000000"
+        ),
+        remote_run_dir="/home/coder/decomp-permuter/remote-runs/fn_80000000-coder64-20260525-143012",
+        local_perm_dir=str(tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"),
+        tmux_session="melee-perm-fn_80000000-coder64-20260525-143012",
+        threads=64,
+        mode="stock",
+        created_at="2026-05-25T14:30:12",
+    )
+
+
+def test_status_job_reports_active_from_tmux(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(returncode=0, stdout="active\n", stderr="")
+
+    status = pr.status_job(job, runner=fake_runner)
+
+    assert status == pr.RemoteStatus(
+        job_id="fn_80000000-coder64-20260525-143012",
+        state="active",
+        detail="",
+    )
+    assert calls == [
+        [
+            "ssh",
+            "coder.coder64",
+            "sh -lc 'tmux has-session -t melee-perm-fn_80000000-coder64-20260525-143012 2>/dev/null && printf active || printf stopped'",
+        ]
+    ]
+
+
+def test_status_job_reports_unknown_on_ssh_failure(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        return pr.CommandResult(returncode=255, stdout="", stderr="ssh: Could not resolve hostname\n")
+
+    status = pr.status_job(job, runner=fake_runner)
+
+    assert status == pr.RemoteStatus(
+        job_id="fn_80000000-coder64-20260525-143012",
+        state="unknown",
+        detail="ssh: Could not resolve hostname",
+    )
+
+
+def test_fetch_job_rsyncs_outputs_to_run_dir(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        if argv and argv[0] == "ssh" and "remote-rsync" in argv[2]:
+            return pr.CommandResult(returncode=0, stdout=_remote_doctor_ok_stdout(), stderr="")
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    dest = pr.fetch_job(job, runner=fake_runner)
+
+    assert dest == Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    assert dest.is_dir()
+    assert len(calls) == 2
+    assert calls[0][0] == "rsync"
+    assert "remote-runs/***" not in calls[0]
+    assert calls[0][-2] == (
+        "coder.coder64:/home/coder/decomp-permuter/remote-runs/"
+        "fn_80000000-coder64-20260525-143012/nonmatchings/fn_80000000/"
+    )
+    assert calls[0][-1] == str(dest) + "/"
+    assert calls[1][0] == "rsync"
+    assert "--prune-empty-dirs" in calls[1]
+    nonmatchings_dir_include = calls[1].index("nonmatchings/")
+    function_dir_include = calls[1].index("nonmatchings/fn_80000000/")
+    target_include = calls[1].index("nonmatchings/fn_80000000/target.o")
+    nonmatchings_exclude = calls[1].index("nonmatchings/***")
+    metadata_include = calls[1].index("metadata.json")
+    assert calls[1][nonmatchings_dir_include - 1] == "--include"
+    assert calls[1][function_dir_include - 1] == "--include"
+    assert calls[1][target_include - 1] == "--include"
+    assert calls[1][nonmatchings_exclude - 1] == "--exclude"
+    assert metadata_include < nonmatchings_dir_include
+    assert target_include < nonmatchings_exclude
+    assert "metadata.json" in calls[1]
+    assert "*.log" in calls[1]
+    assert "--exclude" in calls[1]
+    assert calls[1][-2] == (
+        "coder.coder64:/home/coder/decomp-permuter/remote-runs/"
+        "fn_80000000-coder64-20260525-143012/"
+    )
+    assert calls[1][-1] == str(dest / "remote-run") + "/"
+    manifest = json.loads((dest / lrr.FETCH_MANIFEST_FILENAME).read_text())
+    assert manifest["state"] == "complete"
+    assert manifest["job_id"] == job.job_id
+    assert manifest["function"] == job.function
+    assert manifest["candidate_audit"] == {
+        "total": 0,
+        "by_status": {},
+        "by_semantic_risk_bucket": {},
+    }
+
+
+def test_fetch_job_writes_candidate_audit_summary(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        if argv and argv[0] == "rsync" and "output-*/***" in argv:
+            dest = Path(argv[-1])
+            output_dir = dest / "output-125-2"
+            output_dir.mkdir(parents=True)
+            (output_dir / "source.c").write_text(
+                "void fn_80000000(void) { inline_fn(); }\n"
+            )
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    dest = pr.fetch_job(job, runner=fake_runner)
+
+    summary = json.loads((dest / "candidate_audit.json").read_text())
+    assert summary["total"] == 1
+    assert summary["by_status"]["corrupt-candidate"] == 1
+    sidecar = dest / "output-125-2" / "melee-agent-candidate-status.json"
+    assert json.loads(sidecar.read_text())["status"] == "corrupt-candidate"
+
+
+def test_fetch_job_preserves_stopped_job_rsync_eof_for_triage(
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> pr.CommandResult:
+        del cwd, timeout
+        calls.append(argv)
+        if argv[0] == "ssh" and "tmux has-session" in argv[2]:
+            return pr.CommandResult(returncode=0, stdout="stopped", stderr="")
+        if argv[0] == "rsync":
+            result = pr.CommandResult(
+                returncode=229,
+                stdout="",
+                stderr="rsync error: unexpected end of file",
+            )
+            if check:
+                raise pr.RemoteJobError(
+                    f"Command failed ({result.returncode}): rsync: {result.stderr}"
+                )
+            return result
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    dest = pr.fetch_job(job, runner=fake_runner)
+
+    assert dest == Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    assert [call[0] for call in calls] == ["rsync", "rsync", "ssh"]
+    warning_path = dest / "remote-fetch-warning.json"
+    assert warning_path.exists()
+    warning = json.loads(warning_path.read_text())
+    assert warning["status"] == "partial"
+    assert warning["remote_status"] == "stopped"
+    assert warning["job_id"] == job.job_id
+    assert len(warning["rsync_failures"]) == 2
+    assert warning["rsync_failures"][0]["returncode"] == 229
+    assert "unexpected end of file" in warning["rsync_failures"][0]["stderr"]
+    manifest = json.loads((dest / lrr.FETCH_MANIFEST_FILENAME).read_text())
+    assert manifest["state"] == "partial"
+    assert manifest["candidate_audit"]["total"] == 0
+
+
+def test_fetch_job_rsync_failure_still_raises_for_active_job(
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> pr.CommandResult:
+        del cwd, check, timeout
+        if argv[0] == "ssh" and "tmux has-session" in argv[2]:
+            return pr.CommandResult(returncode=0, stdout="active", stderr="")
+        if argv[0] == "rsync":
+            return pr.CommandResult(
+                returncode=229,
+                stdout="",
+                stderr="rsync error: unexpected end of file",
+            )
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(pr.RemoteJobError, match="active job"):
+        pr.fetch_job(job, runner=fake_runner)
+
+    dest = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    assert (dest / "candidate_audit.json").is_file()
+    manifest = json.loads((dest / lrr.FETCH_MANIFEST_FILENAME).read_text())
+    assert manifest["state"] == "partial"
+    assert json.loads((dest / "remote-fetch-warning.json").read_text())["status"] == "partial"
+
+
+def test_fetch_job_audit_failure_is_controlled_and_marks_partial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _sample_job(tmp_path)
+    monkeypatch.setattr(
+        pr.candidate_audit,
+        "audit_candidate_tree",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("audit failed")),
+    )
+
+    with pytest.raises(pr.RemoteJobError, match="candidate audit"):
+        pr.fetch_job(
+            job,
+            runner=lambda *_args, **_kwargs: pr.CommandResult(0, "", ""),
+        )
+
+    dest = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    assert json.loads((dest / "remote-fetch-warning.json").read_text())["status"] == "partial"
+    assert not (dest / lrr.FETCH_MANIFEST_FILENAME).exists()
+
+
+def test_fetch_job_manifest_failure_is_controlled_and_marks_partial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _sample_job(tmp_path)
+    monkeypatch.setattr(
+        lrr,
+        "write_local_fetch_manifest",
+        lambda *_args, **_kwargs: lrr.ManifestWriteResult(
+            "publish-failed",
+            Path(job.local_perm_dir) / "remote-runs" / job.job_id / lrr.FETCH_MANIFEST_FILENAME,
+            "disk full",
+        ),
+    )
+
+    with pytest.raises(pr.RemoteJobError, match="fetch manifest"):
+        pr.fetch_job(
+            job,
+            runner=lambda *_args, **_kwargs: pr.CommandResult(0, "", ""),
+        )
+
+    dest = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    warning = json.loads((dest / "remote-fetch-warning.json").read_text())
+    assert warning["status"] == "partial"
+    assert "manifest" in warning["message"].lower() or warning["rsync_failures"]
+
+
+def test_fetch_job_refuses_symlinked_owned_destination_before_rsync(
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    expected = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    expected.parent.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    expected.symlink_to(outside, target_is_directory=True)
+    called = False
+
+    def runner(*_args: object, **_kwargs: object) -> pr.CommandResult:
+        nonlocal called
+        called = True
+        return pr.CommandResult(0, "", "")
+
+    with pytest.raises(pr.RemoteJobError, match="destination"):
+        pr.fetch_job(job, runner=runner)
+
+    assert not called
+    assert list(outside.iterdir()) == []
+
+
+def test_complete_refetch_clears_prior_partial_warning_after_manifest(
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+
+    def partial_runner(argv: list[str], **_: object) -> pr.CommandResult:
+        if argv[0] == "ssh":
+            return pr.CommandResult(0, "stopped", "")
+        return pr.CommandResult(23, "", "partial")
+
+    dest = pr.fetch_job(job, runner=partial_runner)
+    warning = dest / "remote-fetch-warning.json"
+    assert warning.is_file()
+
+    pr.fetch_job(
+        job,
+        runner=lambda *_args, **_kwargs: pr.CommandResult(0, "", ""),
+    )
+
+    assert not warning.exists()
+    manifest = json.loads((dest / lrr.FETCH_MANIFEST_FILENAME).read_text())
+    assert manifest["state"] == "complete"
+    (dest / "remote-run" / "metadata.json").write_text(
+        json.dumps(job.__dict__, indent=2, sort_keys=True) + "\n"
+    )
+    inventory = lrr.inventory_local_remote_runs(
+        Path(job.local_perm_dir).parent.parent,
+        git_runner=lambda argv, **_: subprocess.CompletedProcess(argv, 0, "", ""),
+    )
+    assert inventory.runs[0].fetch_manifest_status == "complete"
+    assert "fetch-partial" not in inventory.runs[0].local_reasons
+
+
+def test_partial_refetch_keeps_and_updates_warning(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    stderr = "first partial"
+
+    def runner(argv: list[str], **_: object) -> pr.CommandResult:
+        if argv[0] == "ssh":
+            return pr.CommandResult(0, "stopped", "")
+        return pr.CommandResult(23, "", stderr)
+
+    dest = pr.fetch_job(job, runner=runner)
+    warning = dest / "remote-fetch-warning.json"
+    first = warning.read_bytes()
+    stderr = "second partial"
+    pr.fetch_job(job, runner=runner)
+
+    assert warning.is_file()
+    assert warning.read_bytes() != first
+    assert "second partial" in warning.read_text()
+    assert json.loads((dest / lrr.FETCH_MANIFEST_FILENAME).read_text())["state"] == "partial"
+
+
+@pytest.mark.parametrize("unsafe_kind", ["symlink", "directory"])
+def test_partial_fetch_refuses_unsafe_warning_without_touching_outside(
+    tmp_path: Path,
+    unsafe_kind: str,
+) -> None:
+    job = _sample_job(tmp_path)
+    dest = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    dest.mkdir(parents=True)
+    warning = dest / "remote-fetch-warning.json"
+    outside = tmp_path / "outside-warning"
+    outside.write_text("untouched")
+    if unsafe_kind == "symlink":
+        warning.symlink_to(outside)
+    else:
+        warning.mkdir()
+
+    def runner(argv: list[str], **_: object) -> pr.CommandResult:
+        if argv[0] == "ssh":
+            return pr.CommandResult(0, "stopped", "")
+        return pr.CommandResult(23, "", "partial")
+
+    with pytest.raises(pr.RemoteJobError, match="warning"):
+        pr.fetch_job(job, runner=runner)
+
+    assert outside.read_text() == "untouched"
+
+
+def test_complete_warning_clear_failure_is_controlled_and_remains_protected(
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    dest = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    dest.mkdir(parents=True)
+    warning = dest / "remote-fetch-warning.json"
+    outside = tmp_path / "outside-warning"
+    outside.write_text("untouched")
+    warning.symlink_to(outside)
+
+    with pytest.raises(pr.RemoteJobError, match="warning"):
+        pr.fetch_job(
+            job,
+            runner=lambda *_args, **_kwargs: pr.CommandResult(0, "", ""),
+        )
+
+    assert outside.read_text() == "untouched"
+    assert warning.is_symlink()
+    perm_root = Path(job.local_perm_dir).parent.parent
+    inventory = lrr.inventory_local_remote_runs(
+        perm_root,
+        git_runner=lambda argv, **_: subprocess.CompletedProcess(argv, 0, "", ""),
+    )
+    assert "fetch-warning-invalid" in inventory.runs[0].local_reasons
+
+
+def test_complete_manifest_failure_does_not_clear_prior_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _sample_job(tmp_path)
+    dest = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    dest.mkdir(parents=True)
+    warning = dest / "remote-fetch-warning.json"
+    warning.write_text('{"status":"partial","job_id":"prior"}\n')
+    prior = warning.read_bytes()
+    monkeypatch.setattr(
+        lrr,
+        "write_local_fetch_manifest",
+        lambda *_args, **_kwargs: lrr.ManifestWriteResult(
+            "publish-failed",
+            dest / lrr.FETCH_MANIFEST_FILENAME,
+            "disk full",
+        ),
+    )
+
+    with pytest.raises(pr.RemoteJobError, match="fetch manifest"):
+        pr.fetch_job(
+            job,
+            runner=lambda *_args, **_kwargs: pr.CommandResult(0, "", ""),
+        )
+
+    assert warning.read_bytes() == prior
+
+
+def test_fetch_warning_parent_swap_writes_only_opened_original_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _sample_job(tmp_path)
+    run = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    pr._prepare_local_fetch_destination(job, run)
+    remote_runs = run.parent
+    moved = tmp_path / "moved-remote-runs"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / run.name).mkdir()
+    sentinel = outside / run.name / "sentinel"
+    sentinel.write_text("outside untouched")
+    original = lrr._rename_no_replace_at
+    swapped = False
+
+    def swap_then_rename(source_fd: int, source: str, dest_fd: int, dest: str) -> str:
+        nonlocal swapped
+        if not swapped and dest == "remote-fetch-warning.json":
+            swapped = True
+            remote_runs.rename(moved)
+            remote_runs.symlink_to(outside, target_is_directory=True)
+        return original(source_fd, source, dest_fd, dest)
+
+    monkeypatch.setattr(lrr, "_rename_no_replace_at", swap_then_rename)
+
+    pr._write_remote_fetch_warning(
+        run,
+        job=job,
+        remote_status=pr.RemoteStatus(job.job_id, "stopped"),
+        rsync_failures=[{"command": "rsync", "returncode": 23}],
+    )
+
+    assert (moved / run.name / "remote-fetch-warning.json").is_file()
+    assert sentinel.read_text() == "outside untouched"
+    assert not (outside / run.name / "remote-fetch-warning.json").exists()
+
+
+def test_fetch_warning_clear_parent_swap_unlinks_only_opened_original_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = _sample_job(tmp_path)
+    run = Path(job.local_perm_dir) / "remote-runs" / job.job_id
+    pr._prepare_local_fetch_destination(job, run)
+    warning = run / "remote-fetch-warning.json"
+    warning.write_text("original warning")
+    remote_runs = run.parent
+    moved = tmp_path / "moved-remote-runs"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_run = outside / run.name
+    outside_run.mkdir()
+    outside_warning = outside_run / "remote-fetch-warning.json"
+    outside_warning.write_text("outside warning")
+    original = lrr._rename_no_replace_at
+    swapped = False
+
+    def swap_then_rename(source_fd: int, source: str, dest_fd: int, dest: str) -> str:
+        nonlocal swapped
+        if not swapped and source == "remote-fetch-warning.json":
+            swapped = True
+            remote_runs.rename(moved)
+            remote_runs.symlink_to(outside, target_is_directory=True)
+        return original(source_fd, source, dest_fd, dest)
+
+    monkeypatch.setattr(lrr, "_rename_no_replace_at", swap_then_rename)
+
+    pr._clear_remote_fetch_warning(run, job=job)
+
+    assert not (moved / run.name / "remote-fetch-warning.json").exists()
+    assert outside_warning.read_text() == "outside warning"
+
+
+def test_cleanup_remote_run_dir_deletes_only_remote_runs_child(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    calls: list[tuple[list[str], bool]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> pr.CommandResult:
+        del cwd, timeout
+        calls.append((argv, check))
+        if "tmux has-session" in argv[2]:
+            return pr.CommandResult(returncode=0, stdout="stopped", stderr="")
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    pr.cleanup_remote_run_dir(job, runner=fake_runner)
+
+    assert len(calls) == 2
+    argv, check = calls[1]
+    assert check is False
+    assert argv[0] == "ssh"
+    assert argv[1] == job.ssh
+    assert "remote_runs_root=/home/coder/decomp-permuter/remote-runs" in argv[2]
+    assert "rm -rf --" in argv[2]
+    assert "refusing to clean path outside remote-runs" in argv[2]
+
+
+def test_cleanup_remote_run_dir_rejects_path_outside_remote_runs(tmp_path: Path) -> None:
+    job = replace(_sample_job(tmp_path), remote_run_dir="/tmp/not-a-remote-run")
+
+    with pytest.raises(pr.RemoteJobError, match="outside remote-runs"):
+        pr.cleanup_remote_run_dir(job, runner=lambda argv, **kwargs: pytest.fail("no ssh"))
+
+
+def test_cleanup_remote_run_dir_refuses_active_job(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> pr.CommandResult:
+        del cwd, check, timeout
+        calls.append(argv)
+        return pr.CommandResult(returncode=0, stdout="active", stderr="")
+
+    with pytest.raises(pr.RemoteJobError, match="still active"):
+        pr.cleanup_remote_run_dir(job, runner=fake_runner)
+
+    assert len(calls) == 1
+    assert "tmux has-session" in calls[0][2]
+
+
+def test_fetch_all_jobs_deletes_remote_when_requested(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    calls: list[list[str]] = []
+    cleanup_results: list[tuple[str, str | None]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> pr.CommandResult:
+        del cwd, check, timeout
+        calls.append(argv)
+        if argv[0] == "ssh" and "tmux has-session" in argv[2]:
+            return pr.CommandResult(returncode=0, stdout="stopped", stderr="")
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    fetched = pr.fetch_all_jobs(
+        [job],
+        runner=fake_runner,
+        delete_remote=True,
+        after_cleanup=lambda cleanup_job, warning, index, total: cleanup_results.append(
+            (cleanup_job.job_id, warning)
+        ),
+    )
+
+    assert fetched == [Path(job.local_perm_dir) / "remote-runs" / job.job_id]
+    assert [call[0] for call in calls] == ["rsync", "rsync", "ssh", "ssh"]
+    assert cleanup_results == [(job.job_id, None)]
+    assert job.remote_run_dir in calls[-1][2]
+
+
+def test_tail_job_snapshots_remote_permuter_log_by_default(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    pr.tail_job(job, runner=fake_runner, lines=20)
+
+    assert calls == [
+        [
+            "ssh",
+            "coder.coder64",
+            "sh -lc 'tail -c 65536 /home/coder/decomp-permuter/remote-runs/fn_80000000-coder64-20260525-143012/permuter.log'",
+        ]
+    ]
+
+
+def test_tail_job_follow_is_opt_in(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    pr.tail_job(job, runner=fake_runner, lines=20, follow=True)
+
+    assert calls == [
+        [
+            "ssh",
+            "coder.coder64",
+            "sh -lc 'tail -n 20 -f /home/coder/decomp-permuter/remote-runs/fn_80000000-coder64-20260525-143012/permuter.log'",
+        ]
+    ]
+
+
+def test_tail_job_requires_explicit_streaming_runner_for_follow(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+
+    with pytest.raises(pr.RemoteJobError) as exc:
+        pr.tail_job(job, follow=True)
+
+    msg = str(exc.value)
+    assert "explicit" in msg
+    assert "streaming runner" in msg
+
+
+@pytest.mark.parametrize("lines", [-1, 0, "20", True])
+def test_tail_job_rejects_invalid_lines(tmp_path: Path, lines: object) -> None:
+    job = _sample_job(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(pr.RemoteJobError) as exc:
+        pr.tail_job(job, runner=fake_runner, lines=lines)  # type: ignore[arg-type]
+
+    assert "lines" in str(exc.value)
+    assert calls == []
+
+
+def test_stop_job_kills_tmux_session(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    pr.stop_job(job, runner=fake_runner)
+
+    assert calls == [["ssh", "coder.coder64", "sh -lc 'tmux kill-session -t melee-perm-fn_80000000-coder64-20260525-143012'"]]
+
+
+def _remote_doctor_ok_stdout() -> str:
+    return "\n".join(
+        [
+            "remote-sh\tok\tsh",
+            "remote-rsync\tok\t/usr/bin/rsync",
+            "remote-tmux\tok\t/usr/bin/tmux",
+            "remote-python3\tok\t/usr/bin/python3",
+            "remote-melee-root\tok\t/home/coder/melee",
+            "remote-perm-root\tok\t/home/coder/decomp-permuter",
+            "remote-permuter-py\tok\t/home/coder/decomp-permuter/permuter.py",
+            "remote-mwcc\tok\t/home/coder/melee/build/compilers/GC/1.2.5n/mwcceppc_debug.exe",
+            "remote-wibo\tok\t/home/coder/melee/tools/mwcc_debug/bin/wibo",
+            "remote-melee-agent\tok\t/home/coder/.local/bin/melee-agent",
+            "remote-python3-toml\tok\ttoml ok",
+        ]
+    ) + "\n"
+
+
+def test_doctor_target_reports_ready_remote_and_local_perm_dir(tmp_path: Path) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        'objdump_command = "/usr/bin/powerpc-linux-gnu-objdump -dr"\n'
+    )
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(
+            returncode=0,
+            stdout=(
+                _remote_doctor_ok_stdout()
+                + "remote-objdump-command\tok\t/usr/bin/powerpc-linux-gnu-objdump\n"
+            ),
+            stderr="",
+        )
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    report = pr.doctor_target(target, local_perm_dir=local_perm, runner=fake_runner)
+
+    assert report.ok
+    assert calls[0][:2] == ["ssh", "coder.coder64"]
+    assert "python3" in calls[0][2]
+    assert "import toml" in calls[0][2]
+    assert "remote-objdump-command" in calls[0][2]
+    assert {check.name: check.ok for check in report.checks}["local path leaks"]
+    assert {check.name: check.ok for check in report.checks}["remote objdump command"]
+
+
+def test_suggest_ready_targets_skips_failed_target_and_unhealthy_siblings() -> None:
+    targets = {
+        "coder2": pr.RemoteTarget(
+            name="coder2",
+            ssh="coder2.example",
+            remote_melee_root="/home/discord/melee",
+            remote_perm_root="/home/discord/decomp-permuter",
+            threads=16,
+            session_prefix="melee-perm",
+        ),
+        "coder1": pr.RemoteTarget(
+            name="coder1",
+            ssh="coder1.example",
+            remote_melee_root="/home/discord/permuter-work/melee",
+            remote_perm_root="/home/discord/permuter-work/decomp-permuter",
+            threads=16,
+            session_prefix="melee-perm",
+        ),
+        "coder3": pr.RemoteTarget(
+            name="coder3",
+            ssh="coder3.example",
+            remote_melee_root="/home/discord/melee",
+            remote_perm_root="/home/discord/decomp-permuter",
+            threads=16,
+            session_prefix="melee-perm",
+        ),
+    }
+    probed: list[str] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        probed.append(argv[1])
+        if argv[1] == "coder3.example":
+            return pr.CommandResult(returncode=0, stdout=_remote_doctor_ok_stdout(), stderr="")
+        return pr.CommandResult(returncode=255, stdout="", stderr="ssh failed\n")
+
+    suggestions = pr.suggest_ready_targets(
+        targets,
+        failed_target_name="coder2",
+        runner=fake_runner,
+    )
+
+    assert suggestions == ["coder3"]
+    assert probed == ["coder1.example", "coder3.example"]
+
+
+def test_doctor_target_flags_missing_remote_objdump_from_settings(tmp_path: Path) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        'objdump_command = "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-objdump -dr"\n'
+    )
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    report = pr.doctor_target(
+        target,
+        local_perm_dir=local_perm,
+        runner=lambda argv, **kwargs: pr.CommandResult(
+            returncode=0,
+            stdout=(
+                _remote_doctor_ok_stdout()
+                + "remote-objdump-command\tfail\t/opt/devkitpro/devkitPPC/bin/powerpc-eabi-objdump not found or not executable\n"
+            ),
+            stderr="",
+        ),
+    )
+
+    assert not report.ok
+    objdump_check = next(
+        check for check in report.checks if check.name == "remote objdump command"
+    )
+    assert not objdump_check.ok
+    assert "powerpc-eabi-objdump" in objdump_check.detail
+
+
+def test_doctor_target_uses_staged_remote_objdump_for_local_absolute_settings(
+    tmp_path: Path,
+) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        'objdump_command = "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-objdump -dr"\n'
+    )
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    calls: list[list[str]] = []
+
+    def fake_runner(argv: list[str], **_: object) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(
+            returncode=0,
+            stdout=(
+                _remote_doctor_ok_stdout()
+                + "remote-objdump-command\tok\tmelee-agent debug target dtk-objdump --help\n"
+            ),
+            stderr="",
+        )
+
+    report = pr.doctor_target(target, local_perm_dir=local_perm, runner=fake_runner)
+
+    assert report.ok
+    remote_script = calls[0][2]
+    assert "/opt/devkitpro/devkitPPC/bin/powerpc-eabi-objdump" not in remote_script
+    assert "melee-agent debug target dtk-objdump --melee-root /home/coder/melee" in remote_script
+
+
+def test_doctor_target_checks_full_objdump_command(tmp_path: Path) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        'objdump_command = "melee-agent debug target dtk-objdump '
+        '--function fn_80000000"\n'
+    )
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    calls: list[list[str]] = []
+
+    def fake_runner(argv: list[str], **_: object) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(
+            returncode=0,
+            stdout=_remote_doctor_ok_stdout()
+            + "remote-objdump-command\tok\tmelee-agent debug target dtk-objdump --help\n",
+            stderr="",
+        )
+
+    report = pr.doctor_target(target, local_perm_dir=local_perm, runner=fake_runner)
+
+    assert report.ok
+    remote_script = calls[0][2]
+    assert (
+        "melee-agent debug target dtk-objdump --function fn_80000000"
+        in remote_script
+    )
+    assert "--melee-root /home/coder/melee" in remote_script
+    assert "$HOME/.local/bin/melee-agent" in remote_script
+    assert "MELEE_ROOT=\"$melee_root\"" in remote_script
+    assert "objdump_run_command" in remote_script
+    assert "objdump_probe" in remote_script
+    assert "/home/coder/decomp-permuter/nonmatchings/fn_80000000/target.o" in remote_script
+
+
+def test_remote_settings_rewrite_preserves_function_selector() -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    settings = (
+        'func_name = "fn_80000000"\n'
+        'objdump_command = "melee-agent debug target dtk-objdump '
+        '--function fn_80000000"\n'
+    )
+
+    rewritten = pr._rewrite_settings_toml_for_remote(settings, target=target)
+
+    assert '--function fn_80000000' in rewritten
+    assert '--melee-root /home/coder/melee' in rewritten
+    assert '--object-root /home/coder/decomp-permuter' in rewritten
+
+
+def test_remote_settings_rewrite_replaces_single_quoted_objdump_once() -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    settings = (
+        "# retain this comment\n"
+        "objdump_command = 'melee-agent debug target dtk-objdump "
+        "--function fn_80000000'\n"
+        "\n[weight_overrides]\nperm_xor_zero = 5.0\n"
+    )
+
+    rewritten = pr._rewrite_settings_toml_for_remote(settings, target=target)
+    parsed = tomllib.loads(rewritten)
+
+    assert rewritten.count("objdump_command =") == 1
+    assert "# retain this comment" in rewritten
+    assert "--function fn_80000000" in parsed["objdump_command"]
+    assert parsed["weight_overrides"]["perm_xor_zero"] == 5.0
+
+
+def test_remote_settings_rewrite_replaces_inline_comment_objdump_once() -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    settings = (
+        'objdump_command = "melee-agent debug target dtk-objdump '
+        '--function fn_80000000"  # retain objdump note\n'
+    )
+
+    rewritten = pr._rewrite_settings_toml_for_remote(settings, target=target)
+    parsed = tomllib.loads(rewritten)
+
+    assert rewritten.count("objdump_command =") == 1
+    assert "# retain objdump note" in rewritten
+    assert "--function fn_80000000" in parsed["objdump_command"]
+
+
+def test_remote_objdump_replaces_split_and_equals_root_options() -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/remote/melee",
+        remote_perm_root="/remote/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    command = (
+        "melee-agent debug target dtk-objdump --function fn_80000000 "
+        "--melee-root /old/melee-a --melee-root=/old/melee-b "
+        "--object-root /old/perm-a --object-root=/old/perm-b --no-name-magic"
+    )
+
+    rewritten = pr._remote_dtk_objdump_command(target, command)
+    argv = shlex.split(rewritten)
+
+    assert argv.count("--melee-root") == 1
+    assert argv[argv.index("--melee-root") + 1] == target.remote_melee_root
+    assert not any(arg.startswith("--melee-root=") for arg in argv)
+    assert argv.count("--object-root") == 1
+    assert argv[argv.index("--object-root") + 1] == target.remote_perm_root
+    assert not any(arg.startswith("--object-root=") for arg in argv)
+    assert argv[argv.index("--function") + 1] == "fn_80000000"
+    assert "--no-name-magic" in argv
+
+
+def test_remote_settings_rewrite_toml_escapes_quoted_roots() -> None:
+    target = pr.RemoteTarget(
+        name="quoted",
+        ssh="quoted.example",
+        remote_melee_root='/remote/"quoted"/melee',
+        remote_perm_root='/remote/"quoted"/decomp-permuter',
+        threads=8,
+        session_prefix="melee-perm",
+    )
+    settings = (
+        'objdump_command = "melee-agent debug target dtk-objdump '
+        '--function fn_80000000"\n'
+    )
+
+    rewritten = pr._rewrite_settings_toml_for_remote(settings, target=target)
+    parsed = tomllib.loads(rewritten)
+    argv = shlex.split(parsed["objdump_command"])
+
+    assert argv[argv.index("--melee-root") + 1] == target.remote_melee_root
+    assert argv[argv.index("--object-root") + 1] == target.remote_perm_root
+    assert argv[argv.index("--function") + 1] == "fn_80000000"
+
+
+def test_doctor_target_objdump_failure_reports_command_rc_and_probe(
+    tmp_path: Path,
+) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        'objdump_command = "melee-agent debug target dtk-objdump"\n'
+    )
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    calls: list[list[str]] = []
+
+    def fake_runner(argv: list[str], **_: object) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(returncode=0, stdout=_remote_doctor_ok_stdout(), stderr="")
+
+    pr.doctor_target(target, local_perm_dir=local_perm, runner=fake_runner)
+
+    remote_script = calls[0][2]
+    assert "rc=$objdump_rc" in remote_script
+    assert "command=$objdump_run_command" in remote_script
+    assert "target=$objdump_probe" in remote_script
+    assert "stdout_stderr=$objdump_out" in remote_script
+
+
+def test_doctor_target_treats_local_runner_fallback_block_as_remote_ready(
+    tmp_path: Path,
+) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text(
+        """#!/usr/bin/env bash
+cd /Users/mike/code/melee
+if command -v wine >/dev/null 2>&1; then
+    MWCC_RUNNER=wine
+else
+    MWCC_RUNNER=build/tools/wibo
+fi
+"$MWCC_RUNNER" build/compilers/GC/1.2.5n/mwcceppc.exe -Cpp_exceptions off "$INPUT" -o "$OUTPUT"
+"""
+    )
+    (local_perm / "settings.toml").write_text("[score]\n")
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    report = pr.doctor_target(
+        target,
+        local_perm_dir=local_perm,
+        runner=lambda argv, **kwargs: pr.CommandResult(
+            returncode=0,
+            stdout=_remote_doctor_ok_stdout(),
+            stderr="",
+        ),
+    )
+
+    checks = {check.name: check for check in report.checks}
+    assert checks["local compile runner"].ok
+    assert "remote Linux wibo" in checks["local compile runner"].detail
+
+
+def test_doctor_target_treats_rewritable_compile_sh_as_remote_ready(tmp_path: Path) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text(
+        """#!/usr/bin/env bash
+INPUT_ABS="$(realpath "$1")"
+OUTPUT_ABS="$(realpath "$3")"
+cd /Users/mike/code/melee
+STAGE="nonmatchings/.permuter_stage_$$.c"
+cp "$INPUT_ABS" "$STAGE"
+INPUT="$STAGE"
+OUTPUT="$OUTPUT_ABS"
+wine build/compilers/GC/1.2.5n/mwcceppc.exe -Cpp_exceptions off "$INPUT" -o "$OUTPUT"
+"""
+    )
+    (local_perm / "settings.toml").write_text("[score]\n")
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    report = pr.doctor_target(
+        target,
+        local_perm_dir=local_perm,
+        runner=lambda argv, **kwargs: pr.CommandResult(
+            returncode=0,
+            stdout=_remote_doctor_ok_stdout(),
+            stderr="",
+        ),
+    )
+
+    assert report.ok
+    checks = {check.name: check for check in report.checks}
+    assert checks["local path leaks"].ok
+    assert checks["local compile runner"].ok
+    assert "wibo" in checks["local compile runner"].detail
+
+
+def test_doctor_target_flags_stale_validation_roots(tmp_path: Path) -> None:
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        return pr.CommandResult(returncode=0, stdout=_remote_doctor_ok_stdout(), stderr="")
+
+    target = pr.RemoteTarget(
+        name="coder3",
+        ssh="mike-grimes-dev-3.coder",
+        remote_melee_root="/tmp/codex-remote-perm-123-remote-melee",
+        remote_perm_root="/tmp/codex-remote-perm-123-remote-perm",
+        threads=2,
+        session_prefix="codex-validate",
+    )
+
+    report = pr.doctor_target(target, runner=fake_runner)
+
+    assert not report.ok
+    root_check = next(check for check in report.checks if check.name == "config target roots")
+    assert not root_check.ok
+    assert "/tmp/codex-remote-perm-123-remote-melee" in root_check.detail
+
+
+def test_doctor_target_flags_yaml_local_path_leaks(tmp_path: Path) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text("[score]\n")
+    (local_perm / "simplify_order_target.yaml").write_text(
+        "baseline_dump: /Users/mike/code/melee/build/cache.txt\n"
+    )
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        return pr.CommandResult(returncode=0, stdout=_remote_doctor_ok_stdout(), stderr="")
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    report = pr.doctor_target(target, local_perm_dir=local_perm, runner=fake_runner)
+
+    assert not report.ok
+    leak_check = next(check for check in report.checks if check.name == "local path leaks")
+    assert not leak_check.ok
+    assert "simplify_order_target.yaml" in leak_check.detail
+
+
+def test_doctor_target_accepts_relative_custom_scorer_target(tmp_path: Path) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        """
+[scorer]
+command = "melee-agent debug target score-simplify-order --function fn_80000000 --target nonmatchings/fn_80000000/simplify_order_target.yaml"
+""".strip()
+        + "\n"
+    )
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    report = pr.doctor_target(
+        target,
+        local_perm_dir=local_perm,
+        runner=lambda argv, **kwargs: pr.CommandResult(
+            returncode=0,
+            stdout=(
+                _remote_doctor_ok_stdout()
+                + "remote-custom-scorer\tok\t/home/coder/decomp-permuter\n"
+                + "remote-scorer-command\tok\t/home/coder/.local/bin/melee-agent debug target score-simplify-order --help\n"
+                + "remote-scorer-schema\tok\tstrict-polarity scorer schema supported\n"
+                + "remote-scorer-target\tok\t/home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml\n"
+            ),
+            stderr="",
+        ),
+    )
+
+    assert report.ok
+    target_check = next(
+        check for check in report.checks if check.name == "local scorer target path"
+    )
+    assert target_check.ok
+    assert "/home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml" in target_check.detail
+
+
+def test_doctor_target_flags_remote_without_custom_scorer_support(tmp_path: Path) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        """
+[scorer]
+command = "melee-agent debug target score-simplify-order --function fn_80000000 --target /home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml"
+""".strip()
+        + "\n"
+    )
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    report = pr.doctor_target(
+        target,
+        local_perm_dir=local_perm,
+        runner=lambda argv, **kwargs: pr.CommandResult(
+            returncode=0,
+            stdout=(
+                _remote_doctor_ok_stdout()
+                + "remote-custom-scorer\tfail\tCustomCommandScorer missing\n"
+                + "remote-scorer-command\tok\t/home/coder/.local/bin/melee-agent --help\n"
+                + "remote-scorer-target\tok\t/home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml\n"
+            ),
+            stderr="",
+        ),
+    )
+
+    assert not report.ok
+    custom_check = next(
+        check for check in report.checks if check.name == "remote custom scorer"
+    )
+    assert not custom_check.ok
+    assert "CustomCommandScorer missing" in custom_check.detail
+
+
+def test_doctor_target_flags_stale_remote_scorer_schema(tmp_path: Path) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        """
+[scorer]
+command = "melee-agent debug target score-simplify-order --function fn_80000000 --target /home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml"
+""".strip()
+        + "\n"
+    )
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    report = pr.doctor_target(
+        target,
+        local_perm_dir=local_perm,
+        runner=lambda argv, **kwargs: pr.CommandResult(
+            returncode=0,
+            stdout=(
+                _remote_doctor_ok_stdout()
+                + "remote-custom-scorer\tok\t/home/coder/decomp-permuter\n"
+                + "remote-scorer-command\tok\t/home/coder/.local/bin/melee-agent --help\n"
+                + "remote-scorer-schema\tfail\tmissing --strict-polarity\n"
+                + "remote-scorer-target\tok\t/home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml\n"
+            ),
+            stderr="",
+        ),
+    )
+
+    assert not report.ok
+    schema_check = next(
+        check for check in report.checks if check.name == "remote scorer schema"
+    )
+    assert not schema_check.ok
+    assert "--strict-polarity" in schema_check.detail
+
+
+def test_doctor_target_probes_force_phys_scorer_and_home_local_bin(
+    tmp_path: Path,
+) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        """
+[scorer]
+command = "melee-agent debug target score-force-phys --function fn_80000000 --target nonmatchings/fn_80000000/simplify_order_target.yaml"
+""".strip()
+        + "\n"
+    )
+    calls: list[list[str]] = []
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    def fake_runner(argv: list[str], **_: object) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(
+            returncode=0,
+            stdout=(
+                _remote_doctor_ok_stdout()
+                + "remote-custom-scorer\tok\t/home/coder/decomp-permuter\n"
+                + "remote-scorer-command\tok\t/home/coder/.local/bin/melee-agent debug target score-force-phys --help\n"
+                + "remote-scorer-schema\tok\tforce-phys scorer schema supported\n"
+                + "remote-scorer-target\tok\t/home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml\n"
+            ),
+            stderr="",
+        )
+
+    report = pr.doctor_target(target, local_perm_dir=local_perm, runner=fake_runner)
+
+    assert report.ok
+    target_check = next(
+        check for check in report.checks if check.name == "local scorer target path"
+    )
+    assert target_check.ok
+    assert target_check.detail.endswith(
+        "/home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml"
+    )
+    remote_script = calls[0][2]
+    assert 'test -x "$HOME/.local/bin/melee-agent"' in remote_script
+    assert "scorer_command=score-force-phys" in remote_script
+    assert '"$scorer_command" --help' in remote_script
+    assert "--breakdown" in remote_script
+
+
+def test_stale_remote_scorer_schema_is_auto_repairable() -> None:
+    report = pr.DoctorReport(
+        target="coder64",
+        checks=[
+            pr.DoctorCheck(
+                "remote scorer schema",
+                False,
+                "stale score-force-phys help; missing --breakdown",
+            ),
+        ],
+    )
+
+    assert pr._preflight_can_be_repaired(report)
+
+
+def test_repair_target_syncs_tooling_permuter_deps_and_function_dir(tmp_path: Path) -> None:
+    local_melee = tmp_path / "melee"
+    local_perm_root = tmp_path / "decomp-permuter"
+    function_dir = local_perm_root / "nonmatchings" / "fn_80000000"
+    (local_melee / "tools" / "melee-agent").mkdir(parents=True)
+    (local_melee / "tools" / "melee-agent" / "pyproject.toml").write_text("[project]\n")
+    (local_melee / "tools" / "mwcc_debug").mkdir(parents=True)
+    (local_melee / "tools" / "mwcc_retro").mkdir(parents=True)
+    (local_melee / "tools" / "mwcc_retro" / "__init__.py").write_text("")
+    compiler_dir = local_melee / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("mwcc\n")
+    (compiler_dir / "MWDBG326.dll").write_text("dll\n")
+    tools_dir = local_melee / "build" / "tools"
+    tools_dir.mkdir(parents=True)
+    (tools_dir / "dtk").write_text("dtk\n")
+    (local_perm_root / "src").mkdir(parents=True)
+    (local_perm_root / "permuter.py").write_text("#!/usr/bin/env python3\n")
+    function_dir.mkdir(parents=True)
+    (function_dir / "compile.sh").write_text("#!/bin/sh\n")
+    (function_dir / "remote-runs" / "old-job").mkdir(parents=True)
+    (function_dir / "output-1000-1").mkdir()
+    (function_dir / "settings.toml").write_text(
+        """
+[scorer]
+command = "/home/coder/.local/bin/melee-agent debug target score-simplify-order --function fn_80000000 --target /home/coder/decomp-permuter/nonmatchings/fn_80000000/simplify_order_target.yaml"
+""".strip()
+        + "\n"
+    )
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    report = pr.repair_target(
+        target,
+        local_melee_root=local_melee,
+        local_perm_root=local_perm_root,
+        function="fn_80000000",
+        local_perm_dir=function_dir,
+        runner=fake_runner,
+    )
+
+    assert report.target == "coder64"
+    assert "synced tools/melee-agent" in report.actions
+    assert "refreshed remote Linux dtk" in report.actions
+    assert "synced tools/mwcc_retro" in report.actions
+    assert "installed remote python dependencies" in report.actions
+    assert ["ssh", "coder.coder64"] == calls[0][:2]
+    assert "mkdir -p /home/coder/melee /home/coder/decomp-permuter" in calls[0][2]
+    joined_calls = "\n".join(" ".join(call) for call in calls)
+    assert f"{local_melee}/tools/melee-agent/" in joined_calls
+    assert "coder.coder64:/home/coder/melee/tools/melee-agent/" in joined_calls
+    assert f"{local_melee}/tools/mwcc_debug/" in joined_calls
+    assert f"{local_melee}/tools/mwcc_retro/" in joined_calls
+    assert "coder.coder64:/home/coder/melee/tools/mwcc_retro/" in joined_calls
+    assert "mwcceppc_debug.exe" in joined_calls
+    assert f"{local_melee}/build/tools/dtk" not in joined_calls
+    assert "dtk-linux-" in calls[-1][2]
+    assert "/home/coder/melee/build/tools/dtk" in calls[-1][2]
+    assert f"{local_perm_root}/" in joined_calls
+    assert "coder.coder64:/home/coder/decomp-permuter/" in joined_calls
+    perm_root_sync = next(
+        call
+        for call in calls
+        if call[0] == "rsync"
+        and f"{local_perm_root}/" in call
+        and "coder.coder64:/home/coder/decomp-permuter/" in call
+    )
+    assert _exclude_index(perm_root_sync, "nonmatchings") >= 0
+    assert _exclude_index(perm_root_sync, "nonmatchings/***") >= 0
+    assert f"{function_dir}/" in joined_calls
+    assert "rm -rf /home/coder/decomp-permuter/nonmatchings/fn_80000000" in joined_calls
+    assert "coder.coder64:/home/coder/decomp-permuter/nonmatchings/fn_80000000/" in joined_calls
+    function_sync = next(
+        call
+        for call in calls
+        if call[0] == "rsync"
+        and f"{function_dir}/" in call
+        and "coder.coder64:/home/coder/decomp-permuter/nonmatchings/fn_80000000/" in call
+    )
+    assert _exclude_index(function_sync, "remote-runs") >= 0
+    assert _exclude_index(function_sync, "remote-runs/***") >= 0
+    assert _exclude_index(function_sync, "output-*") >= 0
+    assert _exclude_index(function_sync, "output-*/***") >= 0
+    bootstrap_script = calls[-1][2]
+    assert "pip install --user" in bootstrap_script
+    assert "wibo-x86_64" in bootstrap_script
+    assert 'exec \\"$py_path\\" -m src.cli \\"\\$@\\"' in bootstrap_script
+    assert "cd /home/coder/melee/tools/melee-agent" in bootstrap_script
+
+
+def test_repair_python_deps_include_toml_for_remote_doctor() -> None:
+    assert any(dep.partition(">=")[0] == "toml" for dep in pr.PYTHON_DEPS)
+
+
+def test_remote_doctor_uses_python311_for_toml_when_available() -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    script = pr._remote_doctor_script(target)
+
+    assert "command -v python3.11" in script
+    assert '"$doctor_py" - <<' in script
+
+
+def _exclude_index(call: list[str], pattern: str) -> int:
+    for index, arg in enumerate(call):
+        if arg == pattern and index > 0 and call[index - 1] == "--exclude":
+            return index
+    return -1
+
+
+def test_submit_job_builds_rsync_ssh_tmux_and_metadata(tmp_path: Path) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "base.c").write_text("void fn_80000000(void) {}\n")
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        'objdump_command = "melee-agent debug target dtk-objdump"\n'
+    )
+    jobs_dir = tmp_path / "jobs"
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        if argv and argv[0] == "ssh" and "remote-rsync" in argv[2]:
+            return pr.CommandResult(
+                returncode=0,
+                stdout=(
+                    _remote_doctor_ok_stdout()
+                    + "remote-objdump-command\tok\tmelee-agent debug target dtk-objdump --help\n"
+                ),
+                stderr="",
+            )
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    job = pr.submit_job(
+        function="fn_80000000",
+        target=target,
+        local_perm_dir=local_perm,
+        jobs_dir=jobs_dir,
+        runner=fake_runner,
+        now=lambda: "2026-05-25T14:30:12",
+    )
+
+    assert job.job_id == "fn_80000000-coder64-20260525-143012"
+    assert job.threads == 64
+    assert job.mode == "stock"
+    assert (jobs_dir / f"{job.job_id}.json").exists()
+    rsync_call = next(call for call in calls if call[0] == "rsync")
+    assert rsync_call[-2].endswith("/fn_80000000/")
+    assert str(local_perm) + "/" not in rsync_call
+    assert (
+        "coder.coder64:/home/coder/decomp-permuter/remote-runs/"
+        "fn_80000000-coder64-20260525-143012/nonmatchings/fn_80000000/"
+    ) in rsync_call
+    submit_call = calls[-1]
+    assert submit_call[:2] == ["ssh", "coder.coder64"]
+    remote_script = submit_call[2]
+    assert "/home/coder/decomp-permuter" in remote_script
+    assert "/home/coder/melee" in remote_script
+    assert 'MELEE_ROOT=\\"$remote_melee_root\\"' in remote_script
+    assert "command -v tmux" in remote_script
+    assert "command -v python3.11" in remote_script
+    assert "tmux new-session -d" in remote_script
+    assert (
+        '\\"$remote_py\\" ./permuter.py remote-runs/fn_80000000-coder64-20260525-143012/'
+        "nonmatchings/fn_80000000 -j 64"
+    ) in remote_script
+    assert "metadata.json" in remote_script
+    assert "permuter.log" in remote_script
+
+
+def test_submit_job_rewrites_scorer_target_to_remote_run_before_preflight(
+    tmp_path: Path,
+) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "base.c").write_text("void fn_80000000(void) {}\n")
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "simplify_order_target.yaml").write_text(
+        "objective: force-phys\n"
+        "force_phys:\n"
+        "  1: 27\n"
+    )
+    (local_perm / "settings.toml").write_text(
+        """
+[scorer]
+command = "melee-agent debug target score-force-phys --function fn_80000000 --target nonmatchings/fn_80000000/simplify_order_target.yaml"
+""".strip()
+        + "\n"
+    )
+    jobs_dir = tmp_path / "jobs"
+    calls: list[list[str]] = []
+    staged_settings: list[str] = []
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        del cwd, check
+        calls.append(argv)
+        if argv[0] == "ssh" and "remote-rsync" in argv[2]:
+            assert "remote-scorer-target" not in argv[2]
+            return pr.CommandResult(
+                returncode=0,
+                stdout=(
+                    _remote_doctor_ok_stdout()
+                    + "remote-custom-scorer\tok\t/home/coder/decomp-permuter\n"
+                    + "remote-scorer-command\tok\t/home/coder/.local/bin/melee-agent debug target score-force-phys --help\n"
+                    + "remote-scorer-schema\tok\tforce-phys scorer schema supported\n"
+                    + "remote-objdump-command\tok\tmelee-agent debug target dtk-objdump --help\n"
+                ),
+                stderr="",
+            )
+        if argv[0] == "rsync" and argv[-1].endswith("/nonmatchings/fn_80000000/"):
+            staged_settings.append((Path(argv[-2]) / "settings.toml").read_text())
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    job = pr.submit_job(
+        function="fn_80000000",
+        target=target,
+        local_perm_dir=local_perm,
+        jobs_dir=jobs_dir,
+        runner=fake_runner,
+        now=lambda: "2026-05-25T14:30:12",
+    )
+
+    expected_target = (
+        "/home/coder/decomp-permuter/remote-runs/"
+        "fn_80000000-coder64-20260525-143012/"
+        "nonmatchings/fn_80000000/simplify_order_target.yaml"
+    )
+    assert job.job_id == "fn_80000000-coder64-20260525-143012"
+    assert staged_settings
+    assert expected_target in staged_settings[0]
+    assert (
+        "/home/coder/decomp-permuter/nonmatchings/"
+        "fn_80000000/simplify_order_target.yaml"
+    ) not in staged_settings[0]
+
+
+def test_submit_job_cleans_remote_run_dir_when_launch_fails_after_rsync(
+    tmp_path: Path,
+) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "base.c").write_text("void fn_80000000(void) {}\n")
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        'objdump_command = "melee-agent debug target dtk-objdump"\n'
+    )
+    jobs_dir = tmp_path / "jobs"
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        if argv and argv[0] == "ssh" and "remote-rsync" in argv[2]:
+            return pr.CommandResult(
+                returncode=0,
+                stdout=(
+                    _remote_doctor_ok_stdout()
+                    + "remote-objdump-command\tok\tmelee-agent debug target dtk-objdump --help\n"
+                ),
+                stderr="",
+            )
+        if argv and argv[0] == "rsync":
+            return pr.CommandResult(returncode=0, stdout="", stderr="")
+        if argv and argv[0] == "ssh" and "tmux new-session" in argv[2]:
+            raise pr.RemoteJobError(
+                "Command failed (255): ssh coder.coder64 sh -lc '<remote heredoc>'\n"
+                "coder ssh: net/http: TLS handshake timeout\n"
+                + ("remote script text\n" * 200)
+            )
+        if argv and argv[0] == "ssh" and "rm -rf" in argv[2]:
+            return pr.CommandResult(returncode=0, stdout="", stderr="")
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    with pytest.raises(pr.RemoteJobError) as exc:
+        pr.submit_job(
+            function="fn_80000000",
+            target=target,
+            local_perm_dir=local_perm,
+            jobs_dir=jobs_dir,
+            runner=fake_runner,
+            now=lambda: "2026-05-25T14:30:12",
+        )
+
+    msg = str(exc.value)
+    assert "JOB NOT STARTED" in msg
+    assert "safe to retry" in msg
+    assert "TLS handshake timeout" in msg
+    assert "remote script text" not in msg
+    assert len(msg) < 1800
+    assert not (jobs_dir / "fn_80000000-coder64-20260525-143012.json").exists()
+    cleanup_calls = [
+        call for call in calls
+        if call[0] == "ssh" and "rm -rf" in call[2]
+    ]
+    assert cleanup_calls
+    assert "fn_80000000-coder64-20260525-143012" in cleanup_calls[0][2]
+
+
+def test_remote_submit_script_fails_when_tmux_session_exits_immediately(
+    tmp_path: Path,
+) -> None:
+    remote_perm_root = tmp_path / "remote-perm"
+    remote_melee_root = tmp_path / "remote-melee"
+    remote_perm_root.mkdir()
+    remote_melee_root.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_tmux = fake_bin / "tmux"
+    fake_tmux.write_text(
+        """#!/bin/sh
+if [ "$1" = "new-session" ]; then
+    exit 0
+fi
+if [ "$1" = "has-session" ]; then
+    exit 1
+fi
+exit 0
+""",
+        encoding="utf-8",
+    )
+    fake_tmux.chmod(0o755)
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root=str(remote_melee_root),
+        remote_perm_root=str(remote_perm_root),
+        threads=64,
+        session_prefix="melee-perm",
+    )
+    job = pr.RemoteJob(
+        job_id="fn_80000000-coder64-20260525-143012",
+        function="fn_80000000",
+        target="coder64",
+        ssh="coder.coder64",
+        remote_perm_dir=str(
+            remote_perm_root
+            / "remote-runs"
+            / "fn_80000000-coder64-20260525-143012"
+            / "nonmatchings"
+            / "fn_80000000"
+        ),
+        remote_run_dir=str(
+            remote_perm_root
+            / "remote-runs"
+            / "fn_80000000-coder64-20260525-143012"
+        ),
+        local_perm_dir="/tmp/local/fn_80000000",
+        tmux_session="melee-perm-fn_80000000-coder64-20260525-143012",
+        threads=64,
+        mode="stock",
+        created_at="2026-05-25T14:30:12",
+    )
+
+    proc = subprocess.run(
+        ["sh", "-lc", pr._remote_submit_script(job, target)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+
+    assert proc.returncode != 0
+    assert "tmux session exited immediately" in proc.stderr
+    assert "permuter.log missing or empty" in proc.stderr
+
+
+def test_submit_job_repairs_missing_remote_toml_before_start(
+    tmp_path: Path,
+) -> None:
+    local_melee = tmp_path / "melee"
+    local_perm_root = tmp_path / "decomp-permuter"
+    local_perm = local_perm_root / "nonmatchings" / "fn_80000000"
+    (local_melee / "tools" / "melee-agent").mkdir(parents=True)
+    (local_melee / "tools" / "mwcc_debug").mkdir(parents=True)
+    (local_melee / "tools" / "mwcc_retro").mkdir(parents=True)
+    (local_melee / "tools" / "mwcc_retro" / "__init__.py").write_text("")
+    compiler_dir = local_melee / "build" / "compilers" / "GC" / "1.2.5n"
+    compiler_dir.mkdir(parents=True)
+    (compiler_dir / "mwcceppc_debug.exe").write_text("mwcc\n")
+    (compiler_dir / "MWDBG326.dll").write_text("dll\n")
+    local_perm.mkdir(parents=True)
+    (local_perm / "base.c").write_text("void fn_80000000(void) {}\n")
+    (local_perm / "compile.sh").write_text("#!/bin/sh\n")
+    (local_perm / "settings.toml").write_text(
+        'objdump_command = "melee-agent debug target dtk-objdump"\n'
+    )
+    (local_perm_root / "permuter.py").write_text("#!/usr/bin/env python3\n")
+    (local_perm_root / "src").mkdir()
+    jobs_dir = tmp_path / "jobs"
+    calls: list[list[str]] = []
+    doctor_calls = 0
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        nonlocal doctor_calls
+        calls.append(argv)
+        if argv and argv[0] == "ssh" and "remote-rsync" in argv[2]:
+            doctor_calls += 1
+            stdout = _remote_doctor_ok_stdout().replace(
+                "remote-python3-toml\tok\ttoml ok\n",
+                "",
+            )
+            if doctor_calls == 1:
+                stdout += (
+                    "remote-python3-toml\tfail\tTraceback (most recent call last):\n"
+                    + "ModuleNotFoundError: No module named 'toml'\n"
+                    + "remote-objdump-command\tok\tmelee-agent debug target dtk-objdump --help\n"
+                )
+            else:
+                stdout += (
+                    "remote-python3-toml\tok\ttoml ok\n"
+                    + "remote-objdump-command\tok\tmelee-agent debug target dtk-objdump --help\n"
+                )
+            return pr.CommandResult(returncode=0, stdout=stdout, stderr="")
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    job = pr.submit_job(
+        function="fn_80000000",
+        target=target,
+        local_perm_dir=local_perm,
+        jobs_dir=jobs_dir,
+        runner=fake_runner,
+        now=lambda: "2026-05-25T14:30:12",
+        local_melee_root=local_melee,
+        local_perm_root=local_perm_root,
+    )
+
+    assert job.job_id == "fn_80000000-coder64-20260525-143012"
+    assert doctor_calls == 2
+    bootstrap_call = next(
+        call for call in calls
+        if call[0] == "ssh" and "pip install --user" in call[2]
+    )
+    assert "toml>=0.10.2" in bootstrap_call[2]
+    assert (jobs_dir / f"{job.job_id}.json").exists()
+
+
+def test_submit_job_stages_compile_sh_with_remote_wibo_and_melee_root(
+    tmp_path: Path,
+) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "base.c").write_text("void fn_80000000(void) {}\n")
+    (local_perm / "settings.toml").write_text("[score]\n")
+    (local_perm / "remote-runs" / "old-job").mkdir(parents=True)
+    (local_perm / "output-1000-1").mkdir()
+    (local_perm / "compile.sh").write_text(
+        """#!/usr/bin/env bash
+INPUT_ABS="$(realpath "$1")"
+OUTPUT_ABS="$(realpath "$3")"
+cd /Users/mike/code/melee
+STAGE="nonmatchings/.permuter_stage_$$.c"
+cp "$INPUT_ABS" "$STAGE"
+INPUT="$STAGE"
+OUTPUT="$OUTPUT_ABS"
+wine build/compilers/GC/1.2.5n/mwcceppc.exe -Cpp_exceptions off "$INPUT" -o "$OUTPUT"
+"""
+    )
+    jobs_dir = tmp_path / "jobs"
+    staged_compile: list[str] = []
+    staged_settings: list[str] = []
+    staged_has_history: list[bool] = []
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        if argv and argv[0] == "ssh" and "remote-rsync" in argv[2]:
+            return pr.CommandResult(
+                returncode=0,
+                stdout=(
+                    _remote_doctor_ok_stdout()
+                    + "remote-objdump-command\tok\tmelee-agent debug target dtk-objdump --help\n"
+                ),
+                stderr="",
+            )
+        if argv and argv[0] == "rsync":
+            source = Path(argv[-2].rstrip("/"))
+            staged_compile.append((source / "compile.sh").read_text())
+            staged_settings.append((source / "settings.toml").read_text())
+            staged_has_history.append(
+                (source / "remote-runs").exists()
+                or (source / "output-1000-1").exists()
+            )
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    pr.submit_job(
+        function="fn_80000000",
+        target=target,
+        local_perm_dir=local_perm,
+        jobs_dir=jobs_dir,
+        runner=fake_runner,
+        now=lambda: "2026-05-25T14:30:12",
+    )
+
+    assert staged_compile
+    assert "/Users/mike" not in staged_compile[0]
+    assert " wine " not in staged_compile[0]
+    assert 'cd "${MELEE_ROOT:?MELEE_ROOT must be set}"' in staged_compile[0]
+    assert 'MWCC_DEBUG_WIBO:-$MELEE_ROOT/tools/mwcc_debug/bin/wibo' in staged_compile[0]
+    assert "mwcceppc_debug.exe" in staged_compile[0]
+    assert staged_settings
+    assert staged_has_history == [False]
+    assert (
+        "melee-agent debug target dtk-objdump --melee-root /home/coder/melee"
+        " --object-root /home/coder/decomp-permuter"
+        in staged_settings[0]
+    )
+    assert any(call[0] == "rsync" for call in calls)
+
+
+def test_rewrite_compile_sh_for_remote_handles_quoted_paths_with_spaces(
+    tmp_path: Path,
+) -> None:
+    host_root = "/Users/mike/Source Trees/melee"
+    host_wibo = "/Users/mike/Runtime Builds/custom wibo"
+    text = f'''#!/usr/bin/env bash
+WIBO=""
+if [[ -n "${{MWCC_DEBUG_WIBO:-}}" && -f "$MWCC_DEBUG_WIBO" && -x "$MWCC_DEBUG_WIBO" ]]; then
+  WIBO="$MWCC_DEBUG_WIBO"
+elif [[ -n "${{MELEE_ROOT:-}}" && -f "$MELEE_ROOT/tools/mwcc_debug/bin/wibo" && -x "$MELEE_ROOT/tools/mwcc_debug/bin/wibo" ]]; then
+  WIBO="$MELEE_ROOT/tools/mwcc_debug/bin/wibo"
+elif [[ -f "tools/mwcc_debug/bin/wibo" && -x "tools/mwcc_debug/bin/wibo" ]]; then
+  WIBO="tools/mwcc_debug/bin/wibo"
+elif [[ -f "{host_wibo}" && -x "{host_wibo}" ]]; then
+  WIBO="{host_wibo}"
+else
+  exit 2
+fi
+cd "{host_root}"
+"$WIBO" "{host_root}/build/compilers/GC/1.2.5n/mwcceppc_debug.exe" -proc gekko "$INPUT" -o "$OUTPUT"
+'''
+
+    rewritten = pr._rewrite_compile_sh_for_remote(text)
+
+    assert host_root not in rewritten
+    assert host_wibo not in rewritten
+    assert 'cd "${MELEE_ROOT:?MELEE_ROOT must be set}"' in rewritten
+    assert '"$WIBO" "${MWCC_DEBUG_COMPILER:-' in rewritten
+    assert 'mwcceppc_debug.exe}" -proc gekko' in rewritten
+    script = tmp_path / "compile.sh"
+    script.write_text(rewritten)
+    syntax = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
+    assert syntax.returncode == 0, syntax.stderr
+
+
+def test_submit_job_preflights_remote_objdump_before_rsync(tmp_path: Path) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "base.c").write_text("void fn_80000000(void) {}\n")
+    (local_perm / "settings.toml").write_text(
+        'objdump_command = "melee-agent debug target dtk-objdump"\n'
+    )
+    jobs_dir = tmp_path / "jobs"
+    calls: list[list[str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(
+            returncode=0,
+            stdout=(
+                _remote_doctor_ok_stdout()
+                + "remote-objdump-command\tfail\t/home/coder/melee/build/tools/dtk missing\n"
+            ),
+            stderr="",
+        )
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    with pytest.raises(pr.RemoteJobError) as exc:
+        pr.submit_job(
+            function="fn_80000000",
+            target=target,
+            local_perm_dir=local_perm,
+            jobs_dir=jobs_dir,
+            runner=fake_runner,
+            now=lambda: "2026-05-25T14:30:12",
+        )
+
+    assert "remote preflight failed" in str(exc.value)
+    assert "remote objdump command" in str(exc.value)
+    assert not any(call[0] == "rsync" for call in calls)
+    assert not list(jobs_dir.glob("*.json"))
+
+
+def test_submit_job_preserves_multiline_remote_preflight_detail(
+    tmp_path: Path,
+) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "base.c").write_text("void fn_80000000(void) {}\n")
+    (local_perm / "settings.toml").write_text("[score]\n")
+    jobs_dir = tmp_path / "jobs"
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        ok_without_toml = _remote_doctor_ok_stdout().replace(
+            "remote-python3-toml\tok\ttoml ok\n",
+            "",
+        )
+        return pr.CommandResult(
+            returncode=0,
+            stdout=(
+                ok_without_toml
+                + "remote-python3-toml\tfail\tTraceback (most recent call last):\n"
+                + "  File \"<stdin>\", line 1, in <module>\n"
+                + "ModuleNotFoundError: No module named 'toml'\n"
+            ),
+            stderr="",
+        )
+
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    with pytest.raises(pr.RemoteJobError) as exc:
+        pr.submit_job(
+            function="fn_80000000",
+            target=target,
+            local_perm_dir=local_perm,
+            jobs_dir=jobs_dir,
+            runner=fake_runner,
+            now=lambda: "2026-05-25T14:30:12",
+        )
+
+    detail = str(exc.value)
+    assert "remote python3 toml: Traceback (most recent call last):" in detail
+    assert "File \"<stdin>\", line 1, in <module>" in detail
+    assert "ModuleNotFoundError: No module named 'toml'" in detail
+    assert not list(jobs_dir.glob("*.json"))
+
+
+def test_submit_job_missing_local_perm_dir_raises(tmp_path: Path) -> None:
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    with pytest.raises(pr.RemoteJobError) as exc:
+        pr.submit_job(
+            function="fn_80000000",
+            target=target,
+            local_perm_dir=tmp_path / "missing",
+            jobs_dir=tmp_path / "jobs",
+            now=lambda: "2026-05-25T14:30:12",
+        )
+
+    assert "local permuter dir not found" in str(exc.value)
+
+
+def test_submit_job_rejects_non_stock_mode(tmp_path: Path) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    with pytest.raises(pr.RemoteJobError) as exc:
+        pr.submit_job(
+            function="fn_80000000",
+            target=target,
+            local_perm_dir=local_perm,
+            jobs_dir=tmp_path / "jobs",
+            mode="mwcc",
+            now=lambda: "2026-05-25T14:30:12",
+        )
+
+    assert "mode" in str(exc.value)
+    assert "stock" in str(exc.value)
+
+
+def test_submit_job_rejects_local_only_paths_in_permuter_files(tmp_path: Path) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "compile.sh").write_text("MELEE_ROOT=/Users/mike/src/melee\n")
+    calls: list[list[str]] = []
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(pr.RemoteJobError) as exc:
+        pr.submit_job(
+            function="fn_80000000",
+            target=target,
+            local_perm_dir=local_perm,
+            jobs_dir=tmp_path / "jobs",
+            runner=fake_runner,
+            now=lambda: "2026-05-25T14:30:12",
+        )
+
+    msg = str(exc.value)
+    assert "not remote-ready" in msg
+    assert "compile.sh" in msg
+    assert calls == []
+
+
+def test_submit_job_rejects_inferred_worktree_paths_in_permuter_files(tmp_path: Path) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    (local_perm / "settings.toml").write_text(f'melee_root = "{Path.cwd()}"\n')
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    with pytest.raises(pr.RemoteJobError) as exc:
+        pr.submit_job(
+            function="fn_80000000",
+            target=target,
+            local_perm_dir=local_perm,
+            jobs_dir=tmp_path / "jobs",
+            now=lambda: "2026-05-25T14:30:12",
+        )
+
+    msg = str(exc.value)
+    assert "not remote-ready" in msg
+    assert "settings.toml" in msg
+
+
+def test_submit_job_metadata_conflict_prevents_remote_side_effects(tmp_path: Path) -> None:
+    local_perm = tmp_path / "local-perm" / "nonmatchings" / "fn_80000000"
+    local_perm.mkdir(parents=True)
+    jobs_dir = tmp_path / "jobs"
+    jobs_dir.mkdir()
+    (jobs_dir / "fn_80000000-coder64-20260525-143012.json").write_text("{}\n")
+    calls: list[list[str]] = []
+    target = pr.RemoteTarget(
+        name="coder64",
+        ssh="coder.coder64",
+        remote_melee_root="/home/coder/melee",
+        remote_perm_root="/home/coder/decomp-permuter",
+        threads=64,
+        session_prefix="melee-perm",
+    )
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        cwd: Path | None = None,
+        check: bool = True,
+    ) -> pr.CommandResult:
+        calls.append(argv)
+        return pr.CommandResult(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(pr.RemoteJobError) as exc:
+        pr.submit_job(
+            function="fn_80000000",
+            target=target,
+            local_perm_dir=local_perm,
+            jobs_dir=jobs_dir,
+            runner=fake_runner,
+            now=lambda: "2026-05-25T14:30:12",
+        )
+
+    assert "already exists" in str(exc.value)
+    assert calls == []
+
+
+# ── _parse_tmux_session_name ─────────────────────────────────────────────────
+
+
+def test_parse_tmux_session_name_extracts_job_id() -> None:
+    result = pr._parse_tmux_session_name(
+        "melee-perm-fn_80000000-coder64-20260608-120000",
+        "melee-perm-",
+    )
+    assert result == "fn_80000000-coder64-20260608-120000"
+
+
+def test_parse_tmux_session_name_rejects_non_matching_prefix() -> None:
+    result = pr._parse_tmux_session_name("other-fn_80000000", "melee-perm-")
+    assert result is None
+
+
+# ── _job_is_done ─────────────────────────────────────────────────────────────
+
+
+def test_job_is_done_byte_match() -> None:
+    log = pr.RemoteLogStatus(exists=True, match_found=True)
+    should_stop, reason = pr._job_is_done(log)
+    assert should_stop is True
+    assert "byte-matched" in reason
+
+
+def test_job_is_done_descending_not_done() -> None:
+    log = pr.RemoteLogStatus(
+        exists=True,
+        match_found=False,
+        verdict="descending",
+        modified_at=pr.utcnow(),
+    )
+    should_stop, reason = pr._job_is_done(log)
+    assert should_stop is False
+
+
+def test_job_is_done_plateau_stale_enough() -> None:
+    log = pr.RemoteLogStatus(
+        exists=True,
+        match_found=False,
+        verdict="plateau",
+        modified_at=pr.parse_timestamp("2026-06-01T00:00:00"),
+    )
+    should_stop, reason = pr._job_is_done(log, idle_hours_threshold=1.0)
+    assert should_stop is True
+    assert "plateaued" in reason
+
+
+def test_job_is_done_plateau_recent_not_done() -> None:
+    log = pr.RemoteLogStatus(
+        exists=True,
+        match_found=False,
+        verdict="plateau",
+        modified_at=pr.utcnow(),
+    )
+    should_stop, reason = pr._job_is_done(log, idle_hours_threshold=24.0)
+    assert should_stop is False
+
+
+# ── probe_jobs_active ────────────────────────────────────────────────────────
+
+
+def test_probe_jobs_active_maps_active_dead(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    calls = 0
+
+    def fake_status_job(
+        loaded_job: pr.RemoteJob,
+        *,
+        runner=None,
+        timeout=None,
+    ) -> pr.RemoteStatus:
+        nonlocal calls
+        calls += 1
+        return pr.RemoteStatus(job_id=loaded_job.job_id, state="active" if calls == 1 else "stopped")
+
+    import types
+    original = pr.status_job
+    pr.status_job = fake_status_job
+    try:
+        active_map = pr.probe_jobs_active([job, replace(job, job_id="job2-target-20260101-000000")])
+    finally:
+        pr.status_job = original
+
+    assert active_map[job.job_id] is True
+    assert active_map["job2-target-20260101-000000"] is False
+
+
+def test_probe_jobs_active_batched_groups_one_tmux_query_per_ssh(tmp_path: Path) -> None:
+    job = _sample_job(tmp_path)
+    same_host_dead = replace(
+        job,
+        job_id="fn_80000010-coder64-20260525-143013",
+        function="fn_80000010",
+        tmux_session="melee-perm-fn_80000010-coder64-20260525-143013",
+    )
+    other_host = replace(
+        job,
+        job_id="fn_80000020-coder2-20260525-143014",
+        function="fn_80000020",
+        target="coder2",
+        ssh="coder2.example",
+        tmux_session="melee-perm-fn_80000020-coder2-20260525-143014",
+    )
+    calls: list[tuple[str, float | None, str]] = []
+
+    def fake_runner(
+        argv: list[str],
+        *,
+        check: bool = True,
+        timeout: float | None = None,
+    ) -> pr.CommandResult:
+        assert argv[0] == "ssh"
+        assert check is False
+        calls.append((argv[1], timeout, argv[2]))
+        stdout = f"{job.tmux_session}\n" if argv[1] == job.ssh else ""
+        return pr.CommandResult(returncode=0, stdout=stdout, stderr="")
+
+    active_map = pr.probe_jobs_active_batched(
+        [job, same_host_dead, other_host],
+        runner=fake_runner,
+        timeout=0.5,
+    )
+
+    assert active_map == {
+        job.job_id: True,
+        same_host_dead.job_id: False,
+        other_host.job_id: False,
+    }
+    assert sorted((ssh, timeout) for ssh, timeout, _script in calls) == [
+        ("coder.coder64", 0.5),
+        ("coder2.example", 0.5),
+    ]
+    assert all("tmux list-sessions" in script for _ssh, _timeout, script in calls)
+
+
+# ── prune_dead_jobs ──────────────────────────────────────────────────────────
+
+
+def test_prune_dead_jobs_removes_only_dead_metadata(tmp_path: Path) -> None:
+    jobs_dir = tmp_path / "jobs"
+    jobs_dir.mkdir()
+    job1 = _sample_job(tmp_path)
+    job2 = replace(job1, job_id="job2-target-20260101-000000")
+    pr.write_job(job1, jobs_dir=jobs_dir)
+    pr.write_job(job2, jobs_dir=jobs_dir)
+
+    def fake_probe(jobs, **kwargs):
+        return {job1.job_id: True, job2.job_id: False}
+
+    original = pr.probe_jobs_active_batched
+    pr.probe_jobs_active_batched = fake_probe
+    try:
+        pruned = pr.prune_dead_jobs(
+            [job1, job2], dry_run=False, jobs_dir=jobs_dir,
+        )
+    finally:
+        pr.probe_jobs_active_batched = original
+
+    assert pruned == [job2.job_id]
+    assert (jobs_dir / f"{job1.job_id}.json").exists()
+    assert not (jobs_dir / f"{job2.job_id}.json").exists()
+
+
+def test_prune_dead_jobs_dry_run_does_not_delete(tmp_path: Path) -> None:
+    jobs_dir = tmp_path / "jobs"
+    jobs_dir.mkdir()
+    job = _sample_job(tmp_path)
+    pr.write_job(job, jobs_dir=jobs_dir)
+
+    def fake_probe(jobs, **kwargs):
+        return {job.job_id: False}
+
+    original = pr.probe_jobs_active_batched
+    pr.probe_jobs_active_batched = fake_probe
+    try:
+        pruned = pr.prune_dead_jobs([job], dry_run=True, jobs_dir=jobs_dir)
+    finally:
+        pr.probe_jobs_active_batched = original
+
+    assert pruned == [job.job_id]
+    assert (jobs_dir / f"{job.job_id}.json").exists()
+
+
+# ── remote list CLI ──────────────────────────────────────────────────────────
+
+
+def test_remote_list_cli_shows_active_dead(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+
+    def fake_list_jobs(jobs_dir=None):
+        return [job]
+
+    def fake_probe(jobs, **kwargs):
+        return {job.job_id: True}
+
+    monkeypatch.setattr(pr, "list_jobs", fake_list_jobs)
+    monkeypatch.setattr(pr, "probe_jobs_active_batched", fake_probe, raising=False)
+
+    result = CliRunner().invoke(app, ["debug", "permute", "remote", "list"])
+    assert result.exit_code == 0
+    assert "active" in result.stdout
+    assert job.job_id in result.stdout
+
+
+def test_remote_list_cli_active_flag_filters(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    job2 = replace(job, job_id="job2-target-20260101-000000", function="fn_80000010")
+
+    def fake_list_jobs(jobs_dir=None):
+        return [job, job2]
+
+    def fake_probe(jobs, **kwargs):
+        return {job.job_id: True, job2.job_id: False}
+
+    monkeypatch.setattr(pr, "list_jobs", fake_list_jobs)
+    monkeypatch.setattr(pr, "probe_jobs_active_batched", fake_probe, raising=False)
+
+    result = CliRunner().invoke(
+        app, ["debug", "permute", "remote", "list", "--active"],
+    )
+    assert result.exit_code == 0
+    assert job.job_id in result.stdout
+    assert job2.job_id not in result.stdout
+
+
+def test_remote_list_cli_dead_flag_filters(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    job2 = replace(job, job_id="job2-target-20260101-000000", function="fn_80000010")
+
+    def fake_list_jobs(jobs_dir=None):
+        return [job, job2]
+
+    def fake_probe(jobs, **kwargs):
+        return {job.job_id: True, job2.job_id: False}
+
+    monkeypatch.setattr(pr, "list_jobs", fake_list_jobs)
+    monkeypatch.setattr(pr, "probe_jobs_active_batched", fake_probe, raising=False)
+
+    result = CliRunner().invoke(
+        app, ["debug", "permute", "remote", "list", "--dead"],
+    )
+    assert result.exit_code == 0
+    assert job.job_id not in result.stdout
+    assert job2.job_id in result.stdout
+
+
+def test_remote_list_cli_uses_batched_active_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    job2 = replace(
+        job,
+        job_id="fn_80000010-coder64-20260525-143013",
+        function="fn_80000010",
+    )
+    seen_probe: list[tuple[list[str], float | None]] = []
+
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=None: [job, job2])
+
+    def fail_sequential_probe(jobs, **kwargs):
+        raise AssertionError("remote list must not probe jobs serially")
+
+    def fake_batched_probe(
+        jobs: list[pr.RemoteJob],
+        **kwargs,
+    ) -> dict[str, bool]:
+        seen_probe.append(([loaded.job_id for loaded in jobs], kwargs.get("timeout")))
+        return {job.job_id: True, job2.job_id: False}
+
+    monkeypatch.setattr(pr, "probe_jobs_active", fail_sequential_probe)
+    monkeypatch.setattr(
+        pr,
+        "probe_jobs_active_batched",
+        fake_batched_probe,
+        raising=False,
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["debug", "permute", "remote", "list", "--timeout", "0.5"],
+    )
+
+    assert result.exit_code == 0
+    assert seen_probe == [([job.job_id, job2.job_id], 0.5)]
+    assert job.job_id in result.stdout
+    assert job2.job_id in result.stdout
+
+
+def test_remote_list_cli_active_dead_mutually_exclusive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=None: [])
+    result = CliRunner().invoke(
+        app, ["debug", "permute", "remote", "list", "--active", "--dead"],
+    )
+    assert result.exit_code == 2
+    assert "mutually exclusive" in result.stderr
+
+
+def test_remote_list_cli_shows_live_sessions_when_metadata_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = pr.RemoteTarget(
+        name="coder1",
+        ssh="coder1.example",
+        remote_melee_root="/remote/melee",
+        remote_perm_root="/remote/decomp-permuter",
+        threads=16,
+        session_prefix="melee-perm",
+    )
+    entry = pr.RemotePsEntry(
+        target="coder1",
+        session_name="melee-perm-fn_80000000-coder1-20260611-065847",
+        job_id="fn_80000000-coder1-20260611-065847",
+        function="fn_80000000",
+        best_score="123",
+        iterations="456",
+        age="2h03m",
+        verdict="descending",
+    )
+
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=None: [])
+    monkeypatch.setattr(pr, "load_targets", lambda config_path: {"coder1": target})
+    monkeypatch.setattr(pr, "remote_ps", lambda targets, timeout=10.0: [entry])
+
+    result = CliRunner().invoke(app, ["debug", "permute", "remote", "list"])
+
+    assert result.exit_code == 0
+    assert "No local remote permuter job metadata found" in result.stdout
+    assert "LIVE REMOTE SESSIONS WITHOUT LOCAL METADATA" in result.stdout
+    assert entry.job_id in result.stdout
+    assert "descending" in result.stdout
+
+
+def test_remote_ps_cli_outputs_live_dashboard(monkeypatch: pytest.MonkeyPatch) -> None:
+    target = pr.RemoteTarget(
+        name="coder1",
+        ssh="coder1.example",
+        remote_melee_root="/remote/melee",
+        remote_perm_root="/remote/decomp-permuter",
+        threads=16,
+        session_prefix="melee-perm",
+    )
+    entry = pr.RemotePsEntry(
+        target="coder1",
+        session_name="melee-perm-fn_80000000-coder1-20260611-065847",
+        job_id="fn_80000000-coder1-20260611-065847",
+        function="fn_80000000",
+        best_score="123",
+        iterations="456",
+        age="2h03m",
+        verdict="descending",
+    )
+
+    monkeypatch.setattr(pr, "load_targets", lambda config_path: {"coder1": target})
+    monkeypatch.setattr(pr, "remote_ps", lambda targets, timeout=15.0: [entry])
+
+    result = CliRunner().invoke(app, ["debug", "permute", "remote", "ps"])
+
+    assert result.exit_code == 0
+    assert entry.job_id in result.stdout
+    assert "descending" in result.stdout
+
+
+# ── remote fetch --all ───────────────────────────────────────────────────────
+
+
+def test_remote_fetch_cli_all_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    fetch_calls: list[pr.RemoteJob] = []
+
+    def fake_fetch_all(jobs, **kwargs):
+        fetch_calls.extend(jobs)
+        return [Path("/tmp/out")]
+
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=None: [job])
+    monkeypatch.setattr(pr, "fetch_all_jobs", fake_fetch_all)
+
+    result = CliRunner().invoke(
+        app, ["debug", "permute", "remote", "fetch", "--all"],
+    )
+    assert result.exit_code == 0
+    assert len(fetch_calls) == 1
+    assert fetch_calls[0] == job
+    assert "Fetched" in result.stdout
+
+
+def test_remote_fetch_cli_delete_remote_after_single_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    cleaned: list[str] = []
+
+    monkeypatch.setattr(pr, "read_job", lambda job_id, jobs_dir=None: job)
+    monkeypatch.setattr(pr, "fetch_job", lambda loaded_job: Path("/tmp/fetched"))
+
+    def fake_cleanup(loaded_job: pr.RemoteJob) -> None:
+        cleaned.append(loaded_job.job_id)
+
+    monkeypatch.setattr(pr, "cleanup_remote_run_dir", fake_cleanup)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "remote",
+            "fetch",
+            job.job_id,
+            "--delete-remote",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert cleaned == [job.job_id]
+    assert f"Deleted remote run dir: {job.remote_run_dir}" in result.stdout
+
+
+def test_remote_fetch_all_prints_progress_and_triage_for_each_job(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    job2 = replace(
+        job,
+        job_id="fn_80000000-coder2-20260525-143013",
+        target="coder2",
+        ssh="coder2.example",
+    )
+    fetch_calls: list[str] = []
+
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=None: [job, job2])
+
+    def fake_fetch_job(loaded_job: pr.RemoteJob, **kwargs) -> Path:
+        fetch_calls.append(loaded_job.job_id)
+        return Path(f"/tmp/{loaded_job.job_id}")
+
+    monkeypatch.setattr(pr, "fetch_job", fake_fetch_job)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "remote",
+            "fetch",
+            "--all",
+            "--function",
+            job.function,
+            "--triage",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert fetch_calls == [job.job_id, job2.job_id]
+    assert f"Fetching 1/2: {job.job_id}" in result.stdout
+    assert f"Fetching 2/2: {job2.job_id}" in result.stdout
+    assert result.stdout.index(f"Fetching 1/2: {job.job_id}") < result.stdout.index(
+        f"Fetched: /tmp/{job.job_id}"
+    )
+    assert result.stdout.count("Triage manually with:") == 2
+    assert f"--function {job.function}" in result.stdout
+    assert "Fetched 2 job(s)." in result.stdout
+
+
+def test_remote_fetch_all_delete_remote_passes_cleanup_flag(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+    seen_delete_remote: list[bool] = []
+
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=None: [job])
+
+    def fake_fetch_all(jobs, **kwargs):
+        del jobs
+        seen_delete_remote.append(kwargs["delete_remote"])
+        kwargs["after_cleanup"](job, None, 1, 1)
+        return [Path("/tmp/fetched")]
+
+    monkeypatch.setattr(pr, "fetch_all_jobs", fake_fetch_all)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "debug",
+            "permute",
+            "remote",
+            "fetch",
+            "--all",
+            "--delete-remote",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert seen_delete_remote == [True]
+    assert f"Deleted remote run dir: {job.remote_run_dir}" in result.stdout
+
+
+def test_remote_fetch_cli_requires_job_id_or_all(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = CliRunner().invoke(app, ["debug", "permute", "remote", "fetch"])
+    assert result.exit_code == 2
+    assert "JOB_ID or --all" in result.stderr
+
+
+# ── remote reap ──────────────────────────────────────────────────────────────
+
+
+def test_remote_reap_cli_dry_run_shows_would_stop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    job = _sample_job(tmp_path)
+
+    def fake_reap(targets, jobs, **kwargs):
+        return [
+            pr.ReapAction(
+                job_id=job.job_id,
+                function=job.function,
+                target=job.target,
+                action="would-stop",
+                reason="byte-matched (score 0)",
+            )
+        ]
+
+    monkeypatch.setattr(pr, "load_targets", lambda config_path=pr.CONFIG_PATH: {})
+    monkeypatch.setattr(pr, "list_jobs", lambda jobs_dir=None: [job])
+    monkeypatch.setattr(pr, "remote_reap", fake_reap)
+
+    result = CliRunner().invoke(
+        app, ["debug", "permute", "remote", "reap", "--dry-run"],
+    )
+    assert result.exit_code == 0
+    assert "would-stop" in result.stdout
+    assert "byte-matched" in result.stdout
+    assert "dry run" in result.stdout.lower()
+
+
+# ── remote prune ─────────────────────────────────────────────────────────────
+
+
+def test_remote_prune_cli_dry_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_prune(targets, **kwargs):
+        return [
+            pr.PruneAction(
+                target="coder64",
+                remote_dir="/home/coder/decomp-permuter/remote-runs/old-job",
+                action="would-delete",
+                reason="stale (21d old)",
+            )
+        ]
+
+    monkeypatch.setattr(pr, "load_targets", lambda config_path=pr.CONFIG_PATH: {})
+    monkeypatch.setattr(pr, "remote_prune", fake_prune)
+
+    result = CliRunner().invoke(
+        app, ["debug", "permute", "remote", "prune", "--dry-run"],
+    )
+    assert result.exit_code == 0
+    assert "would-delete" in result.stdout
+    assert "21d" in result.stdout
+    assert "dry run" in result.stdout.lower()
+
+
+# ── _parse_ps_log_tail ───────────────────────────────────────────────────────
+
+
+def test_parse_ps_log_tail_extracts_score_and_verdict() -> None:
+    # All iterations at same best score = plateau (no record improvements)
+    best, iters, verdict, plateau, match = pr._parse_ps_log_tail(
+        "iteration 100, 0 errors, score = 35\r"
+        "iteration 200, 0 errors, score = 35\r"
+        "iteration 300, 0 errors, score = 50\r"
+    )
+    assert best == "35"
+    assert verdict == "plateau"
+    assert plateau is True
+    assert match is False
+
+
+def test_parse_ps_log_tail_detects_match() -> None:
+    best, iters, verdict, plateau, match = pr._parse_ps_log_tail(
+        "iteration 50, 0 errors, score = 0\n"
+    )
+    assert best == "0"
+    assert match is True
+    assert verdict == "match"

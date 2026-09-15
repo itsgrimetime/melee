@@ -1,0 +1,43 @@
+                                                                                
+ Usage: melee-agent debug inspect stack-homes [OPTIONS] [PCDUMP]                
+                                                                                
+ Explain final-only FPR stack-home targets and source-shape leads.              
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   pcdump      [PCDUMP]  Path to pcdump.txt. Auto-resolves from cache when    │
+│                         omitted.                                             │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function                   -f      TEXT     Function to analyze.        │
+│                                                  [required]                  │
+│    --checkdiff-json                     PATH     Existing checkdiff --format │
+│                                                  json output containing a    │
+│                                                  stack_slot_localizer. If    │
+│                                                  omitted, checkdiff is run   │
+│                                                  with --no-build to get one. │
+│    --source-file                        PATH     C source file used for      │
+│                                                  source/lifetime             │
+│                                                  attribution. Defaults to    │
+│                                                  the repo source for the     │
+│                                                  function when available.    │
+│    --checkdiff-timeout                  FLOAT    Timeout in seconds when     │
+│                                                  auto-running checkdiff.     │
+│                                                  [default: 60.0]             │
+│    --score-sqrt-array-variants                   Generate local-array sqrtf  │
+│                                                  variants, compile them in   │
+│                                                  the current tree, and rank  │
+│                                                  target stack-slot movement  │
+│                                                  before overall match        │
+│                                                  percent.                    │
+│    --max-variants                       INTEGER  Maximum generated           │
+│                                                  sqrt-array variants to      │
+│                                                  score.                      │
+│                                                  [default: 4]                │
+│    --variant-timeout                    FLOAT    Timeout in seconds for each │
+│                                                  generated variant           │
+│                                                  build/score.                │
+│                                                  [default: 120.0]            │
+│    --json                                        Emit as JSON.               │
+│    --help                                        Show this message and exit. │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

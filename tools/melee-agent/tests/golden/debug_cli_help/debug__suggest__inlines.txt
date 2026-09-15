@@ -1,0 +1,65 @@
+                                                                                
+ Usage: melee-agent debug suggest inlines [OPTIONS]                             
+                                                                                
+ Suggest hidden inline/helper/source-shape candidates.                          
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function                 -f      TEXT     Function to analyze.          │
+│                                                [required]                    │
+│    --pcdump                           PATH     Optional pcdump path.         │
+│    --source-file                      PATH     Retained/full-unit C source   │
+│                                                to use instead of repo source │
+│                                                for candidate generation.     │
+│    --seed-source                      TEXT     Candidate seed source: all,   │
+│                                                repeated, guide, coalesce,    │
+│                                                patterns, or duplicate-block. │
+│                                                [default: all]                │
+│    --budget                           INTEGER  Maximum candidate count.      │
+│                                                [default: 8]                  │
+│    --max-span-statements              INTEGER  Max statements per repeated   │
+│                                                group.                        │
+│                                                [default: 6]                  │
+│    --verify                                    Stage and verify candidates.  │
+│    --apply-best                                Apply best verified           │
+│                                                candidate.                    │
+│    --target                           PATH     Optional target spec for      │
+│                                                allocator scoring.            │
+│    --score-output-dir                 PATH     Directory for retained        │
+│                                                full-unit score-source        │
+│                                                candidates.                   │
+│    --expression-baseline              PATH     Baseline pcdump path for      │
+│                                                score-source expression       │
+│                                                anchors.                      │
+│    --expression-source                PATH     Baseline source path for      │
+│                                                score-source expression       │
+│                                                anchors.                      │
+│    --expression-reg-class             TEXT     Register class for            │
+│                                                score-source expression       │
+│                                                anchors.                      │
+│                                                [default: fpr]                │
+│    --threshold                        FLOAT    Minimum checkdiff delta for   │
+│                                                --apply-best.                 │
+│                                                [default: 0.05]               │
+│    --keep-failed                               Preserve failed candidate     │
+│                                                diagnostics.                  │
+│    --emit-patches                              Include full patched_source   │
+│                                                payloads in --json output.    │
+│    --emit-hunks,--emit-diffs                   Include compact unified hunks │
+│                                                in --json output without full │
+│                                                patched_source payloads.      │
+│    --trace-copies                              With --verify, compile        │
+│                                                candidate pcdumps and trace   │
+│                                                newly introduced `mr` copies. │
+│    --explain                                   Alias for --trace-copies      │
+│                                                during --verify.              │
+│    --trace-timeout                    FLOAT    Timeout in seconds for each   │
+│                                                trace-copy pcdump compile.    │
+│                                                [default: 60.0]               │
+│    --checkdiff-timeout                FLOAT    Timeout in seconds for each   │
+│                                                checkdiff run during          │
+│                                                --verify.                     │
+│                                                [default: 60.0]               │
+│    --json                                      Emit JSON.                    │
+│    --help                                      Show this message and exit.   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

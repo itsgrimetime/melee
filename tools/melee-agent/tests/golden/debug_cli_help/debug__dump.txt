@@ -1,0 +1,20 @@
+                                                                                
+ Usage: melee-agent debug dump [OPTIONS] COMMAND [ARGS]...                      
+                                                                                
+ Collect pcdumps and manage local mwcc_debug setup.                             
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ remote                 Dump MWCC's internal IR + codegen for a TU and emit   │
+│                        pcdump.txt to stdout.                                 │
+│ setup                  One-time setup for local mwcc_debug pcdump            │
+│                        (macOS+wibo).                                         │
+│ doctor                 Diagnose local mwcc_debug setup before dump/inspect   │
+│                        workflows fail.                                       │
+│ restore-object-report  Safely restore one source's object and build report.  │
+│ local                  Local mwcc_debug pcdump (macOS+wibo+Zig-built DLL, no │
+│                        SSH).                                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

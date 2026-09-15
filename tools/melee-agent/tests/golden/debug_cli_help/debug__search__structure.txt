@@ -1,0 +1,60 @@
+                                                                                
+ Usage: melee-agent debug search structure [OPTIONS]                            
+                                                                                
+ Run structure-search axes and rank candidate variants.                         
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function              -f                TEXT     Function to run        │
+│                                                       structure search for.  │
+│                                                       [required]             │
+│    --source-file,--source                    PATH     Source file to use for │
+│                                                       source-based axes.     │
+│                                                       When omitted, resolved │
+│                                                       from                   │
+│                                                       build/GALE01/report.j… │
+│    --axis                                    TEXT     Structure axis to run; │
+│                                                       repeatable. Supported  │
+│                                                       axes: decl-order,      │
+│                                                       control-flow,          │
+│                                                       case-order,            │
+│                                                       statement-order,       │
+│                                                       source-lifetime,       │
+│                                                       inline-boundary,       │
+│                                                       loop-shape-expanded.   │
+│                                                       Defaults to            │
+│                                                       decl-order,            │
+│                                                       control-flow,          │
+│                                                       case-order,            │
+│                                                       statement-order.       │
+│    --output-dir                              PATH     Directory for          │
+│                                                       generated candidates.  │
+│                                                       Defaults to            │
+│                                                       build/structure-searc… │
+│    --max-candidates                          INTEGER  Maximum ranked         │
+│                                                       structure variants to  │
+│                                                       return.                │
+│                                                       [default: 24]          │
+│    --timeout                                 INTEGER  Per-axis subprocess    │
+│                                                       timeout in seconds.    │
+│                                                       [default: 120]         │
+│    --score                     --no-score             Compile and score      │
+│                                                       retained candidate     │
+│                                                       source variants.       │
+│                                                       [default: score]       │
+│    --score-timeout                           FLOAT    Per-build/checkdiff    │
+│                                                       scoring timeout in     │
+│                                                       seconds.               │
+│                                                       [default: 120.0]       │
+│    --pure-helper                             TEXT     Treat a helper as      │
+│                                                       read-only for          │
+│                                                       source-lifetime        │
+│                                                       probes. Use NAME or    │
+│                                                       NAME=RETURN_TYPE;      │
+│                                                       repeatable or          │
+│                                                       comma-separated.       │
+│    --json                                             Emit structure search  │
+│                                                       payload as JSON.       │
+│    --help                                             Show this message and  │
+│                                                       exit.                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

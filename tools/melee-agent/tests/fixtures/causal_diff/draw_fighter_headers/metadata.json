@@ -1,0 +1,83 @@
+{
+  "schema_version": "causal-pilot-fixture-metadata.v1",
+  "function": "mnDiagram_DrawFighterHeaders",
+  "anchor": 564,
+  "compiler": "mwcc_233_163n",
+  "target": "GALE01",
+  "flags": "-nowraplines -cwd source -Cpp_exceptions off -proc gekko -fp hardware -align powerpc -nosyspath -fp_contract on -O4,p -multibyte -enum int -nodefaults -inline auto -pragma \"cats off\" -pragma \"warn_notinlined off\" -RTTI off -str reuse -DBUILD_VERSION=0 -DVERSION_GALE01 -maxerrors 1 -msgstyle std -warn off -requireprotos -i src -i src/MSL -i src/Runtime -i extern/dolphin/include -i src/melee -i src/melee/ft/chara -i src/sysdolphin -lang=c",
+  "flags_sha256": "231893363c51fb47c9c34df01317650011840304e7ea75e55c2ed752418e440b",
+  "environment": {
+    "platform": "Darwin-arm64",
+    "python": "3.11.14",
+    "stock_compiler_sha256": "ccf4b465cec73b5aae9c5c5543dcf8cda8a62aba246f89e2e0b200d742f2e55c",
+    "patched_compiler_sha256": "932ade63a0ac45fc249ed016f6c5073e5878f948277002655e8daef5c5e5b3d1",
+    "mwcc_debug_dll_sha256": "7636fd64485f7d39fafa17793edc22afe5e38f24742c4b74cb3e73df900cc8f4",
+    "mwcc_debug_features": "v6",
+    "wibo_sha256": "5e964dafccbc9a22fd8310baa994b3300dcee10711d68c134a55cddc54edd7a1",
+    "mwcc_inspect_detected": "GC/1.2.5"
+  },
+  "environment_sha256": "ecb585400cf7755f5fd21fddb01f7e546a4de461a1f45eefad7d87087d0864dc",
+  "expected_assembly_sha256": "8a52d7d8da976c5d8c917995de0fb275d2a393271aece1c0d3787469a57a5377",
+  "fixture_expected_assembly_sha256": "b2368512f90863b4ed1b3e513e98c7c5c6a86335fe31e4863af3e38fd05b8f99",
+  "producer_versions": {
+    "melee_agent_git": "d4f70c927be3adae93f79632b6885dd7e109bc64",
+    "checkdiff": "checkdiff-json.v1",
+    "mwcc_debug": "mwcc-debug-pcdump.v1",
+    "mwcc_inspect": "mwcc-inspect-text.v1",
+    "frame_report": "frame-reservations.v1",
+    "mwcc_inspect_wrapper_sha256": "926337f3273881ad171b5d12309699827acdb3b3299278ea2b4238029f90c1ca"
+  },
+  "generation_commands": {
+    "checkout": "git clone --shared --no-checkout /Users/mike/.codex/worktrees/eeff/melee /tmp/task9-regen-<label> && git checkout --detach <source_commit>",
+    "build": "python tools/worktree-doctor.py --fix; python configure.py && ninja",
+    "pcdump": "melee-agent debug dump local src/melee/mn/mndiagram.c --function mnDiagram_DrawFighterHeaders --output /tmp/task9-artifacts/<label>/pcdump.full.txt --no-cache-sync",
+    "pcdump_slice": "python tools/melee-agent/scripts/slice_pcdump_function.py /tmp/task9-artifacts/<label>/pcdump.full.txt mnDiagram_DrawFighterHeaders /tmp/task9-artifacts/<label>/pcdump.txt",
+    "checkdiff": "python tools/checkdiff.py mnDiagram_DrawFighterHeaders --format json --no-build --no-fingerprint --pcdump /tmp/task9-artifacts/<label>/pcdump.full.txt",
+    "inspect": "MWCC_INSPECT_REMOTE_REF=<source_commit> tools/workflow/mwcc-inspect.sh src/melee/mn/mndiagram.c",
+    "frame": "melee-agent debug inspect frame-reservations /tmp/task9-artifacts/<label>/pcdump.txt -f mnDiagram_DrawFighterHeaders --expected-asm /tmp/task9-artifacts/<label>/expected.asm --json"
+  },
+  "frontiers": {
+    "paired": {
+      "source_commit": "f70dfdafa867307e6f04aa16820870a49a4b0a10",
+      "source_path": "src/melee/mn/mndiagram.c",
+      "source_lines": [2672, 2744],
+      "full_source_sha256": "f16344432d0faae57ab960630e7d47c59e850f0b62ae654a0a002a8337c8a52b",
+      "verified_anchor": {"expected_phys": 22, "current_phys": 22, "expected_source_phys": 21, "current_source_phys": 21},
+      "verified_stack": {"expected_offset": 68, "current_offset": 72},
+      "generation_outputs": {
+        "pcdump": {"path": "/tmp/task9-artifacts/paired/pcdump.full.txt", "sha256": "0af3aa4229b4d740e21572d212f9f8d660e7808688c0f7939358e2b5a0173578", "generated_at": "2026-07-11T11:04:18-0700"},
+        "checkdiff": {"path": "/tmp/task9-artifacts/paired/checkdiff.full.json", "sha256": "6517f8b68da45c9b6529f800f405ba96c0c1e96002575293200e5ff482760350", "generated_at": "2026-07-11T11:05:36-0700"},
+        "inspect": {"path": "/tmp/task9-artifacts/paired/inspect.full.txt", "sha256": "62cdd17759e93c290a9ee3d7e06db375d7b96b9edf5bef93a2db15410c49fb15", "generated_at": "2026-07-11T11:07:23-0700"},
+        "frame": {"path": "/tmp/task9-artifacts/paired/frame.full.json", "sha256": "0e29aea382500176c6556595414d20ceba9531f28f6997de58c854d2a27cbb07", "generated_at": "2026-07-11T11:09:02-0700"}
+      },
+      "fixture_artifacts": {
+        "source.c": "e44d67da518c84c42997b564f7b0ac3b68340b534f3b0709c7f26372a054143f",
+        "checkdiff.json": "df033fb4d549e1ebf288e255e041957105df84326145a504c2ce0f0503d07b69",
+        "pcdump.txt": "0af3aa4229b4d740e21572d212f9f8d660e7808688c0f7939358e2b5a0173578",
+        "inspect.txt": "5c78a396cd73d7ce40ecf085290c463232fdffca67232e486d692157a8bdc1e7",
+        "frame.json": "4e55bdd52d77210f14b39936fd0f72dc73df76e242eca8fb4a3f29464b3f7bfe"
+      }
+    },
+    "direct": {
+      "source_commit": "871eec422ad6ea536f6d88e004ba2f03a1b73e44",
+      "source_path": "src/melee/mn/mndiagram.c",
+      "source_lines": [2672, 2732],
+      "full_source_sha256": "1bd94b7b7e90d2d16321de1848356950322d463b29edf7dceb344a7c7cca0046",
+      "verified_anchor": {"expected_phys": 22, "current_phys": 20, "expected_source_phys": 21, "current_source_phys": 19},
+      "verified_stack": {"expected_offset": 68, "current_offset": 68},
+      "generation_outputs": {
+        "pcdump": {"path": "/tmp/task9-artifacts/direct/pcdump.full.txt", "sha256": "f87d98e599edaaa75403a4a3af0d5fcfa3be0bbb0c16048e78299a5e23bfe18d", "generated_at": "2026-07-11T11:04:18-0700"},
+        "checkdiff": {"path": "/tmp/task9-artifacts/direct/checkdiff.full.json", "sha256": "1d2bb1ce4974515095983b874103c9c7e9a81d56ef8cf5bab66564c5a497f63f", "generated_at": "2026-07-11T11:05:37-0700"},
+        "inspect": {"path": "/tmp/task9-artifacts/direct/inspect.full.txt", "sha256": "af2b212f36eda4b55a87801346dbc2ab23b06ba7fd34ace4ad287ce8335bea26", "generated_at": "2026-07-11T11:07:50-0700"},
+        "frame": {"path": "/tmp/task9-artifacts/direct/frame.full.json", "sha256": "4c4aa78c970a9060dc2679dc889a29c0e5c1808cd8580aa524b6eea29939d0d6", "generated_at": "2026-07-11T11:09:04-0700"}
+      },
+      "fixture_artifacts": {
+        "source.c": "d09c31be19691caff2588bbebacef2ebf9528d104aa7c30cbcd94daf60c3270f",
+        "checkdiff.json": "f6a55cf82a7f7a6fe14814b2e1059d702360465e3f8068bf7631ac7fc32f6aea",
+        "pcdump.txt": "f87d98e599edaaa75403a4a3af0d5fcfa3be0bbb0c16048e78299a5e23bfe18d",
+        "inspect.txt": "914a59add9b252e8717657237275fcd178ff76eae02f000fdefd8a2d87c5363b",
+        "frame.json": "bd4b0969f09d5ce2f670a6951dffafef0792161cdeeedac4963242680b27b5a6"
+      }
+    }
+  }
+}

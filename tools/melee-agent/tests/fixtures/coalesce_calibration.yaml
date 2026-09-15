@@ -1,0 +1,56 @@
+# tools/melee-agent/tests/fixtures/coalesce_calibration.yaml
+# Strict matching per spec §13 success criterion 2. Each case lists
+# the EXACT expected pattern names or top-1 pair; the parametrize loop
+# asserts equality. When fixtures are regenerated and these values
+# change legitimately, update the YAML — the test failure is the
+# regression signal.
+cases:
+  - function: mnDiagram3_8024714C
+    pcdump: fn_802461BC_pcdump.txt
+    pair: [53, 3]
+    expected_patterns: []
+    notes: |
+      ADJUSTMENT (Task 7+14 carry-forward): the fixture fn_802461BC_pcdump.txt
+      does NOT contain fn_802461BC — it contains mnDiagram3_8024714C (and
+      other functions from the same TU). Function name changed to
+      mnDiagram3_8024714C to match what is actually in the fixture.
+      pair [53, 3] kept as-is; run() does not raise ValueError for this pair.
+      expected_patterns is empty (fall-through acceptable). The test's else
+      branch asserts pr.ir_facts is non-empty, which is verified: the
+      orchestrator populates both 'from' and 'to' IR fact entries.
+
+  - function: mnVibration_80248644
+    pcdump: mnVibration_80248644_pcdump.txt
+    discover: true
+    expected_cascade_length_min: 6
+    # expected_top_priority_class is deliberately absent: first real run
+    # (Task 16 execution) shows pairs=[] for this fixture — the cascade
+    # analyzer finds no candidates because the function is already matched
+    # (100% via s32 j decl reorder). No pair assertions are made.
+    expected_top_pair: null
+    notes: |
+      MEMORY.md: matched 100% via `s32 j` decl reorder. Discover mode on
+      this fixture produces cascade [r31, r30, r29, r28, r27, r26] (6 regs)
+      but zero pair candidates — the function has no remaining coalesce
+      opportunities in the fixture snapshot. expected_cascade_length_min set
+      to 6 (actual value) rather than the spec's placeholder of 4.
+      expected_top_priority_class omitted to avoid assert report.pairs on an
+      empty list. expected_top_pair left null (no candidates to fill in).
+      Update this YAML if the fixture is regenerated with a pre-match snapshot.
+      See also: the pre-match case below for end-of-chain priority-class coverage.
+
+  - function: mnVibration_80248644
+    pcdump: mnVibration_80248644_premature_pcdump.txt
+    discover: true
+    expected_cascade_length_min: 6
+    expected_top_priority_class: "frees-slot"
+    expected_top_pair: [42, 43]
+    notes: |
+      Pre-match snapshot: mnvibration.c + .h at 1e555fbe2 (BEFORE the
+      `s32 j` decl reorder landed in 3cc6d4951). Discover mode finds a
+      real cascade with concrete top-1 candidate (enabled by the
+      multi-holder enumeration in analyze_cascade, commit ad21e50e4).
+      This is the load-bearing discover-mode regression signal — the
+      sibling post-match case has 0 candidates because the function is
+      already 100% matched.
+      Update top_pair if fixture is regenerated and ranking shifts.

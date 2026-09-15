@@ -1,0 +1,75 @@
+                                                                                
+ Usage: melee-agent debug permute verify [OPTIONS] CANDIDATE                    
+                                                                                
+ Tier 7a: apply a permuter candidate to the real source and verify.             
+                                                                                
+ The permuter preprocesses its base.c (macro expansion, header merging),        
+ so a winning candidate doesn't always transfer cleanly. This command:          
+                                                                                
+   1. Extracts the target function from the candidate source                    
+   2. Patches it into the real source tree                                      
+   3. Runs `ninja <obj>` to rebuild                                             
+   4. Reads the fresh fuzzy_match_percent from report.json                      
+   5. Reports the delta vs. pre-patch baseline                                  
+                                                                                
+ By default the patched source is REVERTED at the end regardless of             
+ outcome — pass --keep to leave a winning transfer applied.                     
+                                                                                
+ Safe-keep behaviour: when --keep is set and a permuter base.c is found         
+ (candidate.parent.parent/base.c), debug permute verify performs a 3-way merge  
+ instead of a full replace — it applies the *diff* from base.c to the           
+ candidate onto the current real source.  If the merge conflicts (e.g.          
+ you edited the same lines the permuter mutated), the command aborts            
+ without writing anything.  Pass --force to fall back to a full replace         
+ when a merge conflict is detected.                                             
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    candidate      PATH  Path to permuter candidate source (.c file with    │
+│                           the mutated function). Typically                   │
+│                           output-NNNN-N/source.c from decomp-permuter.       │
+│                           [required]                                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function           -f      TEXT   Function name to transfer [required]  │
+│    --keep                              If the transfer improves match%,      │
+│                                        leave the patched source in place. By │
+│                                        default we always revert (dry-run     │
+│                                        semantics).                           │
+│    --force                             When --keep is set, allow overwriting │
+│                                        manual edits that diverge from the    │
+│                                        permuter's base.c. Without --force,   │
+│                                        debug permute verify aborts if        │
+│                                        applying the candidate would silently │
+│                                        revert commits you made after         │
+│                                        importing the permuter baseline. Has  │
+│                                        no effect without --keep.             │
+│    --threshold                  FLOAT  Minimum improvement (in percentage    │
+│                                        points) to consider the candidate a   │
+│                                        win. Default 0.05 — small enough to   │
+│                                        catch +0.05-0.09% chain wins permuter │
+│                                        often produces, but not so small that │
+│                                        build-noise registers as a hit.       │
+│                                        [default: 0.05]                       │
+│    --json                              Emit verification result as JSON.     │
+│    --keep-failed                       On compile failure, preserve the      │
+│                                        failing patched source at a temp path │
+│                                        (printed in the error message)        │
+│                                        instead of reverting silently. Useful │
+│                                        when the candidate is promising but   │
+│                                        the transfer needs manual repair.     │
+│    --force-schedule             TEXT   Compile the transferred candidate     │
+│                                        through `debug dump local` with this  │
+│                                        MWCC schedule override before         │
+│                                        measuring match%. Format matches      │
+│                                        `debug dump local --force-schedule`,  │
+│                                        e.g. 'lwz:0x74>0x70'.                 │
+│    --force-schedule-fn          TEXT   Scope --force-schedule to a function. │
+│                                        Defaults to the verified --function   │
+│                                        when --force-schedule is set.         │
+│    --candidate-timeout          FLOAT  Build/report timeout in seconds for   │
+│                                        the transferred candidate (0          │
+│                                        disables).                            │
+│                                        [default: 120.0]                      │
+│    --help                              Show this message and exit.           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

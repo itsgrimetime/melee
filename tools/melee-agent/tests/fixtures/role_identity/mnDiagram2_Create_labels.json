@@ -1,0 +1,37 @@
+{
+  "function": "mnDiagram2_Create",
+  "class_id": 0,
+  "matched_dump": "mnDiagram2_Create_matched_pcdump.txt",
+  "wip_dump": "mnDiagram2_Create_wip_pcdump.txt",
+  "matched_rev": "d1a10c029",
+  "wip_rev": "388f5b89c",
+  "adjudication_basis": "AUTO unique-first-def (non-circular): each label is a class-0 role whose normalized first-def signature is unique in BOTH compiles -- a source-grounded struct access / named symbol / immediate that identifies it independent of ig number and of the matcher use-site feature. Cross-file pair (mndiagram2.c), distinct from the mnvibration corpus. Generic first-defs left unadjudicated.",
+  "same": {
+    "33": 32,
+    "34": 49,
+    "37": 37,
+    "52": 50,
+    "55": 51,
+    "56": 52,
+    "59": 55,
+    "62": 58,
+    "64": 60,
+    "66": 62,
+    "69": 68
+  },
+  "same_role_notes": {
+    "33": "lwz r#,44(r#)",
+    "34": "subf r#,r#,r#",
+    "37": "li r#,24",
+    "52": "add r#,r#,r#",
+    "55": "lis r#,ha(mndiagram_804a0834)",
+    "56": "addi r#,r#,lo(mndiagram_804a0834)",
+    "59": "lis r#,ha(hsd_gobj_jobjcallback)",
+    "62": "lis r#,ha(mndiagram2_freeuserdata)",
+    "64": "rlwinm r#,r#,2,0,29",
+    "66": "lis r#,ha(mndiagram2_think)",
+    "69": "lhz r#,68(r#)"
+  },
+  "raw_ig_baseline_correct": 1,
+  "raw_ig_note": "Of 11 auto-labels raw ig_idx agrees on 1; 10 drifted and must be recovered by first-def identity."
+}

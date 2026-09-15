@@ -1,0 +1,23 @@
+                                                                                
+ Usage: melee-agent debug suggest schedule [OPTIONS]                            
+                                                                                
+ Suggest C source reshapes for a divergent scheduler decision.                  
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function        -f      TEXT  Function to analyze. [required]           │
+│ *  --force-schedule          TEXT  Target scheduler swap list that produced  │
+│                                    the forced pcdump, e.g.                   │
+│                                    'lwz:0x94>0x90,lwz:0xAC>0xA8'.            │
+│                                    [required]                                │
+│ *  --against                 PATH  Forced-path pcdump.txt to compare against │
+│                                    the real path.                            │
+│                                    [required]                                │
+│    --pcdump                  PATH  Real-path pcdump.txt. Auto-resolves from  │
+│                                    cache when omitted.                       │
+│    --source-file             PATH  C source file used for advisory IR/source │
+│                                    provenance. Defaults to the repo source   │
+│                                    for the function when available.          │
+│    --json                          Emit as JSON.                             │
+│    --help                          Show this message and exit.               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

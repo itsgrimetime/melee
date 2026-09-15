@@ -1,0 +1,10 @@
+[1/6] MWCC build/GALE01/src/melee/mn/mndiagram3.o
+[2/6] REPORT
+[3/6] LINK build/GALE01/main.elf
+[4/6] DOL build/GALE01/main.dol
+[5/6] CHECK config/GALE01/build.sha1
+FAILED: [code=1] build/GALE01/ok
+build/tools/dtk shasum  -c config/GALE01/build.sha1 -o build/GALE01/ok
+build/GALE01/main.dol: FAILED
+WARNING: 1 computed checksum(s) did NOT match
+ninja: build stopped: subcommand failed.

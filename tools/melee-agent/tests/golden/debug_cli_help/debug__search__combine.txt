@@ -1,0 +1,48 @@
+                                                                                
+ Usage: melee-agent debug search combine [OPTIONS]                              
+                                                                                
+ Recombine complementary directed-search candidate source hunks.                
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --base                             PATH     Retained/base source file     │
+│                                                used as the recombination     │
+│                                                anchor.                       │
+│                                                [required]                    │
+│    --candidate                        TEXT     Candidate source file, or     │
+│                                                CANDIDATE_ID=path. May be     │
+│                                                passed multiple times.        │
+│    --telemetry                        PATH     JSON from debug search        │
+│                                                run/directed containing       │
+│                                                directed_telemetry.           │
+│    --out-dir                          PATH     Directory where combined      │
+│                                                candidate sources are         │
+│                                                written.                      │
+│                                                [default:                     │
+│                                                build/search-combined]        │
+│    --score-command                    TEXT     Optional command template to  │
+│                                                score each combined           │
+│                                                candidate. Use {candidate} as │
+│                                                the generated source path     │
+│                                                placeholder.                  │
+│    --range                            TEXT     Manual subhunk range          │
+│                                                CANDIDATE_ID:BASE_START-BASE… │
+│                                                When present for a candidate, │
+│                                                combine uses those subhunks   │
+│                                                instead of broad auto hunks.  │
+│    --protect-assignment               TEXT     Required protected assignment │
+│                                                IG:PHYS to preserve while     │
+│                                                evaluating structural         │
+│                                                recombinations.               │
+│    --max-normalized-diff-lines        INTEGER  Target                        │
+│                                                structural_guard.normalized_… │
+│                                                threshold for protected       │
+│                                                synthesis summaries.          │
+│    --source-component                 TEXT     Named source component        │
+│                                                represented by the candidate  │
+│                                                set. May be repeated and is   │
+│                                                reported in synthesis         │
+│                                                summaries.                    │
+│    --json                                      Emit machine-readable JSON.   │
+│    --help                                      Show this message and exit.   │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

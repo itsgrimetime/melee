@@ -1,0 +1,11 @@
+                                                                                
+ Usage: melee-agent debug dump doctor [OPTIONS]                                 
+                                                                                
+ Diagnose local mwcc_debug setup before dump/inspect workflows fail.            
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --repair          Run `debug dump setup` when required checks are missing,   │
+│                   then report the post-setup state.                          │
+│ --help            Show this message and exit.                                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,12 @@
+{
+  "units": [
+    {
+      "name": "main/melee/mn/sample",
+      "functions": [
+        {"name": "fn_alpha", "fuzzy_match_percent": 87.2},
+        {"name": "fn_beta",  "fuzzy_match_percent": 73.4},
+        {"name": "fn_gamma", "fuzzy_match_percent": 100.0}
+      ]
+    }
+  ]
+}

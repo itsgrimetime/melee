@@ -1,0 +1,66 @@
+                                                                                
+ Usage: melee-agent debug mutate control-flow-shape-search [OPTIONS]            
+                                                                                
+ Compile and score conservative control-flow shape source probes.               
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function          -f                        TEXT     Function to        │
+│                                                           explore.           │
+│                                                           [required]         │
+│    --source-file                                 PATH     Source file used   │
+│                                                           to generate        │
+│                                                           control-flow shape │
+│                                                           probes.            │
+│    --output-dir                                  PATH     Directory for      │
+│                                                           generated          │
+│                                                           control-flow probe │
+│                                                           source files.      │
+│    --suggestions-json                            PATH     JSON output from   │
+│                                                           debug suggest      │
+│                                                           control-flow-shap… │
+│                                                           When provided,     │
+│                                                           only suggested     │
+│                                                           families are       │
+│                                                           materialized.      │
+│    --baseline-checkd…                            PATH     Baseline           │
+│                                                           tools/checkdiff.py │
+│                                                           --format json      │
+│                                                           payload used to    │
+│                                                           report checkdiff   │
+│                                                           deltas.            │
+│    --candidate                                   TEXT     Candidate source   │
+│                                                           to score,          │
+│                                                           repeatable. Format │
+│                                                           OPERATOR=path or   │
+│                                                           LABEL:OPERATOR=pa… │
+│    --compile-probes        --no-compile-prob…             Compile generated  │
+│                                                           control-flow shape │
+│                                                           source probes.     │
+│                                                           [default:          │
+│                                                           compile-probes]    │
+│    --score-match-per…      --no-score-match-…             For source         │
+│                                                           candidates,        │
+│                                                           temporarily        │
+│                                                           transfer into the  │
+│                                                           real tree and read │
+│                                                           final report.json  │
+│                                                           match percent.     │
+│                                                           [default:          │
+│                                                           score-match-perce… │
+│    --max-probes                                  INTEGER  Maximum generated  │
+│                                                           probes to list or  │
+│                                                           compile.           │
+│                                                           [default: 12]      │
+│    --operator                                    TEXT     Control-flow       │
+│                                                           operator to        │
+│                                                           generate;          │
+│                                                           repeatable.        │
+│    --timeout                                     INTEGER  Per-candidate      │
+│                                                           compile timeout in │
+│                                                           seconds.           │
+│                                                           [default: 120]     │
+│    --json                                                 Emit as JSON.      │
+│    --help                                                 Show this message  │
+│                                                           and exit.          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

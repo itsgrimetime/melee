@@ -1,0 +1,37 @@
+# .github/workflows/capabilities-drift.yml
+name: capabilities-drift
+on:
+  pull_request:
+    paths:
+      - '.claude/**'
+      - 'docs/CAPABILITIES.md'
+      - 'docs/agent-tool-manifest.md'
+      - 'tools/melee-agent/**'
+      - 'CLAUDE.md'
+  push:
+    branches: [master]
+    paths:
+      - '.claude/**'
+      - 'docs/CAPABILITIES.md'
+      - 'docs/agent-tool-manifest.md'
+      - 'tools/melee-agent/**'
+      - 'CLAUDE.md'
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4   # full checkout: .claude and docs present
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install melee-agent
+        run: pip install -e tools/melee-agent
+      - name: Regenerate capability artifacts
+        run: melee-agent capabilities generate
+      - name: Fail on drift
+        run: |
+          if ! git diff --exit-code -- .claude/capabilities-brief.md docs/CAPABILITIES.md; then
+            echo "::error::Capability artifacts are stale. Run 'melee-agent capabilities generate' and commit."
+            exit 1
+          fi

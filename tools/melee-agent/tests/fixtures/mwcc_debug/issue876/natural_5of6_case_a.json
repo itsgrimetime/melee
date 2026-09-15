@@ -1,0 +1,170 @@
+{
+  "candidate_id": "natural-5of6-case-a",
+  "provenance": "issue876-natural-expression-score",
+  "target_score": {
+    "matched": 5,
+    "virtual_distance": 1
+  },
+  "expression_score": {
+    "register_class": "fpr",
+    "matched": 5,
+    "targeted": 6,
+    "virtual_distance": 1,
+    "false_positive_virtual_id_hit_count": 0,
+    "false_positive_virtual_id_hits": [],
+    "virtuals": {
+      "32": {
+        "baseline_virtual": 32,
+        "expected": 28,
+        "signature": {
+          "kind": "name",
+          "source_kind": "local",
+          "name": "col_offset_product_fpr"
+        },
+        "baseline_source": {
+          "kind": "local",
+          "confidence": "fpr-expression-order",
+          "name": "col_offset_product_fpr"
+        },
+        "candidate_source": {
+          "kind": "local",
+          "confidence": "fpr-expression-order",
+          "name": "col_offset_product_fpr"
+        },
+        "candidate_virtual": 32,
+        "actual": 25,
+        "matched": false,
+        "status": "ok"
+      },
+      "33": {
+        "baseline_virtual": 33,
+        "expected": 26,
+        "signature": {
+          "kind": "name",
+          "source_kind": "local",
+          "name": "digit_pair_f33_f34"
+        },
+        "baseline_source": {
+          "kind": "local",
+          "confidence": "fpr-expression-order",
+          "name": "digit_pair_f33_f34"
+        },
+        "candidate_source": {
+          "kind": "local",
+          "confidence": "fpr-expression-order",
+          "name": "digit_pair_f33_f34"
+        },
+        "candidate_virtual": 33,
+        "actual": 26,
+        "matched": true,
+        "status": "ok"
+      },
+      "34": {
+        "baseline_virtual": 34,
+        "expected": 26,
+        "signature": {
+          "kind": "name",
+          "source_kind": "local",
+          "name": "digit_pair_f33_f34_extra"
+        },
+        "baseline_source": {
+          "kind": "local",
+          "confidence": "fpr-expression-order",
+          "name": "digit_pair_f33_f34_extra"
+        },
+        "candidate_source": {
+          "kind": "local",
+          "confidence": "fpr-expression-order",
+          "name": "digit_pair_f33_f34_extra"
+        },
+        "candidate_virtual": 34,
+        "actual": 26,
+        "matched": true,
+        "status": "ok"
+      },
+      "39": {
+        "baseline_virtual": 39,
+        "expected": 29,
+        "signature": {
+          "kind": "name",
+          "source_kind": "local",
+          "name": "digit_pair_f39_f40_f41"
+        },
+        "baseline_source": {
+          "kind": "local",
+          "confidence": "fpr-expression-order",
+          "name": "digit_pair_f39_f40_f41"
+        },
+        "candidate_source": {
+          "kind": "local",
+          "confidence": "fpr-expression-order",
+          "name": "digit_pair_f39_f40_f41"
+        },
+        "candidate_virtual": 39,
+        "actual": 29,
+        "matched": true,
+        "status": "ok"
+      },
+      "40": {
+        "baseline_virtual": 40,
+        "expected": 29,
+        "signature": {
+          "kind": "name",
+          "source_kind": "local",
+          "name": "digit_pair_f39_f40_f41_extra1"
+        },
+        "baseline_source": {
+          "kind": "local",
+          "confidence": "fpr-expression-order",
+          "name": "digit_pair_f39_f40_f41_extra1"
+        },
+        "candidate_source": {
+          "kind": "local",
+          "confidence": "fpr-expression-order",
+          "name": "digit_pair_f39_f40_f41_extra1"
+        },
+        "candidate_virtual": 40,
+        "actual": 29,
+        "matched": true,
+        "status": "ok"
+      },
+      "41": {
+        "baseline_virtual": 41,
+        "expected": 29,
+        "signature": {
+          "kind": "name",
+          "source_kind": "local",
+          "name": "digit_pair_f39_f40_f41_extra2"
+        },
+        "baseline_source": {
+          "kind": "local",
+          "confidence": "fpr-expression-order",
+          "name": "digit_pair_f39_f40_f41_extra2"
+        },
+        "candidate_source": {
+          "kind": "local",
+          "confidence": "fpr-expression-order",
+          "name": "digit_pair_f39_f40_f41_extra2"
+        },
+        "candidate_virtual": 41,
+        "actual": 29,
+        "matched": true,
+        "status": "ok"
+      }
+    }
+  },
+  "structural_guard": {
+    "accepted": true
+  },
+  "residual": {
+    "case": "A",
+    "class_id": 1,
+    "ig_idx": 32,
+    "baseline_reg": 25,
+    "target_reg": 28,
+    "blocker_ig": 38,
+    "blocker_source": "row_offset",
+    "blocker_source_confidence": "fpr-expression-order",
+    "focus_blocker_interference_present": true
+  }
+}

@@ -1,0 +1,75 @@
+[1/7] MWCC build/GALE01/src/melee/mn/mnitemsw.o
+002c:err:wineboot:process_run_key Error running cmd L"C:\\windows\\system32\\winemenubuilder.exe -a -r" (2).
+Wine cannot find the FreeType font library.  To enable Wine to
+use TrueType fonts please install a version of FreeType greater than
+or equal to 2.0.5.
+http://www.freetype.org
+Wine cannot find the FreeType font library.  To enable Wine to
+use TrueType fonts please install a version of FreeType greater than
+or equal to 2.0.5.
+http://www.freetype.org
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610cac0 (vid 05ac, pid 0343): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610d8b0 (vid 05ac, pid 8104): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610e9f0 (vid 0000, pid 0000): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610d600 (vid 0000, pid 0000): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610e010 (vid 0000, pid 0000): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610c380 (vid 05ac, pid 0343): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610de30 (vid 0000, pid 0000): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610cf30 (vid 05ac, pid 0343): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610c1a0 (vid 05ac, pid 0343): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610e870 (vid 05ac, pid 8104): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610e5c0 (vid 05ac, pid 8104): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610c860 (vid 05ac, pid 0343): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610db40 (vid 05ac, pid 8104): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610d200 (vid 0000, pid 0000): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610bd40 (vid 05ac, pid 0343): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7fbe4610eec0 (vid 0000, pid 0000): not a joystick or gamepad
+Wine cannot find the FreeType font library.  To enable Wine to
+use TrueType fonts please install a version of FreeType greater than
+or equal to 2.0.5.
+http://www.freetype.org
+0024:err:environ:init_peb starting L"Z:\\Users\\mike\\.codex\\worktrees\\c016\\melee-pr-mnitemsw\\build\\tools\\sjiswrap.exe" in experimental wow64 mode
+0024:err:winediag:gnutls_process_attach failed to load libgnutls, no support for encryption
+[2/7] REPORT
+[3/7] LINK build/GALE01/main.elf
+002c:err:wineboot:process_run_key Error running cmd L"C:\\windows\\system32\\winemenubuilder.exe -a -r" (2).
+Wine cannot find the FreeType font library.  To enable Wine to
+use TrueType fonts please install a version of FreeType greater than
+or equal to 2.0.5.
+http://www.freetype.org
+Wine cannot find the FreeType font library.  To enable Wine to
+use TrueType fonts please install a version of FreeType greater than
+or equal to 2.0.5.
+http://www.freetype.org
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e0011c30 (vid 0000, pid 0000): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e00136e0 (vid 0000, pid 0000): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e0010f70 (vid 05ac, pid 0343): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e0012010 (vid 0000, pid 0000): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e0011910 (vid 05ac, pid 0343): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e0010c20 (vid 05ac, pid 0343): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e0012c90 (vid 0000, pid 0000): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e00133c0 (vid 05ac, pid 8104): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e0012970 (vid 0000, pid 0000): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e0011620 (vid 05ac, pid 0343): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e00130d0 (vid 05ac, pid 8104): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e0012650 (vid 05ac, pid 8104): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e0013a00 (vid 0000, pid 0000): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e0011290 (vid 05ac, pid 0343): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e0012330 (vid 05ac, pid 8104): not a joystick or gamepad
+00c4:err:hid:handle_DeviceMatchingCallback Ignoring HID device 0x7f79e0010950 (vid 05ac, pid 0343): not a joystick or gamepad
+Wine cannot find the FreeType font library.  To enable Wine to
+use TrueType fonts please install a version of FreeType greater than
+or equal to 2.0.5.
+http://www.freetype.org
+0024:err:environ:init_peb starting L"Z:\\Users\\mike\\.codex\\worktrees\\c016\\melee-pr-mnitemsw\\build\\compilers\\GC\\1.3.2\\mwldeppc.exe" in experimental wow64 mode
+[4/7] DOL build/GALE01/main.dol
+[5/7] CHECK config/GALE01/build.sha1
+build/GALE01/main.dol: OK
+[6/7] APPLY build/GALE01/main.elf
+[7/7] PROGRESS
+Progress:
+  All: 99.98% fuzzy, 98.05% matched, 94.64% linked (1116 / 1129 files)
+    Code: 3806364 / 3882032 bytes (19806 / 19828 functions)
+    Data: 1211112 / 1211168 bytes (100.00%)
+
+You have 277 out of 293 Trophies and 48 out of 51 Event Matches.

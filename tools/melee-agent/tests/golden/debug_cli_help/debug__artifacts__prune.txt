@@ -1,0 +1,20 @@
+
+ Usage: melee-agent debug artifacts prune [OPTIONS]
+
+ Preview, or explicitly apply, conservative artifact-run pruning.
+
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --artifact-root          PATH                  Artifact root, relative to    │
+│                                                the Melee root unless         │
+│                                                absolute.                     │
+│ --max-age-days           FLOAT RANGE [x>=0]    Remove terminal runs older    │
+│                                                than this many days.          │
+│                                                [default: 30.0]               │
+│ --max-total-bytes        INTEGER RANGE [x>=0]  Maximum retained evidence     │
+│                                                bytes after pruning.          │
+│                                                [default: 10737418240]        │
+│ --apply                                        Delete the planned run        │
+│                                                directories.                  │
+│ --json                                         Emit machine-readable JSON.   │
+│ --help                                         Show this message and exit.   │
+╰──────────────────────────────────────────────────────────────────────────────╯

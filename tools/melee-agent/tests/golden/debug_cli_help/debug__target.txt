@@ -1,0 +1,31 @@
+                                                                                
+ Usage: melee-agent debug target [OPTIONS] COMMAND [ARGS]...                    
+                                                                                
+ Define and score allocator targets.                                            
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ score-dump            Tier 4: score a pcdump's coloring decisions against a  │
+│                       target spec.                                           │
+│ dtk-objdump           Emit GNU objdump-shaped PPC disassembly using the      │
+│                       project dtk binary.                                    │
+│ derive                Tier 4: extract the current virtual→physical mapping   │
+│                       as a target spec.                                      │
+│ reanchor              Express a saved TargetSpec in a new compile's          │
+│                       ig-numbering (Unit 3).                                 │
+│ force-phys-from-diff  Derive --force-phys targets from a register-only       │
+│                       checkdiff.                                             │
+│ order-target          Derive a proven order-distance target (the §4.2 class  │
+│                       partition).                                            │
+│ match-iter-first      Recommend --force-iter-first arguments by reading the  │
+│                       expected .s.                                           │
+│ score-source          Compile a source via debug dump local, then score      │
+│                       target or checkdiff evidence.                          │
+│ score-force-phys      Permuter scorer: lex-encoded force-phys assignment     │
+│                       hits.                                                  │
+│ score-simplify-order  Permuter scorer: lex-encoded simplify-order + precolor │
+│                       distance.                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

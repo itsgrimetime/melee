@@ -1,0 +1,139 @@
+[
+  {
+    "case": "inspect-only-candidate",
+    "input": {
+      "function": "legacy_inspect_only",
+      "match_percent": "99.0",
+      "work_bucket": "stack-local-layout",
+      "frame_cause": "frame-too-large",
+      "frame_verdict": "source-reachable-candidate",
+      "frame_attribution_status": "source-object-attributed",
+      "frame_closability_tier": "reorder-gated-366",
+      "source_actionability": "generator-gated",
+      "headline_tool": "frame-reservations",
+      "actionability_reason": "blocked on #366",
+      "file_path": "melee/demo.c",
+      "next_command": "melee-agent debug inspect frame-reservations -f legacy_inspect_only --json"
+    },
+    "expected": {
+      "frame_evidence": "pcdump-attributed",
+      "frame_probe_status": "needs-attribution",
+      "frame_match_relevance": "unknown",
+      "source_actionability": "diagnostic-only",
+      "headline_tool": "frame-reservations"
+    }
+  },
+  {
+    "case": "alias-only-same-frame",
+    "input": {
+      "function": "legacy_alias_only",
+      "match_percent": "99.0",
+      "work_bucket": "stack-local-layout",
+      "frame_cause": "stack-object-offset-shift",
+      "frame_closability_tier": "reorder-gated-362",
+      "source_actionability": "generator-gated",
+      "headline_tool": "lifetime-layout",
+      "actionability_reason": "blocked on #362",
+      "file_path": "melee/demo.c"
+    },
+    "expected": {
+      "frame_evidence": "checkdiff-only",
+      "frame_probe_status": "needs-attribution",
+      "frame_match_relevance": "match-neutral",
+      "source_actionability": "diagnostic-only",
+      "headline_tool": "frame-reservations"
+    }
+  },
+  {
+    "case": "alias-only-unknown-frame",
+    "input": {
+      "function": "legacy_alias_only_unknown",
+      "match_percent": "99.0",
+      "work_bucket": "stack-local-layout",
+      "frame_closability_tier": "reorder-gated-362",
+      "source_actionability": "generator-gated",
+      "headline_tool": "frame-transform-search",
+      "actionability_reason": "blocked on #362",
+      "file_path": "melee/demo.c"
+    },
+    "expected": {
+      "frame_evidence": "checkdiff-only",
+      "frame_probe_status": "needs-attribution",
+      "frame_match_relevance": "unknown",
+      "source_actionability": "diagnostic-only",
+      "headline_tool": "frame-reservations"
+    }
+  },
+  {
+    "case": "materializable-stale-copy",
+    "input": {
+      "function": "legacy_materializable",
+      "match_percent": "99.0",
+      "work_bucket": "stack-local-layout",
+      "frame_cause": "frame-too-large",
+      "frame_verdict": "source-reachable-candidate",
+      "frame_attribution_status": "source-object-attributed",
+      "frame_closability_tier": "reorder-gated-366",
+      "source_actionability": "generator-gated",
+      "headline_tool": "frame-reservations",
+      "actionability_reason": "blocked on #366",
+      "file_path": "melee/demo.c",
+      "next_command": "melee-agent debug mutate frame-transform-search -f legacy_materializable --compile-probes --json"
+    },
+    "expected": {
+      "frame_evidence": "pcdump-attributed",
+      "frame_probe_status": "materializable",
+      "frame_match_relevance": "unknown",
+      "source_actionability": "current-tools",
+      "headline_tool": "frame-transform-search"
+    }
+  },
+  {
+    "case": "validated-stale-copy",
+    "input": {
+      "function": "legacy_validated",
+      "match_percent": "99.0",
+      "work_bucket": "stack-local-layout",
+      "frame_cause": "frame-too-large",
+      "frame_raw_verdict": "source-reachable-validated",
+      "frame_attribution_status": "source-object-attributed",
+      "frame_closability_tier": "reorder-gated-369",
+      "source_actionability": "generator-gated",
+      "headline_tool": "frame-reservations",
+      "actionability_reason": "blocked on #369",
+      "file_path": "melee/demo.c"
+    },
+    "expected": {
+      "frame_evidence": "probe-validated",
+      "frame_probe_status": "validated-improving",
+      "frame_match_relevance": "unknown",
+      "source_actionability": "current-tools",
+      "headline_tool": "frame-transform-search"
+    }
+  },
+  {
+    "case": "inconclusive-stale-copy",
+    "input": {
+      "function": "legacy_inconclusive",
+      "match_percent": "99.0",
+      "work_bucket": "stack-local-layout",
+      "frame_cause": "frame-too-large",
+      "frame_verdict": "source-reachable-candidate",
+      "frame_attribution_status": "source-object-attributed",
+      "frame_evidence": "tool-evaluated",
+      "frame_probe_status": "probe-inconclusive",
+      "frame_closability_tier": "reorder-gated-362",
+      "source_actionability": "generator-gated",
+      "headline_tool": "frame-transform-search",
+      "actionability_reason": "blocked on #362",
+      "file_path": "melee/demo.c"
+    },
+    "expected": {
+      "frame_evidence": "tool-evaluated",
+      "frame_probe_status": "probe-inconclusive",
+      "frame_match_relevance": "unknown",
+      "source_actionability": "diagnostic-only",
+      "headline_tool": "frame-reservations"
+    }
+  }
+]

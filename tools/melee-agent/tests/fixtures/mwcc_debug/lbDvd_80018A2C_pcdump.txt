@@ -1,0 +1,3769 @@
+Starting function lbDvd_80018A2C
+--------------------------------------------------------------------------------
+Removing unreachable code at: 36
+Removing goto next at 206
+*****************
+Dumps for pass=0
+*****************
+Found propagatable assignment at: 4
+Found propagatable assignment at: 13
+Found propagatable assignment at: 78
+Found propagatable assignment at: 91
+Found propagatable assignment at: 97
+Found propagatable assignment at: 101
+Found propagatable assignment at: 106
+Found propagatable assignment at: 110
+Found propagatable assignment at: 114
+Found propagatable assignment at: 157
+Found propagatable assignment at: 195
+Found propagatable assignment at: 219
+Found propagatable assignment at: 238
+Found propagatable expression assignment at: 4
+Found propagatable expression assignment at: 13
+Found propagatable expression assignment at: 26
+Found expression propagation at 265 from 26
+Found propagatable expression assignment at: 78
+Found propagatable expression assignment at: 91
+Found propagatable expression assignment at: 97
+Found propagatable expression assignment at: 101
+Found propagatable expression assignment at: 106
+Found propagatable expression assignment at: 110
+Found propagatable expression assignment at: 114
+Found propagatable expression assignment at: 127
+Found expression propagation at 273 from 127
+Found propagatable expression assignment at: 157
+Found propagatable expression assignment at: 195
+Found propagatable expression assignment at: 219
+Found propagatable expression assignment at: 238
+Removing dead assignment 97
+Removing dead assignment 101
+ header = 23 
+ l1 bit vector=
+13-23
+ l bit vector=
+1-7,9,12-25,27-29,31-32
+ header = 32 
+ l1 bit vector=
+1-7,9,12-25,27-29,31-32
+ l bit vector=
+13-23
+IRO_FindLoops_Unroll:Found loop with header 23
+Loop includes: 13-23
+Killed in loop: 7-10
+Found induction variable the old way: @566
+Induction Used in loop
+Induction Used in loop
+IsLoopUnrollable:No due to LP_LOOP_HAS_CNTRLFLOW 
+IRO_FindLoops:Found loop with header 23
+Loop includes: 13-23
+Killed in loop: 7-10
+Found induction variable the old way: @566
+Expressions
+
+   1: 128 FN:13 CE:0 NS:0 Depends: 9
+
+   2: 130 FN:13 CE:0 NS:0 Depends: 9
+
+   3: 132 FN:13 CE:0 NS:0 Depends: 9
+
+   4: 282 FN:13 CE:0 NS:0 Depends: 9
+
+   5: 281 FN:13 CE:0 NS:0 Depends: 9
+
+   6: 286 FN:13 CE:0 NS:0 Depends: 9
+
+   7: 146 FN:13 CE:0 NS:0 Depends: 4,9
+
+   8: 154 FN:14 CE:1 NS:0 Depends: 0,4-5
+
+   9: 159 FN:14 CE:1 NS:0 Depends: 0,4,10
+
+  10: 166 FN:15 CE:1 NS:0 Depends: 0,4,10
+
+  11: 177 FN:17 CE:1 NS:0 Depends: 0,4,10
+
+  12: 183 FN:18 CE:1 NS:0 Depends: 0,4,10
+
+  13: 192 FN:19 CE:1 NS:0 Depends: 0,4-5
+
+  14: 197 FN:19 CE:1 NS:0 Depends: 0,4,10
+
+  15: 204 FN:20 CE:1 NS:0 Depends: 0,4,10
+
+
+Found reduction in strength: 130
+Found reduction in strength: 281
+Using existing RIS: 130
+IRO_FindLoops:Found loop with header 32
+Loop includes: 1-7,9,12-25,27-29,31-32
+Killed in loop: 0-1,3-5,7-11
+Found induction variable the old way: i
+Expressions
+
+   1: 19 FN:1 CE:0 NS:0 Depends: 3
+
+   2: 21 FN:1 CE:0 NS:0 Depends: 3
+
+   3: 23 FN:1 CE:0 NS:0 Depends: 3
+
+   4: 332 FN:1 CE:0 NS:0 Depends: 3
+
+   5: 331 FN:1 CE:0 NS:0 Depends: 3
+
+   6: 336 FN:1 CE:0 NS:0 Depends: 3
+
+   7: 37 FN:1 CE:0 NS:0 Depends: 3-4
+
+   8: 48 FN:3 CE:1 NS:0 Depends: 0,4-5
+
+   9: 57 FN:5 CE:0 NS:0 Depends: 6
+
+  10: 62 FN:5 CE:1 NS:0 Depends: 0,4-5
+
+  11: 63 FN:5 CE:1 NS:0 Depends: 0,4-5
+
+  12: 64 FN:5 CE:1 NS:0 Depends: 0,4-6
+
+  13: 347 FN:7 CE:0 NS:0 Depends: 
+
+  14: 72 FN:7 CE:0 NS:0 Depends: 4
+
+  15: 77 FN:7 CE:1 NS:0 Depends: 0,4-5
+
+  16: 78 FN:7 CE:1 NS:0 Depends: 0,4-5
+
+  17: 91 FN:9 CE:1 NS:0 Depends: 0,4-5
+
+  18: 92 FN:9 CE:1 NS:0 Depends: 0,4-5
+
+  19: 313 FN:12 CE:0 NS:0 Depends: 9
+
+  20: 312 FN:12 CE:0 NS:0 Depends: 9
+
+  21: 146 FN:13 CE:1 NS:0 Depends: 0,4,11
+
+  22: 154 FN:14 CE:1 NS:0 Depends: 0,4-5
+
+  23: 159 FN:14 CE:1 NS:0 Depends: 0,4,10
+
+  24: 166 FN:15 CE:1 NS:0 Depends: 0,4,10
+
+  25: 177 FN:17 CE:1 NS:0 Depends: 0,4,10
+
+  26: 183 FN:18 CE:1 NS:0 Depends: 0,4,10
+
+  27: 192 FN:19 CE:1 NS:0 Depends: 0,4-5
+
+  28: 197 FN:19 CE:1 NS:0 Depends: 0,4,10
+
+  29: 204 FN:20 CE:1 NS:0 Depends: 0,4,10
+
+
+Found reduction in strength: 21
+Found reduction in strength: 331
+Using existing RIS: 21
+Found loop invariant: 57
+Found propagatable assignment at: 4
+Found propagatable assignment at: 13
+Found propagatable assignment at: 86
+Found propagatable assignment at: 99
+Found propagatable assignment at: 114
+Found propagatable assignment at: 118
+Found propagatable assignment at: 122
+Found propagatable assignment at: 173
+Found propagatable assignment at: 211
+Found propagatable assignment at: 235
+Found propagatable assignment at: 254
+Found propagation at 387 from 13
+Found propagation at 314 from 122
+Replacing common sub at 312 with 385
+Replacing common sub at 154 with 77
+Replacing common sub at 183 with 177
+Replacing common sub at 192 with 77
+ReplaceExprWithLeftChild: expr= 385
+Removing branch around goto at 40
+Removing branch around goto at 51
+Removing branch around goto at 65
+Chaining goto at 257
+Chaining goto at 259
+Chaining goto at 259
+Found propagatable assignment at: 4
+Found propagatable assignment at: 13
+Found propagatable assignment at: 121
+Found propagatable assignment at: 134
+Found propagatable assignment at: 149
+Found propagatable assignment at: 153
+Found propagatable assignment at: 157
+Found propagatable assignment at: 168
+Found propagatable assignment at: 249
+Found propagatable assignment at: 318
+Found propagatable assignment at: 346
+Found propagatable assignment at: 369
+Removing unreachable code at: 10
+Removing unreachable code at: 29
+Removing unreachable code at: 30
+Removing goto next at 370
+Found propagatable assignment at: 4
+Found propagatable assignment at: 13
+Found propagatable assignment at: 121
+Found propagatable assignment at: 133
+Found propagatable assignment at: 148
+Found propagatable assignment at: 152
+Found propagatable assignment at: 156
+Found propagatable assignment at: 167
+Found propagatable assignment at: 248
+Found propagatable assignment at: 317
+Found propagatable assignment at: 345
+Found propagatable assignment at: 368
+Found propagatable assignment at: 4
+Found propagatable assignment at: 13
+Found propagatable assignment at: 121
+Found propagatable assignment at: 133
+Found propagatable assignment at: 148
+Found propagatable assignment at: 152
+Found propagatable assignment at: 156
+Found propagatable assignment at: 167
+Found propagatable assignment at: 248
+Found propagatable assignment at: 317
+Found propagatable assignment at: 345
+Found propagatable assignment at: 368
+*****************
+Dumps for pass=1
+*****************
+Found propagatable assignment at: 4
+Found propagatable assignment at: 13
+Found propagatable assignment at: 121
+Found propagatable assignment at: 133
+Found propagatable assignment at: 148
+Found propagatable assignment at: 152
+Found propagatable assignment at: 156
+Found propagatable assignment at: 167
+Found propagatable assignment at: 248
+Found propagatable assignment at: 317
+Found propagatable assignment at: 345
+Found propagatable assignment at: 368
+Found propagatable expression assignment at: 4
+Found propagatable expression assignment at: 13
+Found propagatable expression assignment at: 31
+Found propagatable expression assignment at: 40
+Found propagatable expression assignment at: 121
+Found propagatable expression assignment at: 133
+Found propagatable expression assignment at: 148
+Found propagatable expression assignment at: 152
+Found propagatable expression assignment at: 156
+Found propagatable expression assignment at: 167
+Found propagatable expression assignment at: 176
+Found propagatable expression assignment at: 248
+Found propagatable expression assignment at: 317
+Found propagatable expression assignment at: 345
+Found propagatable expression assignment at: 368
+Found propagatable assignment at: 4
+Found propagatable assignment at: 13
+Found propagatable assignment at: 121
+Found propagatable assignment at: 133
+Found propagatable assignment at: 148
+Found propagatable assignment at: 152
+Found propagatable assignment at: 156
+Found propagatable assignment at: 167
+Found propagatable assignment at: 248
+Found propagatable assignment at: 317
+Found propagatable assignment at: 345
+Found propagatable assignment at: 368
+Found propagatable assignment at: 4
+Found propagatable assignment at: 13
+Found propagatable assignment at: 121
+Found propagatable assignment at: 133
+Found propagatable assignment at: 148
+Found propagatable assignment at: 152
+Found propagatable assignment at: 156
+Found propagatable assignment at: 167
+Found propagatable assignment at: 248
+Found propagatable assignment at: 317
+Found propagatable assignment at: 345
+Found propagatable assignment at: 368
+
+BEFORE GLOBAL OPTIMIZATION
+lbDvd_80018A2C
+:{0005}::::LOOPWEIGHT=0
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=0
+B1: Succ={B2 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+:{0004}::::LOOPWEIGHT=131585
+B2: Succ={B3 } Pred={B1 } Labels={L2 }
+
+    li      r36,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B2 } Labels={L17 }
+
+    bl      OSDisableInterrupts; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B35 } Pred={B3 } Labels={L18 }
+
+    mr      r47,r3
+    mr      r34,r47
+    li      r33,0
+    lis     r48,HA(preloadCache)
+    addi    r49,r48,LO(preloadCache)
+    mr      r41,r49
+    mr      r43,r41
+    rlwinm  r42,r32,0,24,31
+    b       B35
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 B34 } Pred={B35 } Labels={L3 }
+
+    addi    r35,r43,172
+    lbz     r50,172(r43); fIsPtrOp
+    extsb   r51,r50
+    bt      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=12
+B6: Succ={B7 B34 } Pred={B5 } Labels={L19 }
+
+    lha     r52,8(r35); fIsPtrOp
+    cmpi    cr0,r52,0
+    bf      cr0,gt,B34
+:{0004}::::LOOPWEIGHT=15
+B7: Succ={B8 B34 } Pred={B6 } Labels={L20 }
+
+    lbz     r53,4(r35); fIsPtrOp
+    and     r54,r53,r42
+    bt      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=1824551256
+B8: Succ={B9 B10 } Pred={B7 } Labels={L21 }
+
+    lbz     r40,2(r35); fIsPtrOp
+    extsb   r55,r40
+    lis     r56,HA(preloadCache)
+    addi    r57,r56,LO(preloadCache)
+    lwz     r58,2412(r57); fIsPtrOp
+    cmp     cr0,r55,r58
+    bf      cr0,eq,B10
+:{0004}::::LOOPWEIGHT=0
+B9: Succ={B36 } Pred={B8 } Labels={L22 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=11
+B10: Succ={B11 B17 } Pred={B8 } Labels={L4 }
+
+    lbz     r59,0(r35); fIsPtrOp
+    extsb   r60,r59
+    cmpi    cr0,r60,3
+    bt      cr0,eq,B17
+:{0004}::::LOOPWEIGHT=0
+B11: Succ={B12 B14 } Pred={B10 } Labels={L23 }
+
+    bf      cr0,lt,B14
+:{0004}::::LOOPWEIGHT=15
+B12: Succ={B13 B16 } Pred={B11 } Labels={L25 }
+
+    cmpi    cr0,r60,1
+    bf      cr0,lt,B16
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B34 } Pred={B12 } Labels={L26 }
+
+    b       B34
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 B34 } Pred={B11 } Labels={L24 }
+
+    cmpi    cr0,r60,5
+    bf      cr0,lt,B34
+:{0004}::::LOOPWEIGHT=0
+B15: Succ={B33 } Pred={B14 } Labels={L27 }
+
+    b       B33
+:{0004}::::LOOPWEIGHT=786436
+B16: Succ={B36 } Pred={B12 } Labels={L5 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=1824554216
+B17: Succ={B28 } Pred={B10 } Labels={L6 }
+
+    li      r37,0
+    li      r38,0
+    li      r46,0
+    mr      r44,r41
+    b       B28
+:{0004}::::LOOPWEIGHT=33620068
+B18: Succ={B19 B22 } Pred={B28 } Labels={L7 }
+
+    addi    r45,r44,172
+    lbz     r61,172(r44); fIsPtrOp
+    extsb   r62,r61
+    cmpi    cr0,r62,1
+    bf      cr0,eq,B22
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 B22 } Pred={B18 } Labels={L28 }
+
+    lbz     r63,2(r45); fIsPtrOp
+    extsb   r64,r63
+    extsb   r65,r40
+    cmp     cr0,r64,r65
+    bf      cr0,eq,B22
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B22 } Pred={B19 } Labels={L29 }
+
+    lha     r66,8(r45); fIsPtrOp
+    cmpi    cr0,r66,0
+    bf      cr0,gt,B22
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L30 }
+
+    li      r38,1
+:{0004}::::LOOPWEIGHT=259
+B22: Succ={B23 B24 } Pred={B21 B20 B19 B18 } Labels={L8 }
+
+    lbz     r39,0(r45); fIsPtrOp
+    extsb   r67,r39
+    cmpi    cr0,r67,2
+    bt      cr0,eq,B24
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 B27 } Pred={B22 } Labels={L31 }
+
+    extsb   r68,r39
+    cmpi    cr0,r68,3
+    bf      cr0,eq,B27
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 B27 } Pred={B23 B22 } Labels={L9 L32 }
+
+    lbz     r69,2(r45); fIsPtrOp
+    extsb   r70,r69
+    extsb   r71,r40
+    cmp     cr0,r70,r71
+    bf      cr0,eq,B27
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 B27 } Pred={B24 } Labels={L33 }
+
+    lha     r72,8(r45); fIsPtrOp
+    cmpi    cr0,r72,0
+    bf      cr0,lt,B27
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 } Labels={L34 }
+
+    li      r37,1
+:{0004}::::LOOPWEIGHT=1824558248
+B27: Succ={B28 } Pred={B26 B25 B24 B23 } Labels={L10 }
+
+    addi    r44,r44,28
+    addi    r46,r46,1
+:{0004}::::LOOPWEIGHT=1824558304
+B28: Succ={B29 B18 } Pred={B27 B17 } Labels={L11 }
+
+    cmpi    cr0,r46,80
+    bt      cr0,lt,B18
+:{0004}::::LOOPWEIGHT=1704460294
+B29: Succ={B30 B32 } Pred={B28 } Labels={L35 }
+
+    cmpi    cr0,r38,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=73
+B30: Succ={B31 B32 } Pred={B29 } Labels={L36 }
+
+    cmpi    cr0,r37,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B36 } Pred={B30 } Labels={L37 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=1835012
+B32: Succ={B33 } Pred={B30 B29 } Labels={L12 }
+
+    li      r73,4
+    stb     r73,0(r35); fIsPtrOp
+    li      r74,9999
+    sth     r74,8(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=1690828806
+B33: Succ={B34 } Pred={B32 B15 } Labels={L13 }
+
+    li      r36,2
+:{0004}::::LOOPWEIGHT=0
+B34: Succ={B35 } Pred={B33 B14 B13 B7 B6 B5 } Labels={L14 }
+
+    addi    r43,r43,28
+    addi    r33,r33,1
+:{0004}::::LOOPWEIGHT=0
+B35: Succ={B36 B5 } Pred={B34 B4 } Labels={L15 }
+
+    cmpi    cr0,r33,80
+    bt      cr0,lt,B5
+:{0004}::::LOOPWEIGHT=0
+B36: Succ={B37 } Pred={B35 B31 B16 B9 } Labels={L16 L38 }
+
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B37: Succ={B38 } Pred={B36 } Labels={L39 }
+
+    bl      OSRestoreInterrupts; fLink
+:{0004}::::LOOPWEIGHT=1824552736
+B38: Succ={B39 } Pred={B37 } Labels={L40 }
+
+    mr      r75,r3
+    mr      r3,r36
+:{0006}::::LOOPWEIGHT=0
+B39: Succ={} Pred={B38 } Labels={L41 }
+
+
+AFTER VALUE NUMBERING
+lbDvd_80018A2C
+:{0005}::::LOOPWEIGHT=0
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=0
+B1: Succ={B2 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+:{0004}::::LOOPWEIGHT=131585
+B2: Succ={B3 } Pred={B1 } Labels={L2 }
+
+    li      r36,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B2 } Labels={L17 }
+
+    bl      OSDisableInterrupts; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B35 } Pred={B3 } Labels={L18 }
+
+    mr      r47,r3
+    mr      r34,r47
+    li      r33,0
+    lis     r48,HA(preloadCache)
+    addi    r49,r48,LO(preloadCache)
+    mr      r41,r49
+    mr      r43,r41
+    rlwinm  r42,r32,0,24,31
+    b       B35
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 B34 } Pred={B35 } Labels={L3 }
+
+    addi    r35,r43,172
+    lbz     r50,172(r43); fIsPtrOp
+    extsb   r51,r50
+    bt      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=12
+B6: Succ={B7 B34 } Pred={B5 } Labels={L19 }
+
+    lha     r52,8(r35); fIsPtrOp
+    cmpi    cr0,r52,0
+    bf      cr0,gt,B34
+:{0004}::::LOOPWEIGHT=15
+B7: Succ={B8 B34 } Pred={B6 } Labels={L20 }
+
+    lbz     r53,4(r35); fIsPtrOp
+    and     r54,r53,r42
+    bt      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=1824551256
+B8: Succ={B9 B10 } Pred={B7 } Labels={L21 }
+
+    lbz     r40,2(r35); fIsPtrOp
+    extsb   r55,r40
+    lis     r56,HA(preloadCache)
+    addi    r57,r56,LO(preloadCache)
+    lwz     r58,2412(r57); fIsPtrOp
+    cmp     cr0,r55,r58
+    bf      cr0,eq,B10
+:{0004}::::LOOPWEIGHT=0
+B9: Succ={B36 } Pred={B8 } Labels={L22 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=11
+B10: Succ={B11 B17 } Pred={B8 } Labels={L4 }
+
+    lbz     r59,0(r35); fIsPtrOp
+    extsb   r60,r59
+    cmpi    cr0,r60,3
+    bt      cr0,eq,B17
+:{0004}::::LOOPWEIGHT=0
+B11: Succ={B12 B14 } Pred={B10 } Labels={L23 }
+
+    bf      cr0,lt,B14
+:{0004}::::LOOPWEIGHT=15
+B12: Succ={B13 B16 } Pred={B11 } Labels={L25 }
+
+    cmpi    cr0,r60,1
+    bf      cr0,lt,B16
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B34 } Pred={B12 } Labels={L26 }
+
+    b       B34
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 B34 } Pred={B11 } Labels={L24 }
+
+    cmpi    cr0,r60,5
+    bf      cr0,lt,B34
+:{0004}::::LOOPWEIGHT=0
+B15: Succ={B33 } Pred={B14 } Labels={L27 }
+
+    b       B33
+:{0004}::::LOOPWEIGHT=786436
+B16: Succ={B36 } Pred={B12 } Labels={L5 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=1824554216
+B17: Succ={B28 } Pred={B10 } Labels={L6 }
+
+    li      r37,0
+    li      r38,0
+    li      r46,0
+    mr      r44,r41
+    b       B28
+:{0004}::::LOOPWEIGHT=33620068
+B18: Succ={B19 B22 } Pred={B28 } Labels={L7 }
+
+    addi    r45,r44,172
+    lbz     r61,172(r44); fIsPtrOp
+    extsb   r62,r61
+    cmpi    cr0,r62,1
+    bf      cr0,eq,B22
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 B22 } Pred={B18 } Labels={L28 }
+
+    lbz     r63,2(r45); fIsPtrOp
+    extsb   r64,r63
+    extsb   r65,r40
+    cmp     cr0,r64,r65
+    bf      cr0,eq,B22
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B22 } Pred={B19 } Labels={L29 }
+
+    lha     r66,8(r45); fIsPtrOp
+    cmpi    cr0,r66,0
+    bf      cr0,gt,B22
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L30 }
+
+    li      r38,1
+:{0004}::::LOOPWEIGHT=259
+B22: Succ={B23 B24 } Pred={B21 B20 B19 B18 } Labels={L8 }
+
+    lbz     r39,0(r45); fIsPtrOp
+    extsb   r67,r39
+    cmpi    cr0,r67,2
+    bt      cr0,eq,B24
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 B27 } Pred={B22 } Labels={L31 }
+
+    mr      r68,r67
+    cmpi    cr0,r68,3
+    bf      cr0,eq,B27
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 B27 } Pred={B23 B22 } Labels={L9 L32 }
+
+    lbz     r69,2(r45); fIsPtrOp
+    extsb   r70,r69
+    extsb   r71,r40
+    cmp     cr0,r70,r71
+    bf      cr0,eq,B27
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 B27 } Pred={B24 } Labels={L33 }
+
+    lha     r72,8(r45); fIsPtrOp
+    cmpi    cr0,r72,0
+    bf      cr0,lt,B27
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 } Labels={L34 }
+
+    li      r37,1
+:{0004}::::LOOPWEIGHT=1824558248
+B27: Succ={B28 } Pred={B26 B25 B24 B23 } Labels={L10 }
+
+    addi    r44,r44,28
+    addi    r46,r46,1
+:{0004}::::LOOPWEIGHT=1824558304
+B28: Succ={B29 B18 } Pred={B27 B17 } Labels={L11 }
+
+    cmpi    cr0,r46,80
+    bt      cr0,lt,B18
+:{0004}::::LOOPWEIGHT=1704460294
+B29: Succ={B30 B32 } Pred={B28 } Labels={L35 }
+
+    cmpi    cr0,r38,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=73
+B30: Succ={B31 B32 } Pred={B29 } Labels={L36 }
+
+    cmpi    cr0,r37,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B36 } Pred={B30 } Labels={L37 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=1835012
+B32: Succ={B33 } Pred={B30 B29 } Labels={L12 }
+
+    li      r73,4
+    stb     r73,0(r35); fIsPtrOp
+    li      r74,9999
+    sth     r74,8(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=1690828806
+B33: Succ={B34 } Pred={B32 B15 } Labels={L13 }
+
+    li      r36,2
+:{0004}::::LOOPWEIGHT=0
+B34: Succ={B35 } Pred={B33 B14 B13 B7 B6 B5 } Labels={L14 }
+
+    addi    r43,r43,28
+    addi    r33,r33,1
+:{0004}::::LOOPWEIGHT=0
+B35: Succ={B36 B5 } Pred={B34 B4 } Labels={L15 }
+
+    cmpi    cr0,r33,80
+    bt      cr0,lt,B5
+:{0004}::::LOOPWEIGHT=0
+B36: Succ={B37 } Pred={B35 B31 B16 B9 } Labels={L16 L38 }
+
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B37: Succ={B38 } Pred={B36 } Labels={L39 }
+
+    bl      OSRestoreInterrupts; fLink
+:{0004}::::LOOPWEIGHT=1824552736
+B38: Succ={B39 } Pred={B37 } Labels={L40 }
+
+    mr      r75,r3
+    mr      r3,r36
+:{0006}::::LOOPWEIGHT=0
+B39: Succ={} Pred={B38 } Labels={L41 }
+
+
+AFTER COPY PROPAGATION
+lbDvd_80018A2C
+:{0005}::::LOOPWEIGHT=0
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=0
+B1: Succ={B2 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+:{0004}::::LOOPWEIGHT=131585
+B2: Succ={B3 } Pred={B1 } Labels={L2 }
+
+    li      r36,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B2 } Labels={L17 }
+
+    bl      OSDisableInterrupts; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B35 } Pred={B3 } Labels={L18 }
+
+    mr      r47,r3
+    mr      r34,r47
+    li      r33,0
+    lis     r48,HA(preloadCache)
+    addi    r49,r48,LO(preloadCache)
+    mr      r41,r49
+    mr      r43,r41
+    rlwinm  r42,r32,0,24,31
+    b       B35
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 B34 } Pred={B35 } Labels={L3 }
+
+    addi    r35,r43,172
+    lbz     r50,172(r43); fIsPtrOp
+    extsb   r51,r50
+    bt      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=12
+B6: Succ={B7 B34 } Pred={B5 } Labels={L19 }
+
+    lha     r52,8(r35); fIsPtrOp
+    cmpi    cr0,r52,0
+    bf      cr0,gt,B34
+:{0004}::::LOOPWEIGHT=15
+B7: Succ={B8 B34 } Pred={B6 } Labels={L20 }
+
+    lbz     r53,4(r35); fIsPtrOp
+    and     r54,r53,r42
+    bt      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=1824551256
+B8: Succ={B9 B10 } Pred={B7 } Labels={L21 }
+
+    lbz     r40,2(r35); fIsPtrOp
+    extsb   r55,r40
+    lis     r56,HA(preloadCache)
+    addi    r57,r56,LO(preloadCache)
+    lwz     r58,2412(r57); fIsPtrOp
+    cmp     cr0,r55,r58
+    bf      cr0,eq,B10
+:{0004}::::LOOPWEIGHT=0
+B9: Succ={B36 } Pred={B8 } Labels={L22 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=11
+B10: Succ={B11 B17 } Pred={B8 } Labels={L4 }
+
+    lbz     r59,0(r35); fIsPtrOp
+    extsb   r60,r59
+    cmpi    cr0,r60,3
+    bt      cr0,eq,B17
+:{0004}::::LOOPWEIGHT=0
+B11: Succ={B12 B14 } Pred={B10 } Labels={L23 }
+
+    bf      cr0,lt,B14
+:{0004}::::LOOPWEIGHT=15
+B12: Succ={B13 B16 } Pred={B11 } Labels={L25 }
+
+    cmpi    cr0,r60,1
+    bf      cr0,lt,B16
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B34 } Pred={B12 } Labels={L26 }
+
+    b       B34
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 B34 } Pred={B11 } Labels={L24 }
+
+    cmpi    cr0,r60,5
+    bf      cr0,lt,B34
+:{0004}::::LOOPWEIGHT=0
+B15: Succ={B33 } Pred={B14 } Labels={L27 }
+
+    b       B33
+:{0004}::::LOOPWEIGHT=786436
+B16: Succ={B36 } Pred={B12 } Labels={L5 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=1824554216
+B17: Succ={B28 } Pred={B10 } Labels={L6 }
+
+    li      r37,0
+    li      r38,0
+    li      r46,0
+    mr      r44,r41
+    b       B28
+:{0004}::::LOOPWEIGHT=33620068
+B18: Succ={B19 B22 } Pred={B28 } Labels={L7 }
+
+    addi    r45,r44,172
+    lbz     r61,172(r44); fIsPtrOp
+    extsb   r62,r61
+    cmpi    cr0,r62,1
+    bf      cr0,eq,B22
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 B22 } Pred={B18 } Labels={L28 }
+
+    lbz     r63,2(r45); fIsPtrOp
+    extsb   r64,r63
+    extsb   r65,r40
+    cmp     cr0,r64,r65
+    bf      cr0,eq,B22
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B22 } Pred={B19 } Labels={L29 }
+
+    lha     r66,8(r45); fIsPtrOp
+    cmpi    cr0,r66,0
+    bf      cr0,gt,B22
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L30 }
+
+    li      r38,1
+:{0004}::::LOOPWEIGHT=259
+B22: Succ={B23 B24 } Pred={B21 B20 B19 B18 } Labels={L8 }
+
+    lbz     r39,0(r45); fIsPtrOp
+    extsb   r67,r39
+    cmpi    cr0,r67,2
+    bt      cr0,eq,B24
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 B27 } Pred={B22 } Labels={L31 }
+
+    cmpi    cr0,r67,3
+    bf      cr0,eq,B27
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 B27 } Pred={B23 B22 } Labels={L9 L32 }
+
+    lbz     r69,2(r45); fIsPtrOp
+    extsb   r70,r69
+    extsb   r71,r40
+    cmp     cr0,r70,r71
+    bf      cr0,eq,B27
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 B27 } Pred={B24 } Labels={L33 }
+
+    lha     r72,8(r45); fIsPtrOp
+    cmpi    cr0,r72,0
+    bf      cr0,lt,B27
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 } Labels={L34 }
+
+    li      r37,1
+:{0004}::::LOOPWEIGHT=1824558248
+B27: Succ={B28 } Pred={B26 B25 B24 B23 } Labels={L10 }
+
+    addi    r44,r44,28
+    addi    r46,r46,1
+:{0004}::::LOOPWEIGHT=1824558304
+B28: Succ={B29 B18 } Pred={B27 B17 } Labels={L11 }
+
+    cmpi    cr0,r46,80
+    bt      cr0,lt,B18
+:{0004}::::LOOPWEIGHT=1704460294
+B29: Succ={B30 B32 } Pred={B28 } Labels={L35 }
+
+    cmpi    cr0,r38,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=73
+B30: Succ={B31 B32 } Pred={B29 } Labels={L36 }
+
+    cmpi    cr0,r37,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B36 } Pred={B30 } Labels={L37 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=1835012
+B32: Succ={B33 } Pred={B30 B29 } Labels={L12 }
+
+    li      r73,4
+    stb     r73,0(r35); fIsPtrOp
+    li      r74,9999
+    sth     r74,8(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=1690828806
+B33: Succ={B34 } Pred={B32 B15 } Labels={L13 }
+
+    li      r36,2
+:{0004}::::LOOPWEIGHT=0
+B34: Succ={B35 } Pred={B33 B14 B13 B7 B6 B5 } Labels={L14 }
+
+    addi    r43,r43,28
+    addi    r33,r33,1
+:{0004}::::LOOPWEIGHT=0
+B35: Succ={B36 B5 } Pred={B34 B4 } Labels={L15 }
+
+    cmpi    cr0,r33,80
+    bt      cr0,lt,B5
+:{0004}::::LOOPWEIGHT=0
+B36: Succ={B37 } Pred={B35 B31 B16 B9 } Labels={L16 L38 }
+
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B37: Succ={B38 } Pred={B36 } Labels={L39 }
+
+    bl      OSRestoreInterrupts; fLink
+:{0004}::::LOOPWEIGHT=1824552736
+B38: Succ={B39 } Pred={B37 } Labels={L40 }
+
+    mr      r75,r3
+    mr      r3,r36
+:{0006}::::LOOPWEIGHT=0
+B39: Succ={} Pred={B38 } Labels={L41 }
+
+
+AFTER CODE MOTION
+lbDvd_80018A2C
+:{0005}::::LOOPWEIGHT=0
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=0
+B1: Succ={B2 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+:{0004}::::LOOPWEIGHT=131585
+B2: Succ={B3 } Pred={B1 } Labels={L2 }
+
+    li      r36,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B2 } Labels={L17 }
+
+    bl      OSDisableInterrupts; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B41 } Pred={B3 } Labels={L18 }
+
+    mr      r47,r3
+    mr      r34,r47
+    li      r33,0
+    lis     r48,HA(preloadCache)
+    addi    r49,r48,LO(preloadCache)
+    mr      r41,r49
+    mr      r43,r41
+    rlwinm  r42,r32,0,24,31
+    b       B41
+:{0004}::::LOOPWEIGHT=0
+B41: Succ={B35 } Pred={B4 } Labels={L43 }
+
+    lis     r56,HA(preloadCache)
+    addi    r57,r56,LO(preloadCache)
+    b       B35
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 B34 } Pred={B35 } Labels={L3 }
+
+    addi    r35,r43,172
+    lbz     r50,172(r43); fIsPtrOp
+    extsb   r51,r50
+    bt      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=12
+B6: Succ={B7 B34 } Pred={B5 } Labels={L19 }
+
+    lha     r52,8(r35); fIsPtrOp
+    cmpi    cr0,r52,0
+    bf      cr0,gt,B34
+:{0004}::::LOOPWEIGHT=15
+B7: Succ={B8 B34 } Pred={B6 } Labels={L20 }
+
+    lbz     r53,4(r35); fIsPtrOp
+    and     r54,r53,r42
+    bt      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=1824551256
+B8: Succ={B9 B10 } Pred={B7 } Labels={L21 }
+
+    lbz     r40,2(r35); fIsPtrOp
+    extsb   r55,r40
+    lwz     r58,2412(r57); fIsPtrOp
+    cmp     cr0,r55,r58
+    bf      cr0,eq,B10
+:{0004}::::LOOPWEIGHT=0
+B9: Succ={B36 } Pred={B8 } Labels={L22 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=11
+B10: Succ={B11 B17 } Pred={B8 } Labels={L4 }
+
+    lbz     r59,0(r35); fIsPtrOp
+    extsb   r60,r59
+    cmpi    cr0,r60,3
+    bt      cr0,eq,B17
+:{0004}::::LOOPWEIGHT=0
+B11: Succ={B12 B14 } Pred={B10 } Labels={L23 }
+
+    bf      cr0,lt,B14
+:{0004}::::LOOPWEIGHT=15
+B12: Succ={B13 B16 } Pred={B11 } Labels={L25 }
+
+    cmpi    cr0,r60,1
+    bf      cr0,lt,B16
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B34 } Pred={B12 } Labels={L26 }
+
+    b       B34
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 B34 } Pred={B11 } Labels={L24 }
+
+    cmpi    cr0,r60,5
+    bf      cr0,lt,B34
+:{0004}::::LOOPWEIGHT=0
+B15: Succ={B33 } Pred={B14 } Labels={L27 }
+
+    b       B33
+:{0004}::::LOOPWEIGHT=786436
+B16: Succ={B36 } Pred={B12 } Labels={L5 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=1824554216
+B17: Succ={B40 } Pred={B10 } Labels={L6 }
+
+    li      r37,0
+    li      r38,0
+    li      r46,0
+    mr      r44,r41
+    b       B40
+:{0004}::::LOOPWEIGHT=1824555192
+B40: Succ={B28 } Pred={B17 } Labels={L42 }
+
+    extsb   r65,r40
+    extsb   r71,r40
+    b       B28
+:{0004}::::LOOPWEIGHT=33620068
+B18: Succ={B19 B22 } Pred={B28 } Labels={L7 }
+
+    addi    r45,r44,172
+    lbz     r61,172(r44); fIsPtrOp
+    extsb   r62,r61
+    cmpi    cr0,r62,1
+    bf      cr0,eq,B22
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 B22 } Pred={B18 } Labels={L28 }
+
+    lbz     r63,2(r45); fIsPtrOp
+    extsb   r64,r63
+    cmp     cr0,r64,r65
+    bf      cr0,eq,B22
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B22 } Pred={B19 } Labels={L29 }
+
+    lha     r66,8(r45); fIsPtrOp
+    cmpi    cr0,r66,0
+    bf      cr0,gt,B22
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L30 }
+
+    li      r38,1
+:{0004}::::LOOPWEIGHT=259
+B22: Succ={B23 B24 } Pred={B21 B20 B19 B18 } Labels={L8 }
+
+    lbz     r39,0(r45); fIsPtrOp
+    extsb   r67,r39
+    cmpi    cr0,r67,2
+    bt      cr0,eq,B24
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 B27 } Pred={B22 } Labels={L31 }
+
+    cmpi    cr0,r67,3
+    bf      cr0,eq,B27
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 B27 } Pred={B23 B22 } Labels={L9 L32 }
+
+    lbz     r69,2(r45); fIsPtrOp
+    extsb   r70,r69
+    cmp     cr0,r70,r71
+    bf      cr0,eq,B27
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 B27 } Pred={B24 } Labels={L33 }
+
+    lha     r72,8(r45); fIsPtrOp
+    cmpi    cr0,r72,0
+    bf      cr0,lt,B27
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 } Labels={L34 }
+
+    li      r37,1
+:{0004}::::LOOPWEIGHT=1824558248
+B27: Succ={B28 } Pred={B26 B25 B24 B23 } Labels={L10 }
+
+    addi    r44,r44,28
+    addi    r46,r46,1
+:{0004}::::LOOPWEIGHT=1824558304
+B28: Succ={B29 B18 } Pred={B40 B27 } Labels={L11 }
+
+    cmpi    cr0,r46,80
+    bt      cr0,lt,B18
+:{0004}::::LOOPWEIGHT=1704460294
+B29: Succ={B30 B32 } Pred={B28 } Labels={L35 }
+
+    cmpi    cr0,r38,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=73
+B30: Succ={B31 B32 } Pred={B29 } Labels={L36 }
+
+    cmpi    cr0,r37,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B36 } Pred={B30 } Labels={L37 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=1835012
+B32: Succ={B33 } Pred={B30 B29 } Labels={L12 }
+
+    li      r73,4
+    stb     r73,0(r35); fIsPtrOp
+    li      r74,9999
+    sth     r74,8(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=1690828806
+B33: Succ={B34 } Pred={B32 B15 } Labels={L13 }
+
+    li      r36,2
+:{0004}::::LOOPWEIGHT=0
+B34: Succ={B35 } Pred={B33 B14 B13 B7 B6 B5 } Labels={L14 }
+
+    addi    r43,r43,28
+    addi    r33,r33,1
+:{0004}::::LOOPWEIGHT=0
+B35: Succ={B36 B5 } Pred={B41 B34 } Labels={L15 }
+
+    cmpi    cr0,r33,80
+    bt      cr0,lt,B5
+:{0004}::::LOOPWEIGHT=0
+B36: Succ={B37 } Pred={B35 B31 B16 B9 } Labels={L16 L38 }
+
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B37: Succ={B38 } Pred={B36 } Labels={L39 }
+
+    bl      OSRestoreInterrupts; fLink
+:{0004}::::LOOPWEIGHT=1824552736
+B38: Succ={B39 } Pred={B37 } Labels={L40 }
+
+    mr      r75,r3
+    mr      r3,r36
+:{0006}::::LOOPWEIGHT=0
+B39: Succ={} Pred={B38 } Labels={L41 }
+
+
+AFTER LOOP TRANSFORMATIONS
+lbDvd_80018A2C
+:{0005}::::LOOPWEIGHT=0
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=0
+B1: Succ={B2 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+:{0004}::::LOOPWEIGHT=131585
+B2: Succ={B3 } Pred={B1 } Labels={L2 }
+
+    li      r36,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B2 } Labels={L17 }
+
+    bl      OSDisableInterrupts; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B41 } Pred={B3 } Labels={L18 }
+
+    mr      r47,r3
+    mr      r34,r47
+    li      r33,0
+    lis     r48,HA(preloadCache)
+    addi    r49,r48,LO(preloadCache)
+    mr      r41,r49
+    mr      r43,r41
+    rlwinm  r42,r32,0,24,31
+    b       B41
+:{0004}::::LOOPWEIGHT=0
+B41: Succ={B5 } Pred={B4 } Labels={L43 }
+
+    lis     r56,HA(preloadCache)
+    addi    r57,r56,LO(preloadCache)
+    b       B5
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 B34 } Pred={B41 B35 } Labels={L3 }
+
+    addi    r35,r43,172
+    lbz     r50,172(r43); fIsPtrOp
+    extsb   r51,r50
+    bt      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=12
+B6: Succ={B7 B34 } Pred={B5 } Labels={L19 }
+
+    lha     r52,8(r35); fIsPtrOp
+    cmpi    cr0,r52,0
+    bf      cr0,gt,B34
+:{0004}::::LOOPWEIGHT=15
+B7: Succ={B8 B34 } Pred={B6 } Labels={L20 }
+
+    lbz     r53,4(r35); fIsPtrOp
+    and     r54,r53,r42
+    bt      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=1824551256
+B8: Succ={B9 B10 } Pred={B7 } Labels={L21 }
+
+    lbz     r40,2(r35); fIsPtrOp
+    extsb   r55,r40
+    lwz     r58,2412(r57); fIsPtrOp
+    cmp     cr0,r55,r58
+    bf      cr0,eq,B10
+:{0004}::::LOOPWEIGHT=0
+B9: Succ={B36 } Pred={B8 } Labels={L22 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=11
+B10: Succ={B11 B17 } Pred={B8 } Labels={L4 }
+
+    lbz     r59,0(r35); fIsPtrOp
+    extsb   r60,r59
+    cmpi    cr0,r60,3
+    bt      cr0,eq,B17
+:{0004}::::LOOPWEIGHT=0
+B11: Succ={B12 B14 } Pred={B10 } Labels={L23 }
+
+    bf      cr0,lt,B14
+:{0004}::::LOOPWEIGHT=15
+B12: Succ={B13 B16 } Pred={B11 } Labels={L25 }
+
+    cmpi    cr0,r60,1
+    bf      cr0,lt,B16
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B34 } Pred={B12 } Labels={L26 }
+
+    b       B34
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 B34 } Pred={B11 } Labels={L24 }
+
+    cmpi    cr0,r60,5
+    bf      cr0,lt,B34
+:{0004}::::LOOPWEIGHT=0
+B15: Succ={B33 } Pred={B14 } Labels={L27 }
+
+    b       B33
+:{0004}::::LOOPWEIGHT=786436
+B16: Succ={B36 } Pred={B12 } Labels={L5 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=1824554216
+B17: Succ={B40 } Pred={B10 } Labels={L6 }
+
+    li      r37,0
+    li      r38,0
+    li      r46,0
+    mr      r44,r41
+    b       B40
+:{0004}::::LOOPWEIGHT=1824555192
+B40: Succ={B18 } Pred={B17 } Labels={L42 }
+
+    extsb   r65,r40
+    extsb   r71,r40
+    li      r76,40
+    mtctr   r76
+    b       B18
+:{0004}::::LOOPWEIGHT=33620068
+B18: Succ={B19 B22 } Pred={B40 B28 } Labels={L7 }
+
+    addi    r45,r44,172
+    lbz     r61,172(r44); fIsPtrOp
+    extsb   r62,r61
+    cmpi    cr0,r62,1
+    bf      cr0,eq,B22
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 B22 } Pred={B18 } Labels={L28 }
+
+    lbz     r63,2(r45); fIsPtrOp
+    extsb   r64,r63
+    cmp     cr0,r64,r65
+    bf      cr0,eq,B22
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B22 } Pred={B19 } Labels={L29 }
+
+    lha     r66,8(r45); fIsPtrOp
+    cmpi    cr0,r66,0
+    bf      cr0,gt,B22
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L30 }
+
+    li      r38,1
+:{0004}::::LOOPWEIGHT=259
+B22: Succ={B23 B24 } Pred={B21 B20 B19 B18 } Labels={L8 }
+
+    lbz     r39,0(r45); fIsPtrOp
+    extsb   r67,r39
+    cmpi    cr0,r67,2
+    bt      cr0,eq,B24
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 B27 } Pred={B22 } Labels={L31 }
+
+    cmpi    cr0,r67,3
+    bf      cr0,eq,B27
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 B27 } Pred={B23 B22 } Labels={L9 L32 }
+
+    lbz     r69,2(r45); fIsPtrOp
+    extsb   r70,r69
+    cmp     cr0,r70,r71
+    bf      cr0,eq,B27
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 B27 } Pred={B24 } Labels={L33 }
+
+    lha     r72,8(r45); fIsPtrOp
+    cmpi    cr0,r72,0
+    bf      cr0,lt,B27
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 } Labels={L34 }
+
+    li      r37,1
+:{0004}::::LOOPWEIGHT=1824558248
+B27: Succ={B42 } Pred={B26 B25 B24 B23 } Labels={L10 }
+
+    addi    r44,r44,28
+:{0004}::::LOOPWEIGHT=0
+B42: Succ={B46 B43 } Pred={B27 } Labels={L44 }
+
+    addi    r45,r44,172
+    lbz     r61,172(r44); fIsPtrOp
+    extsb   r62,r61
+    cmpi    cr0,r62,1
+    bf      cr0,eq,B46
+:{0004}::::LOOPWEIGHT=0
+B43: Succ={B46 B44 } Pred={B42 } Labels={L45 }
+
+    lbz     r63,2(r45); fIsPtrOp
+    extsb   r64,r63
+    cmp     cr0,r64,r65
+    bf      cr0,eq,B46
+:{0004}::::LOOPWEIGHT=0
+B44: Succ={B46 B45 } Pred={B43 } Labels={L46 }
+
+    lha     r66,8(r45); fIsPtrOp
+    cmpi    cr0,r66,0
+    bf      cr0,gt,B46
+:{0004}::::LOOPWEIGHT=33620068
+B45: Succ={B46 } Pred={B44 } Labels={L47 }
+
+    li      r38,1
+:{0004}::::LOOPWEIGHT=0
+B46: Succ={B48 B47 } Pred={B44 B43 B42 B45 } Labels={L48 }
+
+    lbz     r39,0(r45); fIsPtrOp
+    extsb   r67,r39
+    cmpi    cr0,r67,2
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B51 B48 } Pred={B46 } Labels={L49 }
+
+    cmpi    cr0,r67,3
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=0
+B48: Succ={B51 B49 } Pred={B46 B47 } Labels={L50 }
+
+    lbz     r69,2(r45); fIsPtrOp
+    extsb   r70,r69
+    cmp     cr0,r70,r71
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=65619
+B49: Succ={B51 B50 } Pred={B48 } Labels={L51 }
+
+    lha     r72,8(r45); fIsPtrOp
+    cmpi    cr0,r72,0
+    bf      cr0,lt,B51
+:{0004}::::LOOPWEIGHT=0
+B50: Succ={B51 } Pred={B49 } Labels={L52 }
+
+    li      r37,1
+:{0004}::::LOOPWEIGHT=524292
+B51: Succ={B28 } Pred={B49 B48 B47 B50 } Labels={L53 }
+
+    addi    r44,r44,28
+    addi    r46,r46,1
+:{0004}::::LOOPWEIGHT=1824558304
+B28: Succ={B29 B18 } Pred={B51 } Labels={L11 }
+
+    bdnz    B18
+:{0004}::::LOOPWEIGHT=1704460294
+B29: Succ={B30 B32 } Pred={B28 } Labels={L35 }
+
+    cmpi    cr0,r38,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=73
+B30: Succ={B31 B32 } Pred={B29 } Labels={L36 }
+
+    cmpi    cr0,r37,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B36 } Pred={B30 } Labels={L37 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=1835012
+B32: Succ={B33 } Pred={B30 B29 } Labels={L12 }
+
+    li      r73,4
+    stb     r73,0(r35); fIsPtrOp
+    li      r74,9999
+    sth     r74,8(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=1690828806
+B33: Succ={B34 } Pred={B32 B15 } Labels={L13 }
+
+    li      r36,2
+:{0004}::::LOOPWEIGHT=0
+B34: Succ={B35 } Pred={B33 B14 B13 B7 B6 B5 } Labels={L14 }
+
+    addi    r43,r43,28
+    addi    r33,r33,1
+:{0004}::::LOOPWEIGHT=0
+B35: Succ={B36 B5 } Pred={B34 } Labels={L15 }
+
+    cmpi    cr0,r33,80
+    bt      cr0,lt,B5
+:{0004}::::LOOPWEIGHT=0
+B36: Succ={B37 } Pred={B35 B31 B16 B9 } Labels={L16 L38 }
+
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B37: Succ={B38 } Pred={B36 } Labels={L39 }
+
+    bl      OSRestoreInterrupts; fLink
+:{0004}::::LOOPWEIGHT=1824552736
+B38: Succ={B39 } Pred={B37 } Labels={L40 }
+
+    mr      r3,r36
+:{0006}::::LOOPWEIGHT=0
+B39: Succ={} Pred={B38 } Labels={L41 }
+
+
+CONSTPROP RAN (changed_flag: before=0 after=0)
+
+AFTER VALUE NUMBERING 2
+lbDvd_80018A2C
+:{0005}::::LOOPWEIGHT=0
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=0
+B1: Succ={B2 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+:{0004}::::LOOPWEIGHT=131585
+B2: Succ={B3 } Pred={B1 } Labels={L2 }
+
+    li      r36,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B2 } Labels={L17 }
+
+    bl      OSDisableInterrupts; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B41 } Pred={B3 } Labels={L18 }
+
+    mr      r47,r3
+    mr      r34,r47
+    li      r33,0
+    lis     r48,HA(preloadCache)
+    addi    r49,r48,LO(preloadCache)
+    mr      r41,r49
+    mr      r43,r41
+    rlwinm  r42,r32,0,24,31
+    b       B41
+:{0004}::::LOOPWEIGHT=0
+B41: Succ={B5 } Pred={B4 } Labels={L43 }
+
+    b       B5
+:{0004}::::LOOPWEIGHT=0
+B5: Succ={B6 B34 } Pred={B41 B35 } Labels={L3 }
+
+    addi    r35,r43,172
+    lbz     r50,172(r43); fIsPtrOp
+    extsb   r51,r50
+    bt      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=12
+B6: Succ={B7 B34 } Pred={B5 } Labels={L19 }
+
+    lha     r52,8(r35); fIsPtrOp
+    cmpi    cr0,r52,0
+    bf      cr0,gt,B34
+:{0004}::::LOOPWEIGHT=15
+B7: Succ={B8 B34 } Pred={B6 } Labels={L20 }
+
+    lbz     r53,4(r35); fIsPtrOp
+    and     r54,r53,r42
+    bt      cr0,eq,B34
+:{0004}::::LOOPWEIGHT=1824551256
+B8: Succ={B9 B10 } Pred={B7 } Labels={L21 }
+
+    lbz     r40,2(r35); fIsPtrOp
+    extsb   r55,r40
+    lwz     r58,2412(r49); fIsPtrOp
+    cmp     cr0,r55,r58
+    bf      cr0,eq,B10
+:{0004}::::LOOPWEIGHT=0
+B9: Succ={B36 } Pred={B8 } Labels={L22 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=11
+B10: Succ={B11 B17 } Pred={B8 } Labels={L4 }
+
+    lbz     r59,0(r35); fIsPtrOp
+    extsb   r60,r59
+    cmpi    cr0,r60,3
+    bt      cr0,eq,B17
+:{0004}::::LOOPWEIGHT=0
+B11: Succ={B12 B14 } Pred={B10 } Labels={L23 }
+
+    bf      cr0,lt,B14
+:{0004}::::LOOPWEIGHT=15
+B12: Succ={B13 B16 } Pred={B11 } Labels={L25 }
+
+    cmpi    cr0,r60,1
+    bf      cr0,lt,B16
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B34 } Pred={B12 } Labels={L26 }
+
+    b       B34
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 B34 } Pred={B11 } Labels={L24 }
+
+    cmpi    cr0,r60,5
+    bf      cr0,lt,B34
+:{0004}::::LOOPWEIGHT=0
+B15: Succ={B33 } Pred={B14 } Labels={L27 }
+
+    b       B33
+:{0004}::::LOOPWEIGHT=786436
+B16: Succ={B36 } Pred={B12 } Labels={L5 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=1824554216
+B17: Succ={B40 } Pred={B10 } Labels={L6 }
+
+    li      r37,0
+    li      r38,0
+    li      r46,0
+    mr      r44,r41
+    b       B40
+:{0004}::::LOOPWEIGHT=1824555192
+B40: Succ={B18 } Pred={B17 } Labels={L42 }
+
+    li      r76,40
+    mtctr   r76
+    b       B18
+:{0004}::::LOOPWEIGHT=33620068
+B18: Succ={B19 B22 } Pred={B40 B28 } Labels={L7 }
+
+    addi    r45,r44,172
+    lbz     r61,172(r44); fIsPtrOp
+    extsb   r62,r61
+    cmpi    cr0,r62,1
+    bf      cr0,eq,B22
+:{0004}::::LOOPWEIGHT=0
+B19: Succ={B20 B22 } Pred={B18 } Labels={L28 }
+
+    lbz     r63,2(r45); fIsPtrOp
+    extsb   r64,r63
+    cmp     cr0,r64,r55
+    bf      cr0,eq,B22
+:{0004}::::LOOPWEIGHT=0
+B20: Succ={B21 B22 } Pred={B19 } Labels={L29 }
+
+    lha     r66,8(r45); fIsPtrOp
+    cmpi    cr0,r66,0
+    bf      cr0,gt,B22
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L30 }
+
+    li      r38,1
+:{0004}::::LOOPWEIGHT=259
+B22: Succ={B23 B24 } Pred={B21 B20 B19 B18 } Labels={L8 }
+
+    lbz     r39,0(r45); fIsPtrOp
+    extsb   r67,r39
+    cmpi    cr0,r67,2
+    bt      cr0,eq,B24
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 B27 } Pred={B22 } Labels={L31 }
+
+    cmpi    cr0,r67,3
+    bf      cr0,eq,B27
+:{0004}::::LOOPWEIGHT=0
+B24: Succ={B25 B27 } Pred={B23 B22 } Labels={L9 L32 }
+
+    lbz     r69,2(r45); fIsPtrOp
+    extsb   r70,r69
+    cmp     cr0,r70,r55
+    bf      cr0,eq,B27
+:{0004}::::LOOPWEIGHT=0
+B25: Succ={B26 B27 } Pred={B24 } Labels={L33 }
+
+    lha     r72,8(r45); fIsPtrOp
+    cmpi    cr0,r72,0
+    bf      cr0,lt,B27
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 } Labels={L34 }
+
+    li      r37,1
+:{0004}::::LOOPWEIGHT=1824558248
+B27: Succ={B42 } Pred={B26 B25 B24 B23 } Labels={L10 }
+
+    addi    r44,r44,28
+:{0004}::::LOOPWEIGHT=0
+B42: Succ={B46 B43 } Pred={B27 } Labels={L44 }
+
+    addi    r45,r44,172
+    lbz     r61,172(r44); fIsPtrOp
+    extsb   r62,r61
+    cmpi    cr0,r62,1
+    bf      cr0,eq,B46
+:{0004}::::LOOPWEIGHT=0
+B43: Succ={B46 B44 } Pred={B42 } Labels={L45 }
+
+    lbz     r63,2(r45); fIsPtrOp
+    extsb   r64,r63
+    cmp     cr0,r64,r55
+    bf      cr0,eq,B46
+:{0004}::::LOOPWEIGHT=0
+B44: Succ={B46 B45 } Pred={B43 } Labels={L46 }
+
+    lha     r66,8(r45); fIsPtrOp
+    cmpi    cr0,r66,0
+    bf      cr0,gt,B46
+:{0004}::::LOOPWEIGHT=33620068
+B45: Succ={B46 } Pred={B44 } Labels={L47 }
+
+    li      r38,1
+:{0004}::::LOOPWEIGHT=0
+B46: Succ={B48 B47 } Pred={B44 B43 B42 B45 } Labels={L48 }
+
+    lbz     r39,0(r45); fIsPtrOp
+    extsb   r67,r39
+    cmpi    cr0,r67,2
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B51 B48 } Pred={B46 } Labels={L49 }
+
+    cmpi    cr0,r67,3
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=0
+B48: Succ={B51 B49 } Pred={B46 B47 } Labels={L50 }
+
+    lbz     r69,2(r45); fIsPtrOp
+    extsb   r70,r69
+    cmp     cr0,r70,r55
+    bf      cr0,eq,B51
+:{0004}::::LOOPWEIGHT=65619
+B49: Succ={B51 B50 } Pred={B48 } Labels={L51 }
+
+    lha     r72,8(r45); fIsPtrOp
+    cmpi    cr0,r72,0
+    bf      cr0,lt,B51
+:{0004}::::LOOPWEIGHT=0
+B50: Succ={B51 } Pred={B49 } Labels={L52 }
+
+    li      r37,1
+:{0004}::::LOOPWEIGHT=524292
+B51: Succ={B28 } Pred={B49 B48 B47 B50 } Labels={L53 }
+
+    addi    r44,r44,28
+    addi    r46,r46,1
+:{0004}::::LOOPWEIGHT=1824558304
+B28: Succ={B29 B18 } Pred={B51 } Labels={L11 }
+
+    bdnz    B18
+:{0004}::::LOOPWEIGHT=1704460294
+B29: Succ={B30 B32 } Pred={B28 } Labels={L35 }
+
+    cmpi    cr0,r38,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=73
+B30: Succ={B31 B32 } Pred={B29 } Labels={L36 }
+
+    cmpi    cr0,r37,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B36 } Pred={B30 } Labels={L37 }
+
+    li      r36,1
+    b       B36
+:{0004}::::LOOPWEIGHT=1835012
+B32: Succ={B33 } Pred={B30 B29 } Labels={L12 }
+
+    li      r73,4
+    stb     r73,0(r35); fIsPtrOp
+    li      r74,9999
+    sth     r74,8(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=1690828806
+B33: Succ={B34 } Pred={B32 B15 } Labels={L13 }
+
+    li      r36,2
+:{0004}::::LOOPWEIGHT=0
+B34: Succ={B35 } Pred={B33 B14 B13 B7 B6 B5 } Labels={L14 }
+
+    addi    r43,r43,28
+    addi    r33,r33,1
+:{0004}::::LOOPWEIGHT=0
+B35: Succ={B36 B5 } Pred={B34 } Labels={L15 }
+
+    cmpi    cr0,r33,80
+    bt      cr0,lt,B5
+:{0004}::::LOOPWEIGHT=0
+B36: Succ={B37 } Pred={B35 B31 B16 B9 } Labels={L16 L38 }
+
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B37: Succ={B38 } Pred={B36 } Labels={L39 }
+
+    bl      OSRestoreInterrupts; fLink
+:{0004}::::LOOPWEIGHT=1824552736
+B38: Succ={B39 } Pred={B37 } Labels={L40 }
+
+    mr      r3,r36
+:{0006}::::LOOPWEIGHT=0
+B39: Succ={} Pred={B38 } Labels={L41 }
+
+
+AFTER INSTRUCTION SCHEDULING
+lbDvd_80018A2C
+:{0005}::::LOOPWEIGHT=0
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=0
+B1: Succ={B3 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+    li      r36,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B1 } Labels={L17 }
+
+    bl      OSDisableInterrupts; fLink
+:{000c}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L18 }
+
+    lis     r48,HA(preloadCache)
+    addi    r49,r48,LO(preloadCache)
+    mr      r47,r3
+    mr      r41,r49
+    mr      r34,r47
+    mr      r43,r41
+    rlwinm  r42,r32,0,24,31
+    li      r33,0
+:{000c}::::LOOPWEIGHT=0
+B5: Succ={B6 B34 } Pred={B4 B34 } Labels={L3 }
+
+    lbz     r50,172(r43); fIsPtrOp
+    addi    r35,r43,172
+    extsb   r51,r50
+    bt      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=12
+B6: Succ={B7 B34 } Pred={B5 } Labels={L19 }
+
+    lha     r52,8(r35); fIsPtrOp
+    cmpi    cr0,r52,0
+    bf      cr0,gt,B34
+:{000c}::::LOOPWEIGHT=15
+B7: Succ={B8 B34 } Pred={B6 } Labels={L20 }
+
+    lbz     r53,4(r35); fIsPtrOp
+    and     r54,r53,r42
+    bt      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=1824551256
+B8: Succ={B9 B10 } Pred={B7 } Labels={L21 }
+
+    lbz     r40,2(r35); fIsPtrOp
+    lwz     r58,2412(r49); fIsPtrOp
+    extsb   r55,r40
+    cmp     cr0,r55,r58
+    bf      cr0,eq,B10
+:{0004}::::LOOPWEIGHT=0
+B9: Succ={B36 } Pred={B8 } Labels={L22 }
+
+    li      r36,1
+    b       B36
+:{000c}::::LOOPWEIGHT=11
+B10: Succ={B11 B17 } Pred={B8 } Labels={L4 }
+
+    lbz     r59,0(r35); fIsPtrOp
+    extsb   r60,r59
+    cmpi    cr0,r60,3
+    bt      cr0,eq,B17
+:{0004}::::LOOPWEIGHT=0
+B11: Succ={B12 B14 } Pred={B10 } Labels={L23 }
+
+    bf      cr0,lt,B14
+:{0004}::::LOOPWEIGHT=15
+B12: Succ={B13 B16 } Pred={B11 } Labels={L25 }
+
+    cmpi    cr0,r60,1
+    bf      cr0,lt,B16
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B34 } Pred={B12 } Labels={L26 }
+
+    b       B34
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 B34 } Pred={B11 } Labels={L24 }
+
+    cmpi    cr0,r60,5
+    bf      cr0,lt,B34
+:{0004}::::LOOPWEIGHT=0
+B15: Succ={B33 } Pred={B14 } Labels={L27 }
+
+    b       B33
+:{0004}::::LOOPWEIGHT=786436
+B16: Succ={B36 } Pred={B12 } Labels={L5 }
+
+    li      r36,1
+    b       B36
+:{000c}::::LOOPWEIGHT=1824554216
+B17: Succ={B18 } Pred={B10 } Labels={L6 }
+
+    li      r76,40
+    mtctr   r76
+    mr      r44,r41
+    li      r37,0
+    li      r38,0
+    li      r46,0
+:{000c}::::LOOPWEIGHT=33620068
+B18: Succ={B19 B22 } Pred={B17 B51 } Labels={L7 }
+
+    lbz     r61,172(r44); fIsPtrOp
+    addi    r45,r44,172
+    extsb   r62,r61
+    cmpi    cr0,r62,1
+    bf      cr0,eq,B22
+:{000c}::::LOOPWEIGHT=0
+B19: Succ={B20 B22 } Pred={B18 } Labels={L28 }
+
+    lbz     r63,2(r45); fIsPtrOp
+    extsb   r64,r63
+    cmp     cr0,r64,r55
+    bf      cr0,eq,B22
+:{000c}::::LOOPWEIGHT=0
+B20: Succ={B21 B22 } Pred={B19 } Labels={L29 }
+
+    lha     r66,8(r45); fIsPtrOp
+    cmpi    cr0,r66,0
+    bf      cr0,gt,B22
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L30 }
+
+    li      r38,1
+:{000c}::::LOOPWEIGHT=259
+B22: Succ={B23 B24 } Pred={B21 B20 B19 B18 } Labels={L8 }
+
+    lbz     r39,0(r45); fIsPtrOp
+    extsb   r67,r39
+    cmpi    cr0,r67,2
+    bt      cr0,eq,B24
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 B27 } Pred={B22 } Labels={L31 }
+
+    cmpi    cr0,r67,3
+    bf      cr0,eq,B27
+:{000c}::::LOOPWEIGHT=0
+B24: Succ={B25 B27 } Pred={B23 B22 } Labels={L9 L32 }
+
+    lbz     r69,2(r45); fIsPtrOp
+    extsb   r70,r69
+    cmp     cr0,r70,r55
+    bf      cr0,eq,B27
+:{000c}::::LOOPWEIGHT=0
+B25: Succ={B26 B27 } Pred={B24 } Labels={L33 }
+
+    lha     r72,8(r45); fIsPtrOp
+    cmpi    cr0,r72,0
+    bf      cr0,lt,B27
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 } Labels={L34 }
+
+    li      r37,1
+:{000c}::::LOOPWEIGHT=1824558248
+B27: Succ={B46 B43 } Pred={B26 B25 B24 B23 } Labels={L10 }
+
+    addi    r44,r44,28
+    lbz     r61,172(r44); fIsPtrOp
+    addi    r45,r44,172
+    extsb   r62,r61
+    cmpi    cr0,r62,1
+    bf      cr0,eq,B46
+:{000c}::::LOOPWEIGHT=0
+B43: Succ={B46 B44 } Pred={B27 } Labels={L45 }
+
+    lbz     r63,2(r45); fIsPtrOp
+    extsb   r64,r63
+    cmp     cr0,r64,r55
+    bf      cr0,eq,B46
+:{000c}::::LOOPWEIGHT=0
+B44: Succ={B46 B45 } Pred={B43 } Labels={L46 }
+
+    lha     r66,8(r45); fIsPtrOp
+    cmpi    cr0,r66,0
+    bf      cr0,gt,B46
+:{0004}::::LOOPWEIGHT=33620068
+B45: Succ={B46 } Pred={B44 } Labels={L47 }
+
+    li      r38,1
+:{000c}::::LOOPWEIGHT=0
+B46: Succ={B48 B47 } Pred={B44 B43 B27 B45 } Labels={L48 }
+
+    lbz     r39,0(r45); fIsPtrOp
+    extsb   r67,r39
+    cmpi    cr0,r67,2
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B51 B48 } Pred={B46 } Labels={L49 }
+
+    cmpi    cr0,r67,3
+    bf      cr0,eq,B51
+:{000c}::::LOOPWEIGHT=0
+B48: Succ={B51 B49 } Pred={B46 B47 } Labels={L50 }
+
+    lbz     r69,2(r45); fIsPtrOp
+    extsb   r70,r69
+    cmp     cr0,r70,r55
+    bf      cr0,eq,B51
+:{000c}::::LOOPWEIGHT=65619
+B49: Succ={B51 B50 } Pred={B48 } Labels={L51 }
+
+    lha     r72,8(r45); fIsPtrOp
+    cmpi    cr0,r72,0
+    bf      cr0,lt,B51
+:{0004}::::LOOPWEIGHT=0
+B50: Succ={B51 } Pred={B49 } Labels={L52 }
+
+    li      r37,1
+:{000c}::::LOOPWEIGHT=524292
+B51: Succ={B29 B18 } Pred={B49 B48 B47 B50 } Labels={L53 }
+
+    addi    r44,r44,28
+    addi    r46,r46,1
+    bdnz    B18
+:{0004}::::LOOPWEIGHT=1704460294
+B29: Succ={B30 B32 } Pred={B51 } Labels={L35 }
+
+    cmpi    cr0,r38,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=73
+B30: Succ={B31 B32 } Pred={B29 } Labels={L36 }
+
+    cmpi    cr0,r37,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B36 } Pred={B30 } Labels={L37 }
+
+    li      r36,1
+    b       B36
+:{000c}::::LOOPWEIGHT=1835012
+B32: Succ={B33 } Pred={B30 B29 } Labels={L12 }
+
+    li      r73,4
+    stb     r73,0(r35); fIsPtrOp
+    li      r74,9999
+    sth     r74,8(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=1690828806
+B33: Succ={B34 } Pred={B32 B15 } Labels={L13 }
+
+    li      r36,2
+:{000c}::::LOOPWEIGHT=0
+B34: Succ={B36 B5 } Pred={B33 B14 B13 B7 B6 B5 } Labels={L14 }
+
+    addi    r33,r33,1
+    cmpi    cr0,r33,80
+    addi    r43,r43,28
+    bt      cr0,lt,B5
+:{0004}::::LOOPWEIGHT=0
+B36: Succ={B37 } Pred={B34 B31 B16 B9 } Labels={L16 L38 }
+
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B37: Succ={B38 } Pred={B36 } Labels={L39 }
+
+    bl      OSRestoreInterrupts; fLink
+:{0004}::::LOOPWEIGHT=1824552736
+B38: Succ={B39 } Pred={B37 } Labels={L40 }
+
+    mr      r3,r36
+:{0006}::::LOOPWEIGHT=0
+B39: Succ={} Pred={B38 } Labels={L41 }
+
+
+AFTER PEEPHOLE FORWARD
+lbDvd_80018A2C
+:{0005}::::LOOPWEIGHT=0
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=0
+B1: Succ={B3 } Pred={B0 } Labels={L1 }
+
+    mr      r32,r3
+    li      r36,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B1 } Labels={L17 }
+
+    bl      OSDisableInterrupts; fLink
+:{000c}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L18 }
+
+    lis     r48,HA(preloadCache)
+    addi    r49,r48,LO(preloadCache)
+    mr      r47,r3
+    mr      r41,r49
+    mr      r34,r47
+    mr      r43,r41
+    rlwinm  r42,r32,0,24,31
+    li      r33,0
+:{000c}::::LOOPWEIGHT=0
+B5: Succ={B6 B34 } Pred={B4 B34 } Labels={L3 }
+
+    lbz     r50,172(r43); fIsPtrOp
+    addi    r35,r43,172
+    extsb   r51,r50
+    bt      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=12
+B6: Succ={B7 B34 } Pred={B5 } Labels={L19 }
+
+    lha     r52,8(r35); fIsPtrOp
+    cmpi    cr0,r52,0
+    bf      cr0,gt,B34
+:{000c}::::LOOPWEIGHT=15
+B7: Succ={B8 B34 } Pred={B6 } Labels={L20 }
+
+    lbz     r53,4(r35); fIsPtrOp
+    and     r54,r53,r42
+    bt      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=1824551256
+B8: Succ={B9 B10 } Pred={B7 } Labels={L21 }
+
+    lbz     r40,2(r35); fIsPtrOp
+    lwz     r58,2412(r49); fIsPtrOp
+    extsb   r55,r40
+    cmp     cr0,r55,r58
+    bf      cr0,eq,B10
+:{0004}::::LOOPWEIGHT=0
+B9: Succ={B36 } Pred={B8 } Labels={L22 }
+
+    li      r36,1
+    b       B36
+:{000c}::::LOOPWEIGHT=11
+B10: Succ={B11 B17 } Pred={B8 } Labels={L4 }
+
+    lbz     r59,0(r35); fIsPtrOp
+    extsb   r60,r59
+    cmpi    cr0,r60,3
+    bt      cr0,eq,B17
+:{0004}::::LOOPWEIGHT=0
+B11: Succ={B12 B14 } Pred={B10 } Labels={L23 }
+
+    bf      cr0,lt,B14
+:{0004}::::LOOPWEIGHT=15
+B12: Succ={B13 B16 } Pred={B11 } Labels={L25 }
+
+    cmpi    cr0,r60,1
+    bf      cr0,lt,B16
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B34 } Pred={B12 } Labels={L26 }
+
+    b       B34
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 B34 } Pred={B11 } Labels={L24 }
+
+    cmpi    cr0,r60,5
+    bf      cr0,lt,B34
+:{0004}::::LOOPWEIGHT=0
+B15: Succ={B33 } Pred={B14 } Labels={L27 }
+
+    b       B33
+:{0004}::::LOOPWEIGHT=786436
+B16: Succ={B36 } Pred={B12 } Labels={L5 }
+
+    li      r36,1
+    b       B36
+:{000c}::::LOOPWEIGHT=1824554216
+B17: Succ={B18 } Pred={B10 } Labels={L6 }
+
+    li      r76,40
+    mtctr   r76
+    mr      r44,r41
+    li      r37,0
+    li      r38,0
+    li      r46,0
+:{000c}::::LOOPWEIGHT=33620068
+B18: Succ={B19 B22 } Pred={B17 B51 } Labels={L7 }
+
+    lbz     r61,172(r44); fIsPtrOp
+    addi    r45,r44,172
+    extsb   r62,r61
+    cmpi    cr0,r62,1
+    bf      cr0,eq,B22
+:{000c}::::LOOPWEIGHT=0
+B19: Succ={B20 B22 } Pred={B18 } Labels={L28 }
+
+    lbz     r63,2(r45); fIsPtrOp
+    extsb   r64,r63
+    cmp     cr0,r64,r55
+    bf      cr0,eq,B22
+:{000c}::::LOOPWEIGHT=0
+B20: Succ={B21 B22 } Pred={B19 } Labels={L29 }
+
+    lha     r66,8(r45); fIsPtrOp
+    cmpi    cr0,r66,0
+    bf      cr0,gt,B22
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L30 }
+
+    li      r38,1
+:{000c}::::LOOPWEIGHT=259
+B22: Succ={B23 B24 } Pred={B21 B20 B19 B18 } Labels={L8 }
+
+    lbz     r39,0(r45); fIsPtrOp
+    extsb   r67,r39
+    cmpi    cr0,r67,2
+    bt      cr0,eq,B24
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 B27 } Pred={B22 } Labels={L31 }
+
+    cmpi    cr0,r67,3
+    bf      cr0,eq,B27
+:{000c}::::LOOPWEIGHT=0
+B24: Succ={B25 B27 } Pred={B23 B22 } Labels={L9 L32 }
+
+    lbz     r69,2(r45); fIsPtrOp
+    extsb   r70,r69
+    cmp     cr0,r70,r55
+    bf      cr0,eq,B27
+:{000c}::::LOOPWEIGHT=0
+B25: Succ={B26 B27 } Pred={B24 } Labels={L33 }
+
+    lha     r72,8(r45); fIsPtrOp
+    cmpi    cr0,r72,0
+    bf      cr0,lt,B27
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 } Labels={L34 }
+
+    li      r37,1
+:{0004}::::LOOPWEIGHT=1824558248
+B27: Succ={B46 B43 } Pred={B26 B25 B24 B23 } Labels={L10 }
+
+    lbz     r61,200(r44); fIsPtrOp
+    addi    r45,r44,200
+    extsb   r62,r61
+    cmpi    cr0,r62,1
+    addi    r44,r44,28
+    bf      cr0,eq,B46
+:{000c}::::LOOPWEIGHT=0
+B43: Succ={B46 B44 } Pred={B27 } Labels={L45 }
+
+    lbz     r63,2(r45); fIsPtrOp
+    extsb   r64,r63
+    cmp     cr0,r64,r55
+    bf      cr0,eq,B46
+:{000c}::::LOOPWEIGHT=0
+B44: Succ={B46 B45 } Pred={B43 } Labels={L46 }
+
+    lha     r66,8(r45); fIsPtrOp
+    cmpi    cr0,r66,0
+    bf      cr0,gt,B46
+:{0004}::::LOOPWEIGHT=33620068
+B45: Succ={B46 } Pred={B44 } Labels={L47 }
+
+    li      r38,1
+:{000c}::::LOOPWEIGHT=0
+B46: Succ={B48 B47 } Pred={B44 B43 B27 B45 } Labels={L48 }
+
+    lbz     r39,0(r45); fIsPtrOp
+    extsb   r67,r39
+    cmpi    cr0,r67,2
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B51 B48 } Pred={B46 } Labels={L49 }
+
+    cmpi    cr0,r67,3
+    bf      cr0,eq,B51
+:{000c}::::LOOPWEIGHT=0
+B48: Succ={B51 B49 } Pred={B46 B47 } Labels={L50 }
+
+    lbz     r69,2(r45); fIsPtrOp
+    extsb   r70,r69
+    cmp     cr0,r70,r55
+    bf      cr0,eq,B51
+:{000c}::::LOOPWEIGHT=65619
+B49: Succ={B51 B50 } Pred={B48 } Labels={L51 }
+
+    lha     r72,8(r45); fIsPtrOp
+    cmpi    cr0,r72,0
+    bf      cr0,lt,B51
+:{0004}::::LOOPWEIGHT=0
+B50: Succ={B51 } Pred={B49 } Labels={L52 }
+
+    li      r37,1
+:{000c}::::LOOPWEIGHT=524292
+B51: Succ={B29 B18 } Pred={B49 B48 B47 B50 } Labels={L53 }
+
+    addi    r44,r44,28
+    addi    r46,r46,1
+    bdnz    B18
+:{0004}::::LOOPWEIGHT=1704460294
+B29: Succ={B30 B32 } Pred={B51 } Labels={L35 }
+
+    cmpi    cr0,r38,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=73
+B30: Succ={B31 B32 } Pred={B29 } Labels={L36 }
+
+    cmpi    cr0,r37,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B36 } Pred={B30 } Labels={L37 }
+
+    li      r36,1
+    b       B36
+:{000c}::::LOOPWEIGHT=1835012
+B32: Succ={B33 } Pred={B30 B29 } Labels={L12 }
+
+    li      r73,4
+    stb     r73,0(r35); fIsPtrOp
+    li      r74,9999
+    sth     r74,8(r35); fIsPtrOp
+:{0004}::::LOOPWEIGHT=1690828806
+B33: Succ={B34 } Pred={B32 B15 } Labels={L13 }
+
+    li      r36,2
+:{000c}::::LOOPWEIGHT=0
+B34: Succ={B36 B5 } Pred={B33 B14 B13 B7 B6 B5 } Labels={L14 }
+
+    addi    r33,r33,1
+    cmpi    cr0,r33,80
+    addi    r43,r43,28
+    bt      cr0,lt,B5
+:{0004}::::LOOPWEIGHT=0
+B36: Succ={B37 } Pred={B34 B31 B16 B9 } Labels={L16 L38 }
+
+    mr      r3,r34
+:{0004}::::LOOPWEIGHT=0
+B37: Succ={B38 } Pred={B36 } Labels={L39 }
+
+    bl      OSRestoreInterrupts; fLink
+:{0004}::::LOOPWEIGHT=1824552736
+B38: Succ={B39 } Pred={B37 } Labels={L40 }
+
+    mr      r3,r36
+:{0006}::::LOOPWEIGHT=0
+B39: Succ={} Pred={B38 } Labels={L41 }
+
+
+[DATAFLOW] enter class=0 n_nodes=77 N_IGNODES_pre=54
+[DATAFLOW] exit result=0 N_IGNODES_post=54
+
+[COALESCE] enter class=0 n_virtuals=77
+[COALESCE] natural mappings (virt -> root):
+  34 -> 3
+  47 -> 3
+  49 -> 41
+[COALESCE] exit class=0 n_virtuals=77 distinct_roots=74 forced=0
+
+IG CONSTRUCTED (class=0, n_nodes=54)
+
+SIMPLIFY GRAPH (class=0, n_colors=29, n_class_regs=77)
+iter  ig_idx  degree  arraySize flags     notes
+0     43      4       38       0x2       
+1     42      3       36       0x2       
+2     41      4       38       0xa       SPILLED
+3     36      14      31       0x2       
+4     35      4       37       0x2       
+5     33      4       37       0x2       
+6     -1      3       9        0x2       
+7     -1      0       0        0x2       
+8     -1      3       8        0x2       
+9     -1      3       8        0x2       
+10    -1      3       13       0x2       
+11    -1      0       0        0x2       
+12    -1      3       14       0x2       
+13    -1      3       14       0x2       
+14    -1      0       0        0x2       
+15    -1      3       14       0x2       
+16    -1      3       14       0x2       
+17    -1      0       0        0x2       
+18    -1      3       14       0x2       
+19    -1      3       14       0x2       
+20    -1      3       14       0x2       
+21    -1      3       14       0x2       
+22    -1      3       10       0x2       
+23    -1      3       10       0x2       
+24    -1      3       11       0x2       
+25    -1      0       0        0x2       
+26    -1      0       0        0x2       
+27    -1      3       28       0x2       
+28    -1      3       9        0x2       
+29    53      3       9        0x2       
+30    52      3       9        0x2       
+31    51      3       9        0x2       
+32    50      3       9        0x2       
+33    48      2       4        0x2       
+34    46      4       24       0x2       
+35    45      4       23       0x2       
+36    44      4       24       0x2       
+37    40      3       10       0x2       
+38    39      3       14       0x2       
+39    38      3       23       0x2       
+40    37      3       23       0x2       
+41    32      14      18       0x2       
+
+COLORGRAPH DECISIONS (class=0, result=1, n_nodes=54)
+iter  ig_idx  assignedReg degree  nIntfr  flags
+0     43      r4         4       38      0x02
+      interferers: 0=r0 3=r3 32=r30 33=r7 34=r3 35=r6 36=r31 37=r30 38=r31 39=r8 40=r9 41=r5 42=r0 44=r12 45=r11 46=r10 49=r41 50=r8 51=r8 52=r8 53=r8 54=r-1 55=r-1 58=r-1 59=r-1 60=r-1 61=r-1 62=r-1 63=r-1 64=r-1 66=r-1 67=r-1 69=r-1 70=r-1 72=r-1 73=r-1 74=r-1 76=r-1
+1     42      r0         3       36      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 36=r31 37=r30 38=r31 39=r8 40=r9 41=r5 43=r4 44=r12 45=r11 46=r10 49=r41 50=r8 51=r8 52=r8 53=r8 54=r-1 55=r-1 58=r-1 59=r-1 60=r-1 61=r-1 62=r-1 63=r-1 64=r-1 66=r-1 67=r-1 69=r-1 70=r-1 72=r-1 73=r-1 74=r-1 76=r-1
+2     41      r5         4       38      0x0a  [ROOT]
+      interferers: 0=r0 3=r3 32=r30 33=r7 34=r3 35=r6 36=r31 37=r30 38=r31 39=r8 40=r9 42=r0 43=r4 44=r12 45=r11 46=r10 47=r3 50=r8 51=r8 52=r8 53=r8 54=r-1 55=r-1 58=r-1 59=r-1 60=r-1 61=r-1 62=r-1 63=r-1 64=r-1 66=r-1 67=r-1 69=r-1 70=r-1 72=r-1 73=r-1 74=r-1 76=r-1
+3     36      r31        14      31      0x02
+      interferers: 0=r0 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 32=r30 33=r7 34=r3 35=r6 40=r9 41=r5 42=r0 43=r4 47=r3 48=r4 49=r41 50=r8 51=r8 52=r8 53=r8 54=r-1 55=r-1 58=r-1 59=r-1 60=r-1
+4     35      r6         4       37      0x02
+      interferers: 0=r0 3=r3 33=r7 34=r3 36=r31 37=r30 38=r31 39=r8 40=r9 41=r5 42=r0 43=r4 44=r12 45=r11 46=r10 49=r41 50=r8 51=r8 52=r8 53=r8 54=r-1 55=r-1 58=r-1 59=r-1 60=r-1 61=r-1 62=r-1 63=r-1 64=r-1 66=r-1 67=r-1 69=r-1 70=r-1 72=r-1 73=r-1 74=r-1 76=r-1
+5     33      r7         4       37      0x02
+      interferers: 0=r0 3=r3 34=r3 35=r6 36=r31 37=r30 38=r31 39=r8 40=r9 41=r5 42=r0 43=r4 44=r12 45=r11 46=r10 49=r41 50=r8 51=r8 52=r8 53=r8 54=r-1 55=r-1 58=r-1 59=r-1 60=r-1 61=r-1 62=r-1 63=r-1 64=r-1 66=r-1 67=r-1 69=r-1 70=r-1 72=r-1 73=r-1 74=r-1 76=r-1
+6     76      r8         3       9       0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 41=r5 42=r0 43=r4 49=r41 55=r-1
+7     75      r0         0       0       0x02
+8     74      r8         3       8       0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 41=r5 42=r0 43=r4 49=r41
+9     73      r8         3       8       0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 41=r5 42=r0 43=r4 49=r41
+10    72      r8         3       13      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 37=r30 38=r31 41=r5 42=r0 43=r4 44=r12 46=r10 49=r41 55=r-1
+11    71      r0         0       0       0x02
+12    70      r8         3       14      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 37=r30 38=r31 41=r5 42=r0 43=r4 44=r12 45=r11 46=r10 49=r41 55=r-1
+13    69      r8         3       14      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 37=r30 38=r31 41=r5 42=r0 43=r4 44=r12 45=r11 46=r10 49=r41 55=r-1
+14    68      r0         0       0       0x02
+15    67      r8         3       14      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 37=r30 38=r31 41=r5 42=r0 43=r4 44=r12 45=r11 46=r10 49=r41 55=r-1
+16    66      r8         3       14      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 37=r30 38=r31 41=r5 42=r0 43=r4 44=r12 45=r11 46=r10 49=r41 55=r-1
+17    65      r0         0       0       0x02
+18    64      r8         3       14      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 37=r30 38=r31 41=r5 42=r0 43=r4 44=r12 45=r11 46=r10 49=r41 55=r-1
+19    63      r8         3       14      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 37=r30 38=r31 41=r5 42=r0 43=r4 44=r12 45=r11 46=r10 49=r41 55=r-1
+20    62      r8         3       14      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 37=r30 38=r31 41=r5 42=r0 43=r4 44=r12 45=r11 46=r10 49=r41 55=r-1
+21    61      r8         3       14      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 37=r30 38=r31 41=r5 42=r0 43=r4 44=r12 45=r11 46=r10 49=r41 55=r-1
+22    60      r8         3       10      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 36=r31 41=r5 42=r0 43=r4 49=r41 55=r-1
+23    59      r8         3       10      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 36=r31 41=r5 42=r0 43=r4 49=r41 55=r-1
+24    58      r8         3       11      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 36=r31 40=r9 41=r5 42=r0 43=r4 49=r41 55=r-1
+25    57      r0         0       0       0x02
+26    56      r0         0       0       0x02
+27    55      r9         3       28      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 36=r31 37=r30 38=r31 39=r8 41=r5 42=r0 43=r4 44=r12 45=r11 46=r10 49=r41 58=r-1 59=r-1 60=r-1 61=r-1 62=r-1 63=r-1 64=r-1 66=r-1 67=r-1 69=r-1 70=r-1 72=r-1 76=r-1
+28    54      r8         3       9       0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 36=r31 41=r5 42=r0 43=r4 49=r41
+29    53      r8         3       9       0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 36=r31 41=r5 42=r0 43=r4 49=r41
+30    52      r8         3       9       0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 36=r31 41=r5 42=r0 43=r4 49=r41
+31    51      r8         3       9       0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 36=r31 41=r5 42=r0 43=r4 49=r41
+32    50      r8         3       9       0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 36=r31 41=r5 42=r0 43=r4 49=r41
+33    48      r4         2       4       0x02
+      interferers: 0=r0 3=r3 32=r30 36=r31
+34    46      r10        4       24      0x02
+      interferers: 0=r0 3=r3 33=r7 34=r3 35=r6 37=r30 38=r31 39=r8 41=r5 42=r0 43=r4 44=r12 45=r11 49=r41 55=r-1 61=r-1 62=r-1 63=r-1 64=r-1 66=r-1 67=r-1 69=r-1 70=r-1 72=r-1
+35    45      r11        4       23      0x02
+      interferers: 0=r0 3=r3 33=r7 34=r3 35=r6 37=r30 38=r31 39=r8 41=r5 42=r0 43=r4 44=r12 46=r10 49=r41 55=r-1 61=r-1 62=r-1 63=r-1 64=r-1 66=r-1 67=r-1 69=r-1 70=r-1
+36    44      r12        4       24      0x02
+      interferers: 0=r0 3=r3 33=r7 34=r3 35=r6 37=r30 38=r31 39=r8 41=r5 42=r0 43=r4 45=r11 46=r10 49=r41 55=r-1 61=r-1 62=r-1 63=r-1 64=r-1 66=r-1 67=r-1 69=r-1 70=r-1 72=r-1
+37    40      r9         3       10      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 36=r31 41=r5 42=r0 43=r4 49=r41 58=r-1
+38    39      r8         3       14      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 37=r30 38=r31 41=r5 42=r0 43=r4 44=r12 45=r11 46=r10 49=r41 55=r-1
+39    38      r31        3       23      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 37=r30 39=r8 41=r5 42=r0 43=r4 44=r12 45=r11 46=r10 49=r41 55=r-1 61=r-1 62=r-1 63=r-1 64=r-1 66=r-1 67=r-1 69=r-1 70=r-1 72=r-1
+40    37      r30        3       23      0x02
+      interferers: 3=r3 33=r7 34=r3 35=r6 38=r31 39=r8 41=r5 42=r0 43=r4 44=r12 45=r11 46=r10 49=r41 55=r-1 61=r-1 62=r-1 63=r-1 64=r-1 66=r-1 67=r-1 69=r-1 70=r-1 72=r-1
+41    32      r30        14      18      0x02
+      interferers: 0=r0 3=r3 4=r4 5=r5 6=r6 7=r7 8=r8 9=r9 10=r10 11=r11 12=r12 34=r3 36=r31 41=r5 43=r4 47=r3 48=r4 49=r41
+
+COALESCED ALIASES (alias_idx -> root_idx [root_phys]):
+  34 -> 3 [r3]
+  47 -> 3 [r3]
+  49 -> 41 [r5]
+
+AFTER REGISTER COLORING
+lbDvd_80018A2C
+:{0005}::::LOOPWEIGHT=0
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+:{0004}::::LOOPWEIGHT=0
+B1: Succ={B3 } Pred={B0 } Labels={L1 }
+
+    mr      r30,r3
+    li      r31,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B1 } Labels={L17 }
+
+    bl      OSDisableInterrupts; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L18 }
+
+    lis     r4,HA(preloadCache)
+    addi    r5,r4,LO(preloadCache)
+    mr      r4,r5
+    rlwinm  r0,r30,0,24,31
+    li      r7,0
+:{000c}::::LOOPWEIGHT=0
+B5: Succ={B6 B34 } Pred={B4 B34 } Labels={L3 }
+
+    lbz     r8,172(r4); fIsPtrOp
+    addi    r6,r4,172
+    extsb   r8,r8
+    bt      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=12
+B6: Succ={B7 B34 } Pred={B5 } Labels={L19 }
+
+    lha     r8,8(r6); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,gt,B34
+:{000c}::::LOOPWEIGHT=15
+B7: Succ={B8 B34 } Pred={B6 } Labels={L20 }
+
+    lbz     r8,4(r6); fIsPtrOp
+    and     r8,r8,r0
+    bt      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=1824551256
+B8: Succ={B9 B10 } Pred={B7 } Labels={L21 }
+
+    lbz     r9,2(r6); fIsPtrOp
+    lwz     r8,2412(r5); fIsPtrOp
+    extsb   r9,r9
+    cmp     cr0,r9,r8
+    bf      cr0,eq,B10
+:{0004}::::LOOPWEIGHT=0
+B9: Succ={B36 } Pred={B8 } Labels={L22 }
+
+    li      r31,1
+    b       B36
+:{000c}::::LOOPWEIGHT=11
+B10: Succ={B11 B17 } Pred={B8 } Labels={L4 }
+
+    lbz     r8,0(r6); fIsPtrOp
+    extsb   r8,r8
+    cmpi    cr0,r8,3
+    bt      cr0,eq,B17
+:{0004}::::LOOPWEIGHT=0
+B11: Succ={B12 B14 } Pred={B10 } Labels={L23 }
+
+    bf      cr0,lt,B14
+:{0004}::::LOOPWEIGHT=15
+B12: Succ={B13 B16 } Pred={B11 } Labels={L25 }
+
+    cmpi    cr0,r8,1
+    bf      cr0,lt,B16
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B34 } Pred={B12 } Labels={L26 }
+
+    b       B34
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 B34 } Pred={B11 } Labels={L24 }
+
+    cmpi    cr0,r8,5
+    bf      cr0,lt,B34
+:{0004}::::LOOPWEIGHT=0
+B15: Succ={B33 } Pred={B14 } Labels={L27 }
+
+    b       B33
+:{0004}::::LOOPWEIGHT=786436
+B16: Succ={B36 } Pred={B12 } Labels={L5 }
+
+    li      r31,1
+    b       B36
+:{000c}::::LOOPWEIGHT=1824554216
+B17: Succ={B18 } Pred={B10 } Labels={L6 }
+
+    li      r8,40
+    mtctr   r8
+    mr      r12,r5
+    li      r30,0
+    li      r31,0
+    li      r10,0
+:{000c}::::LOOPWEIGHT=33620068
+B18: Succ={B19 B22 } Pred={B17 B51 } Labels={L7 }
+
+    lbz     r8,172(r12); fIsPtrOp
+    addi    r11,r12,172
+    extsb   r8,r8
+    cmpi    cr0,r8,1
+    bf      cr0,eq,B22
+:{000c}::::LOOPWEIGHT=0
+B19: Succ={B20 B22 } Pred={B18 } Labels={L28 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B22
+:{000c}::::LOOPWEIGHT=0
+B20: Succ={B21 B22 } Pred={B19 } Labels={L29 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,gt,B22
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L30 }
+
+    li      r31,1
+:{000c}::::LOOPWEIGHT=259
+B22: Succ={B23 B24 } Pred={B21 B20 B19 B18 } Labels={L8 }
+
+    lbz     r8,0(r11); fIsPtrOp
+    extsb   r8,r8
+    cmpi    cr0,r8,2
+    bt      cr0,eq,B24
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 B27 } Pred={B22 } Labels={L31 }
+
+    cmpi    cr0,r8,3
+    bf      cr0,eq,B27
+:{000c}::::LOOPWEIGHT=0
+B24: Succ={B25 B27 } Pred={B23 B22 } Labels={L9 L32 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B27
+:{000c}::::LOOPWEIGHT=0
+B25: Succ={B26 B27 } Pred={B24 } Labels={L33 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,lt,B27
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 } Labels={L34 }
+
+    li      r30,1
+:{0004}::::LOOPWEIGHT=1824558248
+B27: Succ={B46 B43 } Pred={B26 B25 B24 B23 } Labels={L10 }
+
+    lbz     r8,200(r12); fIsPtrOp
+    addi    r11,r12,200
+    extsb   r8,r8
+    cmpi    cr0,r8,1
+    addi    r12,r12,28
+    bf      cr0,eq,B46
+:{000c}::::LOOPWEIGHT=0
+B43: Succ={B46 B44 } Pred={B27 } Labels={L45 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B46
+:{000c}::::LOOPWEIGHT=0
+B44: Succ={B46 B45 } Pred={B43 } Labels={L46 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,gt,B46
+:{0004}::::LOOPWEIGHT=33620068
+B45: Succ={B46 } Pred={B44 } Labels={L47 }
+
+    li      r31,1
+:{000c}::::LOOPWEIGHT=0
+B46: Succ={B48 B47 } Pred={B44 B43 B27 B45 } Labels={L48 }
+
+    lbz     r8,0(r11); fIsPtrOp
+    extsb   r8,r8
+    cmpi    cr0,r8,2
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B51 B48 } Pred={B46 } Labels={L49 }
+
+    cmpi    cr0,r8,3
+    bf      cr0,eq,B51
+:{000c}::::LOOPWEIGHT=0
+B48: Succ={B51 B49 } Pred={B46 B47 } Labels={L50 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B51
+:{000c}::::LOOPWEIGHT=65619
+B49: Succ={B51 B50 } Pred={B48 } Labels={L51 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,lt,B51
+:{0004}::::LOOPWEIGHT=0
+B50: Succ={B51 } Pred={B49 } Labels={L52 }
+
+    li      r30,1
+:{000c}::::LOOPWEIGHT=524292
+B51: Succ={B29 B18 } Pred={B49 B48 B47 B50 } Labels={L53 }
+
+    addi    r12,r12,28
+    addi    r10,r10,1
+    bdnz    B18
+:{0004}::::LOOPWEIGHT=1704460294
+B29: Succ={B30 B32 } Pred={B51 } Labels={L35 }
+
+    cmpi    cr0,r31,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=73
+B30: Succ={B31 B32 } Pred={B29 } Labels={L36 }
+
+    cmpi    cr0,r30,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B36 } Pred={B30 } Labels={L37 }
+
+    li      r31,1
+    b       B36
+:{000c}::::LOOPWEIGHT=1835012
+B32: Succ={B33 } Pred={B30 B29 } Labels={L12 }
+
+    li      r8,4
+    stb     r8,0(r6); fIsPtrOp
+    li      r8,9999
+    sth     r8,8(r6); fIsPtrOp
+:{0004}::::LOOPWEIGHT=1690828806
+B33: Succ={B34 } Pred={B32 B15 } Labels={L13 }
+
+    li      r31,2
+:{000c}::::LOOPWEIGHT=0
+B34: Succ={B36 B5 } Pred={B33 B14 B13 B7 B6 B5 } Labels={L14 }
+
+    addi    r7,r7,1
+    cmpi    cr0,r7,80
+    addi    r4,r4,28
+    bt      cr0,lt,B5
+:{0004}::::LOOPWEIGHT=0
+B36: Succ={B37 } Pred={B34 B31 B16 B9 } Labels={L16 L38 }
+
+:{0004}::::LOOPWEIGHT=0
+B37: Succ={B38 } Pred={B36 } Labels={L39 }
+
+    bl      OSRestoreInterrupts; fLink
+:{0004}::::LOOPWEIGHT=1824552736
+B38: Succ={B39 } Pred={B37 } Labels={L40 }
+
+    mr      r3,r31
+:{0006}::::LOOPWEIGHT=0
+B39: Succ={} Pred={B38 } Labels={L41 }
+
+
+AFTER GENERATING EPILOGUE, PROLOGUE
+lbDvd_80018A2C
+:{0005}::::LOOPWEIGHT=0
+B0: Succ={B1 } Pred={} Labels={L0 }
+
+    mflr    r0
+    stw     r0,4(r1); fIsPtrOp
+    stwu    r1,-24(r1); fIsPtrOp
+    stw     r31,20(r1); fIsPtrOp
+    stw     r30,16(r1); fIsPtrOp
+:{0004}::::LOOPWEIGHT=0
+B1: Succ={B3 } Pred={B0 } Labels={L1 }
+
+    mr      r30,r3
+    li      r31,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B1 } Labels={L17 }
+
+    bl      OSDisableInterrupts; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L18 }
+
+    lis     r4,HA(preloadCache)
+    addi    r5,r4,LO(preloadCache)
+    mr      r4,r5
+    rlwinm  r0,r30,0,24,31
+    li      r7,0
+:{000c}::::LOOPWEIGHT=0
+B5: Succ={B6 B34 } Pred={B4 B34 } Labels={L3 }
+
+    lbz     r8,172(r4); fIsPtrOp
+    addi    r6,r4,172
+    extsb   r8,r8
+    bt      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=12
+B6: Succ={B7 B34 } Pred={B5 } Labels={L19 }
+
+    lha     r8,8(r6); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,gt,B34
+:{000c}::::LOOPWEIGHT=15
+B7: Succ={B8 B34 } Pred={B6 } Labels={L20 }
+
+    lbz     r8,4(r6); fIsPtrOp
+    and     r8,r8,r0
+    bt      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=1824551256
+B8: Succ={B9 B10 } Pred={B7 } Labels={L21 }
+
+    lbz     r9,2(r6); fIsPtrOp
+    lwz     r8,2412(r5); fIsPtrOp
+    extsb   r9,r9
+    cmp     cr0,r9,r8
+    bf      cr0,eq,B10
+:{0004}::::LOOPWEIGHT=0
+B9: Succ={B36 } Pred={B8 } Labels={L22 }
+
+    li      r31,1
+    b       B36
+:{000c}::::LOOPWEIGHT=11
+B10: Succ={B11 B17 } Pred={B8 } Labels={L4 }
+
+    lbz     r8,0(r6); fIsPtrOp
+    extsb   r8,r8
+    cmpi    cr0,r8,3
+    bt      cr0,eq,B17
+:{0004}::::LOOPWEIGHT=0
+B11: Succ={B12 B14 } Pred={B10 } Labels={L23 }
+
+    bf      cr0,lt,B14
+:{0004}::::LOOPWEIGHT=15
+B12: Succ={B13 B16 } Pred={B11 } Labels={L25 }
+
+    cmpi    cr0,r8,1
+    bf      cr0,lt,B16
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B34 } Pred={B12 } Labels={L26 }
+
+    b       B34
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 B34 } Pred={B11 } Labels={L24 }
+
+    cmpi    cr0,r8,5
+    bf      cr0,lt,B34
+:{0004}::::LOOPWEIGHT=0
+B15: Succ={B33 } Pred={B14 } Labels={L27 }
+
+    b       B33
+:{0004}::::LOOPWEIGHT=786436
+B16: Succ={B36 } Pred={B12 } Labels={L5 }
+
+    li      r31,1
+    b       B36
+:{000c}::::LOOPWEIGHT=1824554216
+B17: Succ={B18 } Pred={B10 } Labels={L6 }
+
+    li      r8,40
+    mtctr   r8
+    mr      r12,r5
+    li      r30,0
+    li      r31,0
+    li      r10,0
+:{000c}::::LOOPWEIGHT=33620068
+B18: Succ={B19 B22 } Pred={B17 B51 } Labels={L7 }
+
+    lbz     r8,172(r12); fIsPtrOp
+    addi    r11,r12,172
+    extsb   r8,r8
+    cmpi    cr0,r8,1
+    bf      cr0,eq,B22
+:{000c}::::LOOPWEIGHT=0
+B19: Succ={B20 B22 } Pred={B18 } Labels={L28 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B22
+:{000c}::::LOOPWEIGHT=0
+B20: Succ={B21 B22 } Pred={B19 } Labels={L29 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,gt,B22
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L30 }
+
+    li      r31,1
+:{000c}::::LOOPWEIGHT=259
+B22: Succ={B23 B24 } Pred={B21 B20 B19 B18 } Labels={L8 }
+
+    lbz     r8,0(r11); fIsPtrOp
+    extsb   r8,r8
+    cmpi    cr0,r8,2
+    bt      cr0,eq,B24
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 B27 } Pred={B22 } Labels={L31 }
+
+    cmpi    cr0,r8,3
+    bf      cr0,eq,B27
+:{000c}::::LOOPWEIGHT=0
+B24: Succ={B25 B27 } Pred={B23 B22 } Labels={L9 L32 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B27
+:{000c}::::LOOPWEIGHT=0
+B25: Succ={B26 B27 } Pred={B24 } Labels={L33 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,lt,B27
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 } Labels={L34 }
+
+    li      r30,1
+:{0004}::::LOOPWEIGHT=1824558248
+B27: Succ={B46 B43 } Pred={B26 B25 B24 B23 } Labels={L10 }
+
+    lbz     r8,200(r12); fIsPtrOp
+    addi    r11,r12,200
+    extsb   r8,r8
+    cmpi    cr0,r8,1
+    addi    r12,r12,28
+    bf      cr0,eq,B46
+:{000c}::::LOOPWEIGHT=0
+B43: Succ={B46 B44 } Pred={B27 } Labels={L45 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B46
+:{000c}::::LOOPWEIGHT=0
+B44: Succ={B46 B45 } Pred={B43 } Labels={L46 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,gt,B46
+:{0004}::::LOOPWEIGHT=33620068
+B45: Succ={B46 } Pred={B44 } Labels={L47 }
+
+    li      r31,1
+:{000c}::::LOOPWEIGHT=0
+B46: Succ={B48 B47 } Pred={B44 B43 B27 B45 } Labels={L48 }
+
+    lbz     r8,0(r11); fIsPtrOp
+    extsb   r8,r8
+    cmpi    cr0,r8,2
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B51 B48 } Pred={B46 } Labels={L49 }
+
+    cmpi    cr0,r8,3
+    bf      cr0,eq,B51
+:{000c}::::LOOPWEIGHT=0
+B48: Succ={B51 B49 } Pred={B46 B47 } Labels={L50 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B51
+:{000c}::::LOOPWEIGHT=65619
+B49: Succ={B51 B50 } Pred={B48 } Labels={L51 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,lt,B51
+:{0004}::::LOOPWEIGHT=0
+B50: Succ={B51 } Pred={B49 } Labels={L52 }
+
+    li      r30,1
+:{000c}::::LOOPWEIGHT=524292
+B51: Succ={B29 B18 } Pred={B49 B48 B47 B50 } Labels={L53 }
+
+    addi    r12,r12,28
+    addi    r10,r10,1
+    bdnz    B18
+:{0004}::::LOOPWEIGHT=1704460294
+B29: Succ={B30 B32 } Pred={B51 } Labels={L35 }
+
+    cmpi    cr0,r31,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=73
+B30: Succ={B31 B32 } Pred={B29 } Labels={L36 }
+
+    cmpi    cr0,r30,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B36 } Pred={B30 } Labels={L37 }
+
+    li      r31,1
+    b       B36
+:{000c}::::LOOPWEIGHT=1835012
+B32: Succ={B33 } Pred={B30 B29 } Labels={L12 }
+
+    li      r8,4
+    stb     r8,0(r6); fIsPtrOp
+    li      r8,9999
+    sth     r8,8(r6); fIsPtrOp
+:{0004}::::LOOPWEIGHT=1690828806
+B33: Succ={B34 } Pred={B32 B15 } Labels={L13 }
+
+    li      r31,2
+:{000c}::::LOOPWEIGHT=0
+B34: Succ={B36 B5 } Pred={B33 B14 B13 B7 B6 B5 } Labels={L14 }
+
+    addi    r7,r7,1
+    cmpi    cr0,r7,80
+    addi    r4,r4,28
+    bt      cr0,lt,B5
+:{0004}::::LOOPWEIGHT=0
+B36: Succ={B37 } Pred={B34 B31 B16 B9 } Labels={L16 L38 }
+
+:{0004}::::LOOPWEIGHT=0
+B37: Succ={B38 } Pred={B36 } Labels={L39 }
+
+    bl      OSRestoreInterrupts; fLink
+:{0004}::::LOOPWEIGHT=1824552736
+B38: Succ={B39 } Pred={B37 } Labels={L40 }
+
+    mr      r3,r31
+:{0006}::::LOOPWEIGHT=0
+B39: Succ={} Pred={B38 } Labels={L41 }
+
+    lwz     r0,28(r1); fIsPtrOp
+    lwz     r31,20(r1); fIsVolatile; fIsPtrOp
+    lwz     r30,16(r1); fIsVolatile; fIsPtrOp
+    addi    r1,r1,24; fSideEffects
+    mtlr    r0
+    blr     ; fIsLive
+
+AFTER MERGING EPILOGUE, PROLOGUE
+lbDvd_80018A2C
+:{0005}::::LOOPWEIGHT=0
+B0: Succ={B3 } Pred={} Labels={L0 }
+
+    mflr    r0
+    stw     r0,4(r1); fIsPtrOp
+    stwu    r1,-24(r1); fIsPtrOp
+    stw     r31,20(r1); fIsPtrOp
+    stw     r30,16(r1); fIsPtrOp
+    mr      r30,r3
+    li      r31,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B0 } Labels={L17 }
+
+    bl      OSDisableInterrupts; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L18 }
+
+    lis     r4,HA(preloadCache)
+    addi    r5,r4,LO(preloadCache)
+    mr      r4,r5
+    rlwinm  r0,r30,0,24,31
+    li      r7,0
+:{000c}::::LOOPWEIGHT=0
+B5: Succ={B6 B34 } Pred={B4 B34 } Labels={L3 }
+
+    lbz     r8,172(r4); fIsPtrOp
+    addi    r6,r4,172
+    extsb   r8,r8
+    bt      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=12
+B6: Succ={B7 B34 } Pred={B5 } Labels={L19 }
+
+    lha     r8,8(r6); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,gt,B34
+:{000c}::::LOOPWEIGHT=15
+B7: Succ={B8 B34 } Pred={B6 } Labels={L20 }
+
+    lbz     r8,4(r6); fIsPtrOp
+    and     r8,r8,r0
+    bt      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=1824551256
+B8: Succ={B9 B10 } Pred={B7 } Labels={L21 }
+
+    lbz     r9,2(r6); fIsPtrOp
+    lwz     r8,2412(r5); fIsPtrOp
+    extsb   r9,r9
+    cmp     cr0,r9,r8
+    bf      cr0,eq,B10
+:{0004}::::LOOPWEIGHT=0
+B9: Succ={B36 } Pred={B8 } Labels={L22 }
+
+    li      r31,1
+    b       B36
+:{000c}::::LOOPWEIGHT=11
+B10: Succ={B11 B17 } Pred={B8 } Labels={L4 }
+
+    lbz     r8,0(r6); fIsPtrOp
+    extsb   r8,r8
+    cmpi    cr0,r8,3
+    bt      cr0,eq,B17
+:{0004}::::LOOPWEIGHT=0
+B11: Succ={B12 B14 } Pred={B10 } Labels={L23 }
+
+    bf      cr0,lt,B14
+:{0004}::::LOOPWEIGHT=15
+B12: Succ={B13 B16 } Pred={B11 } Labels={L25 }
+
+    cmpi    cr0,r8,1
+    bf      cr0,lt,B16
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B34 } Pred={B12 } Labels={L26 }
+
+    b       B34
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 B34 } Pred={B11 } Labels={L24 }
+
+    cmpi    cr0,r8,5
+    bf      cr0,lt,B34
+:{0004}::::LOOPWEIGHT=0
+B15: Succ={B33 } Pred={B14 } Labels={L27 }
+
+    b       B33
+:{0004}::::LOOPWEIGHT=786436
+B16: Succ={B36 } Pred={B12 } Labels={L5 }
+
+    li      r31,1
+    b       B36
+:{000c}::::LOOPWEIGHT=1824554216
+B17: Succ={B18 } Pred={B10 } Labels={L6 }
+
+    li      r8,40
+    mtctr   r8
+    mr      r12,r5
+    li      r30,0
+    li      r31,0
+    li      r10,0
+:{000c}::::LOOPWEIGHT=33620068
+B18: Succ={B19 B22 } Pred={B17 B51 } Labels={L7 }
+
+    lbz     r8,172(r12); fIsPtrOp
+    addi    r11,r12,172
+    extsb   r8,r8
+    cmpi    cr0,r8,1
+    bf      cr0,eq,B22
+:{000c}::::LOOPWEIGHT=0
+B19: Succ={B20 B22 } Pred={B18 } Labels={L28 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B22
+:{000c}::::LOOPWEIGHT=0
+B20: Succ={B21 B22 } Pred={B19 } Labels={L29 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,gt,B22
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L30 }
+
+    li      r31,1
+:{000c}::::LOOPWEIGHT=259
+B22: Succ={B23 B24 } Pred={B21 B20 B19 B18 } Labels={L8 }
+
+    lbz     r8,0(r11); fIsPtrOp
+    extsb   r8,r8
+    cmpi    cr0,r8,2
+    bt      cr0,eq,B24
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 B27 } Pred={B22 } Labels={L31 }
+
+    cmpi    cr0,r8,3
+    bf      cr0,eq,B27
+:{000c}::::LOOPWEIGHT=0
+B24: Succ={B25 B27 } Pred={B23 B22 } Labels={L9 L32 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B27
+:{000c}::::LOOPWEIGHT=0
+B25: Succ={B26 B27 } Pred={B24 } Labels={L33 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,lt,B27
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 } Labels={L34 }
+
+    li      r30,1
+:{0004}::::LOOPWEIGHT=1824558248
+B27: Succ={B46 B43 } Pred={B26 B25 B24 B23 } Labels={L10 }
+
+    lbz     r8,200(r12); fIsPtrOp
+    addi    r11,r12,200
+    extsb   r8,r8
+    cmpi    cr0,r8,1
+    addi    r12,r12,28
+    bf      cr0,eq,B46
+:{000c}::::LOOPWEIGHT=0
+B43: Succ={B46 B44 } Pred={B27 } Labels={L45 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B46
+:{000c}::::LOOPWEIGHT=0
+B44: Succ={B46 B45 } Pred={B43 } Labels={L46 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,gt,B46
+:{0004}::::LOOPWEIGHT=33620068
+B45: Succ={B46 } Pred={B44 } Labels={L47 }
+
+    li      r31,1
+:{000c}::::LOOPWEIGHT=0
+B46: Succ={B48 B47 } Pred={B44 B43 B27 B45 } Labels={L48 }
+
+    lbz     r8,0(r11); fIsPtrOp
+    extsb   r8,r8
+    cmpi    cr0,r8,2
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B51 B48 } Pred={B46 } Labels={L49 }
+
+    cmpi    cr0,r8,3
+    bf      cr0,eq,B51
+:{000c}::::LOOPWEIGHT=0
+B48: Succ={B51 B49 } Pred={B46 B47 } Labels={L50 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B51
+:{000c}::::LOOPWEIGHT=65619
+B49: Succ={B51 B50 } Pred={B48 } Labels={L51 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,lt,B51
+:{0004}::::LOOPWEIGHT=0
+B50: Succ={B51 } Pred={B49 } Labels={L52 }
+
+    li      r30,1
+:{000c}::::LOOPWEIGHT=524292
+B51: Succ={B29 B18 } Pred={B49 B48 B47 B50 } Labels={L53 }
+
+    addi    r12,r12,28
+    addi    r10,r10,1
+    bdnz    B18
+:{0004}::::LOOPWEIGHT=1704460294
+B29: Succ={B30 B32 } Pred={B51 } Labels={L35 }
+
+    cmpi    cr0,r31,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=73
+B30: Succ={B31 B32 } Pred={B29 } Labels={L36 }
+
+    cmpi    cr0,r30,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B36 } Pred={B30 } Labels={L37 }
+
+    li      r31,1
+    b       B36
+:{000c}::::LOOPWEIGHT=1835012
+B32: Succ={B33 } Pred={B30 B29 } Labels={L12 }
+
+    li      r8,4
+    stb     r8,0(r6); fIsPtrOp
+    li      r8,9999
+    sth     r8,8(r6); fIsPtrOp
+:{0004}::::LOOPWEIGHT=1690828806
+B33: Succ={B34 } Pred={B32 B15 } Labels={L13 }
+
+    li      r31,2
+:{000c}::::LOOPWEIGHT=0
+B34: Succ={B36 B5 } Pred={B33 B14 B13 B7 B6 B5 } Labels={L14 }
+
+    addi    r7,r7,1
+    cmpi    cr0,r7,80
+    addi    r4,r4,28
+    bt      cr0,lt,B5
+:{0004}::::LOOPWEIGHT=0
+B36: Succ={B37 } Pred={B34 B31 B16 B9 } Labels={L16 L38 }
+
+:{0004}::::LOOPWEIGHT=0
+B37: Succ={B38 } Pred={B36 } Labels={L39 }
+
+    bl      OSRestoreInterrupts; fLink
+:{0004}::::LOOPWEIGHT=1824552736
+B38: Succ={B39 } Pred={B37 } Labels={L40 }
+
+    mr      r3,r31
+    lwz     r0,28(r1); fIsPtrOp
+    lwz     r31,20(r1); fIsVolatile; fIsPtrOp
+    lwz     r30,16(r1); fIsVolatile; fIsPtrOp
+:{0006}::::LOOPWEIGHT=0
+B39: Succ={} Pred={B38 } Labels={L41 }
+
+    addi    r1,r1,24; fSideEffects
+    mtlr    r0
+    blr     ; fIsLive
+
+AFTER PEEPHOLE OPTIMIZATION
+lbDvd_80018A2C
+:{0005}::::LOOPWEIGHT=0
+B0: Succ={B3 } Pred={} Labels={L0 }
+
+    mflr    r0
+    stw     r0,4(r1); fIsPtrOp
+    stwu    r1,-24(r1); fIsPtrOp
+    stw     r31,20(r1); fIsPtrOp
+    stw     r30,16(r1); fIsPtrOp
+    addi    r30,r3,0
+    li      r31,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B0 } Labels={L17 }
+
+    bl      OSDisableInterrupts; fLink
+:{0004}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L18 }
+
+    lis     r4,HA(preloadCache)
+    addi    r5,r4,LO(preloadCache)
+    addi    r4,r5,0
+    rlwinm  r0,r30,0,24,31
+    li      r7,0
+:{000c}::::LOOPWEIGHT=0
+B5: Succ={B6 B34 } Pred={B4 B34 } Labels={L3 }
+
+    lbz     r8,172(r4); fIsPtrOp
+    addi    r6,r4,172
+    extsb   r8,r8
+    bt      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=12
+B6: Succ={B7 B34 } Pred={B5 } Labels={L19 }
+
+    lha     r8,8(r6); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,gt,B34
+:{000c}::::LOOPWEIGHT=15
+B7: Succ={B8 B34 } Pred={B6 } Labels={L20 }
+
+    lbz     r8,4(r6); fIsPtrOp
+    and     r8,r8,r0
+    bt      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=1824551256
+B8: Succ={B9 B10 } Pred={B7 } Labels={L21 }
+
+    lbz     r9,2(r6); fIsPtrOp
+    lwz     r8,2412(r5); fIsPtrOp
+    extsb   r9,r9
+    cmp     cr0,r9,r8
+    bf      cr0,eq,B10
+:{0004}::::LOOPWEIGHT=0
+B9: Succ={B36 } Pred={B8 } Labels={L22 }
+
+    li      r31,1
+    b       B36
+:{000c}::::LOOPWEIGHT=11
+B10: Succ={B11 B17 } Pred={B8 } Labels={L4 }
+
+    lbz     r8,0(r6); fIsPtrOp
+    extsb   r8,r8
+    cmpi    cr0,r8,3
+    bt      cr0,eq,B17
+:{0004}::::LOOPWEIGHT=0
+B11: Succ={B12 B14 } Pred={B10 } Labels={L23 }
+
+    bf      cr0,lt,B14
+:{0004}::::LOOPWEIGHT=15
+B12: Succ={B13 B16 } Pred={B11 } Labels={L25 }
+
+    cmpi    cr0,r8,1
+    bf      cr0,lt,B16
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B34 } Pred={B12 } Labels={L26 }
+
+    b       B34
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 B34 } Pred={B11 } Labels={L24 }
+
+    cmpi    cr0,r8,5
+    bf      cr0,lt,B34
+:{0004}::::LOOPWEIGHT=0
+B15: Succ={B33 } Pred={B14 } Labels={L27 }
+
+    b       B33
+:{0004}::::LOOPWEIGHT=786436
+B16: Succ={B36 } Pred={B12 } Labels={L5 }
+
+    li      r31,1
+    b       B36
+:{000c}::::LOOPWEIGHT=1824554216
+B17: Succ={B18 } Pred={B10 } Labels={L6 }
+
+    li      r8,40
+    mtctr   r8
+    addi    r12,r5,0
+    li      r30,0
+    li      r31,0
+    li      r10,0
+:{0004}::::LOOPWEIGHT=33620068
+B18: Succ={B19 B22 } Pred={B17 B51 } Labels={L7 }
+
+    lbz     r8,172(r12); fIsPtrOp
+    addi    r11,r12,172
+    cmpi    cr0,r8,1
+    bf      cr0,eq,B22
+:{000c}::::LOOPWEIGHT=0
+B19: Succ={B20 B22 } Pred={B18 } Labels={L28 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B22
+:{000c}::::LOOPWEIGHT=0
+B20: Succ={B21 B22 } Pred={B19 } Labels={L29 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,gt,B22
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L30 }
+
+    li      r31,1
+:{000c}::::LOOPWEIGHT=259
+B22: Succ={B23 B24 } Pred={B21 B20 B19 B18 } Labels={L8 }
+
+    lbz     r8,0(r11); fIsPtrOp
+    extsb   r8,r8
+    cmpi    cr0,r8,2
+    bt      cr0,eq,B24
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 B27 } Pred={B22 } Labels={L31 }
+
+    cmpi    cr0,r8,3
+    bf      cr0,eq,B27
+:{000c}::::LOOPWEIGHT=0
+B24: Succ={B25 B27 } Pred={B23 B22 } Labels={L9 L32 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B27
+:{000c}::::LOOPWEIGHT=0
+B25: Succ={B26 B27 } Pred={B24 } Labels={L33 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,lt,B27
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 } Labels={L34 }
+
+    li      r30,1
+:{0004}::::LOOPWEIGHT=1824558248
+B27: Succ={B46 B43 } Pred={B26 B25 B24 B23 } Labels={L10 }
+
+    lbz     r8,200(r12); fIsPtrOp
+    addi    r11,r12,200
+    cmpi    cr0,r8,1
+    addi    r12,r12,28
+    bf      cr0,eq,B46
+:{000c}::::LOOPWEIGHT=0
+B43: Succ={B46 B44 } Pred={B27 } Labels={L45 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B46
+:{000c}::::LOOPWEIGHT=0
+B44: Succ={B46 B45 } Pred={B43 } Labels={L46 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,gt,B46
+:{0004}::::LOOPWEIGHT=33620068
+B45: Succ={B46 } Pred={B44 } Labels={L47 }
+
+    li      r31,1
+:{000c}::::LOOPWEIGHT=0
+B46: Succ={B48 B47 } Pred={B44 B43 B27 B45 } Labels={L48 }
+
+    lbz     r8,0(r11); fIsPtrOp
+    extsb   r8,r8
+    cmpi    cr0,r8,2
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B51 B48 } Pred={B46 } Labels={L49 }
+
+    cmpi    cr0,r8,3
+    bf      cr0,eq,B51
+:{000c}::::LOOPWEIGHT=0
+B48: Succ={B51 B49 } Pred={B46 B47 } Labels={L50 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B51
+:{000c}::::LOOPWEIGHT=65619
+B49: Succ={B51 B50 } Pred={B48 } Labels={L51 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,lt,B51
+:{0004}::::LOOPWEIGHT=0
+B50: Succ={B51 } Pred={B49 } Labels={L52 }
+
+    li      r30,1
+:{000c}::::LOOPWEIGHT=524292
+B51: Succ={B29 B18 } Pred={B49 B48 B47 B50 } Labels={L53 }
+
+    addi    r12,r12,28
+    addi    r10,r10,1
+    bdnz    B18
+:{0004}::::LOOPWEIGHT=1704460294
+B29: Succ={B30 B32 } Pred={B51 } Labels={L35 }
+
+    cmpi    cr0,r31,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=73
+B30: Succ={B31 B32 } Pred={B29 } Labels={L36 }
+
+    cmpi    cr0,r30,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B36 } Pred={B30 } Labels={L37 }
+
+    li      r31,1
+    b       B36
+:{000c}::::LOOPWEIGHT=1835012
+B32: Succ={B33 } Pred={B30 B29 } Labels={L12 }
+
+    li      r8,4
+    stb     r8,0(r6); fIsPtrOp
+    li      r8,9999
+    sth     r8,8(r6); fIsPtrOp
+:{0004}::::LOOPWEIGHT=1690828806
+B33: Succ={B34 } Pred={B32 B15 } Labels={L13 }
+
+    li      r31,2
+:{000c}::::LOOPWEIGHT=0
+B34: Succ={B36 B5 } Pred={B33 B14 B13 B7 B6 B5 } Labels={L14 }
+
+    addi    r7,r7,1
+    cmpi    cr0,r7,80
+    addi    r4,r4,28
+    bt      cr0,lt,B5
+:{0004}::::LOOPWEIGHT=0
+B36: Succ={B37 } Pred={B34 B31 B16 B9 } Labels={L16 L38 }
+
+:{0004}::::LOOPWEIGHT=0
+B37: Succ={B38 } Pred={B36 } Labels={L39 }
+
+    bl      OSRestoreInterrupts; fLink
+:{0004}::::LOOPWEIGHT=1824552736
+B38: Succ={B39 } Pred={B37 } Labels={L40 }
+
+    mr      r3,r31
+    lwz     r0,28(r1); fIsPtrOp
+    lwz     r31,20(r1); fIsVolatile; fIsPtrOp
+    lwz     r30,16(r1); fIsVolatile; fIsPtrOp
+:{0006}::::LOOPWEIGHT=0
+B39: Succ={} Pred={B38 } Labels={L41 }
+
+    addi    r1,r1,24; fSideEffects
+    mtlr    r0
+    blr     ; fIsLive
+
+FINAL CODE AFTER INSTRUCTION SCHEDULING
+lbDvd_80018A2C
+:{000d}::::LOOPWEIGHT=0
+B0: Succ={B3 } Pred={} Labels={L0 }
+
+    mflr    r0
+    stw     r0,4(r1); fIsPtrOp
+    stwu    r1,-24(r1); fIsPtrOp
+    stw     r31,20(r1); fIsPtrOp
+    li      r31,0
+    stw     r30,16(r1); fIsPtrOp
+    addi    r30,r3,0
+:{0004}::::LOOPWEIGHT=0
+B3: Succ={B4 } Pred={B0 } Labels={L17 }
+
+    bl      OSDisableInterrupts; fLink
+:{000c}::::LOOPWEIGHT=0
+B4: Succ={B5 } Pred={B3 } Labels={L18 }
+
+    lis     r4,HA(preloadCache)
+    addi    r5,r4,LO(preloadCache)
+    addi    r4,r5,0
+    rlwinm  r0,r30,0,24,31
+    li      r7,0
+:{000c}::::LOOPWEIGHT=0
+B5: Succ={B6 B34 } Pred={B4 B34 } Labels={L3 }
+
+    lbz     r8,172(r4); fIsPtrOp
+    addi    r6,r4,172
+    extsb   r8,r8
+    bt      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=12
+B6: Succ={B7 B34 } Pred={B5 } Labels={L19 }
+
+    lha     r8,8(r6); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,gt,B34
+:{000c}::::LOOPWEIGHT=15
+B7: Succ={B8 B34 } Pred={B6 } Labels={L20 }
+
+    lbz     r8,4(r6); fIsPtrOp
+    and     r8,r8,r0
+    bt      cr0,eq,B34
+:{000c}::::LOOPWEIGHT=1824551256
+B8: Succ={B9 B10 } Pred={B7 } Labels={L21 }
+
+    lbz     r9,2(r6); fIsPtrOp
+    lwz     r8,2412(r5); fIsPtrOp
+    extsb   r9,r9
+    cmp     cr0,r9,r8
+    bf      cr0,eq,B10
+:{0004}::::LOOPWEIGHT=0
+B9: Succ={B36 } Pred={B8 } Labels={L22 }
+
+    li      r31,1
+    b       B36
+:{000c}::::LOOPWEIGHT=11
+B10: Succ={B11 B17 } Pred={B8 } Labels={L4 }
+
+    lbz     r8,0(r6); fIsPtrOp
+    extsb   r8,r8
+    cmpi    cr0,r8,3
+    bt      cr0,eq,B17
+:{0004}::::LOOPWEIGHT=0
+B11: Succ={B12 B14 } Pred={B10 } Labels={L23 }
+
+    bf      cr0,lt,B14
+:{0004}::::LOOPWEIGHT=15
+B12: Succ={B13 B16 } Pred={B11 } Labels={L25 }
+
+    cmpi    cr0,r8,1
+    bf      cr0,lt,B16
+:{0004}::::LOOPWEIGHT=0
+B13: Succ={B34 } Pred={B12 } Labels={L26 }
+
+    b       B34
+:{0004}::::LOOPWEIGHT=0
+B14: Succ={B15 B34 } Pred={B11 } Labels={L24 }
+
+    cmpi    cr0,r8,5
+    bf      cr0,lt,B34
+:{0004}::::LOOPWEIGHT=0
+B15: Succ={B33 } Pred={B14 } Labels={L27 }
+
+    b       B33
+:{0004}::::LOOPWEIGHT=786436
+B16: Succ={B36 } Pred={B12 } Labels={L5 }
+
+    li      r31,1
+    b       B36
+:{000c}::::LOOPWEIGHT=1824554216
+B17: Succ={B18 } Pred={B10 } Labels={L6 }
+
+    li      r8,40
+    mtctr   r8
+    addi    r12,r5,0
+    li      r30,0
+    li      r31,0
+    li      r10,0
+:{000c}::::LOOPWEIGHT=33620068
+B18: Succ={B19 B22 } Pred={B17 B51 } Labels={L7 }
+
+    lbz     r8,172(r12); fIsPtrOp
+    addi    r11,r12,172
+    cmpi    cr0,r8,1
+    bf      cr0,eq,B22
+:{000c}::::LOOPWEIGHT=0
+B19: Succ={B20 B22 } Pred={B18 } Labels={L28 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B22
+:{000c}::::LOOPWEIGHT=0
+B20: Succ={B21 B22 } Pred={B19 } Labels={L29 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,gt,B22
+:{0004}::::LOOPWEIGHT=0
+B21: Succ={B22 } Pred={B20 } Labels={L30 }
+
+    li      r31,1
+:{000c}::::LOOPWEIGHT=259
+B22: Succ={B23 B24 } Pred={B21 B20 B19 B18 } Labels={L8 }
+
+    lbz     r8,0(r11); fIsPtrOp
+    extsb   r8,r8
+    cmpi    cr0,r8,2
+    bt      cr0,eq,B24
+:{0004}::::LOOPWEIGHT=0
+B23: Succ={B24 B27 } Pred={B22 } Labels={L31 }
+
+    cmpi    cr0,r8,3
+    bf      cr0,eq,B27
+:{000c}::::LOOPWEIGHT=0
+B24: Succ={B25 B27 } Pred={B23 B22 } Labels={L9 L32 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B27
+:{000c}::::LOOPWEIGHT=0
+B25: Succ={B26 B27 } Pred={B24 } Labels={L33 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,lt,B27
+:{0004}::::LOOPWEIGHT=0
+B26: Succ={B27 } Pred={B25 } Labels={L34 }
+
+    li      r30,1
+:{000c}::::LOOPWEIGHT=1824558248
+B27: Succ={B46 B43 } Pred={B26 B25 B24 B23 } Labels={L10 }
+
+    lbz     r8,200(r12); fIsPtrOp
+    addi    r11,r12,200
+    addi    r12,r12,28
+    cmpi    cr0,r8,1
+    bf      cr0,eq,B46
+:{000c}::::LOOPWEIGHT=0
+B43: Succ={B46 B44 } Pred={B27 } Labels={L45 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B46
+:{000c}::::LOOPWEIGHT=0
+B44: Succ={B46 B45 } Pred={B43 } Labels={L46 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,gt,B46
+:{0004}::::LOOPWEIGHT=33620068
+B45: Succ={B46 } Pred={B44 } Labels={L47 }
+
+    li      r31,1
+:{000c}::::LOOPWEIGHT=0
+B46: Succ={B48 B47 } Pred={B44 B43 B27 B45 } Labels={L48 }
+
+    lbz     r8,0(r11); fIsPtrOp
+    extsb   r8,r8
+    cmpi    cr0,r8,2
+    bt      cr0,eq,B48
+:{0004}::::LOOPWEIGHT=0
+B47: Succ={B51 B48 } Pred={B46 } Labels={L49 }
+
+    cmpi    cr0,r8,3
+    bf      cr0,eq,B51
+:{000c}::::LOOPWEIGHT=0
+B48: Succ={B51 B49 } Pred={B46 B47 } Labels={L50 }
+
+    lbz     r8,2(r11); fIsPtrOp
+    extsb   r8,r8
+    cmp     cr0,r8,r9
+    bf      cr0,eq,B51
+:{000c}::::LOOPWEIGHT=65619
+B49: Succ={B51 B50 } Pred={B48 } Labels={L51 }
+
+    lha     r8,8(r11); fIsPtrOp
+    cmpi    cr0,r8,0
+    bf      cr0,lt,B51
+:{0004}::::LOOPWEIGHT=0
+B50: Succ={B51 } Pred={B49 } Labels={L52 }
+
+    li      r30,1
+:{000c}::::LOOPWEIGHT=524292
+B51: Succ={B29 B18 } Pred={B49 B48 B47 B50 } Labels={L53 }
+
+    addi    r12,r12,28
+    addi    r10,r10,1
+    bdnz    B18
+:{0004}::::LOOPWEIGHT=1704460294
+B29: Succ={B30 B32 } Pred={B51 } Labels={L35 }
+
+    cmpi    cr0,r31,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=73
+B30: Succ={B31 B32 } Pred={B29 } Labels={L36 }
+
+    cmpi    cr0,r30,0
+    bt      cr0,eq,B32
+:{0004}::::LOOPWEIGHT=0
+B31: Succ={B36 } Pred={B30 } Labels={L37 }
+
+    li      r31,1
+    b       B36
+:{000c}::::LOOPWEIGHT=1835012
+B32: Succ={B33 } Pred={B30 B29 } Labels={L12 }
+
+    li      r8,4
+    stb     r8,0(r6); fIsPtrOp
+    li      r8,9999
+    sth     r8,8(r6); fIsPtrOp
+:{0004}::::LOOPWEIGHT=1690828806
+B33: Succ={B34 } Pred={B32 B15 } Labels={L13 }
+
+    li      r31,2
+:{000c}::::LOOPWEIGHT=0
+B34: Succ={B36 B5 } Pred={B33 B14 B13 B7 B6 B5 } Labels={L14 }
+
+    addi    r7,r7,1
+    cmpi    cr0,r7,80
+    addi    r4,r4,28
+    bt      cr0,lt,B5
+:{0004}::::LOOPWEIGHT=0
+B36: Succ={B37 } Pred={B34 B31 B16 B9 } Labels={L16 L38 }
+
+:{0004}::::LOOPWEIGHT=0
+B37: Succ={B38 } Pred={B36 } Labels={L39 }
+
+    bl      OSRestoreInterrupts; fLink
+:{000c}::::LOOPWEIGHT=1824552736
+B38: Succ={B39 } Pred={B37 } Labels={L40 }
+
+    mr      r3,r31
+    lwz     r0,28(r1); fIsPtrOp
+    lwz     r31,20(r1); fIsVolatile; fIsPtrOp
+    lwz     r30,16(r1); fIsVolatile; fIsPtrOp
+:{000e}::::LOOPWEIGHT=0
+B39: Succ={} Pred={B38 } Labels={L41 }
+
+    addi    r1,r1,24; fSideEffects
+    mtlr    r0
+    blr     ; fIsLive

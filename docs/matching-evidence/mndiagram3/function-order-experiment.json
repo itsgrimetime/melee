@@ -1,0 +1,81 @@
+{
+  "baseline_function_order": [
+    [
+      "mnDiagram3_PopulateRankings",
+      4
+    ],
+    [
+      "mnDiagram3_HandleInput",
+      1564
+    ],
+    [
+      "mnDiagram3_UpdateScrollArrows",
+      4512
+    ],
+    [
+      "mnDiagram3_OnAnimComplete",
+      4708
+    ],
+    [
+      "mnDiagram3_Think",
+      4804
+    ],
+    [
+      "mnDiagram3_FreeUserData",
+      4972
+    ],
+    [
+      "mnDiagram3_InitUserData",
+      5004
+    ],
+    [
+      "mnDiagram3_Create",
+      5224
+    ],
+    [
+      "mnDiagram3_Init",
+      5548
+    ]
+  ],
+  "moved_back_body_check": "function=mnDiagram3_HandleInput match=true match_percent=100.00 classification=relocation-label-only diagnostic_pad_stack=76 source_guidance=natural-frame-reservation",
+  "moved_back_function_order": [
+    [
+      "mnDiagram3_PopulateRankings",
+      4
+    ],
+    [
+      "mnDiagram3_UpdateScrollArrows",
+      1564
+    ],
+    [
+      "mnDiagram3_OnAnimComplete",
+      1760
+    ],
+    [
+      "mnDiagram3_Think",
+      1856
+    ],
+    [
+      "mnDiagram3_FreeUserData",
+      2024
+    ],
+    [
+      "mnDiagram3_InitUserData",
+      2056
+    ],
+    [
+      "mnDiagram3_Create",
+      2276
+    ],
+    [
+      "mnDiagram3_Init",
+      2600
+    ],
+    [
+      "mnDiagram3_HandleInput",
+      3488
+    ]
+  ],
+  "moved_back_build_exit": 1,
+  "restored_build_exit": 0
+}

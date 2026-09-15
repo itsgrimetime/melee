@@ -1,0 +1,61 @@
+                                                                                
+ Usage: melee-agent debug intervene coalesce [OPTIONS]                          
+                                                                                
+ Run/report a scoped coalesce intervention backed by the mwcc_debug DLL.        
+                                                                                
+ The implemented block slice uses the existing backend hook:                    
+ `MWCC_DEBUG_FORCE_COALESCE=virt=virt`. That value is passed through            
+ `debug dump local|remote --force-coalesce ... --force-coalesce-fn FN`,         
+ so the compiler/DLL, not this wrapper, changes allocator state.                
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function                  -f      TEXT     Function to scope the        │
+│                                                 backend coalesce             │
+│                                                 intervention to.             │
+│                                                 [required]                   │
+│    --force                             TEXT     Force one coalesce pair,     │
+│                                                 e.g. r43=r40.                │
+│    --block                             TEXT     Block one natural coalesce   │
+│                                                 pair by un-coalescing the    │
+│                                                 left virtual, e.g. r43=r40   │
+│                                                 emits                        │
+│                                                 MWCC_DEBUG_FORCE_COALESCE=4… │
+│    --trace-copy-json                   PATH     trace-copy --json report to  │
+│                                                 derive a force pair as copy  │
+│                                                 destination=rooted to        │
+│                                                 source, preserving register  │
+│                                                 class.                       │
+│    --source-file                       PATH     Source file to compile when  │
+│                                                 pcdumps are not both         │
+│                                                 supplied.                    │
+│    --baseline-pcdump                   PATH     Existing natural pcdump. If  │
+│                                                 omitted, compile             │
+│                                                 --source-file.               │
+│    --intervention-pcdump               PATH     Existing forced pcdump. If   │
+│                                                 omitted, compile             │
+│                                                 --source-file with the       │
+│                                                 backend coalesce hook.       │
+│    --mode                              TEXT     Compile path for missing     │
+│                                                 pcdumps: local or remote.    │
+│                                                 [default: local]             │
+│    --output-dir                        PATH     Directory for generated      │
+│                                                 baseline/intervention        │
+│                                                 pcdumps.                     │
+│    --timeout                           INTEGER  Per-dump compile timeout in  │
+│                                                 seconds.                     │
+│                                                 [default: 120]               │
+│    --host                              TEXT     Remote host when --mode      │
+│                                                 remote is used.              │
+│                                                 [env var: MWCC_DEBUG_HOST]   │
+│                                                 [default: nzxt-local]        │
+│    --no-pull                                    Forward --no-pull to debug   │
+│                                                 dump remote.                 │
+│    --baseline-match-percent            FLOAT    Optional externally measured │
+│                                                 baseline real match percent. │
+│    --intervention-match-perc…          FLOAT    Optional externally measured │
+│                                                 intervention real match      │
+│                                                 percent.                     │
+│    --json                                       Emit as JSON.                │
+│    --help                                       Show this message and exit.  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

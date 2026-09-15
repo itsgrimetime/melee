@@ -1,0 +1,50 @@
+                                                                                
+ Usage: melee-agent debug permute config [OPTIONS] [PCDUMP]                     
+                                                                                
+ Generate a decomp-permuter settings.toml tuned for the detected pattern.       
+                                                                                
+ Pairs with `debug permute triage` to close the integration loop: this          
+ command BIASES which mutations permuter prefers based on mwcc-debug's          
+ pattern detection, then debug permute triage filters out base.c-vs-real-tree   
+ drift on the resulting winners.                                                
+                                                                                
+ For patterns with no useful permuter weighting profile yet                     
+ (for example, param-iter-ceiling), this command refuses to generate            
+ a config and points at the evidence-gathering workflow. Use                    
+ `--force` to override.                                                         
+                                                                                
+ For `decl-order` specifically, you should ALSO run                             
+ `debug mutate decl-orders` first — it's deterministic and                      
+ ~100x faster than letting permuter rediscover decl-order rounds.               
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   pcdump      [PCDUMP]  Path to pcdump.txt. Omit to auto-resolve via         │
+│                         --function from the cache.                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function   -f      TEXT  Function to generate permuter config for       │
+│                               (required).                                    │
+│                               [required]                                     │
+│    --pattern    -p      TEXT  Override pattern auto-detection. Use a name    │
+│                               from `debug util patterns` (e.g. decl-order,   │
+│                               alias-split).                                  │
+│    --target     -t      PATH  Target spec (YAML or JSON, from `debug target  │
+│                               derive`). Auto-detection needs this to         │
+│                               identify wrong virtuals. Without it, falls     │
+│                               back to stock settings unless --pattern is     │
+│                               provided.                                      │
+│    --out        -o      PATH  Output path. Default:                          │
+│                               <perm-root>/nonmatchings/<function>/settings.… │
+│    --perm-root          PATH  Root of decomp-permuter clone.                 │
+│                               [default: /Users/mike/code/decomp-permuter]    │
+│    --print                    Print rendered TOML to stdout instead of       │
+│                               writing.                                       │
+│    --merge                    Preserve existing  keys not touched by the     │
+│                               pattern profile. Default: overwrite.           │
+│    --force                    Generate config even for skip-marked patterns  │
+│                               (e.g. param-iter-ceiling). Use only if you     │
+│                               know why.                                      │
+│    --json                     Emit a JSON summary of the action.             │
+│    --help                     Show this message and exit.                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -1,0 +1,70 @@
+{
+  "function": "mnDiagram_DrawFighterHeaders",
+  "expected": {
+    "frame_size": 168,
+    "frame_allocation_trace": {
+      "status": "computed",
+      "objects": [
+        {
+          "layout_order": 2,
+          "start": 68,
+          "end": 72,
+          "size": 4,
+          "kind": "local-or-temporary",
+          "origin_tag": "r1-access-local-or-temporary",
+          "source": "r1-access",
+          "access_count": 2,
+          "opcodes": [
+            "lwz"
+          ],
+          "boundary_confidence": "access-width",
+          "ambiguous": false
+        }
+      ]
+    }
+  },
+  "current": {
+    "frame_size": 168,
+    "frame_allocation_trace": {
+      "status": "computed",
+      "objects": [
+        {
+          "layout_order": 3,
+          "start": 72,
+          "end": 76,
+          "size": 4,
+          "kind": "local-or-temporary",
+          "origin_tag": "symbolic-stack-home",
+          "source": "r1-access",
+          "source_symbols": [
+            "@1897"
+          ],
+          "symbol": "@1897",
+          "symbolic_assignment_order": 3,
+          "symbolic_assignment_orders": {
+            "@1897": 3
+          },
+          "expected_source_symbols": [
+            "@1897"
+          ],
+          "expected_source_offsets": {
+            "@1897": 68
+          },
+          "access_count": 2,
+          "opcodes": [
+            "lwz"
+          ],
+          "first_access": {
+            "opcode": "lwz",
+            "operands": "r3,@1897(r1)",
+            "pass": "FINAL CODE AFTER INSTRUCTION SCHEDULING",
+            "block_idx": 90,
+            "instr_idx": 1
+          },
+          "boundary_confidence": "access-width",
+          "ambiguous": false
+        }
+      ]
+    }
+  }
+}

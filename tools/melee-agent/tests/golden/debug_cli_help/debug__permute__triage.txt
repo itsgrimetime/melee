@@ -1,0 +1,79 @@
+                                                                                
+ Usage: melee-agent debug permute triage [OPTIONS] PERM_DIR                     
+                                                                                
+ Tier 7e: batch-triage decomp-permuter output candidates.                       
+                                                                                
+ The matching agent's session noted that many permuter "winners"                
+ (score=N where N < baseline) don't transfer to the real source tree            
+ because permuter preprocesses base.c (header merging, macro                    
+ expansion). This command iterates each `output-*/source.c` in a                
+ permuter run, applies the candidate to the real tree via the same              
+ transfer logic as `debug permute verify`, runs `ninja` + reads                 
+ fuzzy_match_percent, and produces a ranked list of which candidates            
+ actually improve real-tree match%.                                             
+                                                                                
+ Per-candidate cost: ~5-10 seconds (one ninja + report.json). With              
+ permuter generating ~100 winning candidates per session, total                 
+ triage time is typically a few minutes.                                        
+                                                                                
+ Designed as the v1 of permuter integration. v2 would be a permuter             
+ `--external-scorer` patch that calls our scoring per-iteration                 
+ instead of per-winner.                                                         
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    perm_dir      PATH  Directory containing permuter output subdirs        │
+│                          (output-NNNN-N/) each with a source.c.              │
+│                          [required]                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function                   -f      TEXT     Function name to verify     │
+│                                                  [required]                  │
+│    --max-candidates                     INTEGER  Stop after evaluating this  │
+│                                                  many candidates (0 = no     │
+│                                                  limit).                     │
+│                                                  [default: 0]                │
+│    --top                                INTEGER  Show the top K results in   │
+│                                                  the summary.                │
+│                                                  [default: 5]                │
+│    --threshold                          FLOAT    Minimum improvement         │
+│                                                  (percentage points) to      │
+│                                                  consider a win. Default     │
+│                                                  0.05 — catches the          │
+│                                                  +0.05-0.09% chain wins that │
+│                                                  hide at the previous 0.10   │
+│                                                  default.                    │
+│                                                  [default: 0.05]             │
+│    --apply-best                                  If the best transferring    │
+│                                                  candidate clears            │
+│                                                  --threshold, leave it       │
+│                                                  applied. Default reverts at │
+│                                                  the end.                    │
+│    --json                                        Emit results as JSON.       │
+│    --keep-failed                                 For each compile failure,   │
+│                                                  preserve the failing        │
+│                                                  patched source at a unique  │
+│                                                  temp path (paths printed    │
+│                                                  alongside the BUILD FAILED  │
+│                                                  status). Lets you           │
+│                                                  re-attempt promising        │
+│                                                  candidates with targeted    │
+│                                                  fixes instead of re-running │
+│                                                  permuter.                   │
+│    --resume,--skip-status-json                   Skip candidates with        │
+│                                                  terminal status sidecars    │
+│                                                  before applying             │
+│                                                  --max-candidates.           │
+│    --order                              TEXT     Candidate traversal order:  │
+│                                                  name, newest, score-desc,   │
+│                                                  or score-asc. Ordering is   │
+│                                                  applied before resume       │
+│                                                  filtering and               │
+│                                                  --max-candidates.           │
+│                                                  [default: name]             │
+│    --candidate-timeout                  FLOAT    Per-candidate build/report  │
+│                                                  timeout in seconds (0       │
+│                                                  disables).                  │
+│                                                  [default: 120.0]            │
+│    --help                                        Show this message and exit. │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

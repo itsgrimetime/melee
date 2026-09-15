@@ -188,7 +188,7 @@ class ProjectConfig:
             None  # Custom ninja build rules
         )
         self.custom_build_steps: Optional[Dict[str, List[Dict[str, Any]]]] = (
-            None  # Custom build steps, types are ["pre-compile", "post-compile", "post-link", "post-build", "post-ok"]
+            None  # Custom build steps, types are ["pre-compile", "post-compile", "post-link", "post-build"]
         )
         self.generate_compile_commands: bool = (
             True  # Generate compile_commands.json for clangd
@@ -283,12 +283,14 @@ class ProjectConfig:
 
     # Determines whether or not to use wibo as the compiler wrapper.
     def use_wibo(self) -> bool:
-        return (
-            self.wibo_tag is not None
-            and sys.platform == "linux"
-            and platform.machine() in ("i386", "x86_64", "aarch64", "arm64")
-            and self.wrapper is None
-        )
+        if self.wibo_tag is None or self.wrapper is not None:
+            return False
+        if sys.platform == "linux":
+            return platform.machine() in ("i386", "x86_64", "aarch64", "arm64")
+        # macOS wibo is x86_64 but works on ARM via Rosetta 2
+        if sys.platform == "darwin":
+            return True
+        return False
 
 
 def is_windows() -> bool:
@@ -1329,9 +1331,6 @@ def generate_build_ninja(
         )
         n.newline()
 
-        # Add all build steps needed before progress and after checking the hash
-        write_custom_step("post-ok", "post-build")
-
         ###
         # Calculate progress
         ###
@@ -1345,11 +1344,12 @@ def generate_build_ninja(
             outputs="progress",
             rule="progress",
             implicit=[
+                ok_path,
                 configure_script,
                 python_lib,
                 report_path,
             ],
-            order_only="post-ok",
+            order_only="post-build",
         )
 
         ###

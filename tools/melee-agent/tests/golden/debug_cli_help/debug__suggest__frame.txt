@@ -1,0 +1,19 @@
+                                                                                
+ Usage: melee-agent debug suggest frame [OPTIONS] [PCDUMP]                      
+                                                                                
+ Suggest source/probe levers for stack-frame/local-area residuals.              
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│   pcdump      [PCDUMP]  Path to pcdump.txt. Omit to auto-resolve via         │
+│                         --function.                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --function      -f      TEXT  Function name to inspect [required]         │
+│    --expected-asm          PATH  Expected target asm. Omit to extract via    │
+│                                  `extract get --full`.                       │
+│    --no-expected                 Do not compare against target asm; emit     │
+│                                  generic frame levers.                       │
+│    --json                        Emit as JSON.                               │
+│    --help                        Show this message and exit.                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

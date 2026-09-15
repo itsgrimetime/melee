@@ -1,0 +1,24 @@
+{
+  "function": "synthetic_pair_only",
+  "class_id": 0,
+  "_note": "FALLBACK construction (see PROVENANCE.md): the verified Task-5 _pair_only_ig (two independent columns). The plan's literal JSON illustration (40/41/50/51 cross-connected) was brute-force-proven SINGLE-solvable (the rev2-7 trap) and is NOT used. All registers/targets here are DERIVED from predict_assignments, never narrative (T2-review binding).",
+  "ig": {
+    "select_order": [60, 61, 50, 51],
+    "nodes": {
+      "60": {"neighbors": [0, 50], "precolored": {"0": 0}, "array_size": 2,
+              "incomplete": false, "observed_reg": 3},
+      "61": {"neighbors": [0, 51], "precolored": {"0": 0}, "array_size": 2,
+              "incomplete": false, "observed_reg": 3},
+      "50": {"neighbors": [0, 60], "precolored": {"0": 0}, "array_size": 2,
+              "incomplete": false, "observed_reg": 4},
+      "51": {"neighbors": [0, 61], "precolored": {"0": 0}, "array_size": 2,
+              "incomplete": false, "observed_reg": 4}
+    }
+  },
+  "phys_target": {"50": 3, "51": 3},
+  "expected": {
+    "no_single_reaches": true,
+    "working_pair": [{"kind": "order", "target_ig": 50},
+                      {"kind": "order", "target_ig": 51}]
+  }
+}

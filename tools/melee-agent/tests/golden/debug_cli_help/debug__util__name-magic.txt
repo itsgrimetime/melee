@@ -1,0 +1,47 @@
+                                                                                
+ Usage: melee-agent debug util name-magic [OPTIONS] O_FILE                      
+                                                                                
+ Rename anonymous @N symbols in a .o's .sdata2 to user-supplied names.          
+                                                                                
+ Use case: MWCC's int-to-float cast emits an anonymous symbol like              
+ `@491` for the 0x4330000080000000 magic constant. The matching .o              
+ references this data via a named global like `mnVibration_804DC018`            
+ (from symbols.txt). The relocation target name diff blocks byte                
+ matching even when the data is identical.                                      
+                                                                                
+ With `--map s32=mnVibration_804DC018`, this tool finds the                     
+ anonymous symbol whose .sdata2 value matches the s32 int-to-float              
+ bias and renames it via objcopy.  The new symbol is also promoted to           
+ global (``STB_GLOBAL``) by default, matching the binding in the                
+ expected .o.  Pass ``--no-globalize`` to skip this step.                       
+                                                                                
+ Use `--list` to see what's available without renaming.                         
+                                                                                
+╭─ Arguments ──────────────────────────────────────────────────────────────────╮
+│ *    o_file      PATH  Path to the .o file to post-process. [required]       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --map        -m                    TEXT  Mapping of magic constant value to  │
+│                                          symbol name. Format:                │
+│                                          '<value>=<name>,<value>=<name>'.    │
+│                                          <value> is 's32'                    │
+│                                          (0x4330000080000000), 'u32'         │
+│                                          (0x4330000000000000), or a          │
+│                                          hex/decimal literal. May be         │
+│                                          specified once with multiple pairs. │
+│ --out        -o                    PATH  Output path (default: rewrite in    │
+│                                          place).                             │
+│ --list                                   Just list anonymous .sdata2 symbols │
+│                                          and their values; don't rename.     │
+│ --globalize      --no-globalize          After renaming, promote each new    │
+│                                          symbol to global (STB_GLOBAL) via   │
+│                                          objcopy --globalize-symbol. Default │
+│                                          true — the expected .o always has   │
+│                                          these symbols as global, so local   │
+│                                          symbols produce a symbol-binding    │
+│                                          diff even after renaming.           │
+│                                          [default: globalize]                │
+│ --json                                   Emit as JSON.                       │
+│ --help                                   Show this message and exit.         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

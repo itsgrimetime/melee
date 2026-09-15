@@ -1,0 +1,24 @@
+                                                                                
+ Usage: melee-agent debug search retained-frontiers [OPTIONS]                   
+                                                                                
+ Rank retained frontiers and suppress lanes closed by terminal evidence.        
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --function          -f            TEXT     Function name to include. May be  │
+│                                            passed multiple times.            │
+│ --artifact          -a            PATH     JSON artifact file or directory   │
+│                                            to scan. Repeatable.              │
+│ --artifact-glob     -g            TEXT     Glob of JSON artifacts, relative  │
+│                                            to repo root unless absolute.     │
+│ --diagnostics-root                PATH     Diagnostics root to scan          │
+│                                            recursively when no artifacts or  │
+│                                            globs are supplied.               │
+│                                            [default: build/diagnostics]      │
+│ --max-files                       INTEGER  Abort if discovery matches more   │
+│                                            JSON files than this limit.       │
+│                                            [default: 2000]                   │
+│ --json                  --text             Emit JSON or compact text.        │
+│                                            [default: json]                   │
+│ --help                                     Show this message and exit.       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

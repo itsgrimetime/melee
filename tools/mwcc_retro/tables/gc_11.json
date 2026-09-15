@@ -1,0 +1,5 @@
+{
+  "compiler": "1.1",
+  "note": "GC/1.1 uses cadmic native address detection (init_mwcc_version); this table is a placeholder so the launcher can json-load --table.",
+  "entries": {}
+}

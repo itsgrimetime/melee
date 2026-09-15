@@ -1,0 +1,9 @@
+                                                                                
+ Usage: melee-agent debug permute remote targets [OPTIONS]                      
+                                                                                
+ List configured remote permuter targets.                                       
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

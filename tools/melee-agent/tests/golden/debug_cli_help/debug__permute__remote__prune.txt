@@ -1,0 +1,21 @@
+                                                                                
+ Usage: melee-agent debug permute remote prune [OPTIONS]                        
+                                                                                
+ Delete stale remote-runs directories on remote coders.                         
+                                                                                
+ Directories whose corresponding tmux session is still active are NEVER         
+ deleted, even if they are older than the cutoff.                               
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --older-than                      INTEGER  Only prune remote-runs dirs older │
+│                                            than this many days.              │
+│                                            [default: 14]                     │
+│ --target      -t                  TEXT     Only prune on this target.        │
+│ --timeout                         FLOAT    SSH probe timeout in seconds.     │
+│                                            [default: 30.0]                   │
+│ --dry-run         --no-dry-run             Show what would be deleted        │
+│                                            without executing.                │
+│                                            [default: dry-run]                │
+│ --help                                     Show this message and exit.       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

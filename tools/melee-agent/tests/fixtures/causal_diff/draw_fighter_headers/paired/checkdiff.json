@@ -1,0 +1,252 @@
+{
+  "function": "mnDiagram_DrawFighterHeaders",
+  "target_asm": [
+    "+230: 3a a0 00 00 \tli      r21,0",
+    "+234: 3a d5 00 00 \taddi    r22,r21,0",
+    "+238: 7e c3 b3 78 \tmr      r3,r22",
+    "+23c: 48 00 00 01 \tbl      <mnDiagram_DrawFighterHeaders+0x23c>",
+    "+23c: R_PPC_REL24\tmn_IsFighterUnlocked",
+    "+240: 2c 03 00 00 \tcmpwi   r3,0",
+    "+244: 41 82 00 08 \tbeq     <mnDiagram_DrawFighterHeaders+0x24c>",
+    "+248: 3a b5 00 01 \taddi    r21,r21,1",
+    "+24c: 3a d6 00 01 \taddi    r22,r22,1",
+    "+250: 2c 16 00 19 \tcmpwi   r22,25",
+    "+254: 41 80 ff e4 \tblt     <mnDiagram_DrawFighterHeaders+0x238>",
+    "+258: 7c 15 f0 00 \tcmpw    r21,r30",
+    "+25c: 40 81 01 a8 \tble     <mnDiagram_DrawFighterHeaders+0x404>",
+    "+2f4: 38 81 00 44 \taddi    r4,r1,68",
+    "+2f8: 38 a0 00 02 \tli      r5,2",
+    "+2fc: 38 c0 ff ff \tli      r6,-1",
+    "+300: 48 00 00 01 \tbl      <mnDiagram_DrawFighterHeaders+0x300>",
+    "+300: R_PPC_REL24\tlb_80011E24",
+    "+304: 57 80 06 3e \tclrlwi  r0,r28,24",
+    "+308: 80 61 00 44 \tlwz     r3,68(r1)"
+  ],
+  "current_asm": [
+    "+230: 3a a0 00 00 \tli      r21,0",
+    "+234: 3a d5 00 00 \taddi    r22,r21,0",
+    "+238: 7e c3 b3 78 \tmr      r3,r22",
+    "+23c: 48 00 00 01 \tbl      <mnDiagram_DrawFighterHeaders+0x23c>",
+    "+23c: R_PPC_REL24\tmn_IsFighterUnlocked",
+    "+240: 2c 03 00 00 \tcmpwi   r3,0",
+    "+244: 41 82 00 08 \tbeq     <mnDiagram_DrawFighterHeaders+0x24c>",
+    "+248: 3a b5 00 01 \taddi    r21,r21,1",
+    "+24c: 3a d6 00 01 \taddi    r22,r22,1",
+    "+250: 2c 16 00 19 \tcmpwi   r22,25",
+    "+254: 41 80 ff e4 \tblt     <mnDiagram_DrawFighterHeaders+0x238>",
+    "+258: 7c 15 f0 00 \tcmpw    r21,r30",
+    "+25c: 40 81 01 a8 \tble     <mnDiagram_DrawFighterHeaders+0x404>",
+    "+2f4: 38 81 00 48 \taddi    r4,r1,72",
+    "+2f8: 38 a0 00 02 \tli      r5,2",
+    "+2fc: 38 c0 ff ff \tli      r6,-1",
+    "+300: 48 00 00 01 \tbl      <mnDiagram_DrawFighterHeaders+0x300>",
+    "+300: R_PPC_REL24\tlb_80011E24",
+    "+304: 57 80 06 3e \tclrlwi  r0,r28,24",
+    "+308: 80 61 00 48 \tlwz     r3,72(r1)"
+  ],
+  "classification": {
+    "primary": "stack-slot-layout",
+    "stack_frame_sizes": {
+      "expected_frame_size": 168,
+      "current_frame_size": 168,
+      "frame_growth": 0
+    },
+    "stack_slot_localizer": {
+      "frame_size": 168,
+      "mismatch_count": 2,
+      "deltas": [
+        -4
+      ],
+      "mismatches": [
+        {
+          "line_index": 231,
+          "expected_offset": 68,
+          "current_offset": 72,
+          "delta": -4,
+          "opcode": "lwz",
+          "expected": "lwz     r3,68(r1)",
+          "current": "lwz     r3,72(r1)"
+        },
+        {
+          "line_index": 239,
+          "expected_offset": 68,
+          "current_offset": 72,
+          "delta": -4,
+          "opcode": "lwz",
+          "expected": "lwz     r3,68(r1)",
+          "current": "lwz     r3,72(r1)"
+        }
+      ],
+      "pcdump_bridge": {
+        "status": "ok",
+        "function": "mnDiagram_DrawFighterHeaders",
+        "candidate_count": 2,
+        "candidates": [
+          {
+            "mismatch": {
+              "line_index": 231,
+              "expected_offset": 68,
+              "current_offset": 72,
+              "delta": -4,
+              "opcode": "lwz",
+              "expected": "lwz     r3,68(r1)",
+              "current": "lwz     r3,72(r1)"
+            },
+            "opcode": "lwz",
+            "current_offset": 72,
+            "expected_offset": 68,
+            "delta": -4,
+            "register_class": 0,
+            "virtual": 64,
+            "virtual_token": "r64",
+            "site_kind": "final-only-stack-home",
+            "spill_root": "r64",
+            "ig_idx": 64,
+            "mapping_status": "colorgraph",
+            "assigned_reg": "r3",
+            "simplify": {
+              "iter": 52,
+              "degree": 1,
+              "array_size": 14,
+              "flags": 2,
+              "spilled": false
+            },
+            "coalesced_aliases": [],
+            "natural_coalesce_aliases": [],
+            "stack_home_order": [
+              {
+                "offset": 4,
+                "virtual": 89,
+                "virtual_token": "r89",
+                "opcodes": [
+                  "stw"
+                ]
+              },
+              {
+                "offset": 4,
+                "virtual": 91,
+                "virtual_token": "r91",
+                "opcodes": [
+                  "stw"
+                ]
+              },
+              {
+                "offset": 4,
+                "virtual": 102,
+                "virtual_token": "r102",
+                "opcodes": [
+                  "stw"
+                ]
+              },
+              {
+                "offset": 4,
+                "virtual": 104,
+                "virtual_token": "r104",
+                "opcodes": [
+                  "stw"
+                ]
+              }
+            ],
+            "nearest_source_expression": {
+              "expression": "li r64,0",
+              "confidence": "pcode-first-def",
+              "source_file": "src/melee/mn/mndiagram.c",
+              "source_line": null,
+              "source_col": null
+            },
+            "evidence": [
+              "FINAL CODE AFTER INSTRUCTION SCHEDULING B32:1 lwz r3,@1877(r1)"
+            ]
+          },
+          {
+            "mismatch": {
+              "line_index": 231,
+              "expected_offset": 68,
+              "current_offset": 72,
+              "delta": -4,
+              "opcode": "lwz",
+              "expected": "lwz     r3,68(r1)",
+              "current": "lwz     r3,72(r1)"
+            },
+            "opcode": "lwz",
+            "current_offset": 72,
+            "expected_offset": 68,
+            "delta": -4,
+            "register_class": 0,
+            "virtual": 53,
+            "virtual_token": "r53",
+            "site_kind": "final-only-stack-home",
+            "spill_root": "r53",
+            "ig_idx": 53,
+            "mapping_status": "colorgraph",
+            "assigned_reg": "r3",
+            "simplify": {
+              "iter": 60,
+              "degree": 1,
+              "array_size": 12,
+              "flags": 2,
+              "spilled": false
+            },
+            "coalesced_aliases": [],
+            "natural_coalesce_aliases": [],
+            "stack_home_order": [
+              {
+                "offset": 4,
+                "virtual": 89,
+                "virtual_token": "r89",
+                "opcodes": [
+                  "stw"
+                ]
+              },
+              {
+                "offset": 4,
+                "virtual": 91,
+                "virtual_token": "r91",
+                "opcodes": [
+                  "stw"
+                ]
+              },
+              {
+                "offset": 4,
+                "virtual": 102,
+                "virtual_token": "r102",
+                "opcodes": [
+                  "stw"
+                ]
+              },
+              {
+                "offset": 4,
+                "virtual": 104,
+                "virtual_token": "r104",
+                "opcodes": [
+                  "stw"
+                ]
+              }
+            ],
+            "nearest_source_expression": {
+              "expression": "li r53,0",
+              "confidence": "pcode-first-def",
+              "source_file": "src/melee/mn/mndiagram.c",
+              "source_line": null,
+              "source_col": null
+            },
+            "evidence": [
+              "FINAL CODE AFTER INSTRUCTION SCHEDULING B32:1 lwz r3,@1877(r1)"
+            ]
+          }
+        ]
+      }
+    },
+    "structural_truth_gate": {
+      "status": "structural-match",
+      "normalized_diff_lines": 0,
+      "expected_normalized_lines": 319,
+      "current_normalized_lines": 319,
+      "object_paths": {
+        "expected_path": "/private/tmp/task9-regen-paired/build/GALE01/obj/melee/mn/mndiagram.o",
+        "current_path": "/private/tmp/task9-regen-paired/build/GALE01/src/melee/mn/mndiagram.o",
+        "unit": "main/melee/mn/mndiagram"
+      }
+    }
+  }
+}

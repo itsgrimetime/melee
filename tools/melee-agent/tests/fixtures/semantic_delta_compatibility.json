@@ -1,0 +1,87 @@
+[
+  {
+    "name": "current-known-values-canonicalize",
+    "input": {
+      "function": "current_fn",
+      "semantic_delta_families": [
+        "integer-memory-width-transfer",
+        "address-constant-materialization",
+        "integer-memory-width-transfer"
+      ],
+      "opcode_edit_direction": " substitution ",
+      "normalized_trigger_signature_status": " available ",
+      "normalized_trigger_signature": " {\"edit_direction\":\"substitution\",\"normalized_diff_lines\":1,\"pairs\":[[\"mr\",\"li\"]],\"version\":1} ",
+      "normalized_trigger_family": " one-line-substitution ",
+      "normalized_trigger_cluster_size": 2
+    },
+    "expected": {
+      "semantic_delta_families": [
+        "address-constant-materialization",
+        "integer-memory-width-transfer"
+      ],
+      "opcode_edit_direction": "substitution",
+      "normalized_trigger_signature_status": "available",
+      "normalized_trigger_signature": "{\"edit_direction\":\"substitution\",\"normalized_diff_lines\":1,\"pairs\":[[\"mr\",\"li\"]],\"version\":1}",
+      "normalized_trigger_family": "one-line-substitution",
+      "normalized_trigger_cluster_size": 2
+    }
+  },
+  {
+    "name": "future-values-are-preserved",
+    "input": {
+      "function": "future_fn",
+      "semantic_delta_families": [
+        "future-zeta-family",
+        "branch-predicate-control",
+        "future-alpha-family"
+      ],
+      "opcode_edit_direction": "future-direction",
+      "normalized_trigger_signature_status": "future-status",
+      "normalized_trigger_signature": "future-signature",
+      "normalized_trigger_family": "future-trigger-family",
+      "normalized_trigger_cluster_size": 7
+    },
+    "expected": {
+      "semantic_delta_families": [
+        "branch-predicate-control",
+        "future-alpha-family",
+        "future-zeta-family"
+      ],
+      "opcode_edit_direction": "future-direction",
+      "normalized_trigger_signature_status": "future-status",
+      "normalized_trigger_signature": "future-signature",
+      "normalized_trigger_family": "future-trigger-family",
+      "normalized_trigger_cluster_size": 7
+    }
+  },
+  {
+    "name": "malformed-semantic-values-are-sanitized",
+    "input": {
+      "function": "malformed_fn",
+      "semantic_delta_families": "not-an-array",
+      "opcode_edit_direction": ["substitution"],
+      "normalized_trigger_signature_status": false,
+      "normalized_trigger_signature": {"unsafe": "value"},
+      "normalized_trigger_family": 42,
+      "normalized_trigger_cluster_size": true
+    },
+    "expected": {
+      "semantic_delta_families": [],
+      "opcode_edit_direction": "",
+      "normalized_trigger_signature_status": "",
+      "normalized_trigger_signature": "",
+      "normalized_trigger_family": "",
+      "normalized_trigger_cluster_size": 0
+    }
+  },
+  {
+    "name": "legacy-v3-opcode-signature-remains-nonsemantic",
+    "input": {
+      "function": "legacy_fn",
+      "schema_version": 3,
+      "opcode_delta_signature_status": "available",
+      "opcode_delta_signature": "{\"dominant\":[[\"mr\",\"li\",1]],\"first\":[\"mr\",\"li\"],\"version\":1}"
+    },
+    "expected": {}
+  }
+]

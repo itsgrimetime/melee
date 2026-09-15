@@ -1,0 +1,1307 @@
+FUNCTION: mnDiagram_DrawFighterHeaders
+  Type: function(void* arg0, int arg1, int arg2)[returns void]
+
+STATEMENTS (IR):
+--------------------------------------------------------------------------------
+:-707788678 Nop 
+:262144    [data] = TYPCON(FORCELOAD([[arg0] + 44]))
+  [EASS] [data] = TYPCON(FORCELOAD([[arg0] + 44]))
+    [EINDIRECT] [data]
+      [EOBJREF] data
+        -> ObjObject @ 0x0100C8E0: data (DataType: DLOCAL, Type: struct Diagram*)
+    [ETYPCON] TYPCON(FORCELOAD([[arg0] + 44]))
+      [EFORCELOAD] FORCELOAD([[arg0] + 44])
+        [EINDIRECT] [[arg0] + 44]
+          [EADD] [arg0] + 44
+            [EINDIRECT] [arg0]
+              [EOBJREF] arg0
+                -> ObjObject @ 0x00FE22C0: arg0 (DataType: DLOCAL, Type: void*)
+            [EINTCONST] 44
+:0         [data_alias] = [data]
+  [EASS] [data_alias] = [data]
+    [EINDIRECT] [data_alias]
+      [EOBJREF] data_alias
+        -> ObjObject @ 0x0100C988: data_alias (DataType: DLOCAL, Type: struct Diagram*)
+    [EINDIRECT] [data]
+      [EOBJREF] data
+        -> ObjObject @ 0x0100C8E0: data (DataType: DLOCAL, Type: struct Diagram*)
+:16656664  [assets] = TYPCON(mnDiagram_804A0750)
+  [EASS] [assets] = TYPCON(mnDiagram_804A0750)
+    [EINDIRECT] [assets]
+      [EOBJREF] assets
+        -> ObjObject @ 0x0100C9F0: assets (DataType: DLOCAL, Type: struct mnDiagram_Assets*)
+    [ETYPCON] TYPCON(mnDiagram_804A0750)
+      [EOBJREF] mnDiagram_804A0750
+        -> ObjObject @ 0x00CEFE08: mnDiagram_804A0750 (DataType: DDATA, Type: struct mnDiagram_804A0750_t)
+:16646144  [i] = 0
+  [EASS] [i] = 0
+    [EINDIRECT] [i]
+      [EOBJREF] i
+        -> ObjObject @ 0x0100CB00: i (DataType: DLOCAL, Type: int)
+    [EINTCONST] 0
+:17039614  Goto @1838
+:0         Label @1839:
+:1310974   [sorted] = TYPCON([assets])
+  [EASS] [sorted] = TYPCON([assets])
+    [EINDIRECT] [sorted]
+      [EOBJREF] sorted
+        -> ObjObject @ 0x0100CA78: sorted (DataType: DLOCAL, Type: unsigned char*)
+    [ETYPCON] TYPCON([assets])
+      [EINDIRECT] [assets]
+        [EOBJREF] assets
+          -> ObjObject @ 0x0100C9F0: assets (DataType: DLOCAL, Type: struct mnDiagram_Assets*)
+:16658152  Nop 
+:524542    [@1854] = 0
+  [EASS] [@1854] = 0
+    [EINDIRECT] [@1854]
+      [EOBJREF] @1854
+        -> ObjObject @ 0x00FE4FD8: @1854 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 0
+:6094847   [@1855] = 0
+  [EASS] [@1855] = 0
+    [EINDIRECT] [@1855]
+      [EOBJREF] @1855
+        -> ObjObject @ 0x00FE5050: @1855 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 0
+:30        Goto @1858
+:195       Label @1856:
+:0         IfNot (mn_IsFighterUnlocked([@1855])) @1857
+  [EFUNCCALL] mn_IsFighterUnlocked([@1855])
+    Function:
+      [EOBJREF] mn_IsFighterUnlocked
+        -> ObjObject @ 0x00C54970: mn_IsFighterUnlocked (DataType: DFUNC, Type: function(int @no_name@)[returns int])
+    Arg 0:
+      [EINDIRECT] [@1855]
+        [EOBJREF] @1855
+          -> ObjObject @ 0x00FE5050: @1855 (DataType: DLOCAL, Type: int)
+:16646156  [@1854]++
+  [EPOSTINC] [@1854]++
+    [EINDIRECT] [@1854]
+      [EOBJREF] @1854
+        -> ObjObject @ 0x00FE4FD8: @1854 (DataType: DLOCAL, Type: int)
+:33619974  Label @1857:
+:1082130688 [@1855]++
+  [EPOSTINC] [@1855]++
+    [EINDIRECT] [@1855]
+      [EOBJREF] @1855
+        -> ObjObject @ 0x00FE5050: @1855 (DataType: DLOCAL, Type: int)
+:1189085195 Label @1858:
+:34144510  If ([@1855] < 25) @1856
+  [ELESS] [@1855] < 25
+    [EINDIRECT] [@1855]
+      [EOBJREF] @1855
+        -> ObjObject @ 0x00FE5050: @1855 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 25
+:655614    [@1852] = [@1854]
+  [EASS] [@1852] = [@1854]
+    [EINDIRECT] [@1852]
+      [EOBJREF] @1852
+        -> ObjObject @ 0x00FE4F30: @1852 (DataType: DLOCAL, Type: int)
+    [EINDIRECT] [@1854]
+      [EOBJREF] @1854
+        -> ObjObject @ 0x00FE4FD8: @1854 (DataType: DLOCAL, Type: int)
+:33554435  Goto @1853
+:0         Label @1853:
+:1496842247 IfNot ([@1852] > [i]) @1842
+  [EGREATER] [@1852] > [i]
+    [EINDIRECT] [@1852]
+      [EOBJREF] @1852
+        -> ObjObject @ 0x00FE4F30: @1852 (DataType: DLOCAL, Type: int)
+    [EINDIRECT] [i]
+      [EOBJREF] i
+        -> ObjObject @ 0x0100CB00: i (DataType: DLOCAL, Type: int)
+:16658600  Label @1843:
+:16658504  Nop 
+:393216    [@1866] = [i]
+  [EASS] [@1866] = [i]
+    [EINDIRECT] [@1866]
+      [EOBJREF] @1866
+        -> ObjObject @ 0x00FE64F0: @1866 (DataType: DLOCAL, Type: int)
+    [EINDIRECT] [i]
+      [EOBJREF] i
+        -> ObjObject @ 0x0100CB00: i (DataType: DLOCAL, Type: int)
+:34144510  [@1865] = [arg2]
+  [EASS] [@1865] = [arg2]
+    [EINDIRECT] [@1865]
+      [EOBJREF] @1865
+        -> ObjObject @ 0x00FE6478: @1865 (DataType: DLOCAL, Type: int)
+    [EINDIRECT] [arg2]
+      [EOBJREF] arg2
+        -> ObjObject @ 0x00FE23B0: arg2 (DataType: DLOCAL, Type: int)
+:13        [@1868] = [sorted] + [arg2]
+  [EASS] [@1868] = [sorted] + [arg2]
+    [EINDIRECT] [@1868]
+      [EOBJREF] @1868
+        -> ObjObject @ 0x00FE65E0: @1868 (DataType: DLOCAL, Type: unsigned char*)
+    [EADD] [sorted] + [arg2]
+      [EINDIRECT] [sorted]
+        [EOBJREF] sorted
+          -> ObjObject @ 0x0100CA78: sorted (DataType: DLOCAL, Type: unsigned char*)
+      [EINDIRECT] [arg2]
+        [EOBJREF] arg2
+          -> ObjObject @ 0x00FE23B0: arg2 (DataType: DLOCAL, Type: int)
+:65536     Goto @1875
+:1774190846 Label @1871:
+:254       IfNot ([@1866] == 0) @1872
+  [EEQU] [@1866] == 0
+    [EINDIRECT] [@1866]
+      [EOBJREF] @1866
+        -> ObjObject @ 0x00FE64F0: @1866 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 0
+:0         [@1870] = TYPCON([[sorted] + [@1865]])
+  [EASS] [@1870] = TYPCON([[sorted] + [@1865]])
+    [EINDIRECT] [@1870]
+      [EOBJREF] @1870
+        -> ObjObject @ 0x00FE66D0: @1870 (DataType: DLOCAL, Type: int)
+    [ETYPCON] TYPCON([[sorted] + [@1865]])
+      [EINDIRECT] [[sorted] + [@1865]]
+        [EADD] [sorted] + [@1865]
+          [EINDIRECT] [sorted]
+            [EOBJREF] sorted
+              -> ObjObject @ 0x0100CA78: sorted (DataType: DLOCAL, Type: unsigned char*)
+          [EINDIRECT] [@1865]
+            [EOBJREF] @1865
+              -> ObjObject @ 0x00FE6478: @1865 (DataType: DLOCAL, Type: int)
+:13836784  Goto @1876
+:1358430462 Label @1872:
+:254       [@1867] = [@1868]
+  [EASS] [@1867] = [@1868]
+    [EINDIRECT] [@1867]
+      [EOBJREF] @1867
+        -> ObjObject @ 0x00FE6568: @1867 (DataType: DLOCAL, Type: unsigned char*)
+    [EINDIRECT] [@1868]
+      [EOBJREF] @1868
+        -> ObjObject @ 0x00FE65E0: @1868 (DataType: DLOCAL, Type: unsigned char*)
+:1220542718 Label @1873:
+:1717567742 [@1865]++
+  [EPOSTINC] [@1865]++
+    [EINDIRECT] [@1865]
+      [EOBJREF] @1865
+        -> ObjObject @ 0x00FE6478: @1865 (DataType: DLOCAL, Type: int)
+:1321730302 [@1867]++
+  [EPOSTINC] [@1867]++
+    [EINDIRECT] [@1867]
+      [EOBJREF] @1867
+        -> ObjObject @ 0x00FE6568: @1867 (DataType: DLOCAL, Type: unsigned char*)
+:1600651518 [@1868]++
+  [EPOSTINC] [@1868]++
+    [EINDIRECT] [@1868]
+      [EOBJREF] @1868
+        -> ObjObject @ 0x00FE65E0: @1868 (DataType: DLOCAL, Type: unsigned char*)
+:1220542718 IfNot ([@1865] >= 25) @1874
+  [EGREATEREQU] [@1865] >= 25
+    [EINDIRECT] [@1865]
+      [EOBJREF] @1865
+        -> ObjObject @ 0x00FE6478: @1865 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 25
+:16646398  [@1870] = 25
+  [EASS] [@1870] = 25
+    [EINDIRECT] [@1870]
+      [EOBJREF] @1870
+        -> ObjObject @ 0x00FE66D0: @1870 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 25
+:3276800   Goto @1876
+:0         Label @1874:
+:1         If (mn_IsFighterUnlocked(TYPCON([[@1867]])) == 0) @1873
+  [EEQU] mn_IsFighterUnlocked(TYPCON([[@1867]])) == 0
+    [EFUNCCALL] mn_IsFighterUnlocked(TYPCON([[@1867]]))
+      Function:
+        [EOBJREF] mn_IsFighterUnlocked
+          -> ObjObject @ 0x00C54970: mn_IsFighterUnlocked (DataType: DFUNC, Type: function(int @no_name@)[returns int])
+      Arg 0:
+        [ETYPCON] TYPCON([[@1867]])
+          [EINDIRECT] [[@1867]]
+            [EINDIRECT] [@1867]
+              [EOBJREF] @1867
+                -> ObjObject @ 0x00FE6568: @1867 (DataType: DLOCAL, Type: unsigned char*)
+    [EINTCONST] 0
+:13172737  [@1866]--
+  [EPOSTDEC] [@1866]--
+    [EINDIRECT] [@1866]
+      [EOBJREF] @1866
+        -> ObjObject @ 0x00FE64F0: @1866 (DataType: DLOCAL, Type: int)
+:8126718   Label @1875:
+:8126464   If ([@1866] >= 0) @1871
+  [EGREATEREQU] [@1866] >= 0
+    [EINDIRECT] [@1866]
+      [EOBJREF] @1866
+        -> ObjObject @ 0x00FE64F0: @1866 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 0
+:254       Label @1876:
+:0         [@1863] = [@1869] = [@1870]
+  [EASS] [@1863] = [@1869] = [@1870]
+    [EINDIRECT] [@1863]
+      [EOBJREF] @1863
+        -> ObjObject @ 0x00FE63A0: @1863 (DataType: DLOCAL, Type: int)
+    [EASS] [@1869] = [@1870]
+      [EINDIRECT] [@1869]
+        [EOBJREF] @1869
+          -> ObjObject @ 0x00FE6658: @1869 (DataType: DLOCAL, Type: int)
+      [EINDIRECT] [@1870]
+        [EOBJREF] @1870
+          -> ObjObject @ 0x00FE66D0: @1870 (DataType: DLOCAL, Type: int)
+:16676080  Goto @1864
+:16676112  Label @1864:
+:16673384  [header] = [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1859]) , lb_80011E24([@1859], @1861, 2, -1) , HSD_JObjReqAnimAll([@1861], TYPCON([@1862] & 255)) , HSD_JObjAnimAll([@1861]) , FORCELOAD([@1859])
+  [EASS] [header] = [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1859]) , lb_80011E24([@1859], @1861, 2, -1) , HSD_JObjReqAnimAll([@1861], TYPCON([@1862] & 255)) , HSD_JObjAnimAll([@1861]) , FORCELOAD([@1859])
+    [EINDIRECT] [header]
+      [EOBJREF] header
+        -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+    [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1859]) , lb_80011E24([@1859], @1861, 2, -1) , HSD_JObjReqAnimAll([@1861], TYPCON([@1862] & 255)) , HSD_JObjAnimAll([@1861]) , FORCELOAD([@1859])
+      [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1859]) , lb_80011E24([@1859], @1861, 2, -1) , HSD_JObjReqAnimAll([@1861], TYPCON([@1862] & 255)) , HSD_JObjAnimAll([@1861])
+        [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1859]) , lb_80011E24([@1859], @1861, 2, -1) , HSD_JObjReqAnimAll([@1861], TYPCON([@1862] & 255))
+          [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1859]) , lb_80011E24([@1859], @1861, 2, -1)
+            [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1859])
+              [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12]) , HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84])
+                [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]]) , HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12])
+                  [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180 , [@1859] = HSD_JObjLoadJoint([[@1860]])
+                    [ECOMMA] [@1862] = [[fighter_id] = [@1863] , fighter_id] , [@1860] = [assets] + 180
+                      [EASS] [@1862] = [[fighter_id] = [@1863] , fighter_id]
+                        [EINDIRECT] [@1862]
+                          [EOBJREF] @1862
+                            -> ObjObject @ 0x00FE5878: @1862 (DataType: DLOCAL, Type: int)
+                        [EINDIRECT] [[fighter_id] = [@1863] , fighter_id]
+                          [ECOMMA] [fighter_id] = [@1863] , fighter_id
+                            [EASS] [fighter_id] = [@1863]
+                              [EINDIRECT] [fighter_id]
+                                [EOBJREF] fighter_id
+                                  -> ObjObject @ 0x0100C850: fighter_id (DataType: DLOCAL, Type: int)
+                              [EINDIRECT] [@1863]
+                                [EOBJREF] @1863
+                                  -> ObjObject @ 0x00FE63A0: @1863 (DataType: DLOCAL, Type: int)
+                            [EOBJREF] fighter_id
+                              -> ObjObject @ 0x0100C850: fighter_id (DataType: DLOCAL, Type: int)
+                      [EASS] [@1860] = [assets] + 180
+                        [EINDIRECT] [@1860]
+                          [EOBJREF] @1860
+                            -> ObjObject @ 0x00FE5788: @1860 (DataType: DLOCAL, Type: void**)
+                        [EADD] [assets] + 180
+                          [EINDIRECT] [assets]
+                            [EOBJREF] assets
+                              -> ObjObject @ 0x0100C9F0: assets (DataType: DLOCAL, Type: struct mnDiagram_Assets*)
+                          [EINTCONST] 180
+                    [EASS] [@1859] = HSD_JObjLoadJoint([[@1860]])
+                      [EINDIRECT] [@1859]
+                        [EOBJREF] @1859
+                          -> ObjObject @ 0x00FE5710: @1859 (DataType: DLOCAL, Type: struct HSD_JObj*)
+                      [EFUNCCALL] HSD_JObjLoadJoint([[@1860]])
+                        Function:
+                          [EOBJREF] HSD_JObjLoadJoint
+                            -> ObjObject @ 0x00C7A558: HSD_JObjLoadJoint (DataType: DFUNC, Type: function(struct HSD_Joint* @no_name@)[returns struct HSD_JObj*])
+                        Arg 0:
+                          [EINDIRECT] [[@1860]]
+                            [EINDIRECT] [@1860]
+                              [EOBJREF] @1860
+                                -> ObjObject @ 0x00FE5788: @1860 (DataType: DLOCAL, Type: void**)
+                  [EFUNCCALL] HSD_JObjAddAnimAll([@1859], [[@1860] + 4], [[@1860] + 8], [[@1860] + 12])
+                    Function:
+                      [EOBJREF] HSD_JObjAddAnimAll
+                        -> ObjObject @ 0x00C7A6A8: HSD_JObjAddAnimAll (DataType: DFUNC, Type: function(struct HSD_JObj* @no_name@, struct HSD_AnimJoint* @no_name@, struct HSD_MatAnimJoint* @no_name@, struct HSD_ShapeAnimJoint* @no_name@)[returns void])
+                    Arg 0:
+                      [EINDIRECT] [@1859]
+                        [EOBJREF] @1859
+                          -> ObjObject @ 0x00FE5710: @1859 (DataType: DLOCAL, Type: struct HSD_JObj*)
+                    Arg 1:
+                      [EINDIRECT] [[@1860] + 4]
+                        [EADD] [@1860] + 4
+                          [EINDIRECT] [@1860]
+                            [EOBJREF] @1860
+                              -> ObjObject @ 0x00FE5788: @1860 (DataType: DLOCAL, Type: void**)
+                          [EINTCONST] 4
+                    Arg 2:
+                      [EINDIRECT] [[@1860] + 8]
+                        [EADD] [@1860] + 8
+                          [EINDIRECT] [@1860]
+                            [EOBJREF] @1860
+                              -> ObjObject @ 0x00FE5788: @1860 (DataType: DLOCAL, Type: void**)
+                          [EINTCONST] 8
+                    Arg 3:
+                      [EINDIRECT] [[@1860] + 12]
+                        [EADD] [@1860] + 12
+                          [EINDIRECT] [@1860]
+                            [EOBJREF] @1860
+                              -> ObjObject @ 0x00FE5788: @1860 (DataType: DLOCAL, Type: void**)
+                          [EINTCONST] 12
+                [EFUNCCALL] HSD_JObjReqAnimAll([@1859], [mnDiagram_804DBF84])
+                  Function:
+                    [EOBJREF] HSD_JObjReqAnimAll
+                      -> ObjObject @ 0x00C79E28: HSD_JObjReqAnimAll (DataType: DFUNC, Type: function(struct HSD_JObj* @no_name@, float @no_name@)[returns void])
+                  Arg 0:
+                    [EINDIRECT] [@1859]
+                      [EOBJREF] @1859
+                        -> ObjObject @ 0x00FE5710: @1859 (DataType: DLOCAL, Type: struct HSD_JObj*)
+                  Arg 1:
+                    [EINDIRECT] [mnDiagram_804DBF84]
+                      [EOBJREF] mnDiagram_804DBF84
+                        -> ObjObject @ 0x00C9B600: mnDiagram_804DBF84 (DataType: DDATA, Type: float)
+              [EFUNCCALL] HSD_JObjAnimAll([@1859])
+                Function:
+                  [EOBJREF] HSD_JObjAnimAll
+                    -> ObjObject @ 0x00C7A768: HSD_JObjAnimAll (DataType: DFUNC, Type: function(struct HSD_JObj* @no_name@)[returns void])
+                Arg 0:
+                  [EINDIRECT] [@1859]
+                    [EOBJREF] @1859
+                      -> ObjObject @ 0x00FE5710: @1859 (DataType: DLOCAL, Type: struct HSD_JObj*)
+            [EFUNCCALL] lb_80011E24([@1859], @1861, 2, -1)
+              Function:
+                [EOBJREF] lb_80011E24
+                  -> ObjObject @ 0x00CEA190: lb_80011E24 (DataType: DFUNC, Type: function(struct HSD_JObj* @no_name@, struct HSD_JObj** @no_name@, ...)[returns int])
+              Arg 0:
+                [EINDIRECT] [@1859]
+                  [EOBJREF] @1859
+                    -> ObjObject @ 0x00FE5710: @1859 (DataType: DLOCAL, Type: struct HSD_JObj*)
+              Arg 1:
+                [EOBJREF] @1861
+                  -> ObjObject @ 0x00FE5800: @1861 (DataType: DLOCAL, Type: struct HSD_JObj*)
+              Arg 2:
+                [EINTCONST] 2
+              Arg 3:
+                [EINTCONST] -1
+          [EFUNCCALL] HSD_JObjReqAnimAll([@1861], TYPCON([@1862] & 255))
+            Function:
+              [EOBJREF] HSD_JObjReqAnimAll
+                -> ObjObject @ 0x00C79E28: HSD_JObjReqAnimAll (DataType: DFUNC, Type: function(struct HSD_JObj* @no_name@, float @no_name@)[returns void])
+            Arg 0:
+              [EINDIRECT] [@1861]
+                [EOBJREF] @1861
+                  -> ObjObject @ 0x00FE5800: @1861 (DataType: DLOCAL, Type: struct HSD_JObj*)
+            Arg 1:
+              [ETYPCON] TYPCON([@1862] & 255)
+                [EAND] [@1862] & 255
+                  [EINDIRECT] [@1862]
+                    [EOBJREF] @1862
+                      -> ObjObject @ 0x00FE5878: @1862 (DataType: DLOCAL, Type: int)
+                  [EINTCONST] 255
+        [EFUNCCALL] HSD_JObjAnimAll([@1861])
+          Function:
+            [EOBJREF] HSD_JObjAnimAll
+              -> ObjObject @ 0x00C7A768: HSD_JObjAnimAll (DataType: DFUNC, Type: function(struct HSD_JObj* @no_name@)[returns void])
+          Arg 0:
+            [EINDIRECT] [@1861]
+              [EOBJREF] @1861
+                -> ObjObject @ 0x00FE5800: @1861 (DataType: DLOCAL, Type: struct HSD_JObj*)
+      [EFORCELOAD] FORCELOAD([@1859])
+        [EINDIRECT] [@1859]
+          [EOBJREF] @1859
+            -> ObjObject @ 0x00FE5710: @1859 (DataType: DLOCAL, Type: struct HSD_JObj*)
+:16659208  [spacing] = [@1877] = [[data] + 40] , [@1877] ? TYPCON(0) : __assert("jobj.h", 993, "jobj") , FORCELOAD([[@1877] + 56]) - [@1878] = [[data] + 36] , [@1878] ? TYPCON(0) : __assert("jobj.h", 993, "jobj") , FORCELOAD([[@1878] + 56])
+  [EASS] [spacing] = [@1877] = [[data] + 40] , [@1877] ? TYPCON(0) : __assert("jobj.h", 993, "jobj") , FORCELOAD([[@1877] + 56]) - [@1878] = [[data] + 36] , [@1878] ? TYPCON(0) : __assert("jobj.h", 993, "jobj") , FORCELOAD([[@1878] + 56])
+    [EINDIRECT] [spacing]
+      [EOBJREF] spacing
+        -> ObjObject @ 0x0100CAC8: spacing (DataType: DLOCAL, Type: float)
+    [ESUB] [@1877] = [[data] + 40] , [@1877] ? TYPCON(0) : __assert("jobj.h", 993, "jobj") , FORCELOAD([[@1877] + 56]) - [@1878] = [[data] + 36] , [@1878] ? TYPCON(0) : __assert("jobj.h", 993, "jobj") , FORCELOAD([[@1878] + 56])
+      [ECOMMA] [@1877] = [[data] + 40] , [@1877] ? TYPCON(0) : __assert("jobj.h", 993, "jobj") , FORCELOAD([[@1877] + 56])
+        [ECOMMA] [@1877] = [[data] + 40] , [@1877] ? TYPCON(0) : __assert("jobj.h", 993, "jobj")
+          [EASS] [@1877] = [[data] + 40]
+            [EINDIRECT] [@1877]
+              [EOBJREF] @1877
+                -> ObjObject @ 0x00FE7578: @1877 (DataType: DLOCAL, Type: struct HSD_JObj*)
+            [EINDIRECT] [[data] + 40]
+              [EADD] [data] + 40
+                [EINDIRECT] [data]
+                  [EOBJREF] data
+                    -> ObjObject @ 0x0100C8E0: data (DataType: DLOCAL, Type: struct Diagram*)
+                [EINTCONST] 40
+          [ECOND] [@1877] ? TYPCON(0) : __assert("jobj.h", 993, "jobj")
+            Condition:
+              [EINDIRECT] [@1877]
+                [EOBJREF] @1877
+                  -> ObjObject @ 0x00FE7578: @1877 (DataType: DLOCAL, Type: struct HSD_JObj*)
+            True branch:
+              [ETYPCON] TYPCON(0)
+                [EINTCONST] 0
+            False branch:
+              [EFUNCCALL] __assert("jobj.h", 993, "jobj")
+                Function:
+                  [EOBJREF] __assert
+                    -> ObjObject @ 0x00C2C280: __assert (DataType: DFUNC, Type: function(char* @no_name@, unsigned long @no_name@, char* @no_name@)[returns void])
+                Arg 0:
+                  [ESTRINGCONST] "jobj.h"
+                Arg 1:
+                  [EINTCONST] 993
+                Arg 2:
+                  [ESTRINGCONST] "jobj"
+        [EFORCELOAD] FORCELOAD([[@1877] + 56])
+          [EINDIRECT] [[@1877] + 56]
+            [EADD] [@1877] + 56
+              [EINDIRECT] [@1877]
+                [EOBJREF] @1877
+                  -> ObjObject @ 0x00FE7578: @1877 (DataType: DLOCAL, Type: struct HSD_JObj*)
+              [EINTCONST] 56
+      [ECOMMA] [@1878] = [[data] + 36] , [@1878] ? TYPCON(0) : __assert("jobj.h", 993, "jobj") , FORCELOAD([[@1878] + 56])
+        [ECOMMA] [@1878] = [[data] + 36] , [@1878] ? TYPCON(0) : __assert("jobj.h", 993, "jobj")
+          [EASS] [@1878] = [[data] + 36]
+            [EINDIRECT] [@1878]
+              [EOBJREF] @1878
+                -> ObjObject @ 0x00FE78D8: @1878 (DataType: DLOCAL, Type: struct HSD_JObj*)
+            [EINDIRECT] [[data] + 36]
+              [EADD] [data] + 36
+                [EINDIRECT] [data]
+                  [EOBJREF] data
+                    -> ObjObject @ 0x0100C8E0: data (DataType: DLOCAL, Type: struct Diagram*)
+                [EINTCONST] 36
+          [ECOND] [@1878] ? TYPCON(0) : __assert("jobj.h", 993, "jobj")
+            Condition:
+              [EINDIRECT] [@1878]
+                [EOBJREF] @1878
+                  -> ObjObject @ 0x00FE78D8: @1878 (DataType: DLOCAL, Type: struct HSD_JObj*)
+            True branch:
+              [ETYPCON] TYPCON(0)
+                [EINTCONST] 0
+            False branch:
+              [EFUNCCALL] __assert("jobj.h", 993, "jobj")
+                Function:
+                  [EOBJREF] __assert
+                    -> ObjObject @ 0x00C2C280: __assert (DataType: DFUNC, Type: function(char* @no_name@, unsigned long @no_name@, char* @no_name@)[returns void])
+                Arg 0:
+                  [ESTRINGCONST] "jobj.h"
+                Arg 1:
+                  [EINTCONST] 993
+                Arg 2:
+                  [ESTRINGCONST] "jobj"
+        [EFORCELOAD] FORCELOAD([[@1878] + 56])
+          [EINDIRECT] [[@1878] + 56]
+            [EADD] [@1878] + 56
+              [EINDIRECT] [@1878]
+                [EOBJREF] @1878
+                  -> ObjObject @ 0x00FE78D8: @1878 (DataType: DLOCAL, Type: struct HSD_JObj*)
+              [EINTCONST] 56
+:0         Nop 
+:0         [header] ? TYPCON(0) : __assert("jobj.h", 932, "jobj")
+  [ECOND] [header] ? TYPCON(0) : __assert("jobj.h", 932, "jobj")
+    Condition:
+      [EINDIRECT] [header]
+        [EOBJREF] header
+          -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+    True branch:
+      [ETYPCON] TYPCON(0)
+        [EINTCONST] 0
+    False branch:
+      [EFUNCCALL] __assert("jobj.h", 932, "jobj")
+        Function:
+          [EOBJREF] __assert
+            -> ObjObject @ 0x00C2C280: __assert (DataType: DFUNC, Type: function(char* @no_name@, unsigned long @no_name@, char* @no_name@)[returns void])
+        Arg 0:
+          [ESTRINGCONST] "jobj.h"
+        Arg 1:
+          [EINTCONST] 932
+        Arg 2:
+          [ESTRINGCONST] "jobj"
+:0         [[header] + 56] = [spacing] * TYPCON([i])
+  [EASS] [[header] + 56] = [spacing] * TYPCON([i])
+    [EINDIRECT] [[header] + 56]
+      [EADD] [header] + 56
+        [EINDIRECT] [header]
+          [EOBJREF] header
+            -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+        [EINTCONST] 56
+    [EMUL] [spacing] * TYPCON([i])
+      [EINDIRECT] [spacing]
+        [EOBJREF] spacing
+          -> ObjObject @ 0x0100CAC8: spacing (DataType: DLOCAL, Type: float)
+      [ETYPCON] TYPCON([i])
+        [EINDIRECT] [i]
+          [EOBJREF] i
+            -> ObjObject @ 0x0100CB00: i (DataType: DLOCAL, Type: int)
+:0         If ([[header] + 20] & 33554432) @1881
+  [EAND] [[header] + 20] & 33554432
+    [EINDIRECT] [[header] + 20]
+      [EADD] [header] + 20
+        [EINDIRECT] [header]
+          [EOBJREF] header
+            -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+        [EINTCONST] 20
+    [EINTCONST] 33554432
+:1048832   IfNot ([header] != 0) @1880
+  [ENOTEQU] [header] != 0
+    [EINDIRECT] [header]
+      [EOBJREF] header
+        -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+    [EINTCONST] 0
+:16691848  Nop 
+:262398    [header] ? TYPCON(0) : __assert("jobj.h", 564, "jobj")
+  [ECOND] [header] ? TYPCON(0) : __assert("jobj.h", 564, "jobj")
+    Condition:
+      [EINDIRECT] [header]
+        [EOBJREF] header
+          -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+    True branch:
+      [ETYPCON] TYPCON(0)
+        [EINTCONST] 0
+    False branch:
+      [EFUNCCALL] __assert("jobj.h", 564, "jobj")
+        Function:
+          [EOBJREF] __assert
+            -> ObjObject @ 0x00C2C280: __assert (DataType: DFUNC, Type: function(char* @no_name@, unsigned long @no_name@, char* @no_name@)[returns void])
+        Arg 0:
+          [ESTRINGCONST] "jobj.h"
+        Arg 1:
+          [EINTCONST] 564
+        Arg 2:
+          [ESTRINGCONST] "jobj"
+:0         [@1911] = 0
+  [EASS] [@1911] = 0
+    [EINDIRECT] [@1911]
+      [EOBJREF] @1911
+        -> ObjObject @ 0x00FEB420: @1911 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 0
+:262398    If ([[header] + 20] & 8388608) @1912
+  [EAND] [[header] + 20] & 8388608
+    [EINDIRECT] [[header] + 20]
+      [EADD] [header] + 20
+        [EINDIRECT] [header]
+          [EOBJREF] header
+            -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+        [EINTCONST] 20
+    [EINTCONST] 8388608
+:131326    IfNot ([[header] + 20] & 64) @1912
+  [EAND] [[header] + 20] & 64
+    [EINDIRECT] [[header] + 20]
+      [EADD] [header] + 20
+        [EINDIRECT] [header]
+          [EOBJREF] header
+            -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+        [EINTCONST] 20
+    [EINTCONST] 64
+:0         [@1911] = 1
+  [EASS] [@1911] = 1
+    [EINDIRECT] [@1911]
+      [EOBJREF] @1911
+        -> ObjObject @ 0x00FEB420: @1911 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 1
+:0         Label @1912:
+:0         If ([@1911]) @1880
+  [EINDIRECT] [@1911]
+    [EOBJREF] @1911
+      -> ObjObject @ 0x00FEB420: @1911 (DataType: DLOCAL, Type: int)
+:17039484  HSD_JObjSetMtxDirtySub([header])
+  [EFUNCCALL] HSD_JObjSetMtxDirtySub([header])
+    Function:
+      [EOBJREF] HSD_JObjSetMtxDirtySub
+        -> ObjObject @ 0x00C7A0A8: HSD_JObjSetMtxDirtySub (DataType: DFUNC, Type: function(struct HSD_JObj* @no_name@)[returns void])
+    Arg 0:
+      [EINDIRECT] [header]
+        [EOBJREF] header
+          -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+:0         Label @1880:
+:9175040   Label @1881:
+:0         Goto @1879
+:8126464   Label @1879:
+:0         [parent] = [[data] + 36]
+  [EASS] [parent] = [[data] + 36]
+    [EINDIRECT] [parent]
+      [EOBJREF] parent
+        -> ObjObject @ 0x0100CB48: parent (DataType: DLOCAL, Type: struct HSD_JObj*)
+    [EINDIRECT] [[data] + 36]
+      [EADD] [data] + 36
+        [EINDIRECT] [data]
+          [EOBJREF] data
+            -> ObjObject @ 0x0100C8E0: data (DataType: DLOCAL, Type: struct Diagram*)
+        [EINTCONST] 36
+:0         HSD_JObjAddChild([parent], [header])
+  [EFUNCCALL] HSD_JObjAddChild([parent], [header])
+    Function:
+      [EOBJREF] HSD_JObjAddChild
+        -> ObjObject @ 0x00C97D90: HSD_JObjAddChild (DataType: DFUNC, Type: function(struct HSD_JObj* jobj, struct HSD_JObj* child)[returns void])
+    Arg 0:
+      [EINDIRECT] [parent]
+        [EOBJREF] parent
+          -> ObjObject @ 0x0100CB48: parent (DataType: DLOCAL, Type: struct HSD_JObj*)
+    Arg 1:
+      [EINDIRECT] [header]
+        [EOBJREF] header
+          -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+:0         Label @1842:
+:17039614  Label @1841:
+:65536     [i]++
+  [EPOSTINC] [i]++
+    [EINDIRECT] [i]
+      [EOBJREF] i
+        -> ObjObject @ 0x0100CB00: i (DataType: DLOCAL, Type: int)
+:0         Label @1838:
+:16661504  If ([i] < 7) @1839
+  [ELESS] [i] < 7
+    [EINDIRECT] [i]
+      [EOBJREF] i
+        -> ObjObject @ 0x0100CB00: i (DataType: DLOCAL, Type: int)
+    [EINTCONST] 7
+:16661536  Label @1844:
+:16661568  Label @1840:
+:16661728  [i] = 0
+  [EASS] [i] = 0
+    [EINDIRECT] [i]
+      [EOBJREF] i
+        -> ObjObject @ 0x0100CB00: i (DataType: DLOCAL, Type: int)
+    [EINTCONST] 0
+:16661920  Goto @1845
+:0         Label @1846:
+:0         [sorted] = TYPCON([assets])
+  [EASS] [sorted] = TYPCON([assets])
+    [EINDIRECT] [sorted]
+      [EOBJREF] sorted
+        -> ObjObject @ 0x0100CA78: sorted (DataType: DLOCAL, Type: unsigned char*)
+    [ETYPCON] TYPCON([assets])
+      [EINDIRECT] [assets]
+        [EOBJREF] assets
+          -> ObjObject @ 0x0100C9F0: assets (DataType: DLOCAL, Type: struct mnDiagram_Assets*)
+:0         Nop 
+:0         [@1884] = 0
+  [EASS] [@1884] = 0
+    [EINDIRECT] [@1884]
+      [EOBJREF] @1884
+        -> ObjObject @ 0x00FE82E0: @1884 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 0
+:0         [@1885] = 0
+  [EASS] [@1885] = 0
+    [EINDIRECT] [@1885]
+      [EOBJREF] @1885
+        -> ObjObject @ 0x00FE8358: @1885 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 0
+:16680304  Goto @1888
+:17039360  Label @1886:
+:0         IfNot (mn_IsFighterUnlocked([@1885])) @1887
+  [EFUNCCALL] mn_IsFighterUnlocked([@1885])
+    Function:
+      [EOBJREF] mn_IsFighterUnlocked
+        -> ObjObject @ 0x00C54970: mn_IsFighterUnlocked (DataType: DFUNC, Type: function(int @no_name@)[returns int])
+    Arg 0:
+      [EINDIRECT] [@1885]
+        [EOBJREF] @1885
+          -> ObjObject @ 0x00FE8358: @1885 (DataType: DLOCAL, Type: int)
+:8126464   [@1884]++
+  [EPOSTINC] [@1884]++
+    [EINDIRECT] [@1884]
+      [EOBJREF] @1884
+        -> ObjObject @ 0x00FE82E0: @1884 (DataType: DLOCAL, Type: int)
+:16646144  Label @1887:
+:0         [@1885]++
+  [EPOSTINC] [@1885]++
+    [EINDIRECT] [@1885]
+      [EOBJREF] @1885
+        -> ObjObject @ 0x00FE8358: @1885 (DataType: DLOCAL, Type: int)
+:-1990721282 Label @1888:
+:1         If ([@1885] < 25) @1886
+  [ELESS] [@1885] < 25
+    [EINDIRECT] [@1885]
+      [EOBJREF] @1885
+        -> ObjObject @ 0x00FE8358: @1885 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 25
+:-2006449922 [@1882] = [@1884]
+  [EASS] [@1882] = [@1884]
+    [EINDIRECT] [@1882]
+      [EOBJREF] @1882
+        -> ObjObject @ 0x00FE8238: @1882 (DataType: DLOCAL, Type: int)
+    [EINDIRECT] [@1884]
+      [EOBJREF] @1884
+        -> ObjObject @ 0x00FE82E0: @1884 (DataType: DLOCAL, Type: int)
+:16811560  Goto @1883
+:0         Label @1883:
+:12320890  IfNot ([@1882] > [i]) @1849
+  [EGREATER] [@1882] > [i]
+    [EINDIRECT] [@1882]
+      [EOBJREF] @1882
+        -> ObjObject @ 0x00FE8238: @1882 (DataType: DLOCAL, Type: int)
+    [EINDIRECT] [i]
+      [EOBJREF] i
+        -> ObjObject @ 0x0100CB00: i (DataType: DLOCAL, Type: int)
+:0         Label @1850:
+:0         Nop 
+:254       [@1898] = [i]
+  [EASS] [@1898] = [i]
+    [EINDIRECT] [@1898]
+      [EOBJREF] @1898
+        -> ObjObject @ 0x00FE98E8: @1898 (DataType: DLOCAL, Type: int)
+    [EINDIRECT] [i]
+      [EOBJREF] i
+        -> ObjObject @ 0x0100CB00: i (DataType: DLOCAL, Type: int)
+:0         [@1897] = [arg1]
+  [EASS] [@1897] = [arg1]
+    [EINDIRECT] [@1897]
+      [EOBJREF] @1897
+        -> ObjObject @ 0x00FE9870: @1897 (DataType: DLOCAL, Type: int)
+    [EINDIRECT] [arg1]
+      [EOBJREF] arg1
+        -> ObjObject @ 0x00FE2338: arg1 (DataType: DLOCAL, Type: int)
+:-1680342786 [@1896] = [sorted] + [arg1]
+  [EASS] [@1896] = [sorted] + [arg1]
+    [EINDIRECT] [@1896]
+      [EOBJREF] @1896
+        -> ObjObject @ 0x00FE97F8: @1896 (DataType: DLOCAL, Type: unsigned char*)
+    [EADD] [sorted] + [arg1]
+      [EINDIRECT] [sorted]
+        [EOBJREF] sorted
+          -> ObjObject @ 0x0100CA78: sorted (DataType: DLOCAL, Type: unsigned char*)
+      [EINDIRECT] [arg1]
+        [EOBJREF] arg1
+          -> ObjObject @ 0x00FE2338: arg1 (DataType: DLOCAL, Type: int)
+:0         Goto @1905
+:17039484  Label @1901:
+:16686448  IfNot ([@1898] == 0) @1902
+  [EEQU] [@1898] == 0
+    [EINDIRECT] [@1898]
+      [EOBJREF] @1898
+        -> ObjObject @ 0x00FE98E8: @1898 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 0
+:5         [@1900] = TYPCON([[sorted] + [@1897]])
+  [EASS] [@1900] = TYPCON([[sorted] + [@1897]])
+    [EINDIRECT] [@1900]
+      [EOBJREF] @1900
+        -> ObjObject @ 0x00FE99D8: @1900 (DataType: DLOCAL, Type: int)
+    [ETYPCON] TYPCON([[sorted] + [@1897]])
+      [EINDIRECT] [[sorted] + [@1897]]
+        [EADD] [sorted] + [@1897]
+          [EINDIRECT] [sorted]
+            [EOBJREF] sorted
+              -> ObjObject @ 0x0100CA78: sorted (DataType: DLOCAL, Type: unsigned char*)
+          [EINDIRECT] [@1897]
+            [EOBJREF] @1897
+              -> ObjObject @ 0x00FE9870: @1897 (DataType: DLOCAL, Type: int)
+:855638016 Goto @1906
+:0         Label @1902:
+:16685504  [@1895] = [@1896]
+  [EASS] [@1895] = [@1896]
+    [EINDIRECT] [@1895]
+      [EOBJREF] @1895
+        -> ObjObject @ 0x00FE9780: @1895 (DataType: DLOCAL, Type: unsigned char*)
+    [EINDIRECT] [@1896]
+      [EOBJREF] @1896
+        -> ObjObject @ 0x00FE97F8: @1896 (DataType: DLOCAL, Type: unsigned char*)
+:16662312  Label @1903:
+:0         [@1897]++
+  [EPOSTINC] [@1897]++
+    [EINDIRECT] [@1897]
+      [EOBJREF] @1897
+        -> ObjObject @ 0x00FE9870: @1897 (DataType: DLOCAL, Type: int)
+:0         [@1895]++
+  [EPOSTINC] [@1895]++
+    [EINDIRECT] [@1895]
+      [EOBJREF] @1895
+        -> ObjObject @ 0x00FE9780: @1895 (DataType: DLOCAL, Type: unsigned char*)
+:0         [@1896]++
+  [EPOSTINC] [@1896]++
+    [EINDIRECT] [@1896]
+      [EOBJREF] @1896
+        -> ObjObject @ 0x00FE97F8: @1896 (DataType: DLOCAL, Type: unsigned char*)
+:16687680  IfNot ([@1897] >= 25) @1904
+  [EGREATEREQU] [@1897] >= 25
+    [EINDIRECT] [@1897]
+      [EOBJREF] @1897
+        -> ObjObject @ 0x00FE9870: @1897 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 25
+:5         [@1900] = 25
+  [EASS] [@1900] = 25
+    [EINDIRECT] [@1900]
+      [EOBJREF] @1900
+        -> ObjObject @ 0x00FE99D8: @1900 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 25
+:16690120  Goto @1906
+:0         Label @1904:
+:122       If (mn_IsFighterUnlocked(TYPCON([[@1895]])) == 0) @1903
+  [EEQU] mn_IsFighterUnlocked(TYPCON([[@1895]])) == 0
+    [EFUNCCALL] mn_IsFighterUnlocked(TYPCON([[@1895]]))
+      Function:
+        [EOBJREF] mn_IsFighterUnlocked
+          -> ObjObject @ 0x00C54970: mn_IsFighterUnlocked (DataType: DFUNC, Type: function(int @no_name@)[returns int])
+      Arg 0:
+        [ETYPCON] TYPCON([[@1895]])
+          [EINDIRECT] [[@1895]]
+            [EINDIRECT] [@1895]
+              [EOBJREF] @1895
+                -> ObjObject @ 0x00FE9780: @1895 (DataType: DLOCAL, Type: unsigned char*)
+    [EINTCONST] 0
+:16697792  [@1898]--
+  [EPOSTDEC] [@1898]--
+    [EINDIRECT] [@1898]
+      [EOBJREF] @1898
+        -> ObjObject @ 0x00FE98E8: @1898 (DataType: DLOCAL, Type: int)
+:16690952  Label @1905:
+:131072    If ([@1898] >= 0) @1901
+  [EGREATEREQU] [@1898] >= 0
+    [EINDIRECT] [@1898]
+      [EOBJREF] @1898
+        -> ObjObject @ 0x00FE98E8: @1898 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 0
+:-1976041216 Label @1906:
+:16687000  [@1893] = [@1899] = [@1900]
+  [EASS] [@1893] = [@1899] = [@1900]
+    [EINDIRECT] [@1893]
+      [EOBJREF] @1893
+        -> ObjObject @ 0x00FE96A8: @1893 (DataType: DLOCAL, Type: int)
+    [EASS] [@1899] = [@1900]
+      [EINDIRECT] [@1899]
+        [EOBJREF] @1899
+          -> ObjObject @ 0x00FE9960: @1899 (DataType: DLOCAL, Type: int)
+      [EINDIRECT] [@1900]
+        [EOBJREF] @1900
+          -> ObjObject @ 0x00FE99D8: @1900 (DataType: DLOCAL, Type: int)
+:1496842255 Goto @1894
+:-1486880768 Label @1894:
+:0         [header] = [@1892] = [@1893] , [@1890] = [assets] + 180 , [@1889] = HSD_JObjLoadJoint([[@1890]]) , HSD_JObjAddAnimAll([@1889], [[@1890] + 4], [[@1890] + 8], [[@1890] + 12]) , HSD_JObjReqAnimAll([@1889], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1889]) , lb_80011E24([@1889], @1891, 2, -1) , HSD_JObjReqAnimAll([@1891], TYPCON([@1892] & 255)) , HSD_JObjAnimAll([@1891]) , FORCELOAD([@1889])
+  [EASS] [header] = [@1892] = [@1893] , [@1890] = [assets] + 180 , [@1889] = HSD_JObjLoadJoint([[@1890]]) , HSD_JObjAddAnimAll([@1889], [[@1890] + 4], [[@1890] + 8], [[@1890] + 12]) , HSD_JObjReqAnimAll([@1889], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1889]) , lb_80011E24([@1889], @1891, 2, -1) , HSD_JObjReqAnimAll([@1891], TYPCON([@1892] & 255)) , HSD_JObjAnimAll([@1891]) , FORCELOAD([@1889])
+    [EINDIRECT] [header]
+      [EOBJREF] header
+        -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+    [ECOMMA] [@1892] = [@1893] , [@1890] = [assets] + 180 , [@1889] = HSD_JObjLoadJoint([[@1890]]) , HSD_JObjAddAnimAll([@1889], [[@1890] + 4], [[@1890] + 8], [[@1890] + 12]) , HSD_JObjReqAnimAll([@1889], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1889]) , lb_80011E24([@1889], @1891, 2, -1) , HSD_JObjReqAnimAll([@1891], TYPCON([@1892] & 255)) , HSD_JObjAnimAll([@1891]) , FORCELOAD([@1889])
+      [ECOMMA] [@1892] = [@1893] , [@1890] = [assets] + 180 , [@1889] = HSD_JObjLoadJoint([[@1890]]) , HSD_JObjAddAnimAll([@1889], [[@1890] + 4], [[@1890] + 8], [[@1890] + 12]) , HSD_JObjReqAnimAll([@1889], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1889]) , lb_80011E24([@1889], @1891, 2, -1) , HSD_JObjReqAnimAll([@1891], TYPCON([@1892] & 255)) , HSD_JObjAnimAll([@1891])
+        [ECOMMA] [@1892] = [@1893] , [@1890] = [assets] + 180 , [@1889] = HSD_JObjLoadJoint([[@1890]]) , HSD_JObjAddAnimAll([@1889], [[@1890] + 4], [[@1890] + 8], [[@1890] + 12]) , HSD_JObjReqAnimAll([@1889], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1889]) , lb_80011E24([@1889], @1891, 2, -1) , HSD_JObjReqAnimAll([@1891], TYPCON([@1892] & 255))
+          [ECOMMA] [@1892] = [@1893] , [@1890] = [assets] + 180 , [@1889] = HSD_JObjLoadJoint([[@1890]]) , HSD_JObjAddAnimAll([@1889], [[@1890] + 4], [[@1890] + 8], [[@1890] + 12]) , HSD_JObjReqAnimAll([@1889], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1889]) , lb_80011E24([@1889], @1891, 2, -1)
+            [ECOMMA] [@1892] = [@1893] , [@1890] = [assets] + 180 , [@1889] = HSD_JObjLoadJoint([[@1890]]) , HSD_JObjAddAnimAll([@1889], [[@1890] + 4], [[@1890] + 8], [[@1890] + 12]) , HSD_JObjReqAnimAll([@1889], [mnDiagram_804DBF84]) , HSD_JObjAnimAll([@1889])
+              [ECOMMA] [@1892] = [@1893] , [@1890] = [assets] + 180 , [@1889] = HSD_JObjLoadJoint([[@1890]]) , HSD_JObjAddAnimAll([@1889], [[@1890] + 4], [[@1890] + 8], [[@1890] + 12]) , HSD_JObjReqAnimAll([@1889], [mnDiagram_804DBF84])
+                [ECOMMA] [@1892] = [@1893] , [@1890] = [assets] + 180 , [@1889] = HSD_JObjLoadJoint([[@1890]]) , HSD_JObjAddAnimAll([@1889], [[@1890] + 4], [[@1890] + 8], [[@1890] + 12])
+                  [ECOMMA] [@1892] = [@1893] , [@1890] = [assets] + 180 , [@1889] = HSD_JObjLoadJoint([[@1890]])
+                    [ECOMMA] [@1892] = [@1893] , [@1890] = [assets] + 180
+                      [EASS] [@1892] = [@1893]
+                        [EINDIRECT] [@1892]
+                          [EOBJREF] @1892
+                            -> ObjObject @ 0x00FE8B80: @1892 (DataType: DLOCAL, Type: int)
+                        [EINDIRECT] [@1893]
+                          [EOBJREF] @1893
+                            -> ObjObject @ 0x00FE96A8: @1893 (DataType: DLOCAL, Type: int)
+                      [EASS] [@1890] = [assets] + 180
+                        [EINDIRECT] [@1890]
+                          [EOBJREF] @1890
+                            -> ObjObject @ 0x00FE8A90: @1890 (DataType: DLOCAL, Type: void**)
+                        [EADD] [assets] + 180
+                          [EINDIRECT] [assets]
+                            [EOBJREF] assets
+                              -> ObjObject @ 0x0100C9F0: assets (DataType: DLOCAL, Type: struct mnDiagram_Assets*)
+                          [EINTCONST] 180
+                    [EASS] [@1889] = HSD_JObjLoadJoint([[@1890]])
+                      [EINDIRECT] [@1889]
+                        [EOBJREF] @1889
+                          -> ObjObject @ 0x00FE8A18: @1889 (DataType: DLOCAL, Type: struct HSD_JObj*)
+                      [EFUNCCALL] HSD_JObjLoadJoint([[@1890]])
+                        Function:
+                          [EOBJREF] HSD_JObjLoadJoint
+                            -> ObjObject @ 0x00C7A558: HSD_JObjLoadJoint (DataType: DFUNC, Type: function(struct HSD_Joint* @no_name@)[returns struct HSD_JObj*])
+                        Arg 0:
+                          [EINDIRECT] [[@1890]]
+                            [EINDIRECT] [@1890]
+                              [EOBJREF] @1890
+                                -> ObjObject @ 0x00FE8A90: @1890 (DataType: DLOCAL, Type: void**)
+                  [EFUNCCALL] HSD_JObjAddAnimAll([@1889], [[@1890] + 4], [[@1890] + 8], [[@1890] + 12])
+                    Function:
+                      [EOBJREF] HSD_JObjAddAnimAll
+                        -> ObjObject @ 0x00C7A6A8: HSD_JObjAddAnimAll (DataType: DFUNC, Type: function(struct HSD_JObj* @no_name@, struct HSD_AnimJoint* @no_name@, struct HSD_MatAnimJoint* @no_name@, struct HSD_ShapeAnimJoint* @no_name@)[returns void])
+                    Arg 0:
+                      [EINDIRECT] [@1889]
+                        [EOBJREF] @1889
+                          -> ObjObject @ 0x00FE8A18: @1889 (DataType: DLOCAL, Type: struct HSD_JObj*)
+                    Arg 1:
+                      [EINDIRECT] [[@1890] + 4]
+                        [EADD] [@1890] + 4
+                          [EINDIRECT] [@1890]
+                            [EOBJREF] @1890
+                              -> ObjObject @ 0x00FE8A90: @1890 (DataType: DLOCAL, Type: void**)
+                          [EINTCONST] 4
+                    Arg 2:
+                      [EINDIRECT] [[@1890] + 8]
+                        [EADD] [@1890] + 8
+                          [EINDIRECT] [@1890]
+                            [EOBJREF] @1890
+                              -> ObjObject @ 0x00FE8A90: @1890 (DataType: DLOCAL, Type: void**)
+                          [EINTCONST] 8
+                    Arg 3:
+                      [EINDIRECT] [[@1890] + 12]
+                        [EADD] [@1890] + 12
+                          [EINDIRECT] [@1890]
+                            [EOBJREF] @1890
+                              -> ObjObject @ 0x00FE8A90: @1890 (DataType: DLOCAL, Type: void**)
+                          [EINTCONST] 12
+                [EFUNCCALL] HSD_JObjReqAnimAll([@1889], [mnDiagram_804DBF84])
+                  Function:
+                    [EOBJREF] HSD_JObjReqAnimAll
+                      -> ObjObject @ 0x00C79E28: HSD_JObjReqAnimAll (DataType: DFUNC, Type: function(struct HSD_JObj* @no_name@, float @no_name@)[returns void])
+                  Arg 0:
+                    [EINDIRECT] [@1889]
+                      [EOBJREF] @1889
+                        -> ObjObject @ 0x00FE8A18: @1889 (DataType: DLOCAL, Type: struct HSD_JObj*)
+                  Arg 1:
+                    [EINDIRECT] [mnDiagram_804DBF84]
+                      [EOBJREF] mnDiagram_804DBF84
+                        -> ObjObject @ 0x00C9B600: mnDiagram_804DBF84 (DataType: DDATA, Type: float)
+              [EFUNCCALL] HSD_JObjAnimAll([@1889])
+                Function:
+                  [EOBJREF] HSD_JObjAnimAll
+                    -> ObjObject @ 0x00C7A768: HSD_JObjAnimAll (DataType: DFUNC, Type: function(struct HSD_JObj* @no_name@)[returns void])
+                Arg 0:
+                  [EINDIRECT] [@1889]
+                    [EOBJREF] @1889
+                      -> ObjObject @ 0x00FE8A18: @1889 (DataType: DLOCAL, Type: struct HSD_JObj*)
+            [EFUNCCALL] lb_80011E24([@1889], @1891, 2, -1)
+              Function:
+                [EOBJREF] lb_80011E24
+                  -> ObjObject @ 0x00CEA190: lb_80011E24 (DataType: DFUNC, Type: function(struct HSD_JObj* @no_name@, struct HSD_JObj** @no_name@, ...)[returns int])
+              Arg 0:
+                [EINDIRECT] [@1889]
+                  [EOBJREF] @1889
+                    -> ObjObject @ 0x00FE8A18: @1889 (DataType: DLOCAL, Type: struct HSD_JObj*)
+              Arg 1:
+                [EOBJREF] @1891
+                  -> ObjObject @ 0x00FE8B08: @1891 (DataType: DLOCAL, Type: struct HSD_JObj*)
+              Arg 2:
+                [EINTCONST] 2
+              Arg 3:
+                [EINTCONST] -1
+          [EFUNCCALL] HSD_JObjReqAnimAll([@1891], TYPCON([@1892] & 255))
+            Function:
+              [EOBJREF] HSD_JObjReqAnimAll
+                -> ObjObject @ 0x00C79E28: HSD_JObjReqAnimAll (DataType: DFUNC, Type: function(struct HSD_JObj* @no_name@, float @no_name@)[returns void])
+            Arg 0:
+              [EINDIRECT] [@1891]
+                [EOBJREF] @1891
+                  -> ObjObject @ 0x00FE8B08: @1891 (DataType: DLOCAL, Type: struct HSD_JObj*)
+            Arg 1:
+              [ETYPCON] TYPCON([@1892] & 255)
+                [EAND] [@1892] & 255
+                  [EINDIRECT] [@1892]
+                    [EOBJREF] @1892
+                      -> ObjObject @ 0x00FE8B80: @1892 (DataType: DLOCAL, Type: int)
+                  [EINTCONST] 255
+        [EFUNCCALL] HSD_JObjAnimAll([@1891])
+          Function:
+            [EOBJREF] HSD_JObjAnimAll
+              -> ObjObject @ 0x00C7A768: HSD_JObjAnimAll (DataType: DFUNC, Type: function(struct HSD_JObj* @no_name@)[returns void])
+          Arg 0:
+            [EINDIRECT] [@1891]
+              [EOBJREF] @1891
+                -> ObjObject @ 0x00FE8B08: @1891 (DataType: DLOCAL, Type: struct HSD_JObj*)
+      [EFORCELOAD] FORCELOAD([@1889])
+        [EINDIRECT] [@1889]
+          [EOBJREF] @1889
+            -> ObjObject @ 0x00FE8A18: @1889 (DataType: DLOCAL, Type: struct HSD_JObj*)
+:0         [parent] = [[data_alias] + 44]
+  [EASS] [parent] = [[data_alias] + 44]
+    [EINDIRECT] [parent]
+      [EOBJREF] parent
+        -> ObjObject @ 0x0100CB48: parent (DataType: DLOCAL, Type: struct HSD_JObj*)
+    [EINDIRECT] [[data_alias] + 44]
+      [EADD] [data_alias] + 44
+        [EINDIRECT] [data_alias]
+          [EOBJREF] data_alias
+            -> ObjObject @ 0x0100C988: data_alias (DataType: DLOCAL, Type: struct Diagram*)
+        [EINTCONST] 44
+:16646144  [spacing] = [@1907] = [[data_alias] + 48] , [@1907] ? TYPCON(0) : __assert("jobj.h", 1006, "jobj") , FORCELOAD([[@1907] + 60]) - [parent] ? TYPCON(0) : __assert("jobj.h", 1006, "jobj") , FORCELOAD([[parent] + 60])
+  [EASS] [spacing] = [@1907] = [[data_alias] + 48] , [@1907] ? TYPCON(0) : __assert("jobj.h", 1006, "jobj") , FORCELOAD([[@1907] + 60]) - [parent] ? TYPCON(0) : __assert("jobj.h", 1006, "jobj") , FORCELOAD([[parent] + 60])
+    [EINDIRECT] [spacing]
+      [EOBJREF] spacing
+        -> ObjObject @ 0x0100CAC8: spacing (DataType: DLOCAL, Type: float)
+    [ESUB] [@1907] = [[data_alias] + 48] , [@1907] ? TYPCON(0) : __assert("jobj.h", 1006, "jobj") , FORCELOAD([[@1907] + 60]) - [parent] ? TYPCON(0) : __assert("jobj.h", 1006, "jobj") , FORCELOAD([[parent] + 60])
+      [ECOMMA] [@1907] = [[data_alias] + 48] , [@1907] ? TYPCON(0) : __assert("jobj.h", 1006, "jobj") , FORCELOAD([[@1907] + 60])
+        [ECOMMA] [@1907] = [[data_alias] + 48] , [@1907] ? TYPCON(0) : __assert("jobj.h", 1006, "jobj")
+          [EASS] [@1907] = [[data_alias] + 48]
+            [EINDIRECT] [@1907]
+              [EOBJREF] @1907
+                -> ObjObject @ 0x00FEA880: @1907 (DataType: DLOCAL, Type: struct HSD_JObj*)
+            [EINDIRECT] [[data_alias] + 48]
+              [EADD] [data_alias] + 48
+                [EINDIRECT] [data_alias]
+                  [EOBJREF] data_alias
+                    -> ObjObject @ 0x0100C988: data_alias (DataType: DLOCAL, Type: struct Diagram*)
+                [EINTCONST] 48
+          [ECOND] [@1907] ? TYPCON(0) : __assert("jobj.h", 1006, "jobj")
+            Condition:
+              [EINDIRECT] [@1907]
+                [EOBJREF] @1907
+                  -> ObjObject @ 0x00FEA880: @1907 (DataType: DLOCAL, Type: struct HSD_JObj*)
+            True branch:
+              [ETYPCON] TYPCON(0)
+                [EINTCONST] 0
+            False branch:
+              [EFUNCCALL] __assert("jobj.h", 1006, "jobj")
+                Function:
+                  [EOBJREF] __assert
+                    -> ObjObject @ 0x00C2C280: __assert (DataType: DFUNC, Type: function(char* @no_name@, unsigned long @no_name@, char* @no_name@)[returns void])
+                Arg 0:
+                  [ESTRINGCONST] "jobj.h"
+                Arg 1:
+                  [EINTCONST] 1006
+                Arg 2:
+                  [ESTRINGCONST] "jobj"
+        [EFORCELOAD] FORCELOAD([[@1907] + 60])
+          [EINDIRECT] [[@1907] + 60]
+            [EADD] [@1907] + 60
+              [EINDIRECT] [@1907]
+                [EOBJREF] @1907
+                  -> ObjObject @ 0x00FEA880: @1907 (DataType: DLOCAL, Type: struct HSD_JObj*)
+              [EINTCONST] 60
+      [ECOMMA] [parent] ? TYPCON(0) : __assert("jobj.h", 1006, "jobj") , FORCELOAD([[parent] + 60])
+        [ECOND] [parent] ? TYPCON(0) : __assert("jobj.h", 1006, "jobj")
+          Condition:
+            [EINDIRECT] [parent]
+              [EOBJREF] parent
+                -> ObjObject @ 0x0100CB48: parent (DataType: DLOCAL, Type: struct HSD_JObj*)
+          True branch:
+            [ETYPCON] TYPCON(0)
+              [EINTCONST] 0
+          False branch:
+            [EFUNCCALL] __assert("jobj.h", 1006, "jobj")
+              Function:
+                [EOBJREF] __assert
+                  -> ObjObject @ 0x00C2C280: __assert (DataType: DFUNC, Type: function(char* @no_name@, unsigned long @no_name@, char* @no_name@)[returns void])
+              Arg 0:
+                [ESTRINGCONST] "jobj.h"
+              Arg 1:
+                [EINTCONST] 1006
+              Arg 2:
+                [ESTRINGCONST] "jobj"
+        [EFORCELOAD] FORCELOAD([[parent] + 60])
+          [EINDIRECT] [[parent] + 60]
+            [EADD] [parent] + 60
+              [EINDIRECT] [parent]
+                [EOBJREF] parent
+                  -> ObjObject @ 0x0100CB48: parent (DataType: DLOCAL, Type: struct HSD_JObj*)
+              [EINTCONST] 60
+:16664768  Nop 
+:195       [header] ? TYPCON(0) : __assert("jobj.h", 947, "jobj")
+  [ECOND] [header] ? TYPCON(0) : __assert("jobj.h", 947, "jobj")
+    Condition:
+      [EINDIRECT] [header]
+        [EOBJREF] header
+          -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+    True branch:
+      [ETYPCON] TYPCON(0)
+        [EINTCONST] 0
+    False branch:
+      [EFUNCCALL] __assert("jobj.h", 947, "jobj")
+        Function:
+          [EOBJREF] __assert
+            -> ObjObject @ 0x00C2C280: __assert (DataType: DFUNC, Type: function(char* @no_name@, unsigned long @no_name@, char* @no_name@)[returns void])
+        Arg 0:
+          [ESTRINGCONST] "jobj.h"
+        Arg 1:
+          [EINTCONST] 947
+        Arg 2:
+          [ESTRINGCONST] "jobj"
+:262398    [[header] + 60] = [spacing] * TYPCON([i])
+  [EASS] [[header] + 60] = [spacing] * TYPCON([i])
+    [EINDIRECT] [[header] + 60]
+      [EADD] [header] + 60
+        [EINDIRECT] [header]
+          [EOBJREF] header
+            -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+        [EINTCONST] 60
+    [EMUL] [spacing] * TYPCON([i])
+      [EINDIRECT] [spacing]
+        [EOBJREF] spacing
+          -> ObjObject @ 0x0100CAC8: spacing (DataType: DLOCAL, Type: float)
+      [ETYPCON] TYPCON([i])
+        [EINDIRECT] [i]
+          [EOBJREF] i
+            -> ObjObject @ 0x0100CB00: i (DataType: DLOCAL, Type: int)
+:-1943011072 If ([[header] + 20] & 33554432) @1910
+  [EAND] [[header] + 20] & 33554432
+    [EINDIRECT] [[header] + 20]
+      [EADD] [header] + 20
+        [EINDIRECT] [header]
+          [EOBJREF] header
+            -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+        [EINTCONST] 20
+    [EINTCONST] 33554432
+:0         IfNot ([header] != 0) @1909
+  [ENOTEQU] [header] != 0
+    [EINDIRECT] [header]
+      [EOBJREF] header
+        -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+    [EINTCONST] 0
+:0         Nop 
+:0         [header] ? TYPCON(0) : __assert("jobj.h", 564, "jobj")
+  [ECOND] [header] ? TYPCON(0) : __assert("jobj.h", 564, "jobj")
+    Condition:
+      [EINDIRECT] [header]
+        [EOBJREF] header
+          -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+    True branch:
+      [ETYPCON] TYPCON(0)
+        [EINTCONST] 0
+    False branch:
+      [EFUNCCALL] __assert("jobj.h", 564, "jobj")
+        Function:
+          [EOBJREF] __assert
+            -> ObjObject @ 0x00C2C280: __assert (DataType: DFUNC, Type: function(char* @no_name@, unsigned long @no_name@, char* @no_name@)[returns void])
+        Arg 0:
+          [ESTRINGCONST] "jobj.h"
+        Arg 1:
+          [EINTCONST] 564
+        Arg 2:
+          [ESTRINGCONST] "jobj"
+:0         [@1913] = 0
+  [EASS] [@1913] = 0
+    [EINDIRECT] [@1913]
+      [EOBJREF] @1913
+        -> ObjObject @ 0x00FEB9F8: @1913 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 0
+:0         If ([[header] + 20] & 8388608) @1914
+  [EAND] [[header] + 20] & 8388608
+    [EINDIRECT] [[header] + 20]
+      [EADD] [header] + 20
+        [EINDIRECT] [header]
+          [EOBJREF] header
+            -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+        [EINTCONST] 20
+    [EINTCONST] 8388608
+:16694440  IfNot ([[header] + 20] & 64) @1914
+  [EAND] [[header] + 20] & 64
+    [EINDIRECT] [[header] + 20]
+      [EADD] [header] + 20
+        [EINDIRECT] [header]
+          [EOBJREF] header
+            -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+        [EINTCONST] 20
+    [EINTCONST] 64
+:0         [@1913] = 1
+  [EASS] [@1913] = 1
+    [EINDIRECT] [@1913]
+      [EOBJREF] @1913
+        -> ObjObject @ 0x00FEB9F8: @1913 (DataType: DLOCAL, Type: int)
+    [EINTCONST] 1
+:0         Label @1914:
+:16694992  If ([@1913]) @1909
+  [EINDIRECT] [@1913]
+    [EOBJREF] @1913
+      -> ObjObject @ 0x00FEB9F8: @1913 (DataType: DLOCAL, Type: int)
+:-1297612546 HSD_JObjSetMtxDirtySub([header])
+  [EFUNCCALL] HSD_JObjSetMtxDirtySub([header])
+    Function:
+      [EOBJREF] HSD_JObjSetMtxDirtySub
+        -> ObjObject @ 0x00C7A0A8: HSD_JObjSetMtxDirtySub (DataType: DFUNC, Type: function(struct HSD_JObj* @no_name@)[returns void])
+    Arg 0:
+      [EINDIRECT] [header]
+        [EOBJREF] header
+          -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+:0         Label @1909:
+:16691880  Label @1910:
+:254       Goto @1908
+:16677624  Label @1908:
+:-404226044 HSD_JObjAddChild([[data_alias] + 44], [header])
+  [EFUNCCALL] HSD_JObjAddChild([[data_alias] + 44], [header])
+    Function:
+      [EOBJREF] HSD_JObjAddChild
+        -> ObjObject @ 0x00C97D90: HSD_JObjAddChild (DataType: DFUNC, Type: function(struct HSD_JObj* jobj, struct HSD_JObj* child)[returns void])
+    Arg 0:
+      [EINDIRECT] [[data_alias] + 44]
+        [EADD] [data_alias] + 44
+          [EINDIRECT] [data_alias]
+            [EOBJREF] data_alias
+              -> ObjObject @ 0x0100C988: data_alias (DataType: DLOCAL, Type: struct Diagram*)
+          [EINTCONST] 44
+    Arg 1:
+      [EINDIRECT] [header]
+        [EOBJREF] header
+          -> ObjObject @ 0x0100C898: header (DataType: DLOCAL, Type: struct HSD_JObj*)
+:0         Label @1849:
+:117440766 Label @1848:
+:0         [i]++
+  [EPOSTINC] [i]++
+    [EINDIRECT] [i]
+      [EOBJREF] i
+        -> ObjObject @ 0x0100CB00: i (DataType: DLOCAL, Type: int)
+:1055391754 Label @1845:
+:33620222  If ([i] < 10) @1846
+  [ELESS] [i] < 10
+    [EINDIRECT] [i]
+      [EOBJREF] i
+        -> ObjObject @ 0x0100CB00: i (DataType: DLOCAL, Type: int)
+    [EINTCONST] 10
+:17039614  Label @1851:
+:7         Label @1847:
+:33619968  Return
+
+LOCAL VARIABLES (first appearance order, with ObjObject addresses):
+--------------------------------------------------------------------------------
+  [0] 0x0100C8E0  data
+  [1] 0x00FE22C0  arg0
+  [2] 0x0100C988  data_alias
+  [3] 0x0100C9F0  assets
+  [4] 0x0100CB00  i
+  [5] 0x0100CA78  sorted
+  [6] 0x00FE4FD8  @1854
+  [7] 0x00FE5050  @1855
+  [8] 0x00FE4F30  @1852
+  [9] 0x00FE64F0  @1866
+  [10] 0x00FE6478  @1865
+  [11] 0x00FE23B0  arg2
+  [12] 0x00FE65E0  @1868
+  [13] 0x00FE66D0  @1870
+  [14] 0x00FE6568  @1867
+  [15] 0x00FE63A0  @1863
+  [16] 0x00FE6658  @1869
+  [17] 0x0100C898  header
+  [18] 0x00FE5878  @1862
+  [19] 0x0100C850  fighter_id
+  [20] 0x00FE5788  @1860
+  [21] 0x00FE5710  @1859
+  [22] 0x00FE5800  @1861
+  [23] 0x0100CAC8  spacing
+  [24] 0x00FE7578  @1877
+  [25] 0x00FE78D8  @1878
+  [26] 0x00FEB420  @1911
+  [27] 0x0100CB48  parent
+  [28] 0x00FE82E0  @1884
+  [29] 0x00FE8358  @1885
+  [30] 0x00FE8238  @1882
+  [31] 0x00FE98E8  @1898
+  [32] 0x00FE9870  @1897
+  [33] 0x00FE2338  arg1
+  [34] 0x00FE97F8  @1896
+  [35] 0x00FE99D8  @1900
+  [36] 0x00FE9780  @1895
+  [37] 0x00FE96A8  @1893
+  [38] 0x00FE9960  @1899
+  [39] 0x00FE8B80  @1892
+  [40] 0x00FE8A90  @1890
+  [41] 0x00FE8A18  @1889
+  [42] 0x00FE8B08  @1891
+  [43] 0x00FEA880  @1907
+  [44] 0x00FEB9F8  @1913
+
+LOCAL VARIABLES (sorted by ObjObject address):
+--------------------------------------------------------------------------------
+  [0] 0x00FE22C0  arg0
+  [1] 0x00FE2338  arg1
+  [2] 0x00FE23B0  arg2
+  [3] 0x00FE4F30  @1852
+  [4] 0x00FE4FD8  @1854
+  [5] 0x00FE5050  @1855
+  [6] 0x00FE5710  @1859
+  [7] 0x00FE5788  @1860
+  [8] 0x00FE5800  @1861
+  [9] 0x00FE5878  @1862
+  [10] 0x00FE63A0  @1863
+  [11] 0x00FE6478  @1865
+  [12] 0x00FE64F0  @1866
+  [13] 0x00FE6568  @1867
+  [14] 0x00FE65E0  @1868
+  [15] 0x00FE6658  @1869
+  [16] 0x00FE66D0  @1870
+  [17] 0x00FE7578  @1877
+  [18] 0x00FE78D8  @1878
+  [19] 0x00FE8238  @1882
+  [20] 0x00FE82E0  @1884
+  [21] 0x00FE8358  @1885
+  [22] 0x00FE8A18  @1889
+  [23] 0x00FE8A90  @1890
+  [24] 0x00FE8B08  @1891
+  [25] 0x00FE8B80  @1892
+  [26] 0x00FE96A8  @1893
+  [27] 0x00FE9780  @1895
+  [28] 0x00FE97F8  @1896
+  [29] 0x00FE9870  @1897
+  [30] 0x00FE98E8  @1898
+  [31] 0x00FE9960  @1899
+  [32] 0x00FE99D8  @1900
+  [33] 0x00FEA880  @1907
+  [34] 0x00FEB420  @1911
+  [35] 0x00FEB9F8  @1913
+  [36] 0x0100C850  fighter_id
+  [37] 0x0100C898  header
+  [38] 0x0100C8E0  data
+  [39] 0x0100C988  data_alias
+  [40] 0x0100C9F0  assets
+  [41] 0x0100CA78  sorted
+  [42] 0x0100CAC8  spacing
+  [43] 0x0100CB00  i
+  [44] 0x0100CB48  parent
+================================================================================
+
+================================================================================

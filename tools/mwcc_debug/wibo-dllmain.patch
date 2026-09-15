@@ -1,0 +1,20 @@
+diff --git a/src/modules.cpp b/src/modules.cpp
+index 67622d8..0097a96 100644
+--- a/src/modules.cpp
++++ b/src/modules.cpp
+@@ -547,7 +547,14 @@ void registerBuiltinModule(ModuleRegistry &reg, const wibo::ModuleStub *module)
+ 
+ 	reg.builtinAliasLists[module] = {};
+ 	auto &aliasList = reg.builtinAliasLists[module];
+-	const bool pinModule = (module == &lib_lmgr);
++	// Allow on-disk DLLs to override built-in stubs (including lib_lmgr).
++	// The pinning of lib_lmgr was added so users wouldn't accidentally
++	// load a real Macrovision license manager and get prompted for a
++	// license file; but it also prevents legitimate replacements such as
++	// the mwcc_debug DLL that hooks the compiler's logging logic from
++	// DllMain. Leave the built-in as the fallback (used when the on-disk
++	// DLL isn't present); when an external DLL is found, it takes over.
++	const bool pinModule = false;
+ 	if (pinModule) {
+ 		reg.pinnedModules.insert(raw);
+ 	}

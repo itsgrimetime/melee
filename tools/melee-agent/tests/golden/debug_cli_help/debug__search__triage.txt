@@ -1,0 +1,20 @@
+                                                                                
+ Usage: melee-agent debug search triage [OPTIONS]                               
+                                                                                
+ Triage directed-search candidates by source delta and proof movement.          
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ *  --base                 PATH  Retained/base source file to compare         │
+│                                 candidates against.                          │
+│                                 [required]                                   │
+│    --candidate            TEXT  Candidate source file, or CANDIDATE_ID=path. │
+│                                 May be passed multiple times.                │
+│    --telemetry            PATH  JSON from debug search run/directed          │
+│                                 containing directed_telemetry.               │
+│    --score-command        TEXT  Optional command template to score each      │
+│                                 candidate. Use {candidate} as the source     │
+│                                 path placeholder.                            │
+│    --json                       Emit machine-readable JSON.                  │
+│    --help                       Show this message and exit.                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

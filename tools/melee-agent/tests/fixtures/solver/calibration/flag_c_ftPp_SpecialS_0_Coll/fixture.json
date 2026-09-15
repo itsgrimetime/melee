@@ -1,0 +1,159 @@
+{
+  "name": "flag_c_ftPp_SpecialS_0_Coll",
+  "function": "ftPp_SpecialS_0_Coll",
+  "unit": "melee/ft/chara/ftNana/ftNn_Init",
+  "class_id": 0,
+  "kind": "reject_confirmation",
+  "real_exemplar": true,
+  "checkdiff_primary": "normalized-structural-match",
+  "phys_target": {
+    "39": 28
+  },
+  "reachable": false,
+  "reachable_note": "forcing-set-verified",
+  "phys_conflicts": [],
+  "expected": {
+    "outcome": "flagged_c_exit4_window_order",
+    "filter_token": "flagged_c"
+  },
+  "target_ig": 39,
+  "class_signal": {
+    "observed_reg": 27,
+    "desired_reg": 28,
+    "window_order_residual": true
+  },
+  "whole_solver": {
+    "expected_token": "flagged_c",
+    "target_ig": 39,
+    "implicated_hops": 1,
+    "candidates_for_target": 2,
+    "rejected_count": 2,
+    "flagged_count": 2,
+    "survived_in_full": 0,
+    "survived_in_partial": 0,
+    "survived_in_window": 2,
+    "production_filter_token": "flagged_c",
+    "whole_solver_reject_assertion_ok": true,
+    "recompute_equality_audit_ok": true,
+    "recompute_audit": {
+      "reasons": [],
+      "flags": [
+        "flagged_c"
+      ],
+      "admits": 0,
+      "candidates": 2
+    },
+    "broken_filter_control": {
+      "survivors_under_admit_everything": 0,
+      "breaks_gate": true
+    },
+    "enumeration_trace": {
+      "filter_counts": {
+        "candidates_generated": 10,
+        "rejected_a": 0,
+        "rejected_b": 0,
+        "flagged_c": 10,
+        "rejected_survival": 0
+      },
+      "evals_per_kind": {
+        "node-add": 10,
+        "edge": 0,
+        "order": 0
+      },
+      "full_hits": 0,
+      "partial_hits": 0,
+      "window_order_hits": 10,
+      "truncated": false,
+      "last_kind": "node-add"
+    }
+  },
+  "bridge_file": "bridge.json",
+  "expectations": {
+    "predicted_base_coloring": {
+      "35": 31,
+      "33": 30,
+      "32": 29,
+      "102": 0,
+      "101": 0,
+      "100": 3,
+      "99": 0,
+      "98": 4,
+      "97": 4,
+      "96": 0,
+      "95": 0,
+      "94": 0,
+      "93": 0,
+      "92": 0,
+      "91": 3,
+      "90": 0,
+      "89": 0,
+      "88": 0,
+      "87": 0,
+      "86": 0,
+      "85": 0,
+      "84": 0,
+      "83": 0,
+      "82": 0,
+      "81": 0,
+      "80": 0,
+      "79": 0,
+      "78": 0,
+      "77": 4,
+      "76": 0,
+      "75": 30,
+      "74": 3,
+      "73": 0,
+      "72": 31,
+      "71": 4,
+      "70": 0,
+      "69": 0,
+      "68": 0,
+      "67": 0,
+      "66": 28,
+      "65": 5,
+      "64": 0,
+      "63": 0,
+      "61": 3,
+      "60": 0,
+      "59": 0,
+      "58": 0,
+      "57": 0,
+      "56": 0,
+      "55": 0,
+      "54": 3,
+      "53": 0,
+      "52": 4,
+      "51": 0,
+      "50": 3,
+      "49": 0,
+      "48": 0,
+      "47": 5,
+      "46": 0,
+      "45": 0,
+      "42": 27,
+      "40": 0,
+      "39": 27,
+      "38": 5,
+      "37": 4,
+      "36": 3,
+      "34": 27
+    },
+    "base_g1_rate": 1.0
+  },
+  "admission": {
+    "mode": "direct_evidence",
+    "checkdiff_primary": "normalized-structural-match",
+    "check_i_bl_multiset_equal": true,
+    "check_ii_all_normalized_lines_register_class": true,
+    "bl_target_multiset_delta": {
+      "added": {},
+      "removed": {}
+    },
+    "normalized_diff_lines": 0,
+    "nonregister_class_lines": 0
+  },
+  "alias": {
+    "source_object_candidates": [],
+    "lever": "alias"
+  }
+}

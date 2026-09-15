@@ -1,0 +1,17 @@
+                                                                                
+ Usage: melee-agent debug util [OPTIONS] COMMAND [ARGS]...                      
+                                                                                
+ Low-level helpers outside the main mwcc-debug loop.                            
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --help          Show this message and exit.                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ patterns           Tier 7c: dump the catalog of recurring MWCC mutation      │
+│                    patterns.                                                 │
+│ name-magic         Rename anonymous @N symbols in a .o's .sdata2 to          │
+│                    user-supplied names.                                      │
+│ verify-name-magic  Compile, optionally rename anonymous SDA2 constants, then │
+│                    checkdiff.                                                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

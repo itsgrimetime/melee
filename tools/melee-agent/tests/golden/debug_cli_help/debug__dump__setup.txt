@@ -1,0 +1,26 @@
+                                                                                
+ Usage: melee-agent debug dump setup [OPTIONS]                                  
+                                                                                
+ One-time setup for local mwcc_debug pcdump (macOS+wibo).                       
+                                                                                
+ Steps:                                                                         
+ 1. Verify wibo binary is available (built via melee-harness).                  
+ 2. Build the mwcc_debug DLL via tools/mwcc_debug/build_macos.sh                
+    if not already present.                                                     
+ 3. Patch a copy of mwcceppc.exe to import MWDBG326.dll instead                 
+    of LMGR326B.dll (lives next to the stock compiler as                        
+    mwcceppc_debug.exe; stock compiler untouched).                              
+ 4. Copy the DLL into the compiler dir so wibo finds it.                        
+                                                                                
+ After setup, `melee-agent debug dump local <c_file>` works.                    
+                                                                                
+ Wibo dependency: this command expects Luke Champine's patched wibo             
+ at <melee>/../melee-harness/bin/wibo (or path in $MWCC_DEBUG_WIBO).            
+ Clone melee-harness adjacent to melee and build via its setup.sh.              
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --rebuild-dll          Rebuild the mwcc_debug DLL via build_macos.sh even if │
+│                        it already exists.                                    │
+│ --help                 Show this message and exit.                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

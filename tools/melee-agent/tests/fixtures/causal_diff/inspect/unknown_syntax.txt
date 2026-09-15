@@ -1,0 +1,6 @@
+FUNCTION: fn_test
+STATEMENTS (IR):
+--------------------------------------------------------------------------------
+:42        value
+  [EASS] value
+  [ENEWFORM] value

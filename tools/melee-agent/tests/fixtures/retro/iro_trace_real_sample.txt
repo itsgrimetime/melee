@@ -1,0 +1,543 @@
+Starting function mnVibration_802474C4
+--------------------------------------------------------------------------------
+Dumping function mnVibration_802474C4 after IRO_BuildflowGraph 
+--------------------------------------------------------------------------------
+
+Flowgraph
+Flowgraph node 0  First=0, Last=21
+Succ = 1 2 
+Pred = 
+MustReach = 0
+LoopDepth = 0
+Dom: 0
+   0: Nop
+   1: Operand mnVibration_804D6C28 <ind> <immind> <reffed>
+   2: EINDIRECT 1 <subs> <reffed>
+   3: Operand 44 <reffed>
+   4: EADD 2 3 <ind> <subs> <immind> <reffed>
+   5: EINDIRECT 4 <reffed>
+   6: Operand data <assigned> <ind> <immind> <reffed>
+   7: EINDIRECT 6 <assigned> <reffed>
+   8: EASS 7 5
+   9: Operand data <ind> <immind> <reffed>
+  10: EINDIRECT 9 <subs> <reffed>
+  11: Operand 80 <reffed>
+  12: EADD 10 11 <ind> <subs> <immind> <reffed>
+  13: EINDIRECT 12 <reffed>
+  14: Operand temp_r4 <assigned> <ind> <immind> <reffed>
+  15: EINDIRECT 14 <assigned> <reffed>
+  16: EASS 15 13
+  17: Operand temp_r4 <ind> <immind> <reffed>
+  18: EINDIRECT 17 <reffed>
+  19: Operand 0 <reffed>
+  20: EEQU 18 19 <reffed>
+  21: IfNot 20 @184
+
+
+Flowgraph node 1  First=22, Last=27
+Succ = 3 
+Pred = 0 
+MustReach = 0
+LoopDepth = 0
+Dom: 0-1
+  22: Label @185
+  23: Operand 0 <reffed>
+  24: Operand var_r4 <assigned> <ind> <immind> <reffed>
+  25: EINDIRECT 24 <assigned> <reffed>
+  26: EASS 25 23
+  27: Goto @186
+
+
+Flowgraph node 2  First=28, Last=36
+Succ = 3 
+Pred = 0 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,2
+  28: Label @184
+  29: Operand temp_r4 <ind> <immind> <reffed>
+  30: EINDIRECT 29 <subs> <reffed>
+  31: Operand 16 <reffed>
+  32: EADD 30 31 <ind> <subs> <immind> <reffed>
+  33: EINDIRECT 32 <reffed>
+  34: Operand var_r4 <assigned> <ind> <immind> <reffed>
+  35: EINDIRECT 34 <assigned> <reffed>
+  36: EASS 35 33
+
+
+Flowgraph node 3  First=37, Last=38
+Succ = 9 
+Pred = 1 2 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3
+  37: Label @186
+  38: Goto @187
+
+
+Flowgraph node 4  First=39, Last=44
+Succ = 5 6 
+Pred = 9 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3-4,9
+  39: Label @188
+  40: Operand var_r4 <ind> <immind> <reffed>
+  41: EINDIRECT 40 <reffed>
+  42: Operand 0 <reffed>
+  43: EEQU 41 42 <reffed>
+  44: IfNot 43 @191
+
+
+Flowgraph node 5  First=45, Last=50
+Succ = 7 
+Pred = 4 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3-5,9
+  45: Label @192
+  46: Operand 0 <reffed>
+  47: Operand var_r4 <assigned> <ind> <immind> <reffed>
+  48: EINDIRECT 47 <assigned> <reffed>
+  49: EASS 48 46
+  50: Goto @193
+
+
+Flowgraph node 6  First=51, Last=59
+Succ = 7 
+Pred = 4 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3-4,6,9
+  51: Label @191
+  52: Operand var_r4 <ind> <immind> <reffed>
+  53: EINDIRECT 52 <subs> <reffed>
+  54: Operand 8 <reffed>
+  55: EADD 53 54 <ind> <subs> <immind> <reffed>
+  56: EINDIRECT 55 <reffed>
+  57: Operand var_r4 <assigned> <ind> <immind> <reffed>
+  58: EINDIRECT 57 <assigned> <reffed>
+  59: EASS 58 56
+
+
+Flowgraph node 7  First=60, Last=60
+Succ = 8 
+Pred = 5 6 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3-4,7,9
+  60: Label @193
+
+
+Flowgraph node 8  First=61, Last=64
+Succ = 9 
+Pred = 7 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3-4,7-9
+  61: Label @190
+  62: Operand count <assigned> <used> <ind> <immind> <reffed>
+  63: EINDIRECT 62 <assigned> <used> <reffed>
+  64: EPOSTDEC 63
+
+
+Flowgraph node 9  First=65, Last=70
+Succ = 10 4 
+Pred = 3 8 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3,9
+  65: Label @187
+  66: Operand count <ind> <immind> <reffed>
+  67: EINDIRECT 66 <reffed>
+  68: Operand 0 <reffed>
+  69: EGREATER 67 68 <reffed>
+  70: If 69 @188
+
+
+Flowgraph node 10  First=71, Last=71
+Succ = 11 
+Pred = 9 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3,9-10
+  71: Label @194
+
+
+Flowgraph node 11  First=72, Last=75
+Succ = 
+Pred = 10 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3,9-11
+  72: Label @189
+  73: Operand var_r4 <ind> <immind> <reffed>
+  74: EINDIRECT 73 <reffed>
+  75: Return 74
+
+
+Flowgraph node 12  First=76, Last=76
+Succ = 
+Pred = 
+MustReach = 0
+LoopDepth = 0
+Dom: 12
+  76: End
+
+
+
+Removing unreachable code at: 12
+Dumping function mnVibration_802474C4 after IRO_RemoveUnreachable 
+--------------------------------------------------------------------------------
+
+Flowgraph
+Flowgraph node 0  First=0, Last=21
+Succ = 1 2 
+Pred = 
+MustReach = 0
+LoopDepth = 0
+Dom: 0
+   0: Nop
+   1: Operand mnVibration_804D6C28 <ind> <immind> <reffed>
+   2: EINDIRECT 1 <subs> <reffed>
+   3: Operand 44 <reffed>
+   4: EADD 2 3 <ind> <subs> <immind> <reffed>
+   5: EINDIRECT 4 <reffed>
+   6: Operand data <assigned> <ind> <immind> <reffed>
+   7: EINDIRECT 6 <assigned> <reffed>
+   8: EASS 7 5
+   9: Operand data <ind> <immind> <reffed>
+  10: EINDIRECT 9 <subs> <reffed>
+  11: Operand 80 <reffed>
+  12: EADD 10 11 <ind> <subs> <immind> <reffed>
+  13: EINDIRECT 12 <reffed>
+  14: Operand temp_r4 <assigned> <ind> <immind> <reffed>
+  15: EINDIRECT 14 <assigned> <reffed>
+  16: EASS 15 13
+  17: Operand temp_r4 <ind> <immind> <reffed>
+  18: EINDIRECT 17 <reffed>
+  19: Operand 0 <reffed>
+  20: EEQU 18 19 <reffed>
+  21: IfNot 20 @184
+
+
+Flowgraph node 1  First=22, Last=27
+Succ = 3 
+Pred = 0 
+MustReach = 0
+LoopDepth = 0
+Dom: 0-1
+  22: Label @185
+  23: Operand 0 <reffed>
+  24: Operand var_r4 <assigned> <ind> <immind> <reffed>
+  25: EINDIRECT 24 <assigned> <reffed>
+  26: EASS 25 23
+  27: Goto @186
+
+
+Flowgraph node 2  First=28, Last=36
+Succ = 3 
+Pred = 0 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,2
+  28: Label @184
+  29: Operand temp_r4 <ind> <immind> <reffed>
+  30: EINDIRECT 29 <subs> <reffed>
+  31: Operand 16 <reffed>
+  32: EADD 30 31 <ind> <subs> <immind> <reffed>
+  33: EINDIRECT 32 <reffed>
+  34: Operand var_r4 <assigned> <ind> <immind> <reffed>
+  35: EINDIRECT 34 <assigned> <reffed>
+  36: EASS 35 33
+
+
+Flowgraph node 3  First=37, Last=38
+Succ = 9 
+Pred = 1 2 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3
+  37: Label @186
+  38: Goto @187
+
+
+Flowgraph node 4  First=39, Last=44
+Succ = 5 6 
+Pred = 9 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3-4,9
+  39: Label @188
+  40: Operand var_r4 <ind> <immind> <reffed>
+  41: EINDIRECT 40 <reffed>
+  42: Operand 0 <reffed>
+  43: EEQU 41 42 <reffed>
+  44: IfNot 43 @191
+
+
+Flowgraph node 5  First=45, Last=50
+Succ = 7 
+Pred = 4 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3-5,9
+  45: Label @192
+  46: Operand 0 <reffed>
+  47: Operand var_r4 <assigned> <ind> <immind> <reffed>
+  48: EINDIRECT 47 <assigned> <reffed>
+  49: EASS 48 46
+  50: Goto @193
+
+
+Flowgraph node 6  First=51, Last=59
+Succ = 7 
+Pred = 4 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3-4,6,9
+  51: Label @191
+  52: Operand var_r4 <ind> <immind> <reffed>
+  53: EINDIRECT 52 <subs> <reffed>
+  54: Operand 8 <reffed>
+  55: EADD 53 54 <ind> <subs> <immind> <reffed>
+  56: EINDIRECT 55 <reffed>
+  57: Operand var_r4 <assigned> <ind> <immind> <reffed>
+  58: EINDIRECT 57 <assigned> <reffed>
+  59: EASS 58 56
+
+
+Flowgraph node 7  First=60, Last=60
+Succ = 8 
+Pred = 5 6 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3-4,7,9
+  60: Label @193
+
+
+Flowgraph node 8  First=61, Last=64
+Succ = 9 
+Pred = 7 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3-4,7-9
+  61: Label @190
+  62: Operand count <assigned> <used> <ind> <immind> <reffed>
+  63: EINDIRECT 62 <assigned> <used> <reffed>
+  64: EPOSTDEC 63
+
+
+Flowgraph node 9  First=65, Last=70
+Succ = 10 4 
+Pred = 3 8 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3,9
+  65: Label @187
+  66: Operand count <ind> <immind> <reffed>
+  67: EINDIRECT 66 <reffed>
+  68: Operand 0 <reffed>
+  69: EGREATER 67 68 <reffed>
+  70: If 69 @188
+
+
+Flowgraph node 10  First=71, Last=71
+Succ = 11 
+Pred = 9 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3,9-10
+  71: Label @194
+
+
+Flowgraph node 11  First=72, Last=75
+Succ = 
+Pred = 10 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3,9-11
+  72: Label @189
+  73: Operand var_r4 <ind> <immind> <reffed>
+  74: EINDIRECT 73 <reffed>
+  75: Return 74
+
+
+
+Dumping function mnVibration_802474C4 after IRO_RemoveRedundantJumps 
+--------------------------------------------------------------------------------
+
+Flowgraph
+Flowgraph node 0  First=0, Last=21
+Succ = 1 2 
+Pred = 
+MustReach = 0
+LoopDepth = 0
+Dom: 0
+   0: Nop
+   1: Operand mnVibration_804D6C28 <ind> <immind> <reffed>
+   2: EINDIRECT 1 <subs> <reffed>
+   3: Operand 44 <reffed>
+   4: EADD 2 3 <ind> <subs> <immind> <reffed>
+   5: EINDIRECT 4 <reffed>
+   6: Operand data <assigned> <ind> <immind> <reffed>
+   7: EINDIRECT 6 <assigned> <reffed>
+   8: EASS 7 5
+   9: Operand data <ind> <immind> <reffed>
+  10: EINDIRECT 9 <subs> <reffed>
+  11: Operand 80 <reffed>
+  12: EADD 10 11 <ind> <subs> <immind> <reffed>
+  13: EINDIRECT 12 <reffed>
+  14: Operand temp_r4 <assigned> <ind> <immind> <reffed>
+  15: EINDIRECT 14 <assigned> <reffed>
+  16: EASS 15 13
+  17: Operand temp_r4 <ind> <immind> <reffed>
+  18: EINDIRECT 17 <reffed>
+  19: Operand 0 <reffed>
+  20: EEQU 18 19 <reffed>
+  21: IfNot 20 @184
+
+
+Flowgraph node 1  First=22, Last=27
+Succ = 3 
+Pred = 0 
+MustReach = 0
+LoopDepth = 0
+Dom: 0-1
+  22: Label @185
+  23: Operand 0 <reffed>
+  24: Operand var_r4 <assigned> <ind> <immind> <reffed>
+  25: EINDIRECT 24 <assigned> <reffed>
+  26: EASS 25 23
+  27: Goto @186
+
+
+Flowgraph node 2  First=28, Last=36
+Succ = 3 
+Pred = 0 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,2
+  28: Label @184
+  29: Operand temp_r4 <ind> <immind> <reffed>
+  30: EINDIRECT 29 <subs> <reffed>
+  31: Operand 16 <reffed>
+  32: EADD 30 31 <ind> <subs> <immind> <reffed>
+  33: EINDIRECT 32 <reffed>
+  34: Operand var_r4 <assigned> <ind> <immind> <reffed>
+  35: EINDIRECT 34 <assigned> <reffed>
+  36: EASS 35 33
+
+
+Flowgraph node 3  First=37, Last=38
+Succ = 9 
+Pred = 1 2 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3
+  37: Label @186
+  38: Goto @187
+
+
+Flowgraph node 4  First=39, Last=44
+Succ = 5 6 
+Pred = 9 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3-4,9
+  39: Label @188
+  40: Operand var_r4 <ind> <immind> <reffed>
+  41: EINDIRECT 40 <reffed>
+  42: Operand 0 <reffed>
+  43: EEQU 41 42 <reffed>
+  44: IfNot 43 @191
+
+
+Flowgraph node 5  First=45, Last=50
+Succ = 7 
+Pred = 4 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3-5,9
+  45: Label @192
+  46: Operand 0 <reffed>
+  47: Operand var_r4 <assigned> <ind> <immind> <reffed>
+  48: EINDIRECT 47 <assigned> <reffed>
+  49: EASS 48 46
+  50: Goto @193
+
+
+Flowgraph node 6  First=51, Last=59
+Succ = 7 
+Pred = 4 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3-4,6,9
+  51: Label @191
+  52: Operand var_r4 <ind> <immind> <reffed>
+  53: EINDIRECT 52 <subs> <reffed>
+  54: Operand 8 <reffed>
+  55: EADD 53 54 <ind> <subs> <immind> <reffed>
+  56: EINDIRECT 55 <reffed>
+  57: Operand var_r4 <assigned> <ind> <immind> <reffed>
+  58: EINDIRECT 57 <assigned> <reffed>
+  59: EASS 58 56
+
+
+Flowgraph node 7  First=60, Last=60
+Succ = 8 
+Pred = 5 6 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3-4,7,9
+  60: Label @193
+
+
+Flowgraph node 8  First=61, Last=64
+Succ = 9 
+Pred = 7 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3-4,7-9
+  61: Label @190
+  62: Operand count <assigned> <used> <ind> <immind> <reffed>
+  63: EINDIRECT 62 <assigned> <used> <reffed>
+  64: EPOSTDEC 63
+
+
+Flowgraph node 9  First=65, Last=70
+Succ = 10 4 
+Pred = 3 8 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3,9
+  65: Label @187
+  66: Operand count <ind> <immind> <reffed>
+  67: EINDIRECT 66 <reffed>
+  68: Operand 0 <reffed>
+  69: EGREATER 67 68 <reffed>
+  70: If 69 @188
+
+
+Flowgraph node 10  First=71, Last=71
+Succ = 11 
+Pred = 9 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3,9-10
+  71: Label @194
+
+
+Flowgraph node 11  First=72, Last=75
+Succ = 
+Pred = 10 
+MustReach = 0
+LoopDepth = 0
+Dom: 0,3,9-11
+  72: Label @189
+  73: Operand var_r4 <ind> <immind> <reffed>
+  74: EINDIRECT 73 <reffed>
+  75: Return 74
+
+
+
