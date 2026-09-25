@@ -343,11 +343,16 @@ Upstream PRs must contain only upstream-relevant source, headers, configuration,
 and supporting documentation. Keep fork-only tooling, local state, agent notes,
 scratch artifacts, and generated output out of them. PR descriptions should
 state reviewable code and behavior changes plus verification, without naming
-the private agent workflow used to produce them. Every PR opened against
-`doldecomp/melee` with AI assistance must carry the upstream `ai-assisted`
-label from the moment it is created (`gh pr create --label ai-assisted ...`);
-if a PR was opened without it, add it with `gh pr edit <n> --add-label
-ai-assisted` before asking for review.
+the private agent workflow used to produce them.
+
+Every upstream PR an agent opens or updates against `doldecomp/melee` must
+carry the `ai-assisted` label, including cleanup, documentation, and portability
+PRs. Add it at creation with `gh pr create --repo doldecomp/melee --label
+ai-assisted ...`. After creating or updating a PR, verify its labels with
+`gh pr view <n> --repo doldecomp/melee --json labels`. If `ai-assisted` is
+missing, add it with `gh pr edit <n> --repo doldecomp/melee --add-label
+ai-assisted` and verify again before reporting completion or asking for review.
+Preserve all other labels; portability PRs also require `portability`.
 
 ## Skills and Tools
 
