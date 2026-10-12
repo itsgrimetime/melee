@@ -50,15 +50,15 @@ and "cached upstream" describe the recorded audit snapshots above.
 
 ## Follow-up status
 
-Rechecked against upstream `cd997342483931df8f7676cdf6f2bf688201a583`
-on 2026-10-12:
+Implementation follow-ups through upstream
+`e96ae384a4150dc36cc0dc1fd248d3790f113e85` on 2026-10-12:
 
 - **S01/S02 merged** in [#3660](https://github.com/doldecomp/melee/pull/3660).
   Bank counts use `int[65]`; generator callbacks have the signatures already
   established by their call sites. All compiled objects and the final DOL
   remained byte-identical. ARM64 sanitizer checks exercised registration/reset
   and non-null callback dispatch through the actual generator functions.
-- **S13 partial fix proposed** in
+- **S13 partial fix merged** in
   [#3670](https://github.com/doldecomp/melee/pull/3670). The particle transform
   pool uses `sizeof(HSD_psAppSRT)`. A follow-up constructor audit found the
   same issue in the channel pool, now sized with `sizeof(HSD_Chan)`.
@@ -72,12 +72,29 @@ on 2026-10-12:
   model fields. Render/TEV-register pool types are not recovered here; other
   allocation, prefix and serialized-storage cases still need investigation.
 
+- **S06 and part of S07 prepared** in
+  [fork commit `bad956bf4`](https://github.com/itsgrimetime/melee/commit/bad956bf4cf2f57c12435a530feabccd0c2cda3b),
+  based on upstream `e96ae384a4150dc36cc0dc1fd248d3790f113e85`.
+  Both temporary sound commands use `CmdUnion[3]` and typed element copies.
+  The hitbox skip test reads `create_hitbox_3.ignore_thrown_fighters`, removing
+  the unused byte-overlay struct. The fallback graphics ID is modeled as one
+  16-bit operand and read directly. These changes add no platform branches or
+  casts and preserve all 1,133 compiled objects, the report and the final DOL.
+  Focused ARM64 `-O2` ASan/UBSan checks using complete extracted handlers and
+  real headers reproduce both old stack overflows and incorrect flag/ID reads;
+  the corrected code passes sound dispatch, query fallback, cursor advancement
+  and flag/owner cases. This is not a full native game run.
+- **S07 item-damage substitution excluded.** The old halfword mask reads
+  13 bits, while `set_hitbox_damage.value` contains 23 bits. The port's direct
+  replacement drops that distinction. Keep the behavior unchanged until the
+  item operand layout and every relevant consumer are established.
+
 ## Suggested first investigations
 
-S01/S02 are merged and the first S13 allocation batch is proposed above.
-Start the remaining investigations with S04 (Fox blaster effect pointers),
-S05/S06 (command storage and stride), and S09/S10 (global
-layout assumptions and projection-matrix type). S14/S15 are another coherent
+S01/S02 and the first S13 allocation batch are merged; S06 and the fighter
+operands in S07 are prepared above. Start the remaining investigations with
+S04 (Fox blaster effect pointers), S05 (command loop storage), and S09/S10
+(global layout assumptions and projection-matrix type). S14/S15 are another coherent
 callback/control-flow task. Each needs a current-upstream overlap check before
 implementation. Keep the scope to one type path or abstraction per change.
 
@@ -198,12 +215,14 @@ implementation. Keep the scope to one type path or abstraction per change.
   or an accessor; verify nested loops, returns and target codegen. Cached
   upstream retains the word-indexed implementation.
 
-- [ ] **S06 — Temporary command arrays assume four-byte cells.**
+- [x] **S06 — Temporary command arrays assume four-byte cells.**
   [1300](#patch-1300) changes `u32 cmd_words[3]` to `union CmdUnion[3]` in
   the fighter effect handlers and copies named members instead of byte offsets.
   Cached upstream retains the `u32` arrays. Test the sound/effect paths against
   both layouts; do not carry host-only initialization into matching source
   without proving identical stack and instruction output.
+  **Follow-up:** both arrays and copies corrected in fork commit `bad956bf4`;
+  target output is byte-identical, without the port's zero initialization.
 
 - [ ] **S07 — Operand decoding bypasses declared command members.**
   [0044](#patch-0044) replaces the fixed-offset `spawn_hitbox_skip.xF_b4` view
@@ -212,6 +231,8 @@ implementation. Keep the scope to one type path or abstraction per change.
   damage member; [1300](#patch-1300) replaces halfword effect-ID decoding.
   These remain candidates in cached upstream. Confirm command layouts and
   read semantics; resolve compiler-sensitive source forms with match evidence.
+  **Follow-up:** fighter flag and graphics-ID operands corrected in fork
+  commit `bad956bf4`; item damage remains unresolved as explained above.
 
 - [ ] **S08 — Collision-line stride and pointer arithmetic.**
   [0001](#patch-0001) replaces `(int) groundCollLine + offset` casts and
@@ -254,7 +275,7 @@ implementation. Keep the scope to one type path or abstraction per change.
   instead of `0x258`. Audit the remaining constructors in the native slices
   for equivalent fixed-size assumptions. Verify whether each operation covers
   a complete object, a genuine prefix, or serialized target storage.
-  **Follow-up:** particle and channel pool sizes proposed in #3670; HUD
+  **Follow-up:** particle and channel pool sizes merged in #3670; HUD
   clearing already uses the actual array extent. The wider audit remains open.
 
 - [ ] **S14 — Stage animation callbacks lose pointer arguments.**
