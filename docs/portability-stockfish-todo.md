@@ -72,7 +72,8 @@ Implementation follow-ups through upstream
   model fields. Render/TEV-register pool types are not recovered here; other
   allocation, prefix and serialized-storage cases still need investigation.
 
-- **S06 and part of S07 prepared** in
+- **S06 and part of S07 proposed** in
+  [#3671](https://github.com/doldecomp/melee/pull/3671),
   [fork commit `bad956bf4`](https://github.com/itsgrimetime/melee/commit/bad956bf4cf2f57c12435a530feabccd0c2cda3b),
   based on upstream `e96ae384a4150dc36cc0dc1fd248d3790f113e85`.
   Both temporary sound commands use `CmdUnion[3]` and typed element copies.
@@ -92,7 +93,7 @@ Implementation follow-ups through upstream
 ## Suggested first investigations
 
 S01/S02 and the first S13 allocation batch are merged; S06 and the fighter
-operands in S07 are prepared above. Start the remaining investigations with
+operands in S07 are proposed above. Start the remaining investigations with
 S04 (Fox blaster effect pointers), S05 (command loop storage), and S09/S10
 (global layout assumptions and projection-matrix type). S14/S15 are another coherent
 callback/control-flow task. Each needs a current-upstream overlap check before
@@ -221,7 +222,7 @@ implementation. Keep the scope to one type path or abstraction per change.
   Cached upstream retains the `u32` arrays. Test the sound/effect paths against
   both layouts; do not carry host-only initialization into matching source
   without proving identical stack and instruction output.
-  **Follow-up:** both arrays and copies corrected in fork commit `bad956bf4`;
+  **Follow-up:** both arrays and copies proposed in #3671 (`bad956bf4`);
   target output is byte-identical, without the port's zero initialization.
 
 - [ ] **S07 — Operand decoding bypasses declared command members.**
@@ -231,8 +232,8 @@ implementation. Keep the scope to one type path or abstraction per change.
   damage member; [1300](#patch-1300) replaces halfword effect-ID decoding.
   These remain candidates in cached upstream. Confirm command layouts and
   read semantics; resolve compiler-sensitive source forms with match evidence.
-  **Follow-up:** fighter flag and graphics-ID operands corrected in fork
-  commit `bad956bf4`; item damage remains unresolved as explained above.
+  **Follow-up:** fighter flag and graphics-ID operands proposed in #3671
+  (`bad956bf4`); item damage remains unresolved as explained above.
 
 - [ ] **S08 — Collision-line stride and pointer arithmetic.**
   [0001](#patch-0001) replaces `(int) groundCollLine + offset` casts and
