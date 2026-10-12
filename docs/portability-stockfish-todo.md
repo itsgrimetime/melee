@@ -4,7 +4,8 @@ Fork checklist, inspected 2026-10-09. This is an inventory and preliminary
 triage, not an approved patch plan. Game source was not changed. No new native
 runtime, Dolphin, or matching build validation was performed for this inventory.
 Names and behavior asserted by port comments remain claims to reproduce before
-using them in decomp documentation.
+using them in decomp documentation. Implementation follow-ups and their
+validation are recorded separately below.
 
 ## Scope and provenance
 
@@ -42,15 +43,40 @@ overlay builder largely duplicates the numbered baseline and is not counted
 as a second set of fixes.
 
 Checkboxes track **triage**. Checked means a structurally equivalent fix was
-found here or in the cached upstream source; it does not claim new runtime or
-human validation. Unchecked means a decision or investigation remains. Patch
+found in the recorded audit or a dated follow-up; validation is stated
+separately. Unchecked means a decision or investigation remains. Patch
 numbers below link into the appendix. References to "here", "this checkout"
 and "cached upstream" describe the recorded audit snapshots above.
 
+## Follow-up status
+
+Rechecked against upstream `cd997342483931df8f7676cdf6f2bf688201a583`
+on 2026-10-12:
+
+- **S01/S02 merged** in [#3660](https://github.com/doldecomp/melee/pull/3660).
+  Bank counts use `int[65]`; generator callbacks have the signatures already
+  established by their call sites. All compiled objects and the final DOL
+  remained byte-identical. ARM64 sanitizer checks exercised registration/reset
+  and non-null callback dispatch through the actual generator functions.
+- **S13 partial fix proposed** in
+  [#3670](https://github.com/doldecomp/melee/pull/3670). The particle transform
+  pool uses `sizeof(HSD_psAppSRT)`. A follow-up constructor audit found the
+  same issue in the channel pool, now sized with `sizeof(HSD_Chan)`.
+  Native sizes are 184 and 56 bytes rather than the fixed 164 and 48.
+  Both substitutions preserve all 1,133 compiled objects and the final DOL.
+  ARM64 ASan/UBSan checks using the actual object allocator reproduced both
+  old-size overflows and passed with the corrected sizes, including reuse
+  and native pool stride. These are focused tests, not a full native game run.
+- **S13 HUD clearing already covered.** `ifStatus_802F66A4` clears the
+  actual `players` array using `sizeof(hud->players)`, preserving the loaded
+  model fields. Render/TEV-register pool types are not recovered here; other
+  allocation, prefix and serialized-storage cases still need investigation.
+
 ## Suggested first investigations
 
-Start with S01/S02 (particle count and callback declarations), S04 (Fox blaster
-effect pointers), S05/S06 (command storage and stride), and S09/S10 (global
+S01/S02 are merged and the first S13 allocation batch is proposed above.
+Start the remaining investigations with S04 (Fox blaster effect pointers),
+S05/S06 (command storage and stride), and S09/S10 (global
 layout assumptions and projection-matrix type). S14/S15 are another coherent
 callback/control-flow task. Each needs a current-upstream overlap check before
 implementation. Keep the scope to one type path or abstraction per change.
@@ -145,17 +171,19 @@ implementation. Keep the scope to one type path or abstraction per change.
 
 ## Source corrections worth investigating
 
-- [ ] **S01 — Particle texture-group counts declared as pointers.**
+- [x] **S01 — Particle texture-group counts declared as pointers.**
   [1214](#patch-1214) makes `psFormGroupArray[65]` an `s32` count array, replacing
   writes through `(s32*)` and pointer-null initialization. The old declaration
   remains in cached upstream. Audit every read/write and archive header, then
   test bank initialization and indexing with LP64 storage.
+  **Follow-up:** corrected to `int[65]` in merged #3660; see validation above.
 
-- [ ] **S02 — Particle callbacks stored in `u32` globals.**
+- [x] **S02 — Particle callbacks stored in `u32` globals.**
   [3400](#patch-3400) types `hsd_804D78E8` as a generator/matrix callback and
   `hsd_804D78EC` as a generator callback, updating declarations and calls.
   Cached upstream still casts integer globals to those function pointers.
   Check all registrations and callback ABIs before choosing shared typedefs.
+  **Follow-up:** typed declarations and direct calls merged in #3660.
 
 - [ ] **S04 — Fox blaster's effect ring stores returned effect pointers.**
   [1252](#patch-1252)/[3112](#patch-3112) widen `foxblaster.xDE4[6]` and the
@@ -226,6 +254,8 @@ implementation. Keep the scope to one type path or abstraction per change.
   instead of `0x258`. Audit the remaining constructors in the native slices
   for equivalent fixed-size assumptions. Verify whether each operation covers
   a complete object, a genuine prefix, or serialized target storage.
+  **Follow-up:** particle and channel pool sizes proposed in #3670; HUD
+  clearing already uses the actual array extent. The wider audit remains open.
 
 - [ ] **S14 — Stage animation callbacks lose pointer arguments.**
   [3500](#patch-3500) separates `AOBJ_ARG_AV/AOV/AOTV` pointer calls from
