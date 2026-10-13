@@ -90,7 +90,8 @@ Implementation follow-ups through upstream
   replacement drops that distinction. Keep the behavior unchanged until the
   item operand layout and every relevant consumer are established.
 
-- **S04 prepared** in [fork commit `79a0386c4`](https://github.com/itsgrimetime/melee/commit/79a0386c4ba52960041763b0cc686a8a70888e4e),
+- **S04 proposed** in [#3673](https://github.com/doldecomp/melee/pull/3673),
+  [fork commit `79a0386c4`](https://github.com/itsgrimetime/melee/commit/79a0386c4ba52960041763b0cc686a8a70888e4e),
   independently based on upstream `e96ae384a4150dc36cc0dc1fd248d3790f113e85`.
   Fox, Falco and both Kirby copy variants now store shot effects as
   `EF_Effect*[6]`, removing the narrowing assignments and using `NULL` resets.
@@ -108,13 +109,34 @@ Implementation follow-ups through upstream
   variants also differ. No source workarounds are retained; matching trials
   precede native runtime validation, so these items remain open.
 
+- **S14 pointer cases and S15 proposed** in
+  [#3674](https://github.com/doldecomp/melee/pull/3674),
+  [fork commit `7156adc58`](https://github.com/itsgrimetime/melee/commit/7156adc58c44f43a74873b9bfff8b244aeb18345),
+  independently based on `e96ae384a4150dc36cc0dc1fd248d3790f113e85`.
+  Stage `AV`/`AOV`/`AOTV` dispatch reads full pointers with the corresponding
+  callback signatures; enum names make the pointer/integer cases explicit.
+  The animation-search callback matches the SDK's `(HSD_AObj*, void*)`
+  contract and converts its userdata to a typed result destination. The local
+  result pointer itself is volatile across `longjmp`. No host buffer, platform
+  guard or jump implementation is added. Existing scalar/event call forms are
+  outside this pointer-width correction.
+  All 1,133 compiled objects, the report and the DOL remain identical.
+  ARM64 `-O2` ASan/UBSan checks compile the complete stage unit and SDK AObj
+  unit, using native libc jumps and real object trees. All three old pointer
+  variants independently lose identity through direct/public dispatch; the
+  old search callback also truncates the result. The corrected code passes
+  pointer/null cases, scalar controls and 2,048 tree/mask/instance searches.
+  Ground lookup and fatal diagnostics are stubbed; this is not a full game run.
+  The volatile qualifier follows the C rule for modified automatic locals;
+  no separate optimizer failure from its absence alone is claimed.
+
 ## Suggested first investigations
 
-S01/S02 and the first S13 allocation batch are merged; S06 and the fighter
-operands in S07 are proposed above, and S04 is prepared. Remaining candidates
-include S05 (command loop storage), S10 (projection-matrix type), and S14/S15
-(callback/control flow). S08/S09 need a clean matching source form before
-proceeding. Each needs a current-upstream overlap check before
+S01/S02 and the first S13 allocation batch are merged; S04, S06, the fighter
+operands in S07, and the S14/S15 pointer/search corrections are proposed above.
+Remaining candidates include S05 (command loop storage), S10 (projection-matrix
+type), S11 (bone collision records), and S12 (star-death common-data access).
+S08/S09 need a clean matching source form before proceeding. Each needs a current-upstream overlap check before
 implementation. Keep the scope to one type path or abstraction per change.
 
 ## Already covered, wholly or in the stated part
@@ -226,7 +248,7 @@ implementation. Keep the scope to one type path or abstraction per change.
   `efSync_Spawn` assignments, including the Kirby-Fox caller. Cached upstream
   still has `s32` elements. Trace destruction, nulling, aliases and adjacent
   ring fields; determine the concrete pointee before accepting `uintptr_t`.
-  **Follow-up:** corrected to `EF_Effect*[6]` in fork commit `79a0386c4`;
+  **Follow-up:** proposed as `EF_Effect*[6]` in #3673 (`79a0386c4`);
   the return type is established by both actual dispatcher paths.
 
 - [ ] **S05 — Command loop frames mix counters and pointers.**
@@ -304,20 +326,25 @@ implementation. Keep the scope to one type path or abstraction per change.
   **Follow-up:** particle and channel pool sizes merged in #3670; HUD
   clearing already uses the actual array extent. The wider audit remains open.
 
-- [ ] **S14 — Stage animation callbacks lose pointer arguments.**
+- [x] **S14 — Stage animation callbacks lose pointer arguments.**
   [3500](#patch-3500) separates `AOBJ_ARG_AV/AOV/AOTV` pointer calls from
   their `AU/AOU/AOTU` integer counterparts and types `fn_801C82E8`'s arguments
   as `HSD_AObj*`/`HSD_AObj**`. Cached upstream still loads pointer arguments
   through `int*` and has integer callback parameters. Audit all dispatch
   variants and registrations; avoid importing the complete port cast switch
   until callback type compatibility is checked.
+  **Follow-up:** pointer-bearing dispatch and the search callback corrected
+  in proposed #3674; the SDK userdata contract determines the callback type.
+  Scalar/event callback cleanup remains a separate investigation.
 
-- [ ] **S15 — A pointer modified between setjmp and longjmp needs scrutiny.**
+- [x] **S15 — A pointer modified between setjmp and longjmp needs scrutiny.**
   [3501](#patch-3501) makes the stage animation search result and callback
   destination volatile after [3500](#patch-3500) replaces the target jump ABI.
   Cached upstream has an ordinary `HSD_AObj* sp14`. Reproduce under optimized
   host compilation; separate a C lifetime/control-flow correction from the
   Darwin jump-buffer implementation in B05.
+  **Follow-up:** the local result pointer and callback destination access
+  are volatile in proposed #3674, retaining identical target output.
 
 - [ ] **S16 — Inline linkage and include resolution.**
   [3400](#patch-3400)/[1151](#patch-1151) use `static inline` for local effect
