@@ -109,23 +109,25 @@ Implementation follow-ups through upstream
   variants also differ. No source workarounds are retained; matching trials
   precede native runtime validation, so these items remain open.
 
-- **S14 pointer cases and S15 proposed** in
+- **S14 callback dispatch and S15 proposed** in
   [#3674](https://github.com/doldecomp/melee/pull/3674),
-  [fork commit `7156adc58`](https://github.com/itsgrimetime/melee/commit/7156adc58c44f43a74873b9bfff8b244aeb18345),
+  [fork commit `d85a5f958`](https://github.com/itsgrimetime/melee/commit/d85a5f9588f6b8b466ceccfd3f157656ab9e645f),
   independently based on `e96ae384a4150dc36cc0dc1fd248d3790f113e85`.
-  Stage `AV`/`AOV`/`AOTV` dispatch reads full pointers with the corresponding
-  callback signatures; enum names make the pointer/integer cases explicit.
+  The stage dispatcher uses typed callback and payload unions, with all 12
+  signatures matching the SDK's argument kinds and full-width pointer loads.
+  This also removes the old scalar/event callback casts and inaccurate arities.
   The animation-search callback matches the SDK's `(HSD_AObj*, void*)`
   contract and converts its userdata to a typed result destination. The local
   result pointer itself is volatile across `longjmp`. No host buffer, platform
-  guard or jump implementation is added. Existing scalar/event call forms are
-  outside this pointer-width correction.
-  All 1,133 compiled objects, the report and the DOL remain identical.
+  guard or jump implementation is added.
+  The matching report and DOL remain identical, retaining 100% matching.
   ARM64 `-O2` ASan/UBSan checks compile the complete stage unit and SDK AObj
   unit, using native libc jumps and real object trees. All three old pointer
   variants independently lose identity through direct/public dispatch; the
   old search callback also truncates the result. The corrected code passes
   pointer/null cases, scalar controls and 2,048 tree/mask/instance searches.
+  Another 840 public-walker checks cover all 12 signatures across seven
+  animated object kinds/positions with scalar and pointer values.
   Ground lookup and fatal diagnostics are stubbed; this is not a full game run.
   The volatile qualifier follows the C rule for modified automatic locals;
   no separate optimizer failure from its absence alone is claimed.
@@ -333,9 +335,10 @@ implementation. Keep the scope to one type path or abstraction per change.
   through `int*` and has integer callback parameters. Audit all dispatch
   variants and registrations; avoid importing the complete port cast switch
   until callback type compatibility is checked.
-  **Follow-up:** pointer-bearing dispatch and the search callback corrected
-  in proposed #3674; the SDK userdata contract determines the callback type.
-  Scalar/event callback cleanup remains a separate investigation.
+  **Follow-up:** all 12 dispatch signatures and the search callback corrected
+  in proposed #3674; the SDK contract determines the callback types. Ribbanya's
+  [cast-removal request](https://github.com/doldecomp/melee/pull/3674#discussion_r4260464573)
+  is addressed with typed callback and payload union members.
 
 - [x] **S15 — A pointer modified between setjmp and longjmp needs scrutiny.**
   [3501](#patch-3501) makes the stage animation search result and callback
