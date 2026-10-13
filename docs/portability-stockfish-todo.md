@@ -90,13 +90,31 @@ Implementation follow-ups through upstream
   replacement drops that distinction. Keep the behavior unchanged until the
   item operand layout and every relevant consumer are established.
 
+- **S04 prepared** in [fork commit `79a0386c4`](https://github.com/itsgrimetime/melee/commit/79a0386c4ba52960041763b0cc686a8a70888e4e),
+  independently based on upstream `e96ae384a4150dc36cc0dc1fd248d3790f113e85`.
+  Fox, Falco and both Kirby copy variants now store shot effects as
+  `EF_Effect*[6]`, removing the narrowing assignments and using `NULL` resets.
+  IDs 1166/1196 dispatch through `efAlt_Spawn` cases `0x48E`/`0x4AC` to
+  `efLib_Create_Attach_Pos`, which returns `EF_Effect*`. The ring has no
+  numeric consumers or destruction callers; existing effect ownership is
+  unchanged. All 1,133 compiled objects, the report and the DOL remain identical.
+  Focused ARM64 `-O2` ASan/UBSan checks reproduce lost pointer identity in each
+  old variant and pass for all four with the correction: 36 spawns, high native
+  addresses, history rollover, null results, adjacent arrays and reset/guard
+  paths. Effect and position services are stubbed; this is not a full game run.
+- **S08/S09 clean forms trialed and deferred.** Typed collision-line arrays
+  and direct accesses to declared particle/camera/refraction globals change
+  target instructions or register allocation. Ordinary descriptor-pointer
+  variants also differ. No source workarounds are retained; matching trials
+  precede native runtime validation, so these items remain open.
+
 ## Suggested first investigations
 
 S01/S02 and the first S13 allocation batch are merged; S06 and the fighter
-operands in S07 are proposed above. Start the remaining investigations with
-S04 (Fox blaster effect pointers), S05 (command loop storage), and S09/S10
-(global layout assumptions and projection-matrix type). S14/S15 are another coherent
-callback/control-flow task. Each needs a current-upstream overlap check before
+operands in S07 are proposed above, and S04 is prepared. Remaining candidates
+include S05 (command loop storage), S10 (projection-matrix type), and S14/S15
+(callback/control flow). S08/S09 need a clean matching source form before
+proceeding. Each needs a current-upstream overlap check before
 implementation. Keep the scope to one type path or abstraction per change.
 
 ## Already covered, wholly or in the stated part
@@ -203,11 +221,13 @@ implementation. Keep the scope to one type path or abstraction per change.
   Check all registrations and callback ABIs before choosing shared typedefs.
   **Follow-up:** typed declarations and direct calls merged in #3660.
 
-- [ ] **S04 — Fox blaster's effect ring stores returned effect pointers.**
+- [x] **S04 — Fox blaster's effect ring stores returned effect pointers.**
   [1252](#patch-1252)/[3112](#patch-3112) widen `foxblaster.xDE4[6]` and the
   `efSync_Spawn` assignments, including the Kirby-Fox caller. Cached upstream
   still has `s32` elements. Trace destruction, nulling, aliases and adjacent
   ring fields; determine the concrete pointee before accepting `uintptr_t`.
+  **Follow-up:** corrected to `EF_Effect*[6]` in fork commit `79a0386c4`;
+  the return type is established by both actual dispatcher paths.
 
 - [ ] **S05 — Command loop frames mix counters and pointers.**
   [0057](#patch-0057) removes `((u32*) info)[loop_count + 3]` and manipulates
@@ -241,6 +261,8 @@ implementation. Keep the scope to one type path or abstraction per change.
   Cached upstream has already cleaned the narrowing path, but still contains
   the `flags_base[id * 2]` indexing. Prefer typed indexing after tracing the
   helper contracts. Keep the separate connectivity behavior change in N09.
+  **Follow-up:** typed cached-array and direct-field forms trialed against
+  `e96ae384a` change matching; deferred without compiler workarounds.
 
 - [ ] **S09 — Synthetic structs assume neighboring globals are one object.**
   [0042](#patch-0042) replaces `ParticleData*` over particle globals with their
@@ -250,6 +272,9 @@ implementation. Keep the scope to one type path or abstraction per change.
   All three patterns remain in cached upstream (some symbols are renamed).
   Trace target addresses and each access; use declared globals or an accurate
   source aggregate, then measure each function's match separately.
+  **Follow-up:** all three direct-global forms and ordinary camera/refraction
+  descriptor-pointer variants trialed against `e96ae384a` change matching.
+  Deferred; no invented storage layout was added to the proposed batches.
 
 - [ ] **S10 — Projection output uses a 3×4 matrix declaration.**
   [0056](#patch-0056) changes `lbVector_WorldToScreen`'s `Mtx projMtx` to
